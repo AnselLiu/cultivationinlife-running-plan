@@ -4,7 +4,7 @@
  * - Google Fonts：快取後重複使用（stale-while-revalidate）
  * 更新網頁後，把 VERSION 改一個新值再部署，使用者下次開啟就會收到「有新版本」提示。
  */
-const VERSION = 'gengpao-coach-v9';
+const VERSION = 'gengpao-coach-v10';
 const SHELL = ['./', './index.html', './manifest.webmanifest',
   './icons/icon-192.png', './icons/icon-512.png', './icons/icon-maskable-512.png',
   './icons/apple-touch-icon.png', './icons/favicon-32.png'];
