@@ -1,0 +1,26 @@
+{
+  "id": "./",
+  "name": "耕跑團課表教練",
+  "short_name": "耕跑課表",
+  "description": "耕跑團 20 週週期模型：依你的比賽日期、組別與可練天數產生每週課表，並換算配速、下載 PDF、加入行事曆。",
+  "lang": "zh-Hant-TW",
+  "dir": "ltr",
+  "start_url": "./?source=pwa",
+  "scope": "./",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "orientation": "any",
+  "background_color": "#F4F6FA",
+  "theme_color": "#1C4698",
+  "categories": ["sports", "health", "fitness"],
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "今天的課", "short_name": "今天", "url": "./?source=pwa#today", "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }] },
+    { "name": "本週課表", "short_name": "本週", "url": "./?source=pwa#week", "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }] },
+    { "name": "全季總覽", "short_name": "全季", "url": "./?source=pwa#all", "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }] }
+  ]
+}
