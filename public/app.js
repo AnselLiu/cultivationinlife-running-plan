@@ -1,6 +1,7 @@
 // 耕跑團 PWA — 畫面：團練列表、活動詳情與報名、我的課表、課表教練、幹部的新增活動與公告產生器
 import * as P from './plan.js';
 import * as Party from './party.js';
+import { qrSVG, canScan, scan } from './qr.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const view = $('#view');
@@ -170,7 +171,8 @@ async function eventView(id) {
   const closed = !ev.signup_open || ev.status !== 'open' || (ev.deadline && new Date(ev.deadline) < new Date());
   const party = ev.kind === 'party';
   const myTicket = party ? (await api('/my/tickets')).tickets.find((t) => t.event_id === ev.id) : null;
-  const seatData = party ? (await api(`/events/${id}/seats`)).seats : [];
+  const seatInfo = party ? await api(`/events/${id}/seats`) : { seats: [], layout: null };
+  const seatData = seatInfo.seats;
   const plan = ev.week_no ? await P.weekPlan(ev.week_no, me.dist, me.grp) : null;
   const myDay = plan?.find((d) => new RegExp(dayPattern(ev.date)).test(d.d));
 
@@ -183,6 +185,7 @@ async function eventView(id) {
       <h2>${esc(ev.title)}</h2>
       <p class="muted" style="margin:0">${ev.gather_time ? `${ev.gather_time} 集合` : ''}${ev.end_time ? `－${ev.end_time}` : ''}${ev.place ? `　${esc(ev.place)}` : ''}${ev.lead ? `　帶團：${esc(ev.lead)}` : ''}</p>
       ${ev.note ? `<p class="muted" style="margin:0;white-space:pre-wrap">${esc(ev.note)}</p>` : ''}
+      ${ev.link_url ? `<a class="btn block" style="background:#fff;color:#1C4698" href="${esc(ev.link_url)}" target="_blank" rel="noopener">${esc(ev.link_label || '前往登記')} ↗</a>` : ''}
     </section>
 
     ${myDay ? `<section class="card">
@@ -214,7 +217,7 @@ async function eventView(id) {
       ${admin ? '<button class="btn ghost sm" id="copyRoster">複製名單</button>' : ''}
     </section>
 
-    ${party ? Party.seatSection(seatData) : ''}
+    ${party ? Party.seatSection(seatData, seatInfo.layout) : ''}
     ${party && allow('checkin') ? await partyAdmin(ev) : ''}
 
     ${admin ? `<section class="card">
@@ -260,6 +263,10 @@ async function eventView(id) {
     try { const r = await api(`/events/${id}/checkin`, { method: 'POST', body: { code: b.dataset.ci } }); toast(`${r.name} 報到完成`); render(); }
     catch (err) { toast(err.message); }
   };
+  for (const b of document.querySelectorAll('[data-claim]')) b.onclick = async () => {
+    try { await api(`/draws/${b.dataset.claim}/claim`, { method: 'POST' }); toast('已確認領獎'); render(); }
+    catch (err) { toast(err.message); }
+  };
   for (const b of document.querySelectorAll('[data-draw]')) b.onclick = async () => {
     b.disabled = true; b.textContent = '抽獎中…';
     try {
@@ -281,6 +288,7 @@ async function eventView(id) {
     try { const r = await api(`/events/${id}/prizes`, { method: 'POST', body: { text: e.target.text.value } }); toast(`已匯入 ${r.added} 項`); render(); }
     catch (err) { toast(err.message); }
   });
+  if (party && myTicket) paintQR(ev, myTicket.code);
   if (party && $('#seatCard')) {
     const seated = seatData.filter((s) => s.table_no);
     const show = (t) => { $('#tableDetail').innerHTML = Party.tableList(seated, Number(t));
@@ -331,6 +339,7 @@ async function announceText(ev) {
     if (info?.src?.startsWith('推估')) L.push('', '（本週課表為系統依去年同期推估，實際以教練公告為準）');
   } else if (ev.plan_text) { L.push('', ev.plan_text); }
   if (ev.note) L.push('', ev.note);
+  if (ev.link_url) L.push('', `${ev.link_label || '登記'}：${ev.link_url}`);
   if (ev.signup_open) L.push('', `報名：${location.origin}/#/e/${ev.id}`);
   return L.join('\n');
 }
@@ -400,9 +409,151 @@ async function planNewView() {
     try {
       await api('/plans', { method: 'POST', body: {
         title: f.title.value, body: f.body.value, phase: f.phase.value,
-        week_no: f.week_no.value ? Number(f.week_no.value) : null, notify: f.notify.checked } });
+        link_url: f.link_url.value, link_label: f.link_label.value,
+      week_no: f.week_no.value ? Number(f.week_no.value) : null, notify: f.notify.checked } });
       toast('已發布'); location.hash = '#/plan';
     } catch (err) { toast(err.message); }
+  };
+}
+
+
+// ---------- 管理介面（RBAC、會籍、座位圖）----------
+const MEMBERSHIP_NAME = { none: '跑友', applied: '申請中', active: '協會會員', expired: '會籍到期' };
+async function adminView(tab = 'members') {
+  if (!allow('members') && !allow('roles')) { view.innerHTML = '<div class="card"><p class="muted">沒有管理權限。</p></div>'; return; }
+  const data = await api('/members');
+  const tabs = [['members', '會員管理'], ['roles', '身分與權限'], ['events', '活動設定']];
+  const list = data.members;
+  const counts = list.reduce((m, x) => { m[x.membership] = (m[x.membership] || 0) + 1; return m; }, {});
+  view.innerHTML = `
+    <div class="row spread" style="padding:4px"><h2>管理後台</h2><span class="tiny">${list.length} 位跑友</span></div>
+    <div class="seg">${tabs.map(([k, v]) => `<button data-tab="${k}" aria-pressed="${tab === k}">${v}</button>`).join('')}</div>
+    ${tab === 'members' ? membersPanel(list, counts)
+      : tab === 'roles' ? rolesPanel(data)
+      : await eventsPanel()}`;
+  for (const b of document.querySelectorAll('[data-tab]')) b.onclick = () => adminView(b.dataset.tab);
+  if (tab === 'members') bindMembers();
+  if (tab === 'events') bindEventsPanel();
+}
+function membersPanel(list, counts) {
+  const chips = Object.entries(MEMBERSHIP_NAME).map(([k, v]) => `<span class="pill ${k === 'active' ? 'solid' : k === 'applied' ? 'wait' : ''}">${v} ${counts[k] || 0}</span>`).join('');
+  const row = (m) => `<div class="r">
+      ${avatar(m)}
+      <span><b>${esc(m.name)}</b>${m.nickname ? ` <span class="tiny">${esc(m.nickname)}</span>` : ''}
+        <span class="tiny" style="display:block">${esc(m.club || '未填跑團')}・${m.roleName}${m.member_no ? `・編號 ${esc(m.member_no)}` : ''}${m.paid_until ? `・繳費至 ${esc(m.paid_until)}` : ''}</span></span>
+      <button class="btn ghost sm" data-ms="${m.id}">${MEMBERSHIP_NAME[m.membership]}</button>
+    </div>`;
+  const applied = list.filter((m) => m.membership === 'applied');
+  return `
+    <section class="card"><div class="row" style="gap:6px">${chips}</div>
+      <p class="tiny">跑友只要加入就能報名團練；協會會員要另外申請與繳費，兩者分開管理。</p></section>
+    ${applied.length ? `<section class="card"><h3>待審核（${applied.length}）</h3><div class="roster">${applied.map(row).join('')}</div></section>` : ''}
+    <section class="card"><h3>全部跑友</h3>
+      <input id="mq" placeholder="搜尋姓名、暱稱或跑團" autocomplete="off">
+      <div class="roster" id="mlist">${list.map(row).join('')}</div>
+    </section>`;
+}
+function bindMembers() {
+  const bind = () => { for (const b of document.querySelectorAll('[data-ms]')) b.onclick = () => membershipDialog(b.dataset.ms); };
+  bind();
+  const q = $('#mq');
+  if (q) q.oninput = async () => {
+    const key = q.value.trim().toLowerCase();
+    const { members } = await api('/members');
+    const hit = members.filter((m) => [m.name, m.nickname, m.club].some((v) => (v || '').toLowerCase().includes(key)));
+    $('#mlist').innerHTML = hit.map((m) => `<div class="r">${avatar(m)}
+      <span><b>${esc(m.name)}</b><span class="tiny" style="display:block">${esc(m.club || '')}・${m.roleName}</span></span>
+      <button class="btn ghost sm" data-ms="${m.id}">${MEMBERSHIP_NAME[m.membership]}</button></div>`).join('');
+    bind();
+  };
+}
+async function membershipDialog(id) {
+  const { members, memberTypes } = await api('/members');
+  const m = members.find((x) => x.id === id);
+  view.insertAdjacentHTML('afterbegin', `<section class="card" id="msd">
+    <h3>${esc(m.name)} 的會籍</h3>
+    <form id="msf">
+      <div class="grid2">
+        <label>狀態<select name="membership">${Object.entries(MEMBERSHIP_NAME).map(([k, v]) => `<option value="${k}" ${m.membership === k ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
+        <label>會員類別<select name="member_type"><option value="">—</option>${memberTypes.map((t) => `<option ${m.member_type === t ? 'selected' : ''}>${t}</option>`).join('')}</select></label>
+      </div>
+      <div class="grid2">
+        <label>會員編號<input name="member_no" value="${esc(m.member_no || '')}" maxlength="20"></label>
+        <label>入會日期<input type="date" name="joined_on" value="${esc(m.joined_on || '')}"></label>
+      </div>
+      <div class="grid2">
+        <label>會費繳至<input type="date" name="paid_until" value="${esc(m.paid_until || '')}"></label>
+        <label>備註<input name="membership_note" value="${esc(m.membership_note || '')}" maxlength="60"></label>
+      </div>
+      <div class="row"><button class="btn sm">儲存</button><button type="button" class="btn ghost sm" id="msc">取消</button></div>
+    </form></section>`);
+  $('#msc').onclick = () => $('#msd').remove();
+  $('#msf').onsubmit = async (e) => {
+    e.preventDefault();
+    const f = e.target;
+    try {
+      await api(`/members/${id}/membership`, { method: 'POST', body: {
+        membership: f.membership.value, member_type: f.member_type.value, member_no: f.member_no.value,
+        joined_on: f.joined_on.value, paid_until: f.paid_until.value, membership_note: f.membership_note.value } });
+      toast('已更新會籍'); adminView('members');
+    } catch (err) { toast(err.message); }
+  };
+}
+function rolesPanel(data) {
+  const PERM_NAME = { event: '建立活動', plan: '發布課表', checkin: '報到', lottery: '抽獎', roster: '看名冊', members: '會員管理', roles: '指派身分', layout: '座位圖設定' };
+  const order = ['chair', 'director', 'supervisor', 'staff', 'coach', 'member'];
+  const byRole = {};
+  for (const m of data.members) (byRole[m.role] ||= []).push(m);
+  return `<section class="card">
+      <h3>權限對照</h3>
+      <div class="permtable">
+        <div class="hd"><span>身分</span>${Object.values(PERM_NAME).map((p) => `<span>${p}</span>`).join('')}</div>
+        ${order.map((r) => `<div class="rw"><span>${data.roles[r]}</span>${Object.keys(PERM_NAME).map((p) =>
+          `<span>${data.perms[r].includes(p) ? '●' : '·'}</span>`).join('')}</div>`).join('')}
+      </div>
+      <p class="tiny">監事可以看名冊與會籍，但不能修改。身分由理事長在名冊指派。</p>
+    </section>
+    ${order.filter((r) => byRole[r]?.length).map((r) => `<section class="card">
+      <div class="row spread"><h3>${data.roles[r]}</h3><span class="tiny">${byRole[r].length} 人</span></div>
+      <div class="roster">${byRole[r].map((m) => `<div class="r">${avatar(m)}
+        <span><b>${esc(m.name)}</b>${m.title ? ` <span class="tiny">${esc(m.title)}</span>` : ''}</span>
+        ${allow('roles') ? `<button class="btn ghost sm" data-role="${m.id}" data-name="${esc(m.name)}" data-cur="${m.role}">變更</button>` : ''}</div>`).join('')}</div>
+    </section>`).join('')}`;
+}
+async function eventsPanel() {
+  const { events } = await api('/events');
+  const parties = events.filter((e) => e.kind === 'party');
+  return `<section class="card">
+    <h3>座位圖設定</h3>
+    <p class="tiny">每年場地不一樣，這裡可以自己排。每行用逗號分隔桌號，空白代表走道或空位。</p>
+    ${parties.length ? `<form id="lyf">
+      <label>活動<select name="event">${parties.map((e) => `<option value="${e.id}">${esc(e.title)}（${e.date}）</option>`).join('')}</select></label>
+      <label>座位佈局<textarea name="rows" style="min-height:150px;font-family:ui-monospace,Menlo,monospace" placeholder="1,2,3,,4,5,
+7,8,9,,10,11,6"></textarea></label>
+      <div class="grid2">
+        <label>上方標示<input name="stage" value="舞台"></label>
+        <label>下方標示<input name="foot" placeholder="IBM 產品體驗區 ×7"></label>
+      </div>
+      <button class="btn block">儲存座位圖</button>
+    </form>` : '<p class="muted" style="margin:0">還沒有春酒類型的活動。</p>'}
+  </section>`;
+}
+function bindEventsPanel() {
+  const f = $('#lyf');
+  if (!f) return;
+  // 載入目前設定
+  const load = async () => {
+    const { layout } = await api(`/events/${f.event.value}/layout`);
+    f.rows.value = (layout?.rows || Party.SEAT_ROWS).map((r) => r.map((x) => x || '').join(',')).join('\n');
+    f.stage.value = layout?.stage || '舞台';
+    f.foot.value = layout?.foot || '';
+  };
+  f.event.onchange = load; load();
+  f.onsubmit = async (e) => {
+    e.preventDefault();
+    const rows = f.rows.value.split('\n').map((line) => line.split(',').map((x) => (x.trim() ? Number(x.trim()) : null)));
+    try { await api(`/events/${f.event.value}/layout`, { method: 'POST', body: { rows, stage: f.stage.value, foot: f.foot.value } }); toast('已儲存座位圖'); }
+    catch (err) { toast(err.message); }
   };
 }
 
@@ -458,13 +609,75 @@ function partySignupForm(ev, mine) {
 function ticketCard(t, ev) {
   return `<section class="card ticket">
     <div class="row spread"><h3>我的入場券</h3>${t.checked_in_at ? '<span class="pill solid">已報到</span>' : '<span class="pill">未報到</span>'}</div>
+    <div class="qrbox" id="qrBox" data-code="${esc(t.code)}" data-ev="${esc(ev.id)}"></div>
     <div class="code num">${esc(t.code)}</div>
-    <p class="tiny center">入場時把這組代碼給工作人員</p>
-    <div class="row spread tiny">
-      <span>${esc(ev.title)}</span>
-      <span>${t.guests ? `攜伴 ${t.guests} 位・` : ''}${t.meal ? esc(t.meal) : ''}${t.seat ? `・${esc(t.seat)}` : ''}</span>
+    <div class="trow">
+      <span><u>桌次</u>${t.table_no ? `第 ${t.table_no} 桌` : '未排桌'}</span>
+      <span><u>餐點</u>${t.meal ? esc(t.meal) : '—'}</span>
+      <span><u>攜伴</u>${t.guests || 0} 位</span>
     </div>
+    <p class="tiny center">入場時出示這個 QR Code，工作人員掃描即可報到</p>
   </section>`;
+}
+async function paintQR(ev, code) {
+  const box = $('#qrBox');
+  if (!box) return;
+  try { box.innerHTML = await qrSVG(`${location.origin}/#/e/${ev.id}/in/${code}`, { size: 200, dark: '#0B1B33', light: '#fff' }); }
+  catch { box.innerHTML = '<p class="tiny">QR 產生失敗，請用下方代碼報到</p>'; }
+}
+
+// 掃碼／連結報到：/#/e/<id>/in/<code>
+async function checkinView(eventId, code) {
+  if (!allow('checkin')) {
+    view.innerHTML = `<section class="card"><h2>入場代碼</h2><p class="muted">這是入場券連結，請把畫面出示給工作人員。</p>
+      <div class="code num" style="font-size:40px;letter-spacing:.2em;text-align:center">${esc(code)}</div>
+      <a class="btn ghost block" href="#/e/${esc(eventId)}">回活動頁</a></section>`;
+    return;
+  }
+  view.innerHTML = '<p class="loading">報到中…</p>';
+  try {
+    const r = await api(`/events/${eventId}/checkin`, { method: 'POST', body: { code } });
+    view.innerHTML = `<section class="card ${r.already ? '' : 'ok'}">
+      <h2>${r.already ? '這張票已經報到過' : '報到完成'}</h2>
+      <p style="font-size:30px;font-weight:700;margin:4px 0">${esc(r.name)}</p>
+      <p class="muted" style="margin:0">${r.table_no ? `第 ${r.table_no} 桌・` : ''}${r.guests ? `攜伴 ${r.guests} 位・` : ''}${r.meal ? esc(r.meal) : ''}</p>
+      <a class="btn block" href="#/e/${esc(eventId)}/scan">繼續掃下一位</a>
+      <a class="btn ghost block" href="#/e/${esc(eventId)}">回活動頁</a></section>`;
+  } catch (e) {
+    view.innerHTML = `<section class="card"><h2>報到失敗</h2><p class="muted">${esc(e.message)}</p>
+      <a class="btn block" href="#/e/${esc(eventId)}/scan">再掃一次</a></section>`;
+  }
+}
+
+// 掃描台（Android Chrome／桌機 Chrome 可用相機；iPhone 請用相機 App 掃）
+let stopScan = null;
+async function scanView(eventId) {
+  if (!allow('checkin')) { view.innerHTML = '<div class="card"><p class="muted">只有幹部可以掃碼報到。</p></div>'; return; }
+  view.innerHTML = `<section class="card">
+    <div class="row spread"><h2>掃碼報到</h2><a class="tiny" href="#/e/${esc(eventId)}">完成</a></div>
+    ${canScan() ? '<video id="cam" playsinline muted class="cam"></video><p class="tiny center" id="scanMsg">把入場券的 QR 對準框內</p>'
+      : '<p class="notice">這台裝置不支援相機掃描（iPhone 的 Safari 沒有這個功能）。請用手機內建相機 App 掃 QR，會直接開啟報到頁；或在報到台手動輸入代碼。</p>'}
+    <form id="manual" class="row" style="gap:8px">
+      <input name="code" placeholder="手動輸入代碼" style="flex:1;text-transform:uppercase" autocomplete="off">
+      <button class="btn sm">報到</button>
+    </form>
+  </section>`;
+  $('#manual').onsubmit = (e) => { e.preventDefault(); location.hash = `#/e/${eventId}/in/${e.target.code.value.trim().toUpperCase()}`; };
+  if (!canScan()) return;
+  try {
+    let busy = false;
+    stopScan = await scan($('#cam'), async (value) => {
+      if (busy) return;
+      const code = (value.match(/\/in\/([A-Z0-9]{4,10})/i)?.[1] || value).trim().toUpperCase();
+      busy = true;
+      try {
+        const r = await api(`/events/${eventId}/checkin`, { method: 'POST', body: { code } });
+        $('#scanMsg').textContent = `${r.already ? '已報到過：' : '✅ '}${r.name}${r.table_no ? `・第 ${r.table_no} 桌` : ''}`;
+        toast(`${r.name} 報到完成`);
+      } catch (err) { $('#scanMsg').textContent = err.message; }
+      setTimeout(() => { busy = false; }, 1800);
+    });
+  } catch (e) { toast(e.message); }
 }
 async function partyAdmin(ev) {
   const [{ tickets, checkedIn, people }, { prizes, draws }] = await Promise.all([
@@ -484,6 +697,7 @@ async function partyAdmin(ev) {
 
     <section class="card">
       <div class="row spread"><h3>報到台</h3><span class="tiny">${checkedIn}/${tickets.length} 人報到・含攜伴 ${people} 位</span></div>
+      <a class="btn sm" href="#/e/${ev.id}/scan">📷 掃碼報到</a>
       <form id="cform" class="row" style="gap:8px">
         <input name="code" placeholder="輸入入場代碼" style="flex:1;min-width:150px;text-transform:uppercase" autocomplete="off">
         <input name="seat" placeholder="桌次" style="width:90px">
@@ -502,7 +716,7 @@ async function partyAdmin(ev) {
         const w = draws.filter((d) => d.prize_id === p.id);
         return `<div class="prize">
           <div class="row spread"><b>${p.stage ? `<span class="pill">${esc(p.stage)}</span> ` : ''}${esc(p.name)}</b><span class="tiny">${w.length}/${p.qty}${p.sponsor ? `・${esc(p.sponsor)}` : ''}</span></div>
-          ${w.length ? `<div class="winners">${w.map((d) => `<span class="pill solid">${esc(d.name)}</span>`).join('')}</div>` : ''}
+          ${w.length ? `<div class="winners">${w.map((d) => `<button class="pill ${d.claimed_at ? 'solid' : 'wait'}" data-claim="${d.id}" title="${d.claimed_at ? '已領獎' : '點一下確認領獎'}">${esc(d.name)}${d.claimed_at ? ' ✓' : ''}</button>`).join('')}</div>` : ''}
           ${w.length < p.qty ? `<button class="btn sm" data-draw="${p.id}">抽出 1 位</button>` : '<span class="tiny">已抽完</span>'}
         </div>`;
       }).join('') || '<p class="muted" style="margin:0">還沒有獎項。</p>'}
@@ -662,6 +876,10 @@ async function formView(id) {
         <label>課表週次<input type="number" name="week_no" min="1" max="21" value="${d.week_no || ''}" placeholder="自動帶課表"></label>
         <label>人數上限<input type="number" name="capacity" min="1" max="999" value="${d.capacity || ''}" placeholder="不限"></label>
       </div>
+      <div class="grid2">
+        <label>外部報名連結（選填）<input name="link_url" type="url" value="${esc(d.link_url || '')}" placeholder="https://forms.gle/…"></label>
+        <label>按鈕文字<input name="link_label" maxlength="12" value="${esc(d.link_label || '')}" placeholder="索票登記"></label>
+      </div>
       <label>自填課表（沒填週次時使用）<textarea name="plan_text" placeholder="S：…">${esc(d.plan_text || '')}</textarea></label>
       <label>注意事項<textarea name="note" placeholder="攜帶瑜珈墊、水、彈力帶、毛巾">${esc(d.note || '')}</textarea></label>
       <label class="inline"><input type="checkbox" name="signup_open" ${d.signup_open ? 'checked' : ''}> 開放報名</label>
@@ -675,6 +893,7 @@ async function formView(id) {
     const body = {
       kind: f.kind.value, title: f.title.value, date: f.date.value, gather_time: f.gather_time.value,
       place: f.place.value, lead: f.lead.value, note: f.note.value, plan_text: f.plan_text.value,
+      link_url: f.link_url.value, link_label: f.link_label.value,
       week_no: f.week_no.value ? Number(f.week_no.value) : null,
       capacity: f.capacity.value ? Number(f.capacity.value) : null,
       signup_open: f.signup_open.checked,
@@ -732,6 +951,7 @@ async function meView() {
         : '<p class="muted" style="margin:0">還沒設定推播金鑰，通知功能尚未啟用。</p>'}
     </section>
 
+    ${(allow('members') || allow('roles')) ? '<a class="card" href="#/admin"><div class="row spread"><h3>管理後台</h3><span class="tiny">會員・身分・座位圖 ›</span></div></a>' : ''}
     ${allow('roster') ? `<a class="card" href="#/roster"><div class="row spread"><h3>團員名冊</h3><span class="tiny">${allow('roles') ? '可指派幹部角色' : '查看'} ›</span></div></a>` : ''}
     ${allow('plan') ? '<a class="card" href="#/plan/new"><div class="row spread"><h3>發布課表</h3><span class="tiny">教練 ›</span></div></a>' : ''}
     ${me.role !== 'member' ? '' : `<section class="card">
@@ -743,10 +963,15 @@ async function meView() {
     </section>`}
 
     <section class="card">
-      <h3>台灣耕跑團協會</h3>
-      <p class="muted" style="margin:0">入會申請使用協會的 Google 表單，網站不存身分證字號等資料。</p>
-      <a class="btn ghost block" href="https://docs.google.com/forms/d/1QVo9rHK6nUmm0vQgFSV9HYzMd5L5pDSnLuZV69-yMHY/viewform" target="_blank" rel="noopener">開啟入會表單</a>
+      <div class="row spread"><h3>台灣耕跑團協會</h3>
+        <span class="pill ${me.membership === 'active' ? 'solid' : me.membership === 'applied' ? 'wait' : ''}">${esc(me.membershipName || '跑友')}</span></div>
+      ${me.membership === 'active'
+        ? `<p class="muted" style="margin:0">${esc(me.member_type || '會員')}${me.member_no ? `・編號 ${esc(me.member_no)}` : ''}${me.paid_until ? `・會費繳至 ${esc(me.paid_until)}` : ''}</p>`
+        : `<p class="muted" style="margin:0">跑友可以報名所有團練；想加入協會的話，先填官方表單（含身分證字號等資料，不存在這個網站），再按下方按鈕通知行政人員。</p>
+           <a class="btn ghost block" href="https://docs.google.com/forms/d/1QVo9rHK6nUmm0vQgFSV9HYzMd5L5pDSnLuZV69-yMHY/viewform" target="_blank" rel="noopener">開啟入會表單</a>
+           ${me.membership === 'applied' ? '<p class="notice" style="margin:0">已送出申請，等行政人員確認。</p>' : '<button class="btn block" id="applyBtn">我已填表，送出申請</button>'}`}
     </section>
+    <section class="card" id="myPrizes"></section>
 
     <button class="btn ghost block" id="logout">登出</button>
     <p class="tiny center">課表來源：耕跑團記事本。W9 以後為系統推估，以教練公告為準。</p>`;
@@ -772,6 +997,20 @@ async function meView() {
     try { me = (await api('/me/admin', { method: 'POST', body: { code: e.target.code.value } })).member; toast('已升級為幹部'); render(); }
     catch (err) { toast(err.message); }
   });
+  $('#applyBtn')?.addEventListener('click', async () => {
+    try { me = (await api('/me/apply', { method: 'POST' })).member; toast('已送出申請'); render(); } catch (e) { toast(e.message); }
+  });
+  api('/my/prizes').then(({ prizes }) => {
+    const box = $('#myPrizes');
+    if (!box) return;
+    box.innerHTML = prizes.length
+      ? `<h3>我的中獎紀錄</h3>${prizes.map((p) => `<div class="r"><span>🎁</span>
+          <span><b>${esc(p.prize)}</b>${p.stage ? ` <span class="tiny">${esc(p.stage)}</span>` : ''}
+            <span class="tiny" style="display:block">${esc(p.title)}${p.sponsor ? `・${esc(p.sponsor)}` : ''}</span></span>
+          <span class="pill ${p.claimed_at ? 'solid' : 'wait'}">${p.claimed_at ? '已領獎' : '待領獎'}</span></div>`).join('')}`
+      : '';
+    box.hidden = !prizes.length;
+  }).catch(() => {});
   $('#logout').onclick = async () => { await api('/logout', { method: 'POST' }); me = null; location.hash = '#/'; render(); };
   $('#pushBtn')?.addEventListener('click', () => togglePush(sub));
   $('#pushTest')?.addEventListener('click', async () => {
@@ -798,6 +1037,7 @@ const urlB64 = (s) => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/
 
 // ---------- 路由 ----------
 async function render() {
+  if (stopScan) { stopScan(); stopScan = null; }
   const raw = location.hash.replace(/^#/, '') || '/';
   const hash = raw.split('?')[0];
   for (const a of document.querySelectorAll('.tabs a')) {
@@ -817,11 +1057,16 @@ async function render() {
     if (hash === '/coach') return coachView();
     if (hash === '/notifications') return await notificationsView();
     if (hash === '/roster') return await rosterView();
+    if (hash === '/admin') return await adminView();
     if (hash === '/plan/new') return planNewView();
     if (hash === '/me') return await meView();
     if (hash === '/new') return await formView(null);
     const edit = hash.match(/^\/edit\/([\w-]+)$/);
     if (edit) return await formView(edit[1]);
+    const ci = hash.match(/^\/e\/([\w-]+)\/in\/([\w-]+)$/);
+    if (ci) return await checkinView(ci[1], ci[2].toUpperCase());
+    const sc = hash.match(/^\/e\/([\w-]+)\/scan$/);
+    if (sc) return await scanView(sc[1]);
     const ev = hash.match(/^\/e\/([\w-]+)$/);
     if (ev) return await eventView(ev[1]);
     const pl = hash.match(/^\/plan(?:\/(\d+))?$/);
@@ -850,6 +1095,10 @@ $('#theme').onclick = () => {
 
 // 換頁用 View Transition（支援的瀏覽器才有）
 const go = () => { render(); scrollTo({ top: 0, behavior: 'instant' }); };
-addEventListener('hashchange', () => (document.startViewTransition ? document.startViewTransition(go) : go()));
+addEventListener('hashchange', () => {
+  if (!document.startViewTransition) return go();
+  // 連續換頁時前一個轉場會被中斷，忽略那個 rejection
+  document.startViewTransition(go).finished.catch(() => {});
+});
 render();
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});

@@ -328,3 +328,19 @@ button.seatrow:active{background:var(--accent-soft)}
 .lottery .lside .tiny{color:rgba(255,255,255,.6)}
 @media (max-width:700px){.lottery .lbody{grid-template-columns:1fr}.lottery .lside{display:none}}
 .confetti{position:fixed;inset:0;z-index:70;pointer-events:none}
+
+/* 入場券 QR 與資訊列 */
+.qrbox{background:#fff;border-radius:16px;padding:10px;display:grid;place-items:center;margin:2px auto 0;width:min(240px,70%)}
+.qrbox svg{display:block;width:100%;height:auto}
+.ticket .trow{display:flex;justify-content:space-around;gap:10px;text-align:center;font-weight:600;font-size:15px}
+.ticket .trow u{display:block;text-decoration:none;font-size:11px;font-weight:500;color:rgba(255,255,255,.7);letter-spacing:.06em}
+.cam{width:100%;max-height:52vh;border-radius:16px;background:#000;object-fit:cover}
+.card.ok{border-color:color-mix(in srgb,var(--easy) 50%,transparent)}
+
+/* 權限對照表 */
+.permtable{overflow-x:auto;font-size:13px}
+.permtable .hd,.permtable .rw{display:grid;grid-template-columns:76px repeat(8,minmax(44px,1fr));gap:2px;align-items:center}
+.permtable .hd{color:var(--ink-3);font-size:11px;padding-bottom:4px;position:sticky;top:0}
+.permtable .rw{padding:5px 0;border-top:1px solid var(--stroke)}
+.permtable .rw span:first-child{font-weight:650}
+.permtable .rw span:not(:first-child){text-align:center;color:var(--accent);font-weight:700}

@@ -16,7 +16,7 @@ export const STAGES = ['暖身', 'R1', 'R1(大)', 'R1中', 'R2', 'R2(大)', '加
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 // ---- 座位查詢（團員）----
-export function seatSection(seats) {
+export function seatSection(seats, layout) {
   const seated = seats.filter((s) => s.table_no);
   if (!seated.length) return `<section class="card party">
     <h3>座位查詢</h3><p class="muted" style="margin:0">還沒有排桌，排好之後可以在這裡查自己的桌次。</p></section>`;
@@ -31,20 +31,22 @@ export function seatSection(seats) {
       <input id="seatQ" placeholder="輸入姓名、暱稱或跑團" autocomplete="off" inputmode="search">
       <div id="seatResult" class="seatlist"></div>
     </div>
-    <div id="seatMapWrap" hidden>${seatMap(seated)}</div>
+    <div id="seatMapWrap" hidden>${seatMap(seated, layout)}</div>
     <div id="tableDetail"></div>
   </section>`;
 }
-export function seatMap(seats) {
+export function seatMap(seats, layout) {
+  const rows = layout?.rows?.length ? layout.rows : SEAT_ROWS;
+  const cols = Math.max(...rows.map((r) => r.length));
   const count = {};
   for (const s of seats) count[s.table_no] = (count[s.table_no] || 0) + 1 + (s.guests || 0);
   return `<div class="seatmap">
-    <div class="stage">舞台</div>
-    <div class="grid">${SEAT_ROWS.map((row) => row.map((t) => t
+    <div class="stage">${esc(layout?.stage || '舞台')}</div>
+    <div class="grid" style="grid-template-columns:repeat(${cols},1fr)">${rows.map((row) => row.map((t) => t
       ? `<button class="tbl" data-table="${t}"><b class="num">${t}</b><span class="num">${count[t] || 0}</span></button>`
       : '<span class="gap"></span>').join('')).join('')}</div>
-    <div class="ibm">IBM 產品體驗區 ×7</div>
-    <div class="entry">↑ 入口</div>
+    ${layout?.foot || !layout ? `<div class="ibm">${esc(layout?.foot || 'IBM 產品體驗區 ×7')}</div>` : ''}
+    <div class="entry">${esc(layout?.entry || '↑ 入口')}</div>
   </div>`;
 }
 export function tableList(seats, table) {

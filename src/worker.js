@@ -44,18 +44,23 @@ export const ROLES = { chair: '理事長', director: '理事', supervisor: '監�
 const norm = (r) => (r === 'admin' ? 'staff' : ROLES[r] ? r : 'member');   // 相容舊的 admin
 // 權限：活動（建立與編輯）、課表（發布）、報到、抽獎、名冊、角色指派
 const PERMS = {
-  chair:      ['event', 'plan', 'checkin', 'lottery', 'roster', 'roles'],
-  director:   ['event', 'checkin', 'lottery', 'roster'],
-  supervisor: ['roster'],
-  staff:      ['event', 'checkin', 'lottery', 'roster'],
+  chair:      ['event', 'plan', 'checkin', 'lottery', 'roster', 'roles', 'members', 'layout'],
+  director:   ['event', 'checkin', 'lottery', 'roster', 'members'],
+  supervisor: ['roster', 'members'],                 // 監事只看，寫入在各 API 另外擋
+  staff:      ['event', 'checkin', 'lottery', 'roster', 'members', 'layout'],
   coach:      ['event', 'plan', 'checkin'],
   member:     [],
 };
+const READONLY = { supervisor: true };               // 監事：看得到名冊與會籍，但不能改
+export const MEMBERSHIP = { none: '跑友', applied: '申請中', active: '協會會員', expired: '會籍到期' };
+export const MEMBER_TYPES = ['一般會員', '永久會員', '贊助會員'];
 const can = (m, p) => !!m && PERMS[norm(m.role)].includes(p);
 const pub = (m) => ({
   id: m.id, name: m.name, dist: m.dist, grp: m.grp, role: norm(m.role), roleName: ROLES[norm(m.role)],
   title: m.title || null, avatar: m.avatar || null, line: !!m.line_id,
   nickname: m.nickname || '', club: m.club || '', meal_pref: m.meal_pref || '', phone: m.phone || '',
+  membership: m.membership || 'none', membershipName: MEMBERSHIP[m.membership || 'none'],
+  member_type: m.member_type || null, member_no: m.member_no || null, paid_until: m.paid_until || null,
   can: PERMS[norm(m.role)],
 });
 
@@ -127,7 +132,7 @@ async function lineCallback(req, env, url) {
 }
 
 // ---- 活動 ----
-const eventCols = 'id, kind, title, date, gather_time, end_time, place, lead, note, week_no, plan_text, capacity, signup_open, deadline, status, created_at, fee, guest_max, meal_options';
+const eventCols = 'id, kind, title, date, gather_time, end_time, place, lead, note, week_no, plan_text, capacity, signup_open, deadline, status, created_at, fee, guest_max, meal_options, link_url, link_label';
 
 function readEvent(b) {
   const e = {
@@ -147,6 +152,8 @@ function readEvent(b) {
     fee: Number.isInteger(b.fee) && b.fee >= 0 ? b.fee : null,
     guest_max: Number.isInteger(b.guest_max) && b.guest_max > 0 ? Math.min(b.guest_max, 9) : null,
     meal_options: str(b.meal_options, 60),
+    link_url: /^https:\/\/[\w.-]+/.test(str(b.link_url, 300)) ? str(b.link_url, 300) : '',
+    link_label: str(b.link_label, 20),
   };
   if (!e.title || !isDate(e.date) || !isTime(e.gather_time) || !isTime(e.end_time)) return null;
   return e;
@@ -284,9 +291,9 @@ async function api(req, env, path, method) {
     const e = readEvent(await body());
     if (!e) return fail(400, '活動資料不完整');
     const id = rid(8);
-    await env.DB.prepare(`INSERT INTO events (id, kind, title, date, gather_time, end_time, place, lead, note, week_no, plan_text, capacity, signup_open, deadline, created_by, fee, guest_max, meal_options)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .bind(id, e.kind, e.title, e.date, e.gather_time, e.end_time, e.place, e.lead, e.note, e.week_no, e.plan_text, e.capacity, e.signup_open, e.deadline, member.id, e.fee, e.guest_max, e.meal_options).run();
+    await env.DB.prepare(`INSERT INTO events (id, kind, title, date, gather_time, end_time, place, lead, note, week_no, plan_text, capacity, signup_open, deadline, created_by, fee, guest_max, meal_options, link_url, link_label)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .bind(id, e.kind, e.title, e.date, e.gather_time, e.end_time, e.place, e.lead, e.note, e.week_no, e.plan_text, e.capacity, e.signup_open, e.deadline, member.id, e.fee, e.guest_max, e.meal_options, e.link_url, e.link_label).run();
     await notify(env, await allMemberIds(env, member.id), 'event',
       { title: `新活動：${e.title}`, body: `${e.date}${e.gather_time ? ` ${e.gather_time}` : ''}　${e.place || ''}`, url: `/#/e/${id}` });
     return json({ id });
@@ -304,8 +311,8 @@ async function api(req, env, path, method) {
       const ga = needAdmin(); if (ga) return ga;
       const e = readEvent(await body());
       if (!e) return fail(400, '活動資料不完整');
-      const r = await env.DB.prepare(`UPDATE events SET kind=?, title=?, date=?, gather_time=?, end_time=?, place=?, lead=?, note=?, week_no=?, plan_text=?, capacity=?, signup_open=?, deadline=?, fee=?, guest_max=?, meal_options=? WHERE id = ?`)
-        .bind(e.kind, e.title, e.date, e.gather_time, e.end_time, e.place, e.lead, e.note, e.week_no, e.plan_text, e.capacity, e.signup_open, e.deadline, e.fee, e.guest_max, e.meal_options, id).run();
+      const r = await env.DB.prepare(`UPDATE events SET kind=?, title=?, date=?, gather_time=?, end_time=?, place=?, lead=?, note=?, week_no=?, plan_text=?, capacity=?, signup_open=?, deadline=?, fee=?, guest_max=?, meal_options=?, link_url=?, link_label=? WHERE id = ?`)
+        .bind(e.kind, e.title, e.date, e.gather_time, e.end_time, e.place, e.lead, e.note, e.week_no, e.plan_text, e.capacity, e.signup_open, e.deadline, e.fee, e.guest_max, e.meal_options, e.link_url, e.link_label, id).run();
       return r.meta.changes ? json({ ok: true }) : fail(404, '找不到這個活動');
     }
     if (method === 'DELETE') {
@@ -388,6 +395,14 @@ async function api(req, env, path, method) {
   }
 
   // ---- 春酒：入場券、報到、獎項與抽獎 ----
+  if (path === '/api/my/prizes' && method === 'GET') {
+    const g = need(); if (g) return g;
+    const rows = (await env.DB.prepare(
+      `SELECT d.id, d.created_at, d.claimed_at, p.name AS prize, p.stage, p.sponsor, e.title, e.id AS event_id
+       FROM draws d JOIN prizes p ON p.id = d.prize_id JOIN events e ON e.id = d.event_id
+       WHERE d.member_id = ? ORDER BY d.created_at DESC LIMIT 30`).bind(member.id).all()).results;
+    return json({ prizes: rows });
+  }
   if (path === '/api/my/tickets' && method === 'GET') {
     const g = need(); if (g) return g;
     const rows = (await env.DB.prepare(
@@ -396,6 +411,24 @@ async function api(req, env, path, method) {
       .bind(member.id, today()).all()).results;
     return json({ tickets: rows });
   }
+  const ml = path.match(/^\/api\/events\/([\w-]{1,32})\/layout$/);
+  if (ml) {
+    const g = need(); if (g) return g;
+    if (method === 'GET') {
+      const r = await env.DB.prepare('SELECT seat_layout FROM events WHERE id = ?').bind(ml[1]).first();
+      return json({ layout: r?.seat_layout ? JSON.parse(r.seat_layout) : null });
+    }
+    if (method === 'POST') {
+      if (!can(member, 'layout')) return fail(403, '只有行政人員可以設定座位圖');
+      const b = await body();
+      const rows = Array.isArray(b.rows) ? b.rows.slice(0, 20).map((r) => (Array.isArray(r) ? r.slice(0, 12).map((v) => (Number(v) > 0 ? Number(v) : null)) : [])) : null;
+      if (!rows?.length) return fail(400, '座位佈局格式不正確');
+      const layout = { rows, stage: str(b.stage, 20) || '舞台', foot: str(b.foot, 40), entry: str(b.entry, 20) || '↑ 入口' };
+      await env.DB.prepare('UPDATE events SET seat_layout = ? WHERE id = ?').bind(JSON.stringify(layout), ml[1]).run();
+      return json({ ok: true, layout });
+    }
+  }
+
   const ms = path.match(/^\/api\/events\/([\w-]{1,32})\/seats$/);
   if (ms && method === 'GET') {
     const g = need(); if (g) return g;
@@ -403,7 +436,9 @@ async function api(req, env, path, method) {
       `SELECT t.table_no, t.note, t.guests, m.name, m.nickname, m.club
        FROM tickets t JOIN members m ON m.id = t.member_id
        WHERE t.event_id = ? ORDER BY t.table_no, m.name`).bind(ms[1]).all()).results;
-    return json({ seats: rows, tables: [...new Set(rows.map((r) => r.table_no).filter(Boolean))].sort((a, b) => a - b) });
+    const ly = await env.DB.prepare('SELECT seat_layout FROM events WHERE id = ?').bind(ms[1]).first();
+    return json({ seats: rows, layout: ly?.seat_layout ? JSON.parse(ly.seat_layout) : null,
+      tables: [...new Set(rows.map((r) => r.table_no).filter(Boolean))].sort((a, b) => a - b) });
   }
   // 幹部：排桌（單筆或整批）
   const msa = path.match(/^\/api\/events\/([\w-]{1,32})\/seats\/assign$/);
@@ -453,7 +488,7 @@ async function api(req, env, path, method) {
     const eid = mp[1];
     if (method === 'GET') {
       const prizes = (await env.DB.prepare('SELECT id, name, qty, sponsor, sort, stage, note FROM prizes WHERE event_id = ? ORDER BY sort, rowid').bind(eid).all()).results;
-      const draws = (await env.DB.prepare('SELECT id, prize_id, member_id, name, created_at FROM draws WHERE event_id = ? ORDER BY created_at').bind(eid).all()).results;
+      const draws = (await env.DB.prepare('SELECT id, prize_id, member_id, name, created_at, claimed_at FROM draws WHERE event_id = ? ORDER BY created_at').bind(eid).all()).results;
       return json({ prizes, draws });
     }
     if (method === 'POST') {
@@ -529,6 +564,14 @@ async function api(req, env, path, method) {
     return new Response(`\ufeff${csv}`, { headers: { 'content-type': 'text/csv; charset=utf-8', 'content-disposition': 'attachment; filename="draws.csv"' } });
   }
 
+  const mclaim = path.match(/^\/api\/draws\/([\w-]{1,32})\/claim$/);
+  if (mclaim && method === 'POST') {
+    const g = need(); if (g) return g;
+    if (!can(member, 'lottery')) return fail(403, '只有幹部可以確認領獎');
+    await env.DB.prepare("UPDATE draws SET claimed_at = datetime('now') WHERE id = ?").bind(mclaim[1]).run();
+    return json({ ok: true });
+  }
+
   const mdd = path.match(/^\/api\/draws\/([\w-]{1,32})$/);
   if (mdd && method === 'DELETE') {
     const g = need(); if (g) return g;
@@ -541,9 +584,39 @@ async function api(req, env, path, method) {
   if (path === '/api/members' && method === 'GET') {
     const g = need(); if (g) return g;
     if (!can(member, 'roster')) return fail(403, '只有幹部可以看名冊');
-    const rows = (await env.DB.prepare('SELECT id, name, dist, grp, role, title, avatar, created_at FROM members ORDER BY created_at').all()).results;
-    return json({ members: rows.map((m) => ({ ...m, role: norm(m.role), roleName: ROLES[norm(m.role)] })) });
+    const rows = (await env.DB.prepare(
+      `SELECT id, name, nickname, club, dist, grp, role, title, avatar, created_at,
+              membership, member_type, member_no, joined_on, paid_until, membership_note, phone
+       FROM members ORDER BY created_at`).all()).results;
+    return json({
+      members: rows.map((m) => ({ ...m, role: norm(m.role), roleName: ROLES[norm(m.role)], membershipName: MEMBERSHIP[m.membership || 'none'] })),
+      roles: ROLES, perms: PERMS, membership: MEMBERSHIP, memberTypes: MEMBER_TYPES,
+    });
   }
+  const mm = path.match(/^\/api\/members\/([\w-]{1,32})\/membership$/);
+  if (mm && method === 'POST') {
+    const g = need(); if (g) return g;
+    if (!can(member, 'members') || READONLY[norm(member.role)]) return fail(403, '沒有管理會籍的權限');
+    const b = await body();
+    const st = MEMBERSHIP[b.membership] ? b.membership : null;
+    if (!st) return fail(400, '會籍狀態不正確');
+    await env.DB.prepare('UPDATE members SET membership = ?, member_type = ?, member_no = ?, joined_on = ?, paid_until = ?, membership_note = ? WHERE id = ?')
+      .bind(st, str(b.member_type, 10) || null, str(b.member_no, 20) || null, str(b.joined_on, 10) || null,
+            str(b.paid_until, 10) || null, str(b.membership_note, 100) || null, mm[1]).run();
+    if (st === 'active') await notify(env, [mm[1]], 'system', { title: '入會完成', body: '你已經是台灣耕跑團協會會員', url: '/#/me' });
+    return json({ ok: true });
+  }
+
+  // 跑友自己申請入會（填完表單後按一下，行政人員在後台審核）
+  if (path === '/api/me/apply' && method === 'POST') {
+    const g = need(); if (g) return g;
+    if (member.membership === 'active') return fail(400, '你已經是會員');
+    await env.DB.prepare("UPDATE members SET membership = 'applied' WHERE id = ?").bind(member.id).run();
+    const admins = (await env.DB.prepare("SELECT id FROM members WHERE role IN ('chair','staff','director')").all()).results.map((r) => r.id);
+    await notify(env, admins, 'system', { title: '有人申請入會', body: `${member.name} 送出入會申請`, url: '/#/admin' });
+    return json({ member: pub({ ...member, membership: 'applied' }) });
+  }
+
   const mr = path.match(/^\/api\/members\/([\w-]{1,32})\/role$/);
   if (mr && method === 'POST') {
     const g = need(); if (g) return g;
