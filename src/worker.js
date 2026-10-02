@@ -140,7 +140,7 @@ const pub = (m) => ({
   nickname: m.nickname || '', club: m.club || '', meal_pref: m.meal_pref || '', phone: m.phone || '',
   membership: m.membership || 'none', membershipName: MEMBERSHIP[m.membership || 'none'],
   member_type: m.member_type || null, member_no: m.member_no || null, paid_until: m.paid_until || null,
-  share_logs: !!m.share_logs, can: PERMS[norm(m.role)],
+  share_logs: !!m.share_logs, show_rank: !!m.show_rank, can: PERMS[norm(m.role)],
 });
 
 // ---- 通知中心：推播成功與否都留一份 ----
@@ -587,7 +587,7 @@ async function api(req, env, path, method) {
     }
     await audit(env, req, member, 'event.create', 'event', id, `${e.title}${e.team_id ? `（${e.team_id}）` : ''}${e.visibility === 'invite' ? '，邀請制' : ''}${from ? `，複製自 ${from}` : ''}`);
     // 邀請制不廣播；之後邀請誰就通知誰
-    if (b.notify !== false && e.visibility !== 'invite') await notify(env, e.team_id ? await teamMemberIds(env, e.team_id, member.id) : await allMemberIds(env, member.id), 'event',
+    if (b.notify !== false && e.visibility !== 'invite') await notify(env, e.team_id ? await teamMemberIds(e.team_id, member.id) : await allMemberIds(env, member.id), 'event',
       { title: `${e.kind === 'survey' ? '新問卷' : '新活動'}：${e.title}`, body: `${e.date}${e.gather_time ? ` ${e.gather_time}` : ''}　${e.place || ''}`, url: `/#/e/${id}` });
     return json({ id });
   }
@@ -677,7 +677,7 @@ async function api(req, env, path, method) {
       if (tid) {
         // 整個分團：要看得到那個分團名冊的人才能這樣邀
         if (!teamCan(tid, 'roster')) return fail(403, '沒有這個分團的名冊權限');
-        ids = await teamMemberIds(env, tid);
+        ids = await teamMemberIds(tid);
         via = 'team';
       }
       if (!ids.length) return fail(400, '沒有要邀請的人');
@@ -1114,14 +1114,15 @@ async function api(req, env, path, method) {
       `SELECT p.id, p.week_no, p.title, p.phase, p.body, p.created_at, p.team_id, m.name AS author, t.name AS team_name
        FROM plan_posts p LEFT JOIN members m ON m.id = p.author_id LEFT JOIN teams t ON t.id = p.team_id
        WHERE (p.team_id IS NULL OR t.private = 0 OR p.team_id IN (SELECT team_id FROM team_members WHERE member_id = ?1 AND status = 'active') OR ?2 = 1)
-       ${week ? 'AND p.week_no = ?3' : ''} ORDER BY p.created_at DESC LIMIT ${week ? 1 : 20}`)
+       ${week ? 'AND p.week_no = ?3' : ''} ORDER BY p.created_at DESC LIMIT ${week ? 6 : 20}`)
       .bind(member.id, can(member, 'plan') ? 1 : 0, ...(week ? [week] : [])).all()).results;
     return json({ plans: rows });
   }
   if (path === '/api/plans' && method === 'POST') {
     const g = need(); if (g) return g;
-    if (!can(member, 'plan')) return fail(403, '只有教練可以發布課表');
     const b = await body();
+    // 教練可以發給全協會或任何分團；分團團長只能發給自己的分團
+    if (!can(member, 'plan') && !(str(b.team_id, 16) && teamCan(str(b.team_id, 16), 'appoint'))) return fail(403, '只有教練與分團團長可以發布課表');
     const title = str(b.title, 60), bodyText = str(b.body, 8000);
     const week = Number.isInteger(b.week_no) && b.week_no >= 1 && b.week_no <= 21 ? b.week_no : null;
     if (!title || !bodyText) return fail(400, '標題和課表內容都要填');
@@ -1131,13 +1132,15 @@ async function api(req, env, path, method) {
     await env.DB.prepare('INSERT INTO plan_posts (id, week_no, title, phase, body, author_id, team_id) VALUES (?, ?, ?, ?, ?, ?, ?)')
       .bind(id, week, title, str(b.phase, 20), bodyText, member.id, teamId).run();
     await audit(env, req, member, 'plan.publish', 'plan', id, title);
-    if (b.notify !== false) await notify(env, teamId ? await teamMemberIds(env, teamId) : await allMemberIds(env), 'plan', { title: `新課表：${title}`, body: `${member.name} 發布了${week ? ` W${week}` : ''}課表`, url: `/#/plan` });
+    if (b.notify !== false) await notify(env, teamId ? await teamMemberIds(teamId) : await allMemberIds(env), 'plan', { title: `新課表：${title}`, body: `${member.name} 發布了${week ? ` W${week}` : ''}課表`, url: `/#/plan` });
     return json({ id });
   }
   const pdel = path.match(/^\/api\/plans\/([\w-]{1,32})$/);
   if (pdel && method === 'DELETE') {
     const g = need(); if (g) return g;
-    if (!can(member, 'plan')) return fail(403, '只有教練可以刪除課表');
+    const post = await env.DB.prepare('SELECT team_id FROM plan_posts WHERE id = ?').bind(pdel[1]).first();
+    if (!post) return fail(404, '找不到這則課表');
+    if (!can(member, 'plan') && !(post.team_id && teamCan(post.team_id, 'appoint'))) return fail(403, '只有教練與分團團長可以刪除課表');
     await env.DB.prepare('DELETE FROM plan_posts WHERE id = ?').bind(pdel[1]).run();
     await audit(env, req, member, 'plan.delete', 'plan', pdel[1], '');
     return json({ ok: true });
@@ -1402,6 +1405,112 @@ async function api(req, env, path, method) {
         : { ...q, counts: q.options.map((o) => ({ o, n: ins.filter((r) => [].concat(ans(r)[q.id] || []).includes(o)).length })),
             answered: ins.filter((r) => ans(r)[q.id] != null).length }),
     });
+  }
+
+  // ---- 分團公告欄與里程排行榜 ----
+  const mtp = path.match(/^\/api\/teams\/([\w-]{1,16})\/(posts|leaderboard)(?:\/([\w-]{1,32}))?$/);
+  if (mtp) {
+    const g = need(); if (g) return g;
+    const tid = mtp[1], team = await env.DB.prepare('SELECT id, name, private FROM teams WHERE id = ?').bind(tid).first();
+    if (!team) return fail(404, '找不到這個分團');
+    const canRead = !team.private || inTeam(tid) || teamCan(tid, 'roster');
+    if (mtp[2] === 'posts') {
+      if (method === 'GET') {
+        if (!canRead) return fail(403, '這是私密分團的公告');
+        const before = str(new URL(req.url).searchParams.get('before'), 20);
+        const rows = (await env.DB.prepare(`SELECT id, author_id, author_name, title, body, pinned, created_at FROM team_posts WHERE team_id = ?
+          ${before ? 'AND created_at < ?' : ''} ORDER BY pinned DESC, created_at DESC LIMIT 21`).bind(tid, ...(before ? [before] : [])).all()).results;
+        return json({ posts: rows.slice(0, 20), next: rows.length > 20 ? rows[19].created_at : null, canPost: teamCan(tid, 'event') });
+      }
+      if (method === 'POST' && !mtp[3]) {
+        if (!teamCan(tid, 'event')) return fail(403, '只有分團團長與幹部可以發公告');
+        const b = await body(), title = str(b.title, 60), text = str(b.body, 3000);
+        if (!title) return fail(400, '請填標題');
+        const id = rid(8);
+        await env.DB.prepare('INSERT INTO team_posts (id, team_id, author_id, author_name, title, body, pinned) VALUES (?, ?, ?, ?, ?, ?, ?)')
+          .bind(id, tid, member.id, member.nickname || member.name, title, text, b.pinned === true ? 1 : 0).run();
+        await audit(env, req, member, 'team.post', 'team', tid, title);
+        if (b.notify !== false) await notify(env, await teamMemberIds(tid, member.id), 'event', { title: `${team.name}公告：${title}`, body: text.slice(0, 80), url: `/#/t/${tid}` });
+        return json({ id });
+      }
+      if (method === 'DELETE' && mtp[3]) {
+        const post = await env.DB.prepare('SELECT author_id FROM team_posts WHERE id = ? AND team_id = ?').bind(mtp[3], tid).first();
+        if (!post) return fail(404, '找不到這則公告');
+        if (post.author_id !== member.id && !teamCan(tid, 'appoint')) return fail(403, '只有發文的人或團長可以刪除');
+        await env.DB.prepare('DELETE FROM team_posts WHERE id = ?').bind(mtp[3]).run();
+        await audit(env, req, member, 'team.post_delete', 'team', tid, mtp[3]);
+        return json({ ok: true });
+      }
+    }
+    if (mtp[2] === 'leaderboard' && method === 'GET') {
+      // 只有團員看得到；只列出自己同意上榜的人
+      if (!inTeam(tid) && !teamCan(tid, 'roster')) return fail(403, '加入分團後才看得到排行榜');
+      const period = new URL(req.url).searchParams.get('period') === 'month' ? 'month' : 'week';
+      const now = new Date(), from = period === 'month' ? `${tpDate(now).slice(0, 7)}-01`
+        : tpDate(new Date(now.getTime() - ((taipei(now).getUTCDay() + 6) % 7) * 864e5));
+      const rows = (await env.DB.prepare(`SELECT m.id, m.name, m.nickname, m.avatar, ROUND(SUM(COALESCE(l.km, 0)), 1) AS km, COUNT(l.id) AS n
+        FROM members m JOIN team_members tm ON tm.member_id = m.id AND tm.team_id = ? AND tm.status = 'active'
+        JOIN training_logs l ON l.member_id = m.id AND l.date BETWEEN ? AND ? AND l.status != 'skip'
+        WHERE m.show_rank = 1 GROUP BY m.id HAVING km > 0 ORDER BY km DESC LIMIT 30`).bind(tid, from, tpDate(now)).all()).results;
+      return json({ period, from, rows, me: !!member.show_rank });
+    }
+  }
+  if (path === '/api/me/show-rank' && method === 'POST') {
+    const g = need(); if (g) return g;
+    const on = (await body()).on === true ? 1 : 0;
+    await env.DB.prepare('UPDATE members SET show_rank = ? WHERE id = ?').bind(on, member.id).run();
+    await audit(env, req, member, 'privacy.show_rank', 'member', member.id, on ? '開啟' : '關閉');
+    return json({ ok: true });
+  }
+
+  // ---- 管理總覽與群發通知 ----
+  if (path === '/api/admin/overview' && method === 'GET') {
+    const g = need(); if (g) return g;
+    if (!can(member, 'roster')) return fail(403, '只有幹部可以看總覽');
+    const one = async (sql, ...a) => (await env.DB.prepare(sql).bind(...a).first())?.n || 0;
+    const m0 = `${tpDate(new Date()).slice(0, 7)}-01`;
+    const growth = (await env.DB.prepare(`SELECT substr(created_at, 1, 7) AS m, COUNT(*) AS n FROM members
+      WHERE created_at >= date('now', 'start of month', '-11 months') GROUP BY m ORDER BY m`).all()).results;
+    const teamSizes = (await env.DB.prepare(`SELECT t.id, t.name, t.color, COUNT(tm.member_id) AS n FROM teams t
+      LEFT JOIN team_members tm ON tm.team_id = t.id AND tm.status = 'active' GROUP BY t.id ORDER BY t.sort`).all()).results;
+    const att = await env.DB.prepare(`SELECT SUM(CASE WHEN s.attended_at IS NOT NULL THEN 1 ELSE 0 END) AS a, COUNT(*) AS n FROM signups s
+      JOIN events e ON e.id = s.event_id WHERE s.status = 'in' AND e.kind NOT IN ('party', 'survey') AND e.date BETWEEN date('now', '-30 days') AND date('now', '-1 day')`).first();
+    return json({
+      members: await one('SELECT COUNT(*) AS n FROM members'),
+      newThisMonth: await one('SELECT COUNT(*) AS n FROM members WHERE created_at >= ?', m0),
+      active30: await one("SELECT COUNT(*) AS n FROM members WHERE last_seen >= datetime('now', '-30 days')"),
+      association: await one("SELECT COUNT(*) AS n FROM members WHERE membership = 'active'"),
+      applied: await one("SELECT COUNT(*) AS n FROM members WHERE membership = 'applied'"),
+      expiring: await one("SELECT COUNT(*) AS n FROM members WHERE membership = 'active' AND paid_until BETWEEN date('now') AND date('now', '+30 days')"),
+      events30: await one("SELECT COUNT(*) AS n FROM events WHERE date BETWEEN date('now', '-30 days') AND date('now')"),
+      upcoming: await one("SELECT COUNT(*) AS n FROM events WHERE date BETWEEN date('now') AND date('now', '+30 days')"),
+      signups30: await one("SELECT COUNT(*) AS n FROM signups WHERE created_at >= datetime('now', '-30 days') AND status != 'cancel'"),
+      logs7: await one("SELECT COUNT(*) AS n FROM training_logs WHERE date >= date('now', '-6 days')"),
+      pushSubs: await one('SELECT COUNT(DISTINCT member_id) AS n FROM push_subs'),
+      attendance: att?.n ? Math.round((att.a || 0) / att.n * 100) : null,
+      growth, teamSizes,
+    });
+  }
+  if (path === '/api/admin/broadcast' && method === 'POST') {
+    const g = need(); if (g) return g;
+    if (!can(member, 'settings') && !(can(member, 'members') && !READONLY[norm(member.role)])) return fail(403, '只有理事長與行政人員可以群發通知');
+    if (await limited(env, `broadcast:${member.id}`, 10, 3600)) return fail(429, '一小時最多群發 10 次');
+    const b = await body(), title = str(b.title, 60), text = str(b.body, 300), link = str(b.url, 200);
+    if (!title) return fail(400, '請填標題');
+    if (link && !/^\/#\/[\w/?=&.-]*$/.test(link)) return fail(400, '連結只能是站內頁面，例如 /#/e/活動代碼');
+    const teams2 = Array.isArray(b.teams) ? b.teams.map((x) => str(x, 16)).filter(Boolean).slice(0, 30) : [];
+    const roles = Array.isArray(b.roles) ? b.roles.filter((r) => ROLES[r]) : [];
+    const ms = Array.isArray(b.membership) ? b.membership.filter((r) => MEMBERSHIP[r]) : [];
+    const where = [], args = [];
+    if (teams2.length) { where.push(`id IN (SELECT member_id FROM team_members WHERE status = 'active' AND team_id IN (${teams2.map(() => '?').join(',')}))`); args.push(...teams2); }
+    if (roles.length) { where.push(`role IN (${roles.map(() => '?').join(',')})`); args.push(...roles); }
+    if (ms.length) { where.push(`membership IN (${ms.map(() => '?').join(',')})`); args.push(...ms); }
+    const ids = (await env.DB.prepare(`SELECT id FROM members ${where.length ? `WHERE ${where.join(' AND ')}` : ''}`).bind(...args).all()).results.map((r) => r.id);
+    if (b.dryRun === true) return json({ count: ids.length });
+    if (!ids.length) return fail(400, '沒有符合條件的人');
+    await notify(env, ids, 'system', { title, body: text, url: link || '/#/notifications' });
+    await audit(env, req, member, 'broadcast', 'members', null, `${title}｜${ids.length} 人${teams2.length ? `｜分團 ${teams2.join(',')}` : ''}${roles.length ? `｜身分 ${roles.join(',')}` : ''}${ms.length ? `｜會籍 ${ms.join(',')}` : ''}`);
+    return json({ count: ids.length });
   }
 
   // ---- 分團 ----

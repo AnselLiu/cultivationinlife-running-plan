@@ -639,3 +639,15 @@ h3 svg.ic{width:18px;height:18px}
 .cmt b{font-size:13px}
 @media (max-width:480px){.kpi b{font-size:26px}}
 .kpi b{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* 分團公告欄、排行榜 */
+.board{display:grid;gap:10px}
+.post{display:grid;gap:6px;padding:12px 14px;border-radius:var(--r-m);background:color-mix(in srgb,var(--ink) 4%,transparent)}
+.post.pinned{background:var(--accent-soft)}
+.r.rank{grid-template-columns:24px 32px 1fr auto}
+.r.rank .no{font-weight:800;color:var(--ink-3);text-align:center}
+.r.rank:nth-child(-n+3) .no{color:var(--accent)}
+/* 分段控制項：項目多時可以左右滑 */
+.seg{overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch}
+.seg::-webkit-scrollbar{display:none}
+.seg button{flex:1 0 auto}
