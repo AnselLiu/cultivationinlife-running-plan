@@ -426,7 +426,6 @@ details.card summary::-webkit-details-marker{display:none}
 .acts{display:grid;gap:6px;max-height:300px;overflow:auto}
 .act{display:grid;gap:2px;text-align:left;border:0;border-radius:14px;padding:11px 13px;cursor:pointer;background:var(--glass-hi);color:var(--ink)}
 .act:active{transform:scale(.98)}
-.btn.strava{background:#FC4C02;color:#fff}
 .actions{gap:10px}
 
 /* AR 相機：全螢幕取景，下方快門 */

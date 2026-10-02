@@ -1,5 +1,5 @@
 // 數據照：把跑步數據疊在照片上，輸出成 IG 限時動態／貼文／Reels
-// 資料來源：手動輸入、GPX／TCX 檔（Garmin Connect、Apple 健康、各家錶都能匯出）、Strava
+// 資料來源：手動輸入、Apple 健康捷徑、GPX／TCX 檔（Garmin Connect、Apple 健康、各家錶都能匯出）
 // 全部在瀏覽器裡用 canvas 合成，照片不會上傳到伺服器
 
 // ---------- 資料解析 ----------
@@ -11,22 +11,6 @@ function haversine(a, b) {
   return 2 * R * Math.asin(Math.sqrt(h));
 }
 
-// Google 編碼折線（Strava 的路線格式）
-export function decodePolyline(str) {
-  const out = []; let i = 0, lat = 0, lng = 0;
-  while (i < str.length) {
-    for (const k of [0, 1]) {
-      let shift = 0, result = 0, b;
-      do { b = str.charCodeAt(i++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
-      const d = result & 1 ? ~(result >> 1) : result >> 1;
-      if (k === 0) lat += d; else lng += d;
-    }
-    out.push([lat / 1e5, lng / 1e5]);
-  }
-  return out;
-}
-
-// GPX／TCX：算距離、時間、爬升、平均心率、路線
 export function parseTrack(text, filename = '') {
   const doc = new DOMParser().parseFromString(text, 'application/xml');
   if (doc.querySelector('parsererror')) throw new Error('檔案格式看不懂，請確認是 GPX 或 TCX');
@@ -64,12 +48,6 @@ export function parseTrack(text, filename = '') {
     distance, seconds: times.length > 1 ? (times[times.length - 1] - times[0]) / 1000 : 0,
     elevation: Math.round(gain), avg_hr: hrs.length ? Math.round(hrs.reduce((a, b) => a + b, 0) / hrs.length) : null, route,
   };
-}
-
-export function fromStrava(a) {
-  return { title: a.name, date: (a.start || '').slice(0, 10), distance: a.distance, seconds: a.moving_time,
-    elevation: Math.round(a.elevation || 0), avg_hr: a.avg_hr ? Math.round(a.avg_hr) : null,
-    route: a.polyline ? decodePolyline(a.polyline) : [], source: 'Strava' };
 }
 
 // ---------- 格式 ----------
@@ -248,7 +226,6 @@ export async function render(canvas, bg, stats, opts) {
   }
   text(ctx, '耕跑團', M + 82, y0 + 30, 34, { weight: 800 });
   text(ctx, `${opts.name ? `${opts.name}・` : ''}${stats.date || ''}`, M + 82, y0 + 62, 26, { weight: 600, alpha: .8 });
-  if (stats.source === 'Strava') text(ctx, 'Powered by Strava', W - M, y0 + 46, 24, { weight: 600, align: 'right', alpha: .7 });
 }
 
 // ---------- 輸出與分享 ----------

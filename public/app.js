@@ -235,7 +235,6 @@ function privacyView() {
          系統紀錄：登入時間、裝置型號摘要、IP 位址的單向雜湊值（無法還原）。<br>
          個人賽事：你自己加入的賽事名稱、日期與目標成績（用於倒數）。<br>
          訓練紀錄：你照課表記錄的日期、距離、時間、心率、自覺強度、感覺與備註；預設只有你看得到，你打開分享後，教練與分團幹部只看得到完成率、里程與平均強度，看不到備註。<br>
-         Strava（選用）：只在你按下匯入時讀取活動的距離、時間、配速、爬升與路線，用來合成數據照，<b>不保存活動內容</b>；授權權杖以 AES-GCM 加密保存，解除連結或刪除帳號時即刪除並向 Strava 撤銷授權。<br>
          照片：數據照在你的裝置上合成，照片不會上傳到我們的伺服器。<br>
          <b>我們不蒐集</b>身分證字號、地址、生日；協會入會申請另以協會的 Google 表單辦理。</p>
       <h3>三、利用期間、地區、對象與方式</h3>
@@ -817,11 +816,11 @@ const AUDIT_NAME = {
   'settings.club_race': '修改預設倒數', 'event.update': '編輯活動', 'event.export': '匯出報名名單',
   'team.create': '新增分團', 'team.update': '修改分團', 'team.delete': '刪除分團', 'team.join': '加入分團', 'team.leave': '退出分團',
   'team.approve': '通過入團', 'team.reject': '婉拒入團', 'team.remove': '移出分團', 'team.role': '變更分團身分', 'team.add': '加進分團', 'team.icon': '更新分團圖示', 'event.invite': '邀請參加活動', 'event.uninvite': '移出受邀名單', 'event.invite_link': '設定邀請連結',
-  'event.invite_accept': '用邀請連結加入', 'event.invite_denied': '邀請連結無效', 'privacy.share_logs': '訓練紀錄分享設定', 'settings.shortcut': '修改捷徑連結', 'strava.connect': '連結 Strava', 'strava.disconnect': '解除 Strava',
+  'event.invite_accept': '用邀請連結加入', 'event.invite_denied': '邀請連結無效', 'privacy.share_logs': '訓練紀錄分享設定', 'settings.shortcut': '修改捷徑連結',
 };
 // 稽核紀錄：一定要選時間區間（預設最近 7 天），再依類型、操作者、對象縮小；一次 50 筆
 const AUDIT_GROUPS = { '': '所有類型', role: '身分變更', membership: '會籍', team: '分團', event: '活動', checkin: '報到', lottery: '抽獎',
-  settings: '系統設定', privacy: '個資', login: '登入', account: '帳號', 'join.denied': '邀請碼錯誤', bootstrap: '初始設定', plan: '課表', strava: 'Strava' };
+  settings: '系統設定', privacy: '個資', login: '登入', account: '帳號', 'join.denied': '邀請碼錯誤', bootstrap: '初始設定', plan: '課表' };
 function auditPanel() {
   const to = new Date().toISOString().slice(0, 10), from = new Date(Date.now() - 6 * 864e5).toISOString().slice(0, 10);
   return `<section class="card">
@@ -917,7 +916,7 @@ function bindEventsPanel() {
 
 
 // ---------- 系統設定（理事長、行政人員）----------
-const FEATURE_NAME = { studio: '數據照', health: 'Apple 健康匯入', file: 'GPX／TCX 檔匯入', strava: 'Strava 串接', coach: '課表教練', party: '春酒餐敘活動' };
+const FEATURE_NAME = { studio: '數據照', health: 'Apple 健康匯入', file: 'GPX／TCX 檔匯入', coach: '課表教練', party: '春酒餐敘活動' };
 function settingsPanel() {
   const o = org(), f = cfg.settings?.features || {}, docs = cfg.settings?.docs || [], pv = cfg.settings?.privacy || {};
   return `
@@ -946,7 +945,7 @@ function settingsPanel() {
       ${Object.entries(FEATURE_NAME).map(([k, v]) => `<label class="switch"><span>${v}</span><input type="checkbox" name="${k}" ${f[k] !== false ? 'checked' : ''}><i></i></label>`).join('')}
       <button class="btn sm">儲存功能開關</button>
     </form>
-    <p class="tiny" style="margin:0">關掉後，跑友的畫面上就看不到這個功能；已存的資料不會刪除。Strava 另外需要設定 API 金鑰才會出現。</p>
+    <p class="tiny" style="margin:0">關掉後，跑友的畫面上就看不到這個功能；已存的資料不會刪除。</p>
   </section>
 
   <section class="card">
@@ -1324,7 +1323,7 @@ function confetti() {
 }
 
 
-// ---------- 數據照（Strava／檔案／手動 → 照片合成 → 分享 IG）----------
+// ---------- 數據照（手動／Apple 健康／檔案 → 照片合成 → 分享 IG）----------
 const studio = { stats: null, bg: null, template: 'minimal', size: 'story', source: 'manual', acts: null };
 const TEMPLATES = { minimal: '極簡', route: '路線', bib: '號碼布' };
 function defaultStats() {
@@ -1333,8 +1332,6 @@ function defaultStats() {
 async function studioView() {
   studio.stats ||= defaultStats();
   const q = new URLSearchParams(location.hash.split('?')[1] || '');
-  const st = q.get('strava');
-  if (st) studio.source = 'strava';
   if (q.get('km')) {
     // 從 iPhone 捷徑或其他 App 帶進來的數據；只接受數字與日期，其餘忽略
     const num = (k, max) => { const v = parseFloat(String(q.get(k) || '').replace(',', '.')); return v > 0 && v < max ? v : 0; };
@@ -1345,10 +1342,9 @@ async function studioView() {
     history.replaceState(null, '', '#/studio');
     setTimeout(() => toast(q.get('src') === 'health' ? '已帶入 Apple 健康的跑步數據' : '已帶入跑步數據'), 300);
   }
-  if ((studio.source === 'strava' && !(cfg.strava && feat('strava'))) || (studio.source === 'health' && !feat('health')) || (studio.source === 'file' && !feat('file'))) studio.source = 'manual';
+  if ((studio.source === 'health' && !feat('health')) || (studio.source === 'file' && !feat('file'))) studio.source = 'manual';
   view.innerHTML = `
     ${largeTitle('數據照', '把跑步數據疊在照片上，分享到 IG')}
-    ${st && st !== 'ok' ? `<div class="notice">${{ denied: '你取消了 Strava 授權', scope: '要勾選「查看活動資料」才能匯入', expired: '授權逾時，請再試一次', fail: 'Strava 連結失敗，請稍後再試' }[st] || 'Strava 連結失敗'}</div>` : ''}
     <div class="dash studio">
       <section class="card stage-card">
         <div class="frame ${studio.size}"><canvas id="cv" aria-label="數據照預覽"></canvas></div>
@@ -1358,7 +1354,7 @@ async function studioView() {
         <section class="card">
           <h3>1　跑步數據</h3>
           <div class="seg" role="group" aria-label="資料來源">
-            ${[['manual', '手動'], ...(feat('health') ? [['health', 'Apple 健康']] : []), ...(feat('file') ? [['file', '匯入檔案']] : []), ...(cfg.strava && feat('strava') ? [['strava', 'Strava']] : [])].map(([k, v]) => `<button data-src="${k}" aria-pressed="${studio.source === k}">${v}</button>`).join('')}
+            ${[['manual', '手動'], ...(feat('health') ? [['health', 'Apple 健康']] : []), ...(feat('file') ? [['file', '匯入檔案']] : [])].map(([k, v]) => `<button data-src="${k}" aria-pressed="${studio.source === k}">${v}</button>`).join('')}
           </div>
           <div id="srcPanel"></div>
         </section>
@@ -1468,25 +1464,6 @@ async function sourcePanel() {
       try { studio.stats = S.parseTrack(await f.text(), f.name); studio.source = 'manual'; toast(`已匯入 ${(studio.stats.distance / 1000).toFixed(2)} 公里`); studioView(); }
       catch (err) { toast(err.message); }
     };
-  } else {
-    if (!cfg.strava) { box.innerHTML = '<p class="muted" style="margin:0">管理員還沒設定 Strava 串接。</p>'; return; }
-    if (!cfg.stravaLinked) {
-      box.innerHTML = `<a class="btn strava block" href="/api/strava/start">連結 Strava</a>
-        <p class="tiny" style="margin:0">只讀取你公開或追蹤者可見的活動，不會發文，也可以隨時在這裡解除連結。Garmin、Apple Watch 同步到 Strava 後也能用。</p>`;
-      return;
-    }
-    box.innerHTML = '<div class="skel"><i style="height:56px"></i><i style="height:56px"></i></div>';
-    try {
-      studio.acts ||= (await api('/strava/activities')).activities;
-      box.innerHTML = `<div class="acts">${studio.acts.map((x) => `<button class="act" data-act="${esc(x.id)}">
-          <b>${esc(x.name)}</b><span class="tiny">${esc((x.start || '').slice(0, 10))}・${(x.distance / 1000).toFixed(2)} km・${S.fmtDuration(x.moving_time)}</span></button>`).join('') || '<p class="muted">最近沒有活動。</p>'}</div>
-        <div class="row spread"><span class="tiny">Powered by Strava</span><button class="btn ghost sm" id="unlink">解除連結</button></div>`;
-      for (const b of box.querySelectorAll('[data-act]')) b.onclick = async () => {
-        const { activity } = await api(`/strava/activities/${b.dataset.act}`);
-        studio.stats = S.fromStrava(activity); toast('已匯入 Strava 活動'); studio.source = 'manual'; studioView();
-      };
-      $('#unlink').onclick = async () => { await api('/strava/disconnect', { method: 'POST' }); cfg.stravaLinked = false; studio.acts = null; toast('已解除 Strava 連結'); studioView(); };
-    } catch (e) { box.innerHTML = `<p class="muted" style="margin:0">${esc(e.message)}</p>`; }
   }
 }
 
@@ -1649,7 +1626,7 @@ async function logView() {
     ${largeTitle(log ? '修改紀錄' : extra ? '自主加練' : '記錄訓練', week && label ? `W${week}・${esc(dayLabel(label))}` : '')}
     ${planText ? `<section class="card plancard ${log?.kind || day?.kind || ''}"><span class="tiny">當天課表</span><p style="margin:0;font-weight:600">${esc(fixText(planText))}</p>
       <span class="hint">${P.paceHint(planText, me.dist, me.grp)}</span></section>` : ''}
-    ${incoming ? `<div class="notice">已帶入${incoming.source === 'health' ? ' Apple 健康' : incoming.source === 'strava' ? ' Strava' : ''}的數據，確認後按儲存。</div>` : ''}
+    ${incoming ? `<div class="notice">已帶入${incoming.source === 'health' ? ' Apple 健康' : ''}的數據，確認後按儲存。</div>` : ''}
     <section class="card">
       <form id="lf" class="logform">
         ${statuses.length > 1 ? `<div class="chips status">${statuses.map((k) => `<label class="chip"><input type="radio" name="status" value="${k}" ${v.status === k ? 'checked' : ''}><span>${LOG_ICON[k]} ${LOG_STATUS_NAME[k]}</span></label>`).join('')}</div>`
@@ -1669,7 +1646,7 @@ async function logView() {
         <button class="btn block">儲存</button>
         ${log ? '<button type="button" class="btn danger block" id="delLog">刪除這筆紀錄</button>' : ''}
       </form>
-      <div class="row" style="gap:8px">${feat('studio') ? `<a class="btn ghost sm" href="#/studio">從 Apple 健康／檔案／Strava 匯入 ›</a>` : ''}</div>
+      <div class="row" style="gap:8px">${feat('studio') ? `<a class="btn ghost sm" href="#/studio">從 Apple 健康或檔案匯入 ›</a>` : ''}</div>
     </section>`;
   const f = $('#lf');
   const sync = () => {

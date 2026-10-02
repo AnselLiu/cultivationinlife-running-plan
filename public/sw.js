@@ -1,5 +1,5 @@
 // 耕跑團 PWA — Service Worker：外殼快取（離線可開）＋ 推播通知
-const CACHE = 'cil-v8';
+const CACHE = 'cil-v9';
 const SHELL = ['/', '/index.html', '/style.css', '/app.js', '/plan.js', '/data/season-2026.json', '/manifest.webmanifest', '/coach.html', '/party.js', '/qr.js', '/vendor/qrcode.js', '/studio.js', '/icons/icon-192.png', '/teams/youth.webp', '/teams/kids.webp', '/teams/core.webp', '/teams/geng.webp'];
 
 self.addEventListener('install', (e) => {

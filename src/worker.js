@@ -7,7 +7,6 @@
 //   A.5.34 個資：最小蒐集、電話遮罩、IP 只存雜湊、本人可匯出與刪除
 // 工作階段權杖放 HttpOnly cookie，D1 只存 SHA-256；寫入類 API 只接受同源 JSON（擋 CSRF）。
 import { subscribe, unsubscribe, push, validEndpoint } from './push.js';
-import * as Strava from './strava.js';
 
 const COOKIE = '__Host-cil_sess';
 // 工作階段期限：一般跑友長期使用；幹部看得到別人的資料，期限短很多
@@ -451,10 +450,9 @@ async function api(req, env, path, method) {
     return json({ member: member ? pub(member) : null, vapid: env.VAPID_PUBLIC_KEY || null, lineLogin: !!(env.LINE_CHANNEL_ID && env.LINE_CHANNEL_SECRET),
       ...(await (async () => { const st = await getSettings(env);
         return { settings: st, privacyVersion: st.privacy.version, needConsent: !!member && member.consent_version !== st.privacy.version }; })()),
-      race: await countdownTarget(env, member), strava: Strava.stravaReady(env),
+      race: await countdownTarget(env, member),
       teams: member ? await listTeams() : [],
-      shortcut: await env.DB.prepare("SELECT value FROM settings WHERE key = 'health_shortcut'").first().then((r) => r?.value || null),
-      stravaLinked: member ? !!(await env.DB.prepare('SELECT 1 FROM strava_links WHERE member_id = ?').bind(member.id).first()) : false });
+      shortcut: await env.DB.prepare("SELECT value FROM settings WHERE key = 'health_shortcut'").first().then((r) => r?.value || null) });
 
   // 已登入的人輸入幹部碼或理事長碼升級
   // 初始設定：系統裡還沒有理事長時，才能用 CHAIR_CODE 把自己設為理事長（只能用一次）。
@@ -713,7 +711,6 @@ async function api(req, env, path, method) {
       sessions: await q('SELECT created_at, last_seen_at, ua FROM sessions WHERE member_id = ?'),
       races: await q('SELECT name, date, dist, goal, is_primary FROM races WHERE member_id = ?'),
       training_logs: await q('SELECT date, week_no, plan_day, plan_text, status, km, seconds, hr, rpe, feel, note, source FROM training_logs WHERE member_id = ? ORDER BY date'),
-      strava: await q('SELECT athlete_id, scope, created_at FROM strava_links WHERE member_id = ?'),
     };
     await audit(env, req, member, 'privacy.export', 'member', member.id, '');
     return json(data, 200, { 'content-disposition': 'attachment; filename="my-data.json"' });
@@ -724,7 +721,6 @@ async function api(req, env, path, method) {
       const n = (await env.DB.prepare("SELECT COUNT(*) AS n FROM members WHERE role = 'chair'").first()).n;
       if (n <= 1) return fail(400, '你是唯一的理事長，請先指派新的理事長再刪除帳號');
     }
-    await Strava.disconnect(env, member.id).catch(() => {});
     // 得獎紀錄要留給協會對帳，所以只匿名化，不刪除
     await env.DB.batch([
       env.DB.prepare("UPDATE draws SET name = '已刪除帳號', member_id = NULL WHERE member_id = ?").bind(member.id),
@@ -816,7 +812,7 @@ async function api(req, env, path, method) {
       if (b.parent_url && !value.parent_url) return fail(400, '企業網站要是 https:// 開頭的網址');
     } else if (key === 'features') {
       value = {};
-      for (const f of ['studio', 'health', 'file', 'strava', 'coach', 'party']) value[f] = b[f] !== false;
+      for (const f of ['studio', 'health', 'file', 'coach', 'party']) value[f] = b[f] !== false;
     } else if (key === 'docs') {
       const list = Array.isArray(b.docs) ? b.docs.slice(0, 30) : [];
       value = list.map((d) => ({ title: str(d.title, 40), url: httpsUrl(d.url), note: str(d.note, 80) })).filter((d) => d.title && d.url);
@@ -844,25 +840,6 @@ async function api(req, env, path, method) {
     return json({ ok: true });
   }
 
-  // ---- Strava ----
-  if (path === '/api/strava/activities' && method === 'GET') {
-    const g = need(); if (g) return g;
-    if (!Strava.stravaReady(env)) return fail(503, '尚未設定 Strava 串接');
-    if (await limited(env, `strava:${member.id}`, 30, 900)) return fail(429, '讀取太頻繁，請稍後再試');
-    try { return json({ activities: await Strava.listActivities(env, member.id) }); } catch (e) { return fail(400, e.message); }
-  }
-  const msa2 = path.match(/^\/api\/strava\/activities\/(\d{1,20})$/);
-  if (msa2 && method === 'GET') {
-    const g = need(); if (g) return g;
-    if (await limited(env, `strava:${member.id}`, 30, 900)) return fail(429, '讀取太頻繁，請稍後再試');
-    try { return json({ activity: await Strava.getActivity(env, member.id, msa2[1]) }); } catch (e) { return fail(400, e.message); }
-  }
-  if (path === '/api/strava/disconnect' && method === 'POST') {
-    const g = need(); if (g) return g;
-    await Strava.disconnect(env, member.id);
-    await audit(env, req, member, 'strava.disconnect', 'member', member.id, '');
-    return json({ ok: true });
-  }
 
   // ---- 訓練紀錄（照課表打卡）----
   // 查詢一定要有日期區間：自己的紀錄最長 120 天，教練看團員最長 31 天
@@ -872,7 +849,7 @@ async function api(req, env, path, method) {
     return from > to || Date.parse(to) - Date.parse(from) > maxDays * 864e5 ? null : [from, to];
   };
   const LOG_STATUS = ['done', 'partial', 'skip', 'extra'];
-  const LOG_SOURCES = ['manual', 'health', 'file', 'strava'];
+  const LOG_SOURCES = ['manual', 'health', 'file'];
   const LOG_KINDS = ['easy', 'quality', 'long', 'strength', 'race', 'rest'];
   if (path === '/api/logs' && method === 'GET') {
     const g = need(); if (g) return g;
@@ -1475,29 +1452,6 @@ export default {
     // LINE 登入是瀏覽器導向（GET、不是 JSON），走在下面的 CSRF 檢查之前
     if (path === '/api/line/start' && req.method === 'GET') return lineStart(env, url);
     if (path === '/api/line/callback' && req.method === 'GET') return lineCallback(req, env, url);
-    if (path === '/api/strava/start' && req.method === 'GET') {
-      const m = await currentMember(req, env);
-      if (!m) return new Response(null, { status: 302, headers: { location: '/#/' } });
-      if (!Strava.stravaReady(env)) return fail(503, '尚未設定 Strava 串接');
-      const state = rid(12);
-      return new Response(null, { status: 302, headers: { location: Strava.authorizeUrl(env, url.origin, state),
-        'set-cookie': `__Host-cil_strava=${state}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=600` } });
-    }
-    if (path === '/api/strava/callback' && req.method === 'GET') {
-      const clear = '__Host-cil_strava=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0';
-      const back = (q) => new Response(null, { status: 302, headers: { location: `/#/studio?${q}`, 'set-cookie': clear } });
-      const m = await currentMember(req, env);
-      const want = (req.headers.get('cookie') || '').match(/__Host-cil_strava=(\w+)/)?.[1];
-      if (!m || !want || url.searchParams.get('state') !== want) return back('strava=expired');
-      if (url.searchParams.get('error')) return back('strava=denied');
-      const scope = url.searchParams.get('scope') || '';
-      if (!scope.includes('activity:read')) return back('strava=scope');
-      try {
-        await Strava.exchange(env, m.id, url.searchParams.get('code'), scope);
-        await audit(env, req, m, 'strava.connect', 'member', m.id, scope);
-        return back('strava=ok');
-      } catch { return back('strava=fail'); }
-    }
     // 開發用登入：只有 .dev.vars 設 DEV_LOGIN=1 而且在 localhost 才有效，正式環境不會有這個設定
     if (path === '/api/dev/login' && req.method === 'GET' && env.DEV_LOGIN === '1' && ['localhost', '127.0.0.1'].includes(url.hostname)) {
       const m = await env.DB.prepare('SELECT * FROM members WHERE id = ?').bind(str(url.searchParams.get('id'), 32)).first();
