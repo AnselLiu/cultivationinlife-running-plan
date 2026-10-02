@@ -112,3 +112,17 @@ iPhone 要先用 Safari 的「分享 → 加到主畫面」，再從主畫面開
 - 幹部後台：團員名冊、出席統計
 - 協會公益活動與繳費狀態
 - LINE 官方帳號推播（把公告直接送進群組）
+
+## 測試、測試環境與自動部署
+
+```bash
+npm run test:ci        # 啟動獨立的本機資料庫與伺服器，跑全部 API 測試（權限、邀請制、問卷、訓練紀錄、排程、通行金鑰）
+npm run deploy:staging # 部署到測試環境 https://cil-run-staging.anselliu7.workers.dev（獨立資料庫）
+npm run deploy         # 部署正式站
+```
+
+- 測試帳號在 `tests/seed.sql`，測試用資料庫在 `.wrangler/test-state`，不會動到開發或正式資料。
+- GitHub Actions（`.github/workflows/ci.yml`）：每次 push／PR 都跑測試；push 到 `main` 而且測試通過就部署正式站，push 到 `staging` 分支就部署測試環境。
+  要啟用自動部署，到 GitHub repo 的 Settings → Secrets and variables → Actions 新增 `CLOUDFLARE_API_TOKEN`（Cloudflare 後台 → My Profile → API Tokens，用「Edit Cloudflare Workers」範本，再加上 D1 Edit 權限）與 `CLOUDFLARE_ACCOUNT_ID`。沒設定的話只跑測試、不部署。
+- 測試環境的邀請碼與初始理事長碼要另外設：`npx wrangler secret put JOIN_CODE --env staging`。
+- 錯誤監控：Cloudflare 後台 → Workers → cil-run → Logs，可以看到伺服器錯誤、排程結果與前端回報的錯誤（`client-error`）。

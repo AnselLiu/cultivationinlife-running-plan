@@ -24,7 +24,17 @@
   // 排程：每小時整點跑一次（活動提醒、會費到期、每季權限檢視、每天 03:00 資料清理），時間判斷都用台北時間
   "triggers": { "crons": ["0 * * * *"] },
   // 錯誤監控：Cloudflare 後台 Workers → cil-run → Logs 可以看到錯誤與排程結果
-  "observability": { "enabled": true, "head_sampling_rate": 1 }
+  "observability": { "enabled": true, "head_sampling_rate": 1 },
+  // 測試環境：npm run deploy:staging → https://cil-run-staging.anselliu7.workers.dev（獨立資料庫，不影響正式站；不跑排程）
+  "env": {
+    "staging": {
+      "name": "cil-run-staging",
+      "d1_databases": [
+        { "binding": "DB", "database_name": "cil-run-staging", "database_id": "08b71fd7-6681-4363-a670-558e3edf8e97", "migrations_dir": "migrations" }
+      ],
+      "triggers": { "crons": [] }
+    }
+  }
   // 設定值全部用 secrets（npx wrangler secret put 名稱 --name cil-run），不寫在這裡：
   //   JOIN_CODE             跑友加入用的邀請碼（在 LINE 群公告）
   //   CHAIR_CODE            一次性的初始理事長設定碼（有理事長之後自動失效）

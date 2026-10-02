@@ -1,0 +1,160 @@
+// API 權限與核心流程測試：每次改程式都重跑，確認權限沒有被改壞
+// 需要：測試用伺服器（npm run test:ci 會自動啟動），帳號見 tests/seed.sql
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+
+const BASE = process.env.BASE || 'http://localhost:8799';
+const cookies = {};
+async function as(id) {
+  if (!cookies[id]) {
+    const r = await fetch(`${BASE}/api/dev/login?id=${id}`, { redirect: 'manual' });
+    cookies[id] = r.headers.get('set-cookie').split(';')[0];
+  }
+  return cookies[id];
+}
+async function call(who, path, { method = 'GET', body } = {}) {
+  const headers = { origin: BASE };
+  if (who) headers.cookie = await as(who);
+  if (method !== 'GET') headers['content-type'] = 'application/json';
+  const r = await fetch(`${BASE}/api${path}`, { method, headers, body: method === 'GET' ? undefined : JSON.stringify(body ?? {}) });
+  const text = await r.text();
+  let json = null; try { json = JSON.parse(text); } catch {}
+  return { status: r.status, json, text, headers: r.headers };
+}
+const today = new Date(Date.now() + 8 * 3600e3).toISOString().slice(0, 10);
+const plus = (d) => new Date(Date.now() + 8 * 3600e3 + d * 864e5).toISOString().slice(0, 10);
+
+test('沒登入不能讀資料；跨站寫入被擋', async () => {
+  assert.equal((await call(null, '/members')).status, 401);
+  assert.equal((await call(null, '/events')).status, 401);
+  const r = await fetch(`${BASE}/api/events`, { method: 'POST', headers: { cookie: await as('t_chair'), origin: 'https://evil.example', 'content-type': 'application/json' }, body: '{}' });
+  assert.equal(r.status, 403, '別的網域送來的寫入要擋');
+  const r2 = await fetch(`${BASE}/api/events`, { method: 'POST', headers: { cookie: await as('t_chair'), 'content-type': 'text/plain' }, body: '{}' });
+  assert.equal(r2.status, 415, '不是 JSON 的寫入要擋');
+});
+
+test('邀請碼只能成為跑友；初始理事長碼在已有理事長時無效', async () => {
+  const j = await call(null, '/join', { method: 'POST', body: { code: 'wrong', name: 'x', consent: true } });
+  assert.equal(j.status, 403);
+  const c = await call('t_runner', '/me/admin', { method: 'POST', body: { code: 'test-chair' } });
+  assert.equal(c.status, 403, '已有理事長，初始設定碼不能再用');
+});
+
+test('名冊一定要帶條件；電話依權限遮罩', async () => {
+  const none = await call('t_chair', '/members');
+  assert.equal(none.json.needFilter, true);
+  assert.equal(none.json.members.length, 0);
+  const q = await call('t_chair', '/members?q=測試');
+  assert.ok(q.json.members.length >= 3);
+  assert.equal((await call('t_runner', '/members?q=測試')).status, 403, '跑友不能看名冊');
+});
+
+test('稽核：只有理事長與監事能看，而且一定要有時間區間', async () => {
+  assert.equal((await call('t_staff', '/audit')).status, 403);
+  assert.equal((await call('t_super', '/audit')).status, 200);
+  assert.equal((await call('t_chair', '/audit?from=2020-01-01&to=2026-10-01')).status, 400, '超過一年要擋');
+});
+
+test('身分只能由理事長指派；監事唯讀', async () => {
+  assert.equal((await call('t_staff', '/members/t_runner/role', { method: 'POST', body: { role: 'staff' } })).status, 403);
+  assert.equal((await call('t_super', '/members/t_runner/membership', { method: 'POST', body: { membership: 'active' } })).status, 403);
+});
+
+test('分團：團長可建自己分團的活動、不能建全協會活動；團長只能由理事長指派', async () => {
+  assert.equal((await call('t_lead', '/events', { method: 'POST', body: { kind: 'track', title: '全協會', date: plus(3) } })).status, 403);
+  const ok = await call('t_lead', '/events', { method: 'POST', body: { kind: 'track', title: '青年團練', date: plus(3), team_id: 'youth' } });
+  assert.equal(ok.status, 200, ok.text);
+  assert.equal((await call('t_lead', '/events', { method: 'POST', body: { kind: 'track', title: '別團', date: plus(3), team_id: 'kids' } })).status, 403);
+  const lead = await call('t_lead', '/teams/youth/members', { method: 'POST', body: { member_id: 't_runner', action: 'role', role: 'lead' } });
+  assert.equal(lead.status, 403);
+  const officer = await call('t_lead', '/teams/youth/members', { method: 'POST', body: { member_id: 't_runner', action: 'role', role: 'officer' } });
+  assert.equal(officer.status, 200);
+  await call('t_lead', '/teams/youth/members', { method: 'POST', body: { member_id: 't_runner', action: 'role', role: 'member' } });
+});
+
+test('私密分團的活動，非團員看不到', async () => {
+  const ev = await call('t_chair', '/events', { method: 'POST', body: { kind: 'core', title: '核心課', date: plus(4), team_id: 'core', notify: false } });
+  assert.equal((await call('t_other', `/events/${ev.json.id}`)).status, 404);
+  assert.ok(!(await call('t_other', '/events')).json.events.some((e) => e.id === ev.json.id));
+  assert.equal((await call(null, `/public/e/${ev.json.id}`)).status, 404);
+});
+
+test('邀請制：只有受邀的人看得到，移出後立刻看不到', async () => {
+  const ev = await call('t_chair', '/events', { method: 'POST', body: { kind: 'other', title: '邀請制聚餐', date: plus(5), visibility: 'invite' } });
+  const id = ev.json.id;
+  assert.equal((await call('t_runner', `/events/${id}`)).status, 404);
+  assert.equal((await call('t_chair', `/events/${id}/invites`, { method: 'POST', body: { member_ids: ['t_runner'] } })).json.added, 1);
+  assert.equal((await call('t_runner', `/events/${id}`)).status, 200);
+  assert.equal((await call('t_runner', `/events/${id}/signup`, { method: 'POST', body: {} })).status, 200);
+  await call('t_chair', `/events/${id}/invites/t_runner`, { method: 'DELETE' });
+  assert.equal((await call('t_runner', `/events/${id}`)).status, 404);
+  // 邀請連結：錯的代碼不行，對的才加入
+  const tok = (await call('t_chair', `/events/${id}/invite-link`, { method: 'POST', body: { on: true } })).json.token;
+  assert.equal((await call('t_other', `/events/${id}/accept`, { method: 'POST', body: { t: 'nope' } })).status, 404);
+  assert.equal((await call('t_other', `/events/${id}/accept`, { method: 'POST', body: { t: tok } })).status, 200);
+  assert.equal((await call('t_other', `/events/${id}`)).status, 200);
+});
+
+test('問卷：必填與選項驗證；CSV 擋公式注入', async () => {
+  const ev = await call('t_chair', '/events', { method: 'POST', body: { kind: 'other', title: '團服調查', date: plus(6), notify: false,
+    questions: [{ type: 'single', label: '尺寸', options: ['S', 'M'], required: true }, { type: 'text', label: '備註' }] } });
+  const id = ev.json.id;
+  assert.equal((await call('t_runner', `/events/${id}/signup`, { method: 'POST', body: { answers: {} } })).status, 400);
+  assert.equal((await call('t_runner', `/events/${id}/signup`, { method: 'POST', body: { answers: { q1: 'XXL' } } })).status, 400);
+  assert.equal((await call('t_runner', `/events/${id}/signup`, { method: 'POST', body: { answers: { q1: 'M', q2: '=HYPERLINK("x")' } } })).status, 200);
+  assert.equal((await call('t_runner', `/events/${id}/stats`)).status, 403, '跑友不能看統計');
+  const csv = await call('t_chair', `/events/${id}/export.csv`);
+  assert.ok(csv.text.includes(`"'=HYPERLINK`), '開頭是 = 的儲存格要加 \' ');
+});
+
+test('訓練紀錄：不能記未來、查詢有上限、教練要本人分享才看得到', async () => {
+  assert.equal((await call('t_runner', '/logs', { method: 'POST', body: { date: plus(5), km: 5 } })).status, 400);
+  const r = await call('t_runner', '/logs', { method: 'POST', body: { date: today, status: 'done', km: 10, seconds: 3000, rpe: 6, note: '私人備註' } });
+  assert.equal(r.status, 200);
+  assert.equal((await call('t_runner', '/logs?from=2024-01-01&to=2026-10-01')).status, 400);
+  assert.equal((await call('t_coach', '/logs/member/t_runner')).status, 403, '沒分享不能看');
+  await call('t_runner', '/me/share-logs', { method: 'POST', body: { share: true } });
+  const seen = await call('t_coach', '/logs/member/t_runner');
+  assert.equal(seen.status, 200);
+  assert.ok(seen.json.logs.every((l) => !('note' in l)), '教練看不到備註');
+  assert.equal((await call('t_other', `/logs/${r.json.id}`, { method: 'DELETE' })).status, 200);
+  assert.ok((await call('t_runner', `/logs?from=${today}&to=${today}`)).json.logs.some((l) => l.id === r.json.id), '別人刪不掉我的紀錄');
+});
+
+test('排程：活動提醒不重複；每季檢視只發一次', async () => {
+  const ev = await call('t_chair', '/events', { method: 'POST', body: { kind: 'track', title: '提醒測試', date: '2027-03-10', gather_time: '19:00', notify: false } });
+  await call('t_runner', `/events/${ev.json.id}/signup`, { method: 'POST', body: {} });
+  const a = await call(null, '/dev/cron?at=2027-03-09T12:00:00Z');
+  assert.ok(a.json.events >= 1);
+  assert.equal((await call(null, '/dev/cron?at=2027-03-09T12:00:00Z')).json.events, 0);
+  assert.equal((await call(null, '/dev/cron?at=2027-04-01T01:00:00Z')).json.review, 2, '通知理事長與監事');
+  assert.equal((await call(null, '/dev/cron?at=2027-04-01T01:00:00Z')).json.review, 0);
+});
+
+test('行事曆訂閱：只有本人的活動，停用後立即失效', async () => {
+  const { json } = await call('t_runner', '/me/calendar', { method: 'POST' });
+  const r = await fetch(json.url.replace(/^https?:\/\/[^/]+/, BASE));
+  assert.equal(r.status, 200);
+  assert.match(await r.text(), /BEGIN:VCALENDAR/);
+  await call('t_runner', '/me/calendar', { method: 'DELETE' });
+  assert.equal((await fetch(json.url.replace(/^https?:\/\/[^/]+/, BASE))).status, 404);
+});
+
+test('群發通知：只允許站內連結，跑友不能用', async () => {
+  assert.equal((await call('t_runner', '/admin/broadcast', { method: 'POST', body: { title: 'x' } })).status, 403);
+  assert.equal((await call('t_chair', '/admin/broadcast', { method: 'POST', body: { title: 'x', url: 'https://evil.example' } })).status, 400);
+  assert.equal((await call('t_chair', '/admin/broadcast', { method: 'POST', body: { title: 'x', teams: ['youth'], dryRun: true } })).json.count, 2);
+});
+
+test('稽核紀錄有簽章，完整性檢查通過', async () => {
+  const r = await call('t_chair', `/audit/verify?from=${plus(-1)}&to=${today}`);
+  assert.equal(r.status, 200);
+  assert.equal(r.json.modified, 0);
+  assert.ok(r.json.checked > 0);
+});
+
+test('個資：本人可匯出，匯出不含行事曆代碼與登入權杖', async () => {
+  const r = await call('t_runner', '/me/export');
+  assert.equal(r.status, 200);
+  assert.ok(!r.text.includes('cal_token_hash') && !r.text.includes('token_hash'));
+});

@@ -1,0 +1,60 @@
+# 每次 push／PR：跑完整測試（權限、邀請制、問卷、訓練紀錄、排程、通行金鑰…）
+# push 到 main 而且測試通過：套用資料庫遷移並部署正式站
+# push 到 staging 分支：部署測試環境 cil-run-staging
+# 需要在 GitHub → Settings → Secrets and variables → Actions 設定：
+#   CLOUDFLARE_API_TOKEN（權限：Workers Scripts:Edit、D1:Edit）、CLOUDFLARE_ACCOUNT_ID
+name: CI
+
+on:
+  push:
+    branches: [main, staging]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: 語法檢查
+        run: for f in src/*.js public/*.js; do node --check "$f"; done
+      - name: 完整測試（本機 D1＋wrangler dev）
+        run: npm run test:ci
+
+  deploy:
+    needs: test
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: ${{ github.ref_name == 'main' && 'production' || 'staging' }}
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: 部署
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "還沒設定 CLOUDFLARE_API_TOKEN，略過自動部署"; exit 0
+          fi
+          if [ "${GITHUB_REF_NAME}" = "main" ]; then
+            npx wrangler d1 migrations apply cil-run --remote
+            npx wrangler deploy
+          else
+            npx wrangler d1 migrations apply cil-run-staging --remote --env staging
+            npx wrangler deploy --env staging
+          fi
