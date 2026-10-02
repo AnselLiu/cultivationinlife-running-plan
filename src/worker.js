@@ -7,6 +7,7 @@
 //   A.5.34 個資：最小蒐集、電話遮罩、IP 只存雜湊、本人可匯出與刪除
 // 工作階段權杖放 HttpOnly cookie，D1 只存 SHA-256；寫入類 API 只接受同源 JSON（擋 CSRF）。
 import { subscribe, unsubscribe, push, validEndpoint } from './push.js';
+import * as WebAuthn from './webauthn.js';
 
 const COOKIE = '__Host-cil_sess';
 // 工作階段期限：一般跑友長期使用；幹部看得到別人的資料，期限短很多
@@ -61,7 +62,7 @@ async function currentMember(req, env) {
   if (!token) return null;
   const th = await sha(token);
   const row = await env.DB.prepare(
-    `SELECT m.*, s.last_seen_at AS s_seen, s.role_at_issue AS s_role, s.created_at AS s_created
+    `SELECT m.*, s.last_seen_at AS s_seen, s.role_at_issue AS s_role, s.created_at AS s_created, s.mfa_at AS s_mfa, s.token_hash AS s_th
      FROM sessions s JOIN members m ON m.id = s.member_id
      WHERE s.token_hash = ? AND s.expires_at > datetime('now')`).bind(th).first();
   if (!row) return null;
@@ -81,10 +82,10 @@ async function currentMember(req, env) {
   return row;
 }
 
-async function startSession(env, member, req) {
+async function startSession(env, member, req, { mfa = false } = {}) {
   const token = rid(24), pol = policyOf(member.role);
-  await env.DB.prepare(`INSERT INTO sessions (token_hash, member_id, expires_at, last_seen_at, role_at_issue, ip_hash, ua)
-    VALUES (?, ?, datetime('now', '+${pol.absDays} days'), datetime('now'), ?, ?, ?)`)
+  await env.DB.prepare(`INSERT INTO sessions (token_hash, member_id, expires_at, last_seen_at, role_at_issue, ip_hash, ua, mfa_at)
+    VALUES (?, ?, datetime('now', '+${pol.absDays} days'), datetime('now'), ?, ?, ?, ${mfa ? "datetime('now')" : 'NULL'})`)
     .bind(await sha(token), member.id, norm(member.role), await ipHash(req, env), str(req.headers.get('user-agent'), 120)).run();
   return `${COOKIE}=${token}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${pol.absDays * 86400}`;
 }
@@ -101,13 +102,43 @@ async function limited(env, key, limit, windowSec) {
 }
 
 // 稽核紀錄：特權操作一律記下（detail 只放摘要，不放個資原文）
+// 防竄改：每筆用 AUDIT_KEY（只有 Worker 知道）算 HMAC，改動任何欄位都驗得出來；刪除則由每日摘要鏈檢查
+async function hmac(env, text) {
+  if (!env.AUDIT_KEY) return null;
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(env.AUDIT_KEY), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  return [...new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(text)))].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+const auditFields = (r) => [r.id, r.at, r.actor_id, r.actor_name, r.actor_role, r.action, r.target_type, r.target_id, r.detail, r.ip_hash].map((v) => v ?? '').join('\u001f');
 async function audit(env, req, actor, action, targetType, targetId, detail) {
   try {
-    await env.DB.prepare(`INSERT INTO audit_log (id, actor_id, actor_name, actor_role, action, target_type, target_id, detail, ip_hash)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .bind(rid(10), actor?.id || null, actor?.name || (req ? null : '系統排程'), actor ? norm(actor.role) : null, action,
-            targetType || null, targetId || null, str(detail, 300) || null, await ipHash(req, env)).run();
+    const row = { id: rid(10), at: new Date().toISOString().replace('T', ' ').slice(0, 19), actor_id: actor?.id || null,
+      actor_name: actor?.name || (req ? null : '系統排程'), actor_role: actor ? norm(actor.real_role || actor.role) : null, action,
+      target_type: targetType || null, target_id: targetId || null, detail: str(detail, 300) || null, ip_hash: await ipHash(req, env) };
+    row.mac = await hmac(env, auditFields(row));
+    await env.DB.prepare(`INSERT INTO audit_log (id, at, actor_id, actor_name, actor_role, action, target_type, target_id, detail, ip_hash, mac)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .bind(row.id, row.at, row.actor_id, row.actor_name, row.actor_role, row.action, row.target_type, row.target_id, row.detail, row.ip_hash, row.mac).run();
   } catch (e) { console.error('audit', e); }
+}
+
+// 新裝置登入：只記「裝置類型・瀏覽器」的雜湊；第一次以外的新組合會通知本人
+function deviceLabel(ua = '') {
+  const os = /iPhone/.test(ua) ? 'iPhone' : /iPad/.test(ua) ? 'iPad' : /Android/.test(ua) ? 'Android' : /Mac OS X/.test(ua) ? 'Mac' : /Windows/.test(ua) ? 'Windows' : /Linux/.test(ua) ? 'Linux' : '其他裝置';
+  const br = /Line\//.test(ua) ? 'LINE' : /EdgA?\//.test(ua) ? 'Edge' : /Firefox\//.test(ua) ? 'Firefox' : /CriOS|Chrome\//.test(ua) ? 'Chrome' : /Safari\//.test(ua) ? 'Safari' : '瀏覽器';
+  return `${os}・${br}`;
+}
+async function noteDevice(env, req, member, how) {
+  try {
+    const label = deviceLabel(req.headers.get('user-agent') || ''), h = (await sha(`dev|${label}`)).slice(0, 24);
+    const known = await env.DB.prepare('SELECT 1 FROM login_devices WHERE member_id = ? AND device_hash = ?').bind(member.id, h).first();
+    if (known) { await env.DB.prepare("UPDATE login_devices SET last_seen = datetime('now') WHERE member_id = ? AND device_hash = ?").bind(member.id, h).run(); return; }
+    const any = await env.DB.prepare('SELECT COUNT(*) AS n FROM login_devices WHERE member_id = ?').bind(member.id).first();
+    await env.DB.prepare('INSERT INTO login_devices (member_id, device_hash, label) VALUES (?, ?, ?)').bind(member.id, h, label).run();
+    if (any.n) {
+      await notify(env, [member.id], 'system', { title: '新裝置登入', body: `${label} 用${how}登入了你的帳號。不是你的話，到「我的」按「登出所有裝置」。`, url: '/#/me' });
+      await audit(env, req, member, 'login.new_device', 'member', member.id, label);
+    }
+  } catch (e) { console.error('noteDevice', e); }
 }
 // LINE 大頭貼只接受 LINE 自己的圖床
 const safeAvatar = (u) => (/^https:\/\/(profile|obs)\.line-scdn\.net\//.test(u || '') ? u.slice(0, 300) : null);
@@ -141,6 +172,7 @@ const pub = (m) => ({
   membership: m.membership || 'none', membershipName: MEMBERSHIP[m.membership || 'none'],
   member_type: m.member_type || null, member_no: m.member_no || null, paid_until: m.paid_until || null,
   share_logs: !!m.share_logs, show_rank: !!m.show_rank, can: PERMS[norm(m.role)],
+  mfaPending: !!m.mfa_pending, realRole: m.real_role ? norm(m.real_role) : null, realRoleName: m.real_role ? ROLES[norm(m.real_role)] : null, mfa: !!m.s_mfa,
 });
 
 // ---- 通知中心：推播成功與否都留一份 ----
@@ -211,6 +243,7 @@ async function lineCallback(req, env, url) {
     m = { id, name: str(prof.displayName, 40), role: 'member' };
   }
   await audit(env, req, m, isNew ? 'account.create' : 'login', 'member', m.id, 'LINE');
+  env.ctx?.waitUntil(noteDevice({ ...env, defer: (p) => env.ctx.waitUntil(p) }, req, m, ' LINE '));
   return new Response(null, { status: 302, headers: [
     ['location', isNew ? '/#/me?welcome=1' : '/#/'],
     ['set-cookie', await startSession(env, m, req)],
@@ -350,7 +383,11 @@ async function countdownTarget(env, member) {
 
 // ---- 路由 ----
 async function api(req, env, path, method) {
-  const member = await currentMember(req, env);
+  let member = await currentMember(req, env);
+  // 幹部兩步驟驗證：理事長開啟後，幹部的工作階段要用通行金鑰驗證過，才有管理權限（之前一律當一般跑友）
+  const security = (await env.DB.prepare("SELECT value FROM settings WHERE key = 'security'").first().then((r) => JSON.parse(r?.value || '{}')).catch(() => ({})));
+  if (member && security.require_mfa && norm(member.role) !== 'member' && !member.s_mfa)
+    member = { ...member, real_role: member.role, role: 'member', mfa_pending: true };
   const need = () => (member ? null : fail(401, '請先加入'));
   const needPerm = (p) => (can(member, p) ? null : fail(403, '沒有這個權限'));
   const needAdmin = () => needPerm('event');
@@ -466,6 +503,114 @@ async function api(req, env, path, method) {
     return json({ ok: true });
   }
 
+
+  // ---- 通行金鑰（Face ID／指紋登入）與幹部兩步驟驗證 ----
+  const rpId = new URL(req.url).hostname, origin0 = new URL(req.url).origin;
+  if (path === '/api/passkey/options' && method === 'POST') {
+    const b = await body(), purpose = ['register', 'login', 'stepup'].includes(b.purpose) ? b.purpose : null;
+    if (!purpose) return fail(400, '用途不正確');
+    if (purpose !== 'login') { const g = need(); if (g) return g; }
+    if (await limited(env, `pk:${await ipHash(req, env)}`, 30, 600)) return fail(429, '嘗試太多次，請稍後再試');
+    const cid = rid(12), challenge = WebAuthn.b64u(crypto.getRandomValues(new Uint8Array(32)));
+    await env.DB.prepare("DELETE FROM webauthn_challenges WHERE expires_at < datetime('now')").run();
+    await env.DB.prepare("INSERT INTO webauthn_challenges (id, challenge, member_id, purpose, expires_at) VALUES (?, ?, ?, ?, datetime('now', '+5 minutes'))")
+      .bind(cid, challenge, member?.id || null, purpose).run();
+    const mine = member ? (await env.DB.prepare('SELECT id FROM passkeys WHERE member_id = ?').bind(member.id).all()).results : [];
+    const base = { challenge, timeout: 60000, rpId, userVerification: 'preferred' };
+    if (purpose === 'register') return json({ cid, publicKey: { ...base, rp: { id: rpId, name: '耕跑團' },
+      user: { id: WebAuthn.b64u(new TextEncoder().encode(member.id)), name: member.nickname || member.name, displayName: member.name },
+      pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }], attestation: 'none',
+      authenticatorSelection: { residentKey: 'required', requireResidentKey: true, userVerification: 'preferred' },
+      excludeCredentials: mine.map((x) => ({ type: 'public-key', id: x.id })) } });
+    if (purpose === 'stepup' && !mine.length) return fail(400, '你還沒有通行金鑰，請先新增一把');
+    return json({ cid, publicKey: { ...base, allowCredentials: purpose === 'stepup' ? mine.map((x) => ({ type: 'public-key', id: x.id })) : [] } });
+  }
+  if (path === '/api/passkey/verify' && method === 'POST') {
+    const b = await body(), cred = b.credential;
+    const ch = await env.DB.prepare("SELECT * FROM webauthn_challenges WHERE id = ? AND expires_at > datetime('now')").bind(str(b.cid, 32)).first();
+    if (!ch || !cred?.response) return fail(400, '驗證逾時，請再試一次');
+    await env.DB.prepare('DELETE FROM webauthn_challenges WHERE id = ?').bind(ch.id).run();   // 挑戰只能用一次
+    try {
+      if (ch.purpose === 'register') {
+        const g = need(); if (g) return g;
+        if (ch.member_id !== member.id) return fail(400, '驗證逾時，請再試一次');
+        if ((await env.DB.prepare('SELECT COUNT(*) AS n FROM passkeys WHERE member_id = ?').bind(member.id).first()).n >= 10) return fail(400, '最多 10 把通行金鑰');
+        const r = await WebAuthn.verifyRegistration({ credential: cred, challenge: ch.challenge, origin: origin0, rpId });
+        await env.DB.prepare('INSERT INTO passkeys (id, member_id, public_jwk, sign_count, name) VALUES (?, ?, ?, ?, ?)')
+          .bind(r.credId, member.id, JSON.stringify(r.jwk), r.signCount, str(b.name, 20) || deviceLabel(req.headers.get('user-agent') || '')).run();
+        await audit(env, req, member, 'passkey.add', 'member', member.id, deviceLabel(req.headers.get('user-agent') || ''));
+        return json({ ok: true });
+      }
+      const pk = await env.DB.prepare('SELECT * FROM passkeys WHERE id = ?').bind(str(cred.id, 400)).first();
+      if (!pk) throw new Error('找不到這把通行金鑰，可能已經被移除');
+      if (ch.purpose === 'stepup' && (!member || pk.member_id !== member.id || ch.member_id !== member.id)) throw new Error('這把通行金鑰不是你的');
+      const r = await WebAuthn.verifyAssertion({ credential: cred, challenge: ch.challenge, origin: origin0, rpId, jwk: JSON.parse(pk.public_jwk), signCount: pk.sign_count });
+      await env.DB.prepare("UPDATE passkeys SET sign_count = ?, last_used_at = datetime('now') WHERE id = ?").bind(r.signCount, pk.id).run();
+      if (ch.purpose === 'stepup') {
+        await env.DB.prepare("UPDATE sessions SET mfa_at = datetime('now') WHERE token_hash = ?").bind(member.s_th).run();
+        await audit(env, req, member, 'mfa.verify', 'member', member.id, '通行金鑰');
+        return json({ ok: true });
+      }
+      // 用通行金鑰登入：本身就是兩步驟（裝置＋生物辨識），工作階段直接標記已驗證
+      const m = await env.DB.prepare('SELECT * FROM members WHERE id = ?').bind(pk.member_id).first();
+      if (!m) throw new Error('帳號不存在');
+      await audit(env, req, m, 'login', 'member', m.id, '通行金鑰');
+      await noteDevice(env, req, m, '通行金鑰');
+      return json({ ok: true }, 200, { 'set-cookie': await startSession(env, m, req, { mfa: true }) });
+    } catch (e) {
+      await audit(env, req, member, 'passkey.denied', 'member', member?.id || null, str(e.message, 80));
+      return fail(400, e.message || '通行金鑰驗證失敗');
+    }
+  }
+  if (path === '/api/passkeys' && method === 'GET') {
+    const g = need(); if (g) return g;
+    const rows = (await env.DB.prepare('SELECT id, name, created_at, last_used_at FROM passkeys WHERE member_id = ? ORDER BY created_at').bind(member.id).all()).results;
+    return json({ passkeys: rows.map((r) => ({ ...r, id: r.id })), requireMfa: !!security.require_mfa });
+  }
+  const mpk = path.match(/^\/api\/passkeys\/([\w-]{8,400})$/);
+  if (mpk && method === 'DELETE') {
+    const g = need(); if (g) return g;
+    const r = await env.DB.prepare('DELETE FROM passkeys WHERE id = ? AND member_id = ?').bind(mpk[1], member.id).run();
+    if (r.meta.changes) await audit(env, req, member, 'passkey.remove', 'member', member.id, '');
+    return json({ ok: true });
+  }
+  // 開關幹部兩步驟驗證：只有理事長；開啟前自己要有通行金鑰而且這次登入已經驗證過，避免把自己鎖在門外
+  if (path === '/api/settings/security' && method === 'POST') {
+    const g = need(); if (g) return g;
+    if (norm(member.real_role || member.role) !== 'chair') return fail(403, '只有理事長可以設定');
+    const on = (await body()).require_mfa === true;
+    if (on) {
+      const n = (await env.DB.prepare('SELECT COUNT(*) AS n FROM passkeys WHERE member_id = ?').bind(member.id).first()).n;
+      if (!n) return fail(400, '請先在「我的 → 通行金鑰」新增一把，再開啟');
+      if (!member.s_mfa) return fail(400, '請先用通行金鑰驗證一次（「我的 → 通行金鑰 → 驗證」），確定可以用再開啟');
+    }
+    await env.DB.prepare("INSERT INTO settings (key, value) VALUES ('security', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(JSON.stringify({ require_mfa: on })).run();
+    await audit(env, req, member, 'settings.security', 'settings', 'security', on ? '幹部強制兩步驟驗證：開啟' : '關閉');
+    return json({ ok: true });
+  }
+  // 稽核紀錄完整性檢查：重算每筆 HMAC 與每日摘要鏈
+  if (path === '/api/audit/verify' && method === 'GET') {
+    const g = need(); if (g) return g;
+    if (!can(member, 'audit')) return fail(403, '只有理事長與監事可以檢查');
+    if (!env.AUDIT_KEY) return fail(503, '尚未設定 AUDIT_KEY');
+    const u = new URL(req.url), to = isDate(u.searchParams.get('to') || '') ? u.searchParams.get('to') : today();
+    const from = isDate(u.searchParams.get('from') || '') ? u.searchParams.get('from') : new Date(Date.parse(to) - 29 * 864e5).toISOString().slice(0, 10);
+    if (Date.parse(to) - Date.parse(from) > 92 * 864e5) return fail(400, '一次最多檢查 92 天');
+    const rows = (await env.DB.prepare(`SELECT * FROM audit_log WHERE at >= ? AND at < ? ORDER BY at, id LIMIT 20000`).bind(from, `${to} 24`).all()).results;
+    let bad = 0, unsigned = 0; const badIds = [];
+    for (const r of rows) { if (!r.mac) { unsigned += 1; continue; } if ((await hmac(env, auditFields(r))) !== r.mac) { bad += 1; if (badIds.length < 20) badIds.push(r.id); } }
+    const digests = (await env.DB.prepare('SELECT * FROM audit_digests WHERE day BETWEEN ? AND ? ORDER BY day').bind(from, to).all()).results;
+    const brokenDays = [];
+    for (const d of digests) {
+      const prev = (await env.DB.prepare('SELECT digest FROM audit_digests WHERE day < ? ORDER BY day DESC LIMIT 1').bind(d.day).first())?.digest || '';
+      const dayRows = (await env.DB.prepare("SELECT mac FROM audit_log WHERE at >= ? AND at < ? AND mac IS NOT NULL ORDER BY at, id").bind(d.day, `${d.day} 24`).all()).results;
+      const dg = await hmac(env, `${prev}|${dayRows.map((x) => x.mac).join('|')}`);
+      if (dg !== d.digest || dayRows.length !== d.rows) brokenDays.push(d.day);
+    }
+    await audit(env, req, member, 'audit.verify', 'audit', null, `${from}～${to}：${rows.length} 筆，異常 ${bad}，摘要異常 ${brokenDays.length} 天`);
+    return json({ from, to, checked: rows.length, unsigned, modified: bad, modifiedIds: badIds, days: digests.length, brokenDays });
+  }
+
   // 分享連結的預覽：還沒登入的人點進來，先看到是什麼活動（私密分團的活動不顯示）
   const mpv = path.match(/^\/api\/public\/e\/([\w-]{1,32})$/);
   if (mpv && method === 'GET') {
@@ -484,7 +629,7 @@ async function api(req, env, path, method) {
       ...(await (async () => { const st = await getSettings(env);
         return { settings: st, privacyVersion: st.privacy.version, needConsent: !!member && member.consent_version !== st.privacy.version }; })()),
       race: await countdownTarget(env, member),
-      teams: member ? await listTeams() : [], calendarOn: !!member?.cal_token_hash,
+      teams: member ? await listTeams() : [], calendarOn: !!member?.cal_token_hash, requireMfa: !!security.require_mfa,
       shortcut: await env.DB.prepare("SELECT value FROM settings WHERE key = 'health_shortcut'").first().then((r) => r?.value || null) });
 
   // 已登入的人輸入幹部碼或理事長碼升級
@@ -527,6 +672,7 @@ async function api(req, env, path, method) {
       .bind(id, name, dist, grp, role, (await getSettings(env)).privacy.version).run();
     const m = await env.DB.prepare('SELECT * FROM members WHERE id = ?').bind(id).first();
     await audit(env, req, m, 'account.create', 'member', id, '邀請碼');
+    await noteDevice(env, req, m, '邀請碼');
     return json({ member: pub(m) }, 200, { 'set-cookie': await startSession(env, m, req) });
   }
 
@@ -1849,9 +1995,21 @@ async function fatigueCheck(env, now) {
   return n;
 }
 
+// 每天台北 09:00：把前一天（UTC）的稽核 HMAC 串成摘要鏈；有人刪掉或改掉紀錄，重算就對不上
+async function auditDigest(env, now) {
+  if (!env.AUDIT_KEY || taipei(now).getUTCHours() !== 9) return null;
+  const day = new Date(now.getTime() - 864e5).toISOString().slice(0, 10);
+  if (await env.DB.prepare('SELECT 1 FROM audit_digests WHERE day = ?').bind(day).first()) return null;
+  const prev = (await env.DB.prepare('SELECT digest FROM audit_digests WHERE day < ? ORDER BY day DESC LIMIT 1').bind(day).first())?.digest || '';
+  const rows = (await env.DB.prepare('SELECT mac FROM audit_log WHERE at >= ? AND at < ? AND mac IS NOT NULL ORDER BY at, id').bind(day, `${day} 24`).all()).results;
+  const digest = await hmac(env, `${prev}|${rows.map((x) => x.mac).join('|')}`);
+  await env.DB.prepare('INSERT INTO audit_digests (day, rows, digest) VALUES (?, ?, ?)').bind(day, rows.length, digest).run();
+  return { day, rows: rows.length };
+}
+
 async function scheduled(env, now = new Date()) {
   const res = {};
-  for (const [k, fn] of [['events', remindEvents], ['renewals', remindRenewals], ['review', quarterlyReview], ['retention', retention], ['fatigue', fatigueCheck]]) {
+  for (const [k, fn] of [['events', remindEvents], ['renewals', remindRenewals], ['review', quarterlyReview], ['retention', retention], ['fatigue', fatigueCheck], ['auditDigest', auditDigest]]) {
     try { res[k] = await fn(env, now); } catch (e) { console.error('cron', k, e); res[k] = `error: ${e.message}`; }
   }
   return res;

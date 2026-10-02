@@ -139,6 +139,37 @@ function avatarStack(peek, total) {
 }
 const todayLabel = () => { const d = new Date(); return `${d.getMonth() + 1}月${d.getDate()}日 星期${WD[d.getDay()]}`; };
 
+// ---------- 通行金鑰（Face ID／指紋）----------
+const pkSupported = () => !!window.PublicKeyCredential && !!navigator.credentials?.create;
+const b64uToBuf = (s) => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((s.length + 3) % 4)), (c) => c.charCodeAt(0)).buffer;
+const bufToB64u = (b) => btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+// purpose：register 新增、login 登入、stepup 幹部再次驗證
+async function passkey(purpose, name) {
+  if (!pkSupported()) throw new Error('這個瀏覽器不支援通行金鑰，請用 iPhone 的 Safari 或 Chrome');
+  const { cid, publicKey: o } = await api('/passkey/options', { method: 'POST', body: { purpose } });
+  const pk = { ...o, challenge: b64uToBuf(o.challenge) };
+  if (o.user) pk.user = { ...o.user, id: b64uToBuf(o.user.id) };
+  if (o.excludeCredentials) pk.excludeCredentials = o.excludeCredentials.map((c) => ({ ...c, id: b64uToBuf(c.id) }));
+  if (o.allowCredentials) pk.allowCredentials = o.allowCredentials.map((c) => ({ ...c, id: b64uToBuf(c.id) }));
+  let cred;
+  try { cred = purpose === 'register' ? await navigator.credentials.create({ publicKey: pk }) : await navigator.credentials.get({ publicKey: pk, mediation: 'optional' }); }
+  catch (e) { throw new Error(e.name === 'NotAllowedError' ? '已取消' : e.name === 'InvalidStateError' ? '這台裝置已經有通行金鑰了' : '通行金鑰沒有完成'); }
+  const r = cred.response;
+  const credential = { id: cred.id, type: cred.type, response: purpose === 'register'
+    ? { clientDataJSON: bufToB64u(r.clientDataJSON), attestationObject: bufToB64u(r.attestationObject) }
+    : { clientDataJSON: bufToB64u(r.clientDataJSON), authenticatorData: bufToB64u(r.authenticatorData), signature: bufToB64u(r.signature), userHandle: r.userHandle ? bufToB64u(r.userHandle) : null } };
+  return api('/passkey/verify', { method: 'POST', body: { cid, credential, name } });
+}
+// 幹部開了強制兩步驟、這次登入還沒驗證：顯示提示列
+const mfaBanner = () => (me?.mfaPending ? `<section class="card mfabar"><div><b>請驗證身分</b><span class="tiny" style="display:block">你是${esc(me.realRoleName || '幹部')}，協會規定用通行金鑰再驗證一次才能使用管理功能。</span></div>
+  <button class="btn sm" data-stepup>${IC.lock}驗證</button></section>` : '');
+function bindStepup() {
+  for (const b of document.querySelectorAll('[data-stepup]')) b.onclick = async () => {
+    try { await passkey('stepup'); toast('驗證完成'); me = null; render(); }
+    catch (e) { if (/還沒有通行金鑰/.test(e.message)) { toast('先新增通行金鑰'); location.hash = '#/me'; } else if (e.message !== '已取消') toast(e.message); }
+  };
+}
+
 // ---------- 登入 ----------
 function loginView() {
   const err = new URLSearchParams(location.hash.split('?')[1] || '').get('err');
@@ -157,6 +188,7 @@ function loginView() {
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2C6.5 2 2 5.6 2 10c0 3.9 3.5 7.2 8.2 7.9.3.1.8.2.9.5.1.3.1.7 0 1l-.1.9c-.1.3-.3 1.1 1 .6s7-4.1 9.5-7c1.7-1.9 2.5-3.8 2.5-5.9C24 5.6 19.5 2 12 2z"/></svg>
         用 LINE 登入</a>
       <p class="tiny center">只取得你的 LINE 名稱和大頭貼，不會讀取聊天內容，也不會替你發訊息。<br>登入即表示你已閱讀並同意<a href="#/privacy">隱私權政策</a>。</p>` : ''}
+      ${pkSupported() ? `<button class="btn ghost block iconbtn" id="pkLogin" style="justify-content:center">${IC.lock}用通行金鑰登入（Face ID／指紋）</button>` : ''}
       <details ${cfg.lineLogin ? '' : 'open'}>
         <summary class="muted" style="cursor:pointer">用邀請碼加入</summary>
         <form id="joinForm" style="margin-top:12px">
@@ -188,6 +220,10 @@ function loginView() {
         <p class="tiny" style="margin:0">先登入，登入後會直接回到這個活動。</p></section>`;
     }).catch(() => {});
   }
+  $('#pkLogin')?.addEventListener('click', async () => {
+    try { await passkey('login'); toast('登入成功'); me = null; render(); }
+    catch (e) { if (e.message !== '已取消') toast(e.message); }
+  });
   const f = $('#joinForm');
   if (!f) return;
   const sync = () => {
@@ -310,6 +346,7 @@ async function listView() {
   } catch {}
   view.innerHTML = `
     ${largeTitle('團練', todayLabel())}
+    ${mfaBanner()}
     ${visits >= 2 ? installCard('home') : ''}
     ${chips}
     <div class="dash"><div style="display:grid;gap:14px">
@@ -325,6 +362,7 @@ async function listView() {
     </div></div>`;
   for (const b of document.querySelectorAll('[data-tf]')) b.onclick = () => { teamFilter.set(b.dataset.tf); listView(); };
   bindInstall();
+  bindStepup();
   flushLogQueue();
 }
 // 本週在整季的哪裡：階段、週次進度與三堂重點課
@@ -717,6 +755,7 @@ async function planNewView() {
 const MEMBERSHIP_NAME = { none: '跑友', applied: '申請中', active: '協會會員', expired: '會籍到期' };
 async function adminView(tab) {
   tab ||= new URLSearchParams(location.hash.split('?')[1] || '').get('tab') || 'overview';
+  if (me.mfaPending) { view.innerHTML = `${largeTitle('管理後台')}${mfaBanner()}`; bindStepup(); return; }
   if (!allow('members') && !allow('roles') && !allow('settings')) { view.innerHTML = '<div class="card"><p class="muted">沒有管理權限。</p></div>'; return; }
   const tabs = [['overview', '總覽'], ['members', '會員'], ['roles', '權限'], ['teams', '分團'], ['events', '活動'], ...(allow('settings') ? [['settings', '系統設定']] : []), ...(allow('audit') ? [['audit', '稽核']] : [])];
   // 只拿統計數字，名單要下條件才查
@@ -923,11 +962,13 @@ const AUDIT_NAME = {
   'team.approve': '通過入團', 'team.reject': '婉拒入團', 'team.remove': '移出分團', 'team.role': '變更分團身分', 'team.add': '加進分團', 'team.icon': '更新分團圖示', 'event.invite': '邀請參加活動', 'event.uninvite': '移出受邀名單', 'event.invite_link': '設定邀請連結',
   'event.invite_accept': '用邀請連結加入', 'review.reminder': '每季權限檢視提醒', 'event.payment': '更新繳費狀態', 'event.attend_token': '設定現場報到', 'event.bulk': '整批匯入',
   'calendar.on': '產生行事曆訂閱', 'calendar.off': '停用行事曆訂閱',
+  'passkey.add': '新增通行金鑰', 'passkey.remove': '移除通行金鑰', 'passkey.denied': '通行金鑰驗證失敗', 'mfa.verify': '兩步驟驗證', 'login.new_device': '新裝置登入',
+  'settings.security': '修改兩步驟驗證設定', 'audit.verify': '稽核完整性檢查',
   'team.post': '發布分團公告', 'team.post_delete': '刪除分團公告', 'privacy.show_rank': '排行榜設定', broadcast: '群發通知', 'retention.cleanup': '資料保存期限清理', 'event.invite_denied': '邀請連結無效', 'privacy.share_logs': '訓練紀錄分享設定', 'settings.shortcut': '修改捷徑連結',
 };
 // 稽核紀錄：一定要選時間區間（預設最近 7 天），再依類型、操作者、對象縮小；一次 50 筆
 const AUDIT_GROUPS = { '': '所有類型', role: '身分變更', membership: '會籍', team: '分團', event: '活動', checkin: '報到', lottery: '抽獎',
-  settings: '系統設定', privacy: '個資', login: '登入', account: '帳號', 'join.denied': '邀請碼錯誤', bootstrap: '初始設定', plan: '課表' };
+  settings: '系統設定', privacy: '個資', login: '登入', passkey: '通行金鑰', mfa: '兩步驟驗證', account: '帳號', 'join.denied': '邀請碼錯誤', bootstrap: '初始設定', plan: '課表' };
 function auditPanel() {
   const to = new Date().toISOString().slice(0, 10), from = new Date(Date.now() - 6 * 864e5).toISOString().slice(0, 10);
   return `<section class="card">
@@ -946,7 +987,10 @@ function auditPanel() {
       </div>
     </form>
     <div class="audit" id="auList"></div>
-  </section>`;
+  </section>
+  <section class="card"><div class="row spread"><h3>完整性檢查</h3><button class="btn ghost sm" id="auVerify">檢查最近 30 天</button></div>
+    <p class="tiny" style="margin:0">每筆紀錄都有只有系統知道的簽章，每天再串成一條摘要鏈。有人直接改或刪資料庫裡的紀錄，這裡就會顯示異常。</p>
+    <div id="auVerifyOut" class="tiny"></div></section>`;
 }
 function bindAudit() {
   const f = $('#auf'), list = $('#auList');
@@ -971,6 +1015,14 @@ function bindAudit() {
     f.requestSubmit();
   };
   f.requestSubmit();
+  $('#auVerify').onclick = async () => {
+    $('#auVerifyOut').textContent = '檢查中…';
+    try {
+      const r = await api('/audit/verify');
+      $('#auVerifyOut').innerHTML = `${r.from} ～ ${r.to}：檢查 ${r.checked} 筆${r.unsigned ? `（其中 ${r.unsigned} 筆是功能上線前的舊紀錄，沒有簽章）` : ''}。<br>
+        ${r.modified || r.brokenDays.length ? `<b style="color:var(--race)">發現異常：被改動 ${r.modified} 筆${r.brokenDays.length ? `，摘要對不上的日期 ${r.brokenDays.join('、')}` : ''}。請立刻通知理事長與監事。</b>` : `<b>${IC.check} 沒有發現竄改</b>（每日摘要 ${r.days} 天）`}`;
+    } catch (e) { $('#auVerifyOut').textContent = e.message; }
+  };
 }
 
 // 分團管理（理事長、行政人員）：新增分團；細節在各分團頁編輯
@@ -1054,6 +1106,12 @@ function settingsPanel() {
     </form>
   </section>
 
+  ${(me.realRole || me.role) === 'chair' ? `<section class="card">
+    <h3>幹部兩步驟驗證</h3>
+    <label class="switch"><span>幹部要用通行金鑰驗證才能使用管理功能<span class="tiny" style="display:block">理事、監事、行政人員、教練都適用；一般跑友不受影響</span></span>
+      <input type="checkbox" id="mfaToggle" ${cfg.requireMfa ? 'checked' : ''}><i></i></label>
+    <p class="tiny" style="margin:0">開啟前請先在「我的 → 通行金鑰」新增並驗證一次，也請其他幹部先新增，否則他們會暫時只能用一般跑友的功能。</p>
+  </section>` : ''}
   <section class="card">
     <h3>功能開關</h3>
     <form id="featForm" class="toggles">
@@ -1105,6 +1163,10 @@ function bindSettings() {
     save('org', { name: f.name.value, short: f.short.value, join_form: f.join_form.value.trim(), contact: f.contact.value, retention: f.retention.value,
       parent: f.parent.value, parent_url: f.parent_url.value.trim(), parent_note: f.parent_note.value,
       event_data_years: Number(f.event_data_years.value), log_years: Number(f.log_years.value), audit_years: Number(f.audit_years.value) }, '已儲存協會資訊'); };
+  $('#mfaToggle')?.addEventListener('change', async (e) => {
+    try { await api('/settings/security', { method: 'POST', body: { require_mfa: e.target.checked } }); await reload(e.target.checked ? '已開啟幹部兩步驟驗證' : '已關閉幹部兩步驟驗證'); }
+    catch (err) { e.target.checked = !e.target.checked; toast(err.message); }
+  });
   $('#featForm').onsubmit = (e) => { e.preventDefault(); const f = e.target, body = {};
     for (const k of Object.keys(FEATURE_NAME)) body[k] = f[k].checked;
     save('features', body, '已儲存功能開關'); };
@@ -2504,7 +2566,15 @@ async function meView() {
     </section>
     ${allow('settings') ? '<a class="card" href="#/admin"><div class="row spread"><h3>系統設定</h3><span class="tiny">協會資訊・功能開關・文件・隱私權政策 ›</span></div></a>' : ''}
 
+    ${mfaBanner()}
     ${installCard('me')}
+    <section class="card" id="pkCard">
+      <div class="row spread"><h3>通行金鑰</h3>${me.mfa ? `<span class="pill solid">${IC.check}這次已驗證</span>` : ''}</div>
+      <p class="tiny" style="margin:0">用 Face ID、Touch ID 或手機指紋登入，不用密碼也不用 LINE。${['chair', 'director', 'supervisor', 'staff', 'coach'].includes(me.realRole || me.role) ? '幹部建議至少新增一把，協會開啟兩步驟驗證後要用它驗證。' : ''}</p>
+      <div id="pkList" class="roster"></div>
+      <div class="row" style="gap:8px">${pkSupported() ? `<button class="btn sm" id="pkAdd">${IC.plus}新增通行金鑰</button>` : '<span class="tiny">這個瀏覽器不支援通行金鑰</span>'}
+        <button class="btn ghost sm" data-stepup id="pkTest" hidden>驗證一次</button></div>
+    </section>
     <a class="card" href="#/report"><div class="row spread"><h3>訓練報表</h3><span class="tiny">週里程、完成率、強度趨勢、個人最佳 ›</span></div></a>
     <a class="card" href="#/tickets"><div class="row spread"><h3>我的入場券</h3><span class="tiny">春酒等活動的入場 QR Code ›</span></div></a>
     <section class="card" id="calCard">
@@ -2639,6 +2709,27 @@ async function meView() {
   $('#logout').onclick = async () => { await api('/logout', { method: 'POST' }); clearDeviceData(); me = null; location.hash = '#/'; render(); };
   $('#pushBtn')?.addEventListener('click', () => togglePush(sub));
   bindInstall();
+  bindStepup();
+  const loadPk = async () => {
+    const { passkeys } = await api('/passkeys');
+    $('#pkList').innerHTML = passkeys.map((p) => `<div class="r">${IC.lock}<span>${esc(p.name || '通行金鑰')}<span class="tiny" style="display:block">新增於 ${esc(p.created_at.slice(0, 10))}${p.last_used_at ? `・上次使用 ${ago(p.last_used_at)}` : ''}</span></span>
+      <button class="btn ghost sm" data-pkdel="${esc(p.id)}">移除</button></div>`).join('');
+    $('#pkTest').hidden = !passkeys.length || me.mfa;
+    for (const b of document.querySelectorAll('[data-pkdel]')) b.onclick = async () => {
+      if (!confirm('移除這把通行金鑰？之後這台裝置就不能用它登入。')) return;
+      await api(`/passkeys/${encodeURIComponent(b.dataset.pkdel)}`, { method: 'DELETE' }); toast('已移除'); loadPk();
+    };
+  };
+  loadPk().catch(() => {});
+  $('#pkAdd')?.addEventListener('click', async () => {
+    try {
+      await passkey('register');
+      toast('已新增通行金鑰');
+      // 新增後馬上用它驗證一次：確認可以用，也讓這次登入通過兩步驟
+      try { await passkey('stepup'); me = null; render(); return; } catch {}
+      loadPk();
+    } catch (e) { if (e.message !== '已取消') toast(e.message); }
+  });
   // 行事曆訂閱：每次產生都是新網址，舊的立即失效
   $('#calNew').onclick = async () => {
     if (cfg.calendarOn && !confirm('重新產生後，已經訂閱的舊網址會失效，要在行事曆重新訂閱。確定？')) return;

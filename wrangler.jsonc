@@ -29,6 +29,7 @@
   //   JOIN_CODE             跑友加入用的邀請碼（在 LINE 群公告）
   //   CHAIR_CODE            一次性的初始理事長設定碼（有理事長之後自動失效）
   //   HASH_SALT             IP 雜湊用的鹽
+  //   AUDIT_KEY             稽核紀錄防竄改的 HMAC 金鑰
   //   LINE_CHANNEL_ID／LINE_CHANNEL_SECRET   LINE Login
   //   VAPID_PUBLIC_KEY／VAPID_PRIVATE_JWK／VAPID_SUBJECT   推播
 }

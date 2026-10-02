@@ -651,3 +651,5 @@ h3 svg.ic{width:18px;height:18px}
 .seg{overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch}
 .seg::-webkit-scrollbar{display:none}
 .seg button{flex:1 0 auto}
+.mfabar{display:flex;align-items:center;gap:12px;justify-content:space-between;border:1.5px solid color-mix(in srgb,var(--accent) 45%,transparent)}
+.r > svg.ic{width:22px;height:22px;color:var(--accent);justify-self:center}
