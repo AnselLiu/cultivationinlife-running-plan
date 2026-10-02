@@ -1,31 +1,85 @@
-# 耕跑團課表教練・PWA 部署包
+# 耕跑團 Cultivation in Life Run
 
-把整個資料夾放到任何 **HTTPS** 網站的同一個目錄，就能「安裝到主畫面」、離線使用。
+台灣耕跑團協會的團練 PWA：把原本散在 LINE 群組的團練公告、接龍報名和每週課表收在一個網站，並支援推播通知。原本的「課表教練」單頁保留在 `/coach.html`。
 
-## 檔案
-| 檔案 | 用途 |
+- **團練**：週四田徑場、週五核心日、週日長跑等活動，列出時間、地點、帶團與注意事項。
+- **報名**：取代 LINE 接龍。可設人數上限與報名截止，額滿自動排候補，有人取消時候補遞補並推播通知。
+- **課表**：全馬 S–I、半馬 A–E 分組課表，`MP+20''` 這種寫法會自動換算成該組的實際配速。
+- **公告產生器**：幹部建立活動後，依週次帶出各組課表，產生可直接貼回 LINE 的公告文字。
+- **登入**：LINE 登入（帶名稱與大頭貼），或用協會發的邀請碼加入。
+
+## 架構
+
+| 部分 | 內容 |
 |---|---|
-| `index.html` | 課表教練本體（與 claude.ai 上的版本相同） |
-| `manifest.webmanifest` | App 名稱、圖示、主題色、捷徑（今天／本週／全季） |
-| `sw.js` | Service Worker：離線快取、更新提示 |
-| `icons/` | App 圖示（192、512、maskable、Apple、favicon） |
-| `web.config` | 只有放在 IIS 時需要（設定 .webmanifest 的 MIME） |
+| `public/` | PWA 前端（純 HTML／CSS／JS，沒有框架，不用 build） |
+| `public/app.js` | 畫面：登入、團練列表、活動詳情與報名、我的課表、新增活動、設定 |
+| `public/plan.js` | 課表讀取與配速換算（畫面與公告產生器共用） |
+| `public/coach.html` | 原本的課表教練單頁（整季課表、年齡分級、補給試算） |
+| `public/data/season-2026.json` | 2026 臺北馬 W1–W20＋賽後恢復週的分組課表 |
+| `src/worker.js` | API（Cloudflare Worker）：LINE 登入、工作階段、活動、報名、推播 |
+| `src/push.js` | Web Push（RFC 8291 加密＋RFC 8292 VAPID），只用 WebCrypto |
+| `migrations/` | D1 資料表 |
+| `docs/` | GitHub Pages 的轉址頁（App 本體在 Cloudflare） |
 
-## 部署方式（擇一）
-1. **GitHub Pages**：建一個 repo，把所有檔案放在根目錄 → Settings → Pages → 選 main 分支 → 取得 `https://帳號.github.io/repo/`。
-2. **Netlify Drop**：到 app.netlify.com/drop，把整個資料夾拖進去，會直接給一個 HTTPS 網址。
-3. **IIS**：把資料夾放到站台下（需 HTTPS），`web.config` 一起放進去。
+**設計**：品牌色沿用課表教練頁（深藍 `#0B1B33`、藍 `#1C4698`、黃 `#FDF36D`、萊姆 `#B9D04C`），介面走 macOS／iOS 的毛玻璃風格：背景極光＋`backdrop-filter` 玻璃卡片，支援深淺色切換與 `prefers-reduced-motion`。
 
-> 一定要 HTTPS（或 localhost）；直接雙擊 index.html 開啟時不會啟用 PWA，但其他功能都能用。
+**身分與安全**：工作階段權杖放 HttpOnly cookie，資料庫只存 SHA-256；寫入類 API 只收同源 JSON 請求（擋 CSRF）；LINE 登入用 state cookie 防 CSRF。
 
-## 安裝
-- **Android／電腦版 Chrome、Edge**：右上角會出現黃色「安裝 App」按鈕，或網址列的安裝圖示。
-- **iPhone／iPad**：用 Safari 開啟 → 分享 → 加入主畫面（按「安裝 App」會顯示步驟）。
+**個資**：網站只存姓名、組別、LINE 顯示名稱與大頭貼網址、報名紀錄。協會入會申請（含身分證字號、地址）仍走官方 Google 表單，網站只放連結。
 
-## 更新版本
-修改 `index.html` 後，把 `sw.js` 第一行的 `VERSION`（例如 `gengpao-coach-v1` → `v2`）改掉再上傳。使用者下次開啟會看到「有新版本 → 更新」提示。
+## 本機開發
 
-## 安裝後的差異
-- 全螢幕、有自己的圖示，長按圖示有「今天的課／本週課表／全季總覽」捷徑
-- 沒有網路也能開啟、看課表、換算配速
-- 「整季 PDF」和「加入行事曆」會直接下載 `.pdf`、`.ics`（不需要解壓縮）
+```bash
+npm install
+cp .dev.vars.example .dev.vars     # 設邀請碼（之後可加 LINE 與推播金鑰）
+npm run db:migrate:local
+npm run dev                        # http://localhost:8790
+```
+
+## 部署
+
+```bash
+npx wrangler d1 create cil-run          # 把回傳的 database_id 貼進 wrangler.jsonc
+npx wrangler secret put JOIN_CODE       # 團員邀請碼
+npx wrangler secret put ADMIN_CODE      # 幹部碼
+npm run deploy
+```
+
+### LINE 登入
+
+1. 到 [LINE Developers](https://developers.line.biz/console/) 建立 Provider → **LINE Login** channel。
+2. Callback URL 填 `https://你的網域/api/line/callback`（本機測試再加一組 `http://localhost:8790/api/line/callback`）。
+3. 設定 secrets：
+
+```bash
+npx wrangler secret put LINE_CHANNEL_ID
+npx wrangler secret put LINE_CHANNEL_SECRET
+```
+
+沒設定時，登入畫面只顯示邀請碼，其他功能不受影響。
+
+### 推播通知（選用）
+
+```bash
+node -e "crypto.subtle.generateKey({name:'ECDSA',namedCurve:'P-256'},true,['sign','verify']).then(async k=>{
+  const pub=Buffer.from(await crypto.subtle.exportKey('raw',k.publicKey)).toString('base64url');
+  console.log('VAPID_PUBLIC_KEY=',pub);
+  console.log('VAPID_PRIVATE_JWK=',JSON.stringify(await crypto.subtle.exportKey('jwk',k.privateKey)));})"
+npx wrangler secret put VAPID_PUBLIC_KEY
+npx wrangler secret put VAPID_PRIVATE_JWK
+npx wrangler secret put VAPID_SUBJECT     # 例如 mailto:you@example.com
+```
+
+iPhone 要先用 Safari 的「分享 → 加到主畫面」，再從主畫面開啟才收得到通知。
+
+## 課表資料怎麼更新
+
+教練每週發新課表後，在 `gengpao-running-coach` skill 更新原文並重建 `season-2026.json`，再覆蓋 `public/data/season-2026.json`。W9 以後目前是依 2025 臺北馬同期推估，畫面與公告都會標示「以教練公告為準」。
+
+## 待辦
+
+- 活動前一天自動提醒（Cron Trigger）
+- 幹部後台：團員名冊、出席統計
+- 協會公益活動與繳費狀態
+- LINE 官方帳號推播（把公告直接送進群組）

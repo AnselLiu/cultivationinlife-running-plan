@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>耕跑團</title>
+<meta name="description" content="耕跑團團練公告、報名與每週課表">
+<meta name="theme-color" content="#EEF2F9" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#060F1C" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="耕跑團">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="format-detection" content="telephone=no">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+<link rel="icon" href="/icons/favicon-32.png" sizes="32x32">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div class="aurora" aria-hidden="true"><i></i><i></i><i></i></div>
+
+<header class="top">
+  <a class="brand" href="#/">
+    <span class="mark" aria-hidden="true"><svg viewBox="0 0 36 36"><ellipse cx="18" cy="18" rx="11" ry="7.4"/><ellipse cx="18" cy="18" rx="6" ry="3.4"/></svg></span>
+    <span><b>耕跑團</b><small>Cultivation in Life</small></span>
+  </a>
+  <span class="topright">
+    <span class="countdown num" id="countdown"></span>
+    <button class="themebtn" id="theme" title="切換深淺色" aria-label="切換深淺色">◐</button>
+  </span>
+</header>
+
+<main id="view" class="wrap"><p class="loading">載入中…</p></main>
+
+<nav class="tabs" id="tabs" aria-label="主要分頁">
+  <a href="#/" data-tab="/"><span class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9h3l7-4v14l-7-4H4a1 1 0 0 1-1-1v-4a1 1 0 0 1 1-1Z"/><path d="M17.5 8.5a5 5 0 0 1 0 7"/><path d="M6.5 15v3.5"/></svg></span>團練</a>
+  <a href="#/plan" data-tab="/plan"><span class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.2" y="4.8" width="17.6" height="15.4" rx="3.4"/><path d="M3.4 9.6h17.2M8 3.2v3.4M16 3.2v3.4"/><path d="M7.6 13.4h3M7.6 16.6h8.8M13.4 13.4h3"/></svg></span>課表</a>
+  <a href="#/coach" data-tab="/coach"><span class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13.5 4.6a1.5 1.5 0 1 0 0-.1Z"/><path d="M6 20.5l2.6-5 2.4-1.6-1-4.2 3.6-1.4 1.8 3.2 3.4 1"/><path d="M9.6 13.9 6.8 11l-2.6 1.2"/><path d="M11 13.9l1.3 3.2 3.4 2.6"/></svg></span>教練</a>
+  <a href="#/me" data-tab="/me"><span class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8.4" r="3.6"/><path d="M4.8 20.2c.7-3.6 3.6-5.6 7.2-5.6s6.5 2 7.2 5.6"/></svg></span>我的</a>
+</nav>
+
+<script type="module" src="/app.js"></script>
+</body>
+</html>
