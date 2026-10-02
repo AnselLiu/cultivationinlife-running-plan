@@ -197,9 +197,10 @@ const allMemberIds = async (env, exceptId) =>
 const LINE_STATE = '__Host-cil_oauth';
 const redirectUri = (url) => `${url.origin}/api/line/callback`;
 
-function lineStart(env, url) {
+// link=1：已經登入的人把 LINE 綁到目前帳號（例如先用邀請碼加入，之後改用 LINE 登入），不會另外開新帳號
+function lineStart(env, url, current) {
   if (!env.LINE_CHANNEL_ID || !env.LINE_CHANNEL_SECRET) return fail(503, '尚未設定 LINE 登入');
-  const state = rid(12), nonce = rid(12);
+  const state = rid(12), nonce = rid(12), link = url.searchParams.get('link') === '1' && current ? '.L' : '';
   const auth = new URL('https://access.line.me/oauth2/v2.1/authorize');
   auth.searchParams.set('response_type', 'code');
   auth.searchParams.set('client_id', env.LINE_CHANNEL_ID);
@@ -210,14 +211,14 @@ function lineStart(env, url) {
   return new Response(null, { status: 302, headers: {
     location: auth.toString(),
     // state 與 nonce 一起綁在發起登入的瀏覽器上，callback 時兩個都要對得上
-    'set-cookie': `${LINE_STATE}=${state}.${nonce}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=600`,
+    'set-cookie': `${LINE_STATE}=${state}.${nonce}${link}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=600`,
   } });
 }
 
 async function lineCallback(req, env, url) {
   const clear = `${LINE_STATE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`;
   const back = (msg) => new Response(null, { status: 302, headers: { location: `/#/?err=${encodeURIComponent(msg)}`, 'set-cookie': clear } });
-  const [want, nonce] = ((req.headers.get('cookie') || '').match(new RegExp(`${LINE_STATE}=([\\w]+\\.[\\w]+)`))?.[1] || '').split('.');
+  const [want, nonce, linkFlag] = ((req.headers.get('cookie') || '').match(new RegExp(`${LINE_STATE}=([\\w]+\\.[\\w]+(?:\\.L)?)`))?.[1] || '').split('.');
   // 使用者在 LINE 授權頁按了取消
   if (url.searchParams.get('error')) return back(url.searchParams.get('error') === 'access_denied' ? '你取消了 LINE 登入' : 'LINE 登入失敗，請再試一次');
   const code = url.searchParams.get('code'), state = url.searchParams.get('state');
@@ -233,6 +234,16 @@ async function lineCallback(req, env, url) {
   if (!prof.userId || prof.userId !== idt.sub) return back('LINE 登入驗證失敗');
   const pic = safeAvatar(prof.pictureUrl);
   let m = await env.DB.prepare('SELECT id, name, role FROM members WHERE line_id = ?').bind(prof.userId).first();
+  // 綁定模式：把這個 LINE 接到目前登入的帳號
+  if (linkFlag === 'L') {
+    const cur = await currentMember(req, env);
+    const toMe = (q) => new Response(null, { status: 302, headers: { location: `/#/me?${q}`, 'set-cookie': clear } });
+    if (!cur) return back('請先登入再綁定 LINE');
+    if (m && m.id !== cur.id) return toMe('line=taken');
+    await env.DB.prepare('UPDATE members SET line_id = ?, avatar = COALESCE(?, avatar) WHERE id = ?').bind(prof.userId, pic, cur.id).run();
+    await audit(env, req, cur, 'line.link', 'member', cur.id, '綁定 LINE');
+    return toMe('line=linked');
+  }
   let isNew = false;
   if (m) {
     await env.DB.prepare('UPDATE members SET avatar = ? WHERE id = ?').bind(pic, m.id).run();
@@ -2035,7 +2046,7 @@ export default {
     if (!path.startsWith('/api/')) return env.ASSETS.fetch(req);
     env.ctx = ctx;
     // LINE 登入是瀏覽器導向（GET、不是 JSON），走在下面的 CSRF 檢查之前
-    if (path === '/api/line/start' && req.method === 'GET') return lineStart(env, url);
+    if (path === '/api/line/start' && req.method === 'GET') return lineStart(env, url, url.searchParams.get('link') === '1' ? await currentMember(req, env) : null);
     if (path === '/api/line/callback' && req.method === 'GET') return lineCallback(req, env, url);
     // 開發用：手動觸發排程，可指定時間 ?at=2026-10-03T12:00:00Z（只有 DEV_LOGIN=1 的本機有效）
     if (path === '/api/dev/cron' && env.DEV_LOGIN === '1' && ['localhost', '127.0.0.1'].includes(url.hostname)) {

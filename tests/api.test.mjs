@@ -158,3 +158,22 @@ test('個資：本人可匯出，匯出不含行事曆代碼與登入權杖', as
   assert.equal(r.status, 200);
   assert.ok(!r.text.includes('cal_token_hash') && !r.text.includes('token_hash'));
 });
+
+test('LINE 登入：導向 LINE 授權頁、綁定模式帶標記、state 不符或取消都擋下', async () => {
+  const r = await fetch(`${BASE}/api/line/start`, { redirect: 'manual' });
+  assert.equal(r.status, 302);
+  const loc = new URL(r.headers.get('location'));
+  assert.equal(loc.origin + loc.pathname, 'https://access.line.me/oauth2/v2.1/authorize');
+  assert.equal(loc.searchParams.get('redirect_uri'), `${BASE}/api/line/callback`);
+  assert.equal(loc.searchParams.get('scope'), 'profile openid');
+  assert.match(r.headers.get('set-cookie'), /__Host-cil_oauth=\w+\.\w+;/);
+  const l = await fetch(`${BASE}/api/line/start?link=1`, { redirect: 'manual', headers: { cookie: await as('t_runner') } });
+  assert.match(l.headers.get('set-cookie'), /__Host-cil_oauth=\w+\.\w+\.L;/, '綁定模式要帶 .L');
+  const anon = await fetch(`${BASE}/api/line/start?link=1`, { redirect: 'manual' });
+  assert.doesNotMatch(anon.headers.get('set-cookie'), /\.L;/, '沒登入不能進綁定模式');
+  const bad = await fetch(`${BASE}/api/line/callback?code=x&state=forged`, { redirect: 'manual', headers: { cookie: '__Host-cil_oauth=real.nonce' } });
+  assert.match(decodeURIComponent(bad.headers.get('location')), /登入逾時/);
+  const cancel = await fetch(`${BASE}/api/line/callback?error=access_denied&state=x`, { redirect: 'manual' });
+  assert.match(decodeURIComponent(cancel.headers.get('location')), /取消/);
+  assert.equal((await call(null, '/me')).json.lineLogin, true);
+});

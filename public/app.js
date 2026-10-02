@@ -992,7 +992,7 @@ const AUDIT_NAME = {
   'calendar.on': '產生行事曆訂閱', 'calendar.off': '停用行事曆訂閱',
   'passkey.add': '新增通行金鑰', 'passkey.remove': '移除通行金鑰', 'passkey.denied': '通行金鑰驗證失敗', 'mfa.verify': '兩步驟驗證', 'login.new_device': '新裝置登入',
   'settings.security': '修改兩步驟驗證設定', 'audit.verify': '稽核完整性檢查',
-  'team.post': '發布分團公告', 'team.post_delete': '刪除分團公告', 'privacy.show_rank': '排行榜設定', broadcast: '群發通知', 'retention.cleanup': '資料保存期限清理', 'event.invite_denied': '邀請連結無效', 'privacy.share_logs': '訓練紀錄分享設定', 'settings.shortcut': '修改捷徑連結',
+  'line.link': '綁定 LINE', 'team.post': '發布分團公告', 'team.post_delete': '刪除分團公告', 'privacy.show_rank': '排行榜設定', broadcast: '群發通知', 'retention.cleanup': '資料保存期限清理', 'event.invite_denied': '邀請連結無效', 'privacy.share_logs': '訓練紀錄分享設定', 'settings.shortcut': '修改捷徑連結',
 };
 // 稽核紀錄：一定要選時間區間（預設最近 7 天），再依類型、操作者、對象縮小；一次 50 筆
 const AUDIT_GROUPS = { '': '所有類型', role: '身分變更', membership: '會籍', team: '分團', event: '活動', checkin: '報到', lottery: '抽獎',
@@ -2541,9 +2541,13 @@ async function meView() {
   const sub = await reg?.pushManager?.getSubscription().catch(() => null);
   const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone;
   const welcome = new URLSearchParams(location.hash.split('?')[1] || '').get('welcome');
+  const lineMsg = new URLSearchParams(location.hash.split('?')[1] || '').get('line');
   view.innerHTML = `
     ${largeTitle('我的')}
     ${welcome ? '<div class="notice">歡迎加入！先確認你的項目和組別，再到下方「我的分團」加入你在的團。</div>' : ''}
+    ${lineMsg === 'linked' ? '<div class="notice">已綁定 LINE，之後可以直接用 LINE 登入。</div>' : lineMsg === 'taken' ? '<div class="notice">這個 LINE 已經綁定另一個帳號了。如果那個帳號也是你的，請聯絡行政人員合併。</div>' : ''}
+    ${cfg.lineLogin && !me.line ? `<section class="card"><div class="row spread"><div><h3>綁定 LINE</h3><span class="tiny">綁定後可以直接用 LINE 登入，報名名單也會顯示你的 LINE 大頭貼。</span></div>
+      <a class="btn line sm" href="/api/line/start?link=1">綁定</a></div></section>` : ''}
     <section class="card">
       <div class="row">
         ${avatar(me)}
