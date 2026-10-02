@@ -16,8 +16,27 @@ const api = async (path, opt = {}) => {
     body: method === 'GET' ? undefined : JSON.stringify(opt.body ?? {}),
   });
   const data = await res.json().catch(() => ({}));
+  if (method === 'GET') offlineBar(res.headers.get('x-cil-offline') === '1');
   if (!res.ok) throw new Error(data.error || `錯誤 ${res.status}`);
   return data;
+};
+// 斷線時顯示「離線中，畫面是上次的資料」；恢復連線自動消失
+function offlineBar(on) {
+  let el = document.getElementById('offline');
+  if (!on) { el?.remove(); return; }
+  if (el) return;
+  el = document.createElement('div');
+  el.id = 'offline'; el.className = 'offline'; el.role = 'status';
+  el.textContent = '離線中，顯示的是上次的資料；入場券 QR Code 仍然可以使用';
+  document.body.append(el);
+}
+addEventListener('online', () => { offlineBar(false); flushLogQueue(); });
+addEventListener('offline', () => offlineBar(true));
+// 登出、刪除帳號：清掉這台裝置暫存的個人資料
+const clearDeviceData = () => {
+  navigator.serviceWorker?.controller?.postMessage({ type: 'CLEAR_DATA' });
+  try { localStorage.removeItem('cil-log-queue'); } catch {}
+  navigator.clearAppBadge?.().catch(() => {});
 };
 function toast(msg) {
   $('.toast')?.remove();
@@ -283,8 +302,15 @@ async function listView() {
       <button role="tab" data-tf="assoc" aria-selected="${pick === 'assoc'}">全協會</button>
       ${mine.map((t) => `<button role="tab" data-tf="${esc(t.id)}" aria-selected="${pick === t.id}" style="--tc:${esc(t.color)}">${t.icon ? `<img class="ticon xs" src="${esc(t.icon)}" alt="">` : '<i></i>'}${esc(t.name)}</button>`).join('')}
     </div>` : `<a class="card tight lit" href="#/teams"><div class="row spread"><span><b>加入你的分團</b><span class="tiny" style="display:block">耕跑團、耕跑青年、小耕跑…加入後只看自己團的活動</span></span><span class="tiny">›</span></div></a>`;
+  // 第二次打開以後才提示安裝，不要一進來就打擾
+  let visits = 0;
+  try {
+    visits = Number(localStorage.getItem('cil-visits') || 0);
+    if (!sessionStorage.getItem('cil-counted')) { visits += 1; localStorage.setItem('cil-visits', String(visits)); sessionStorage.setItem('cil-counted', '1'); }
+  } catch {}
   view.innerHTML = `
     ${largeTitle('團練', todayLabel())}
+    ${visits >= 2 ? installCard('home') : ''}
     ${chips}
     <div class="dash"><div style="display:grid;gap:14px">
     ${strip}
@@ -298,6 +324,8 @@ async function listView() {
     <a class="tiny center" href="#/past" style="padding:4px">看過去的團練 ›</a>
     </div></div>`;
   for (const b of document.querySelectorAll('[data-tf]')) b.onclick = () => { teamFilter.set(b.dataset.tf); listView(); };
+  bindInstall();
+  flushLogQueue();
 }
 // 本週在整季的哪裡：階段、週次進度與三堂重點課
 async function weekStrip() {
@@ -618,6 +646,7 @@ async function bell() {
     const b = $('#bellCount');
     b.textContent = unread > 99 ? '99+' : unread;
     b.hidden = !unread;
+    if (navigator.setAppBadge) (unread ? navigator.setAppBadge(unread) : navigator.clearAppBadge()).catch(() => {});
   } catch {}
 }
 
@@ -1130,10 +1159,10 @@ function readQuestionFields(form, qs) {
   }
   return out;
 }
-function ticketCard(t, ev) {
+function ticketCard(t, ev, title = '我的入場券') {
   return `<section class="card ticket">
-    <div class="row spread"><h3>我的入場券</h3>${t.checked_in_at ? '<span class="pill solid">已報到</span>' : '<span class="pill">未報到</span>'}</div>
-    <div class="qrbox" id="qrBox" data-code="${esc(t.code)}" data-ev="${esc(ev.id)}"></div>
+    <div class="row spread"><h3>${esc(title)}</h3>${t.checked_in_at ? '<span class="pill solid">已報到</span>' : '<span class="pill">未報到</span>'}</div>
+    <div class="qrbox" ${title === '我的入場券' ? 'id="qrBox"' : ''} data-code="${esc(t.code)}" data-ev="${esc(ev.id)}"></div>
     <div class="code num">${esc(t.code)}</div>
     <div class="trow">
       <span><u>桌次</u>${t.table_no ? `第 ${t.table_no} 桌` : '未排桌'}</span>
@@ -1148,6 +1177,51 @@ async function paintQR(ev, code) {
   if (!box) return;
   try { box.innerHTML = await qrSVG(`${location.origin}/#/e/${ev.id}/in/${code}`, { size: 200, dark: '#0B1B33', light: '#fff' }); }
   catch { box.innerHTML = '<p class="tiny">QR 產生失敗，請用下方代碼報到</p>'; }
+}
+
+// 我的入場券：所有即將到來的入場券集中在一頁（主畫面捷徑直達，離線也能出示）
+async function ticketsView() {
+  const { tickets } = await api('/my/tickets');
+  view.innerHTML = `${largeTitle('我的入場券', tickets.length ? '入場時把 QR Code 給工作人員掃描' : '')}
+    ${tickets.map((t) => `${ticketCard(t, { id: t.event_id }, t.title)}<p class="tiny center" style="margin:-6px 0 8px">${dstr(t.date)}${t.gather_time ? ` ${t.gather_time}` : ''}${t.place ? `・${esc(t.place)}` : ''}　<a href="#/e/${esc(t.event_id)}">活動頁 ›</a></p>`).join('')
+      || `<div class="card">${emptyState('calendar', '目前沒有入場券。報名春酒等需要入場的活動後，入場券會出現在這裡。')}</div>`}`;
+  for (const box of document.querySelectorAll('.qrbox[data-code]')) {
+    try { box.innerHTML = await qrSVG(`${location.origin}/#/e/${box.dataset.ev}/in/${box.dataset.code}`, { size: 200, dark: '#0B1B33', light: '#fff' }); }
+    catch { box.innerHTML = '<p class="tiny">QR 產生失敗，請用下方代碼報到</p>'; }
+  }
+}
+
+// 安裝到主畫面：iPhone 要手動「分享 → 加入主畫面」，Android／桌機用瀏覽器的安裝提示
+const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+const isIOS = () => /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+const SHARE_IC = ic('<path d="M12 15V3.5M7.5 8 12 3.5 16.5 8M5 12.5v6A2.5 2.5 0 0 0 7.5 21h9a2.5 2.5 0 0 0 2.5-2.5v-6"/>');
+const ADD_IC = ic('<rect x="4" y="4" width="16" height="16" rx="4"/><path d="M12 8.5v7M8.5 12h7"/>');
+function installCard(where) {
+  if (isStandalone()) return '';
+  try { if (where === 'home' && localStorage.getItem('cil-install-dismiss')) return ''; } catch {}
+  const ios = isIOS();
+  return `<section class="card installcard">
+    <div class="row spread"><h3 class="row" style="gap:10px"><img src="/icons/icon-192.png" alt="" width="32" height="32" style="border-radius:8px">把耕跑團加到主畫面</h3>
+      ${where === 'home' ? '<button class="btn ghost sm" id="installX" aria-label="不再顯示">不用了</button>' : ''}</div>
+    <p class="tiny" style="margin:0">像 App 一樣從主畫面打開，才收得到團練通知，入場券離線也能出示。</p>
+    ${ios ? `<ol class="steps">
+        <li>點 Safari 下方的分享按鈕 ${SHARE_IC}</li>
+        <li>往下滑，選「加入主畫面」${ADD_IC}</li>
+        <li>按右上角「新增」，之後從主畫面的耕跑團圖示打開</li></ol>
+        <p class="tiny" style="margin:0">要用 Safari 開啟這個網站才有「加入主畫面」；在 LINE 裡打開的話，先點右下角選單「用預設瀏覽器開啟」。</p>`
+      : `<button class="btn block" data-install ${installEvt ? '' : 'hidden'}>安裝 App</button>
+         <p class="tiny" style="margin:0" ${installEvt ? 'hidden' : ''} data-install-hint>如果沒有看到安裝按鈕：點瀏覽器右上角選單，選「安裝應用程式」或「加到主畫面」。</p>`}
+  </section>`;
+}
+function bindInstall() {
+  for (const b of document.querySelectorAll('[data-install]')) b.onclick = async () => {
+    if (!installEvt) return;
+    installEvt.prompt();
+    const { outcome } = await installEvt.userChoice.catch(() => ({}));
+    if (outcome === 'accepted') toast('安裝完成，之後從主畫面打開');
+    installEvt = null;
+  };
+  $('#installX')?.addEventListener('click', () => { try { localStorage.setItem('cil-install-dismiss', '1'); } catch {} $('.installcard')?.remove(); });
 }
 
 // 掃碼／連結報到：/#/e/<id>/in/<code>
@@ -1341,6 +1415,18 @@ async function studioView() {
     studio.source = 'manual';
     history.replaceState(null, '', '#/studio');
     setTimeout(() => toast(q.get('src') === 'health' ? '已帶入 Apple 健康的跑步數據' : '已帶入跑步數據'), 300);
+  }
+  // 從其他 App 分享 GPX／TCX 過來（Service Worker 先暫存）
+  if (q.get('shared')) {
+    history.replaceState(null, '', '#/studio');
+    try {
+      const c = await caches.open('cil-share'), res = await c.match('/shared-track');
+      if (res) {
+        studio.stats = S.parseTrack(await res.text(), decodeURIComponent(res.headers.get('x-name') || 'track.gpx'));
+        studio.source = 'manual'; await c.delete('/shared-track');
+        setTimeout(() => toast(`已匯入 ${(studio.stats.distance / 1000).toFixed(2)} 公里`), 300);
+      }
+    } catch (e) { setTimeout(() => toast(e.message || '這個檔案讀不出來'), 300); }
   }
   if ((studio.source === 'health' && !feat('health')) || (studio.source === 'file' && !feat('file'))) studio.source = 'manual';
   view.innerHTML = `
@@ -1666,13 +1752,32 @@ async function logView() {
       source: log?.source || incoming?.source || 'manual' };
     if (st !== 'skip' && !body.km && !body.seconds) return toast('填一下距離或時間');
     try { await api('/logs', { method: 'POST', body }); toast(st === 'skip' ? '已記下，休息也是訓練的一部分' : '已記錄，辛苦了！'); location.hash = `#/plan${week ? `/${week}` : ''}`; }
-    catch (err) { toast(err.message); }
+    catch (err) {
+      // 斷線（fetch 本身失敗）：先存在手機，連上網路後自動上傳
+      if (!navigator.onLine || err instanceof TypeError) { queueLog(body); toast('目前離線，已先存在手機，連上網路會自動上傳'); location.hash = `#/plan${week ? `/${week}` : ''}`; }
+      else toast(err.message);
+    }
   };
   $('#delLog')?.addEventListener('click', async () => {
     if (!confirm('刪除這筆紀錄？')) return;
     await api(`/logs/${log.id}`, { method: 'DELETE' }); toast('已刪除'); location.hash = `#/plan${week ? `/${week}` : ''}`;
   });
 }
+// 離線時的訓練紀錄暫存區（只放在這台裝置，上傳成功就刪除）
+const logQueue = {
+  get() { try { return JSON.parse(localStorage.getItem('cil-log-queue') || '[]'); } catch { return []; } },
+  set(v) { try { v.length ? localStorage.setItem('cil-log-queue', JSON.stringify(v)) : localStorage.removeItem('cil-log-queue'); } catch {} },
+};
+const queueLog = (body) => logQueue.set([...logQueue.get(), { ...body, id: undefined, queued: Date.now() }].slice(-30));
+async function flushLogQueue() {
+  const q = logQueue.get();
+  if (!q.length || !me) return;
+  const left = [];
+  for (const { queued, ...b } of q) { try { await api('/logs', { method: 'POST', body: b }); } catch (e) { if (e instanceof TypeError) left.push({ ...b, queued }); } }
+  logQueue.set(left);
+  if (left.length < q.length) toast(`已上傳 ${q.length - left.length} 筆離線時的訓練紀錄`);
+}
+
 // 教練與分團幹部：有開分享的團員，一週的完成次數與里程
 async function logsTeamView(week, team) {
   week ||= P.currentWeek();
@@ -2030,7 +2135,9 @@ function bindTeamRoster(t, r, q) {
 
 // ---------- 我的 ----------
 async function meView() {
-  const sub = await (await navigator.serviceWorker?.ready.catch(() => null))?.pushManager.getSubscription().catch(() => null);
+  // LINE 內建瀏覽器等不支援 Service Worker 的環境，ready 永遠不會完成：最多等 1.5 秒
+  const reg = await Promise.race([navigator.serviceWorker?.ready.catch(() => null), new Promise((r) => setTimeout(() => r(null), 1500))]);
+  const sub = await reg?.pushManager?.getSubscription().catch(() => null);
   const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone;
   const welcome = new URLSearchParams(location.hash.split('?')[1] || '').get('welcome');
   view.innerHTML = `
@@ -2090,6 +2197,8 @@ async function meView() {
     </section>
     ${allow('settings') ? '<a class="card" href="#/admin"><div class="row spread"><h3>系統設定</h3><span class="tiny">協會資訊・功能開關・文件・隱私權政策 ›</span></div></a>' : ''}
 
+    ${installCard('me')}
+    <a class="card" href="#/tickets"><div class="row spread"><h3>我的入場券</h3><span class="tiny">春酒等活動的入場 QR Code ›</span></div></a>
     <section class="card">
       <h3>通知</h3>
       ${cfg.vapid
@@ -2204,15 +2313,16 @@ async function meView() {
   }).catch(() => {});
   $('#logoutAll').onclick = async () => {
     if (!confirm('要登出所有裝置嗎？包含這一台。')) return;
-    await api('/logout', { method: 'POST', body: { all: true } }); me = null; location.hash = '#/'; render();
+    await api('/logout', { method: 'POST', body: { all: true } }); clearDeviceData(); me = null; location.hash = '#/'; render();
   };
   $('#delAcct').onclick = async () => {
     if (!confirm('刪除後無法復原：報名、入場券與通知都會刪除，中獎紀錄會匿名保留給協會對帳。確定刪除？')) return;
-    try { await api('/me', { method: 'DELETE' }); me = null; toast('帳號已刪除'); location.hash = '#/'; render(); }
+    try { await api('/me', { method: 'DELETE' }); clearDeviceData(); me = null; toast('帳號已刪除'); location.hash = '#/'; render(); }
     catch (e) { toast(e.message); }
   };
-  $('#logout').onclick = async () => { await api('/logout', { method: 'POST' }); me = null; location.hash = '#/'; render(); };
+  $('#logout').onclick = async () => { await api('/logout', { method: 'POST' }); clearDeviceData(); me = null; location.hash = '#/'; render(); };
   $('#pushBtn')?.addEventListener('click', () => togglePush(sub));
+  bindInstall();
   $('#shareLogs').onchange = async (e) => {
     try { await api('/me/share-logs', { method: 'POST', body: { share: e.target.checked } }); me.share_logs = e.target.checked; toast(e.target.checked ? '已分享給教練' : '已停止分享'); }
     catch (err) { e.target.checked = !e.target.checked; toast(err.message); }
@@ -2224,7 +2334,8 @@ async function meView() {
 
 async function togglePush(sub) {
   try {
-    const reg = await navigator.serviceWorker.ready;
+    const reg = await Promise.race([navigator.serviceWorker?.ready, new Promise((r) => setTimeout(() => r(null), 3000))]);
+    if (!reg) return toast('這個瀏覽器不支援通知，請用 Safari 或 Chrome 打開，並加到主畫面');
     if (sub) {
       await api('/push/unsubscribe', { method: 'POST', body: { endpoint: sub.endpoint } });
       await sub.unsubscribe();
@@ -2285,6 +2396,7 @@ async function route(hash) {
     if (hash === '/plan/new') return planNewView();
     if (hash === '/me') return await meView();
     if (hash === '/teams') return await teamsView();
+    if (hash === '/tickets') return await ticketsView();
     if (hash === '/log') return await logView();
     if (hash === '/logs/team') return await logsTeamView();
     const tm = hash.match(/^\/t\/([\w-]+)$/);
@@ -2354,4 +2466,33 @@ addEventListener('hashchange', () => {
   for (const p of [t.ready, t.updateCallbackDone, t.finished]) p.catch(() => {});
 });
 render();
-if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
+// Service Worker：新版本裝好後先等待，跳出提示讓使用者決定什麼時候更新
+if ('serviceWorker' in navigator) {
+  const hadController = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.register('/sw.js').then((reg) => {
+    const ask = (w) => {
+      if (!w) return;
+      if (!hadController) { w.postMessage({ type: 'SKIP_WAITING' }); return; }   // 第一次安裝直接啟用
+      if (document.getElementById('updbar')) return;
+      const bar = document.createElement('div');
+      bar.id = 'updbar'; bar.className = 'updbar'; bar.role = 'status';
+      bar.innerHTML = '<span>耕跑團有新版本</span><button class="btn sm">更新</button><button class="btn ghost sm" aria-label="稍後">稍後</button>';
+      bar.querySelector('.btn').onclick = () => { w.postMessage({ type: 'SKIP_WAITING' }); bar.remove(); };
+      bar.querySelector('.ghost').onclick = () => bar.remove();
+      document.body.append(bar);
+    };
+    if (reg.waiting) ask(reg.waiting);
+    reg.addEventListener('updatefound', () => {
+      const w = reg.installing;
+      w?.addEventListener('statechange', () => { if (w.state === 'installed') ask(w); });
+    });
+    // 打開 App、切回前景時檢查有沒有新版本
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') reg.update().catch(() => {}); });
+  }).catch(() => {});
+  let reloading = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => { if (hadController && !reloading) { reloading = true; location.reload(); } });
+}
+// 記住安裝提示（Android／桌機 Chrome），在「我的」與首頁顯示安裝按鈕
+let installEvt = null;
+addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvt = e; document.querySelectorAll('[data-install]').forEach((b) => { b.hidden = false; }); });
+addEventListener('appinstalled', () => { installEvt = null; try { localStorage.setItem('cil-installed', '1'); } catch {} document.querySelectorAll('.installcard').forEach((c) => c.remove()); });

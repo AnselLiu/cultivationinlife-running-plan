@@ -2,7 +2,7 @@
   "id": "./",
   "name": "耕跑團 Cultivation in Life Run",
   "short_name": "耕跑團",
-  "description": "耕跑團團練公告、報名與每週課表",
+  "description": "耕跑團團練公告、報名、課表與訓練紀錄",
   "lang": "zh-Hant",
   "dir": "ltr",
   "start_url": "/",
@@ -42,16 +42,68 @@
   ],
   "shortcuts": [
     {
-      "name": "本週課表",
-      "url": "/#/plan"
+      "name": "記錄訓練",
+      "short_name": "記錄",
+      "url": "/#/plan",
+      "icons": [
+        {
+          "src": "/icons/icon-192.png",
+          "sizes": "192x192"
+        }
+      ]
+    },
+    {
+      "name": "我的入場券",
+      "short_name": "入場券",
+      "url": "/#/tickets",
+      "icons": [
+        {
+          "src": "/icons/icon-192.png",
+          "sizes": "192x192"
+        }
+      ]
+    },
+    {
+      "name": "數據照",
+      "url": "/#/studio",
+      "icons": [
+        {
+          "src": "/icons/icon-192.png",
+          "sizes": "192x192"
+        }
+      ]
     },
     {
       "name": "通知",
-      "url": "/#/notifications"
-    },
-    {
-      "name": "課表教練",
-      "url": "/coach.html"
+      "url": "/#/notifications",
+      "icons": [
+        {
+          "src": "/icons/icon-192.png",
+          "sizes": "192x192"
+        }
+      ]
     }
-  ]
+  ],
+  "share_target": {
+    "action": "/share-target",
+    "method": "POST",
+    "enctype": "multipart/form-data",
+    "params": {
+      "title": "title",
+      "text": "text",
+      "files": [
+        {
+          "name": "track",
+          "accept": [
+            ".gpx",
+            ".tcx",
+            "application/gpx+xml",
+            "application/vnd.garmin.tcx+xml",
+            "application/xml",
+            "text/xml"
+          ]
+        }
+      ]
+    }
+  }
 }
