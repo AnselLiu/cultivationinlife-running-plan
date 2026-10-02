@@ -11,6 +11,8 @@
 - **管理後台**：會員管理（跑友與協會會員分開，會籍、會員類別、編號、繳費年限）、身分與權限對照表、座位圖設定。
 - **通知中心**：活動、課表、報名與中獎都會留一則通知，右上角鈴鐺顯示未讀數；有設推播金鑰時同時推播。
 - **教練發布課表**：教練把 LINE 記事本的原文貼上就能發布，團員在「課表」頁看到該週課表並收到通知。
+- **我的賽事倒數**：每個人可以加自己的賽事（名稱、日期、距離、目標），標題列倒數主要賽事；沒設定時倒數協會預設賽事（幹部可改）。
+- **數據照**：資料來源有手動輸入、GPX／TCX 檔（Garmin Connect、Apple 健康都能匯出）、Strava；照片可選圖、拍照或用 **AR 相機**（鏡頭畫面即時疊數據）；三種版型（極簡、路線、號碼布）× 三種比例（限時動態／Reels 9:16、貼文 4:5、方形 1:1）；輸出圖片或 6 秒 Reels 短片，用手機分享選單送到 Instagram。照片不上傳。
 - **登入與身分**：LINE 登入（帶名稱與大頭貼），或用邀請碼加入。
 
 ## 架構
@@ -81,6 +83,19 @@ npx wrangler secret put LINE_CHANNEL_SECRET
 ```
 
 沒設定時，登入畫面只顯示邀請碼，其他功能不受影響。
+
+### Strava 串接（選用）
+
+1. 到 https://www.strava.com/settings/api 建立應用程式，**Authorization Callback Domain** 填 `cil-run.anselliu7.workers.dev`
+2. 設定 secrets（`TOKEN_KEY` 是加密權杖用的 32 bytes 金鑰）：
+
+```bash
+npx wrangler secret put STRAVA_CLIENT_ID
+npx wrangler secret put STRAVA_CLIENT_SECRET
+openssl rand -base64 32 | npx wrangler secret put TOKEN_KEY
+```
+
+Garmin Connect 與 Apple 健康沒有開放給一般網站的 API：請團員匯出 GPX／TCX 檔，或讓手錶自動同步到 Strava 再匯入。
 
 ### 推播通知（選用）
 

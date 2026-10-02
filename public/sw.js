@@ -1,6 +1,6 @@
 // 耕跑團 PWA — Service Worker：外殼快取（離線可開）＋ 推播通知
-const CACHE = 'cil-v4';
-const SHELL = ['/', '/index.html', '/style.css', '/app.js', '/plan.js', '/data/season-2026.json', '/manifest.webmanifest', '/coach.html', '/party.js', '/qr.js', '/vendor/qrcode.js', '/icons/icon-192.png'];
+const CACHE = 'cil-v5';
+const SHELL = ['/', '/index.html', '/style.css', '/app.js', '/plan.js', '/data/season-2026.json', '/manifest.webmanifest', '/coach.html', '/party.js', '/qr.js', '/vendor/qrcode.js', '/studio.js', '/icons/icon-192.png'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));

@@ -405,3 +405,39 @@ details.card summary::-webkit-details-marker{display:none}
 .prose p,.prose ul{margin:0;color:var(--ink-2);font-size:15px}
 .prose h3{margin-top:6px}
 .prose ul{padding-left:1.2em}
+
+/* ---- 數據照 ---- */
+.studio .stage-card{padding:14px;gap:12px;align-content:start}
+.frame{position:relative;width:100%;margin:0 auto;border-radius:22px;overflow:hidden;background:#0B1B33;
+  box-shadow:0 30px 60px -30px rgba(11,27,51,.6),inset 0 0 0 1px rgba(255,255,255,.08)}
+.frame.story{aspect-ratio:9/16;max-height:66vh;width:auto}
+.frame.post{aspect-ratio:4/5;max-height:62vh;width:auto}
+.frame.square{aspect-ratio:1;max-height:60vh;width:auto}
+.frame canvas{display:block;width:100%;height:100%}
+.tpls{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.tpl{border:0;border-radius:16px;padding:14px 8px;font-weight:650;font-size:15px;cursor:pointer;color:var(--ink);
+  background:var(--glass-2);box-shadow:var(--shadow-s),inset 0 1px 0 var(--rim);transition:transform .2s var(--tap)}
+.tpl:active{transform:scale(.96)}
+.tpl[aria-pressed="true"]{background:var(--accent);color:var(--on-accent)}
+.filebtn{cursor:pointer}
+.mform{gap:10px}
+.drop{display:grid;gap:6px;justify-items:center;text-align:center;padding:22px 14px;border-radius:18px;cursor:pointer;
+  border:1.5px dashed color-mix(in srgb,var(--accent) 45%,transparent);background:var(--accent-soft);color:var(--ink)}
+.acts{display:grid;gap:6px;max-height:300px;overflow:auto}
+.act{display:grid;gap:2px;text-align:left;border:0;border-radius:14px;padding:11px 13px;cursor:pointer;background:var(--glass-hi);color:var(--ink)}
+.act:active{transform:scale(.98)}
+.btn.strava{background:#FC4C02;color:#fff}
+.actions{gap:10px}
+
+/* AR 相機：全螢幕取景，下方快門 */
+.ar{position:fixed;inset:0;z-index:80;background:#000;display:grid;grid-template-rows:1fr auto}
+.ar canvas{width:100%;height:100%;object-fit:contain;min-height:0}
+.ar .arbar{display:flex;align-items:center;justify-content:space-around;padding:18px 16px calc(22px + env(safe-area-inset-bottom,0px));
+  background:linear-gradient(transparent,rgba(0,0,0,.6))}
+.ar .arbar .btn{background:rgba(255,255,255,.16);color:#fff;box-shadow:none}
+.shutter{width:76px;height:76px;border-radius:50%;border:4px solid #fff;background:rgba(255,255,255,.92);cursor:pointer;
+  box-shadow:0 0 0 4px rgba(0,0,0,.25);transition:transform .15s var(--tap)}
+.shutter:active{transform:scale(.88)}
+.ar.flash::after{content:"";position:absolute;inset:0;background:#fff;animation:flash .18s ease-out}
+@keyframes flash{from{opacity:1}to{opacity:0}}
+@media (min-width:1024px){.studio{grid-template-columns:minmax(0,1.05fr) minmax(0,1fr)}}

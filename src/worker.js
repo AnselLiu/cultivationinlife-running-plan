@@ -7,6 +7,7 @@
 //   A.5.34 個資：最小蒐集、電話遮罩、IP 只存雜湊、本人可匯出與刪除
 // 工作階段權杖放 HttpOnly cookie，D1 只存 SHA-256；寫入類 API 只接受同源 JSON（擋 CSRF）。
 import { subscribe, unsubscribe, push, validEndpoint } from './push.js';
+import * as Strava from './strava.js';
 
 const COOKIE = '__Host-cil_sess';
 // 工作階段期限：一般跑友長期使用；幹部看得到別人的資料，期限短很多
@@ -36,7 +37,7 @@ const isDate = (s) => /^\d{4}-\d{2}-\d{2}$/.test(s);
 const isTime = (s) => !s || /^\d{2}:\d{2}$/.test(s);
 const today = () => new Date().toISOString().slice(0, 10);
 // 隱私權政策版本：內容有重大變更時改這裡，使用者下次登入會被要求重新同意
-const PRIVACY_VERSION = '2026-10-02';
+const PRIVACY_VERSION = '2026-10-02.2';
 
 function validGroup(dist, grp) {
   return dist === 'hm' ? HM.includes(grp) : FM.includes(grp);
@@ -285,6 +286,18 @@ async function cancelSignup(env, ev, member) {
   return json({ ok: true });
 }
 
+// 倒數目標：自己設定的主要賽事 → 最近一場自己的賽事 → 協會預設
+async function countdownTarget(env, member) {
+  if (member) {
+    const r = await env.DB.prepare(
+      `SELECT name, date, dist, goal FROM races WHERE member_id = ? AND date >= date('now')
+       ORDER BY is_primary DESC, date ASC LIMIT 1`).bind(member.id).first();
+    if (r) return { ...r, mine: true };
+  }
+  const c = await env.DB.prepare("SELECT value FROM settings WHERE key = 'club_race'").first();
+  try { return c ? { ...JSON.parse(c.value), mine: false } : null; } catch { return null; }
+}
+
 // ---- 路由 ----
 async function api(req, env, path, method) {
   const member = await currentMember(req, env);
@@ -295,7 +308,9 @@ async function api(req, env, path, method) {
 
   if (path === '/api/me' && method === 'GET')
     return json({ member: member ? pub(member) : null, vapid: env.VAPID_PUBLIC_KEY || null, lineLogin: !!(env.LINE_CHANNEL_ID && env.LINE_CHANNEL_SECRET),
-      privacyVersion: PRIVACY_VERSION, needConsent: !!member && member.consent_version !== PRIVACY_VERSION });
+      privacyVersion: PRIVACY_VERSION, needConsent: !!member && member.consent_version !== PRIVACY_VERSION,
+      race: await countdownTarget(env, member), strava: Strava.stravaReady(env),
+      stravaLinked: member ? !!(await env.DB.prepare('SELECT 1 FROM strava_links WHERE member_id = ?').bind(member.id).first()) : false });
 
   // 已登入的人輸入幹部碼或理事長碼升級
   // 初始設定：系統裡還沒有理事長時，才能用 CHAIR_CODE 把自己設為理事長（只能用一次）。
@@ -453,6 +468,8 @@ async function api(req, env, path, method) {
       prizes: await q('SELECT event_id, prize_id, created_at, claimed_at FROM draws WHERE member_id = ?'),
       notifications: await q('SELECT kind, title, body, created_at, read_at FROM notifications WHERE member_id = ?'),
       sessions: await q('SELECT created_at, last_seen_at, ua FROM sessions WHERE member_id = ?'),
+      races: await q('SELECT name, date, dist, goal, is_primary FROM races WHERE member_id = ?'),
+      strava: await q('SELECT athlete_id, scope, created_at FROM strava_links WHERE member_id = ?'),
     };
     await audit(env, req, member, 'privacy.export', 'member', member.id, '');
     return json(data, 200, { 'content-disposition': 'attachment; filename="my-data.json"' });
@@ -463,6 +480,7 @@ async function api(req, env, path, method) {
       const n = (await env.DB.prepare("SELECT COUNT(*) AS n FROM members WHERE role = 'chair'").first()).n;
       if (n <= 1) return fail(400, '你是唯一的理事長，請先指派新的理事長再刪除帳號');
     }
+    await Strava.disconnect(env, member.id).catch(() => {});
     // 得獎紀錄要留給協會對帳，所以只匿名化，不刪除
     await env.DB.batch([
       env.DB.prepare("UPDATE draws SET name = '已刪除帳號', member_id = NULL WHERE member_id = ?").bind(member.id),
@@ -481,6 +499,71 @@ async function api(req, env, path, method) {
       `SELECT at, actor_name, actor_role, action, target_type, target_id, detail FROM audit_log
        ${action ? 'WHERE action LIKE ?' : ''} ORDER BY at DESC LIMIT 200`).bind(...(action ? [`${action}%`] : [])).all()).results;
     return json({ items: rows });
+  }
+
+  // ---- 我的賽事（倒數）----
+  if (path === '/api/races' && method === 'GET') {
+    const g = need(); if (g) return g;
+    const rows = (await env.DB.prepare('SELECT id, name, date, dist, goal, is_primary FROM races WHERE member_id = ? ORDER BY date').bind(member.id).all()).results;
+    return json({ races: rows });
+  }
+  if (path === '/api/races' && method === 'POST') {
+    const g = need(); if (g) return g;
+    const b = await body(), name = str(b.name, 40), date = str(b.date, 10);
+    if (!name || !isDate(date)) return fail(400, '請填賽事名稱與日期');
+    const n = (await env.DB.prepare('SELECT COUNT(*) AS n FROM races WHERE member_id = ?').bind(member.id).first()).n;
+    if (n >= 30) return fail(400, '最多 30 場');
+    const id = rid(8), primary = b.is_primary === true || n === 0 ? 1 : 0;
+    if (primary) await env.DB.prepare('UPDATE races SET is_primary = 0 WHERE member_id = ?').bind(member.id).run();
+    await env.DB.prepare('INSERT INTO races (id, member_id, name, date, dist, goal, is_primary) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .bind(id, member.id, name, date, str(b.dist, 10), str(b.goal, 12), primary).run();
+    return json({ id });
+  }
+  const mrc = path.match(/^\/api\/races\/([\w-]{1,32})(\/primary)?$/);
+  if (mrc) {
+    const g = need(); if (g) return g;
+    if (method === 'DELETE') {
+      await env.DB.prepare('DELETE FROM races WHERE id = ? AND member_id = ?').bind(mrc[1], member.id).run();
+      return json({ ok: true });
+    }
+    if (method === 'POST' && mrc[2]) {
+      await env.DB.batch([
+        env.DB.prepare('UPDATE races SET is_primary = 0 WHERE member_id = ?').bind(member.id),
+        env.DB.prepare('UPDATE races SET is_primary = 1 WHERE id = ? AND member_id = ?').bind(mrc[1], member.id),
+      ]);
+      return json({ ok: true });
+    }
+  }
+  // 協會預設倒數（建立活動權限即可修改）
+  if (path === '/api/settings/club-race' && method === 'POST') {
+    const g = need(); if (g) return g;
+    if (!can(member, 'event')) return fail(403, '只有幹部可以修改協會預設賽事');
+    const b = await body(), name = str(b.name, 40), date = str(b.date, 10);
+    if (!name || !isDate(date)) return fail(400, '請填賽事名稱與日期');
+    await env.DB.prepare("INSERT INTO settings (key, value) VALUES ('club_race', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+      .bind(JSON.stringify({ name, date })).run();
+    await audit(env, req, member, 'settings.club_race', 'settings', 'club_race', `${name} ${date}`);
+    return json({ ok: true });
+  }
+
+  // ---- Strava ----
+  if (path === '/api/strava/activities' && method === 'GET') {
+    const g = need(); if (g) return g;
+    if (!Strava.stravaReady(env)) return fail(503, '尚未設定 Strava 串接');
+    if (await limited(env, `strava:${member.id}`, 30, 900)) return fail(429, '讀取太頻繁，請稍後再試');
+    try { return json({ activities: await Strava.listActivities(env, member.id) }); } catch (e) { return fail(400, e.message); }
+  }
+  const msa2 = path.match(/^\/api\/strava\/activities\/(\d{1,20})$/);
+  if (msa2 && method === 'GET') {
+    const g = need(); if (g) return g;
+    if (await limited(env, `strava:${member.id}`, 30, 900)) return fail(429, '讀取太頻繁，請稍後再試');
+    try { return json({ activity: await Strava.getActivity(env, member.id, msa2[1]) }); } catch (e) { return fail(400, e.message); }
+  }
+  if (path === '/api/strava/disconnect' && method === 'POST') {
+    const g = need(); if (g) return g;
+    await Strava.disconnect(env, member.id);
+    await audit(env, req, member, 'strava.disconnect', 'member', member.id, '');
+    return json({ ok: true });
   }
 
   // ---- 通知中心 ----
@@ -815,6 +898,29 @@ export default {
     // LINE 登入是瀏覽器導向（GET、不是 JSON），走在下面的 CSRF 檢查之前
     if (path === '/api/line/start' && req.method === 'GET') return lineStart(env, url);
     if (path === '/api/line/callback' && req.method === 'GET') return lineCallback(req, env, url);
+    if (path === '/api/strava/start' && req.method === 'GET') {
+      const m = await currentMember(req, env);
+      if (!m) return new Response(null, { status: 302, headers: { location: '/#/' } });
+      if (!Strava.stravaReady(env)) return fail(503, '尚未設定 Strava 串接');
+      const state = rid(12);
+      return new Response(null, { status: 302, headers: { location: Strava.authorizeUrl(env, url.origin, state),
+        'set-cookie': `__Host-cil_strava=${state}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=600` } });
+    }
+    if (path === '/api/strava/callback' && req.method === 'GET') {
+      const clear = '__Host-cil_strava=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0';
+      const back = (q) => new Response(null, { status: 302, headers: { location: `/#/studio?${q}`, 'set-cookie': clear } });
+      const m = await currentMember(req, env);
+      const want = (req.headers.get('cookie') || '').match(/__Host-cil_strava=(\w+)/)?.[1];
+      if (!m || !want || url.searchParams.get('state') !== want) return back('strava=expired');
+      if (url.searchParams.get('error')) return back('strava=denied');
+      const scope = url.searchParams.get('scope') || '';
+      if (!scope.includes('activity:read')) return back('strava=scope');
+      try {
+        await Strava.exchange(env, m.id, url.searchParams.get('code'), scope);
+        await audit(env, req, m, 'strava.connect', 'member', m.id, scope);
+        return back('strava=ok');
+      } catch { return back('strava=fail'); }
+    }
     // 開發用登入：只有 .dev.vars 設 DEV_LOGIN=1 而且在 localhost 才有效，正式環境不會有這個設定
     if (path === '/api/dev/login' && req.method === 'GET' && env.DEV_LOGIN === '1' && ['localhost', '127.0.0.1'].includes(url.hostname)) {
       const m = await env.DB.prepare('SELECT * FROM members WHERE id = ?').bind(str(url.searchParams.get('id'), 32)).first();

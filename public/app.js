@@ -2,6 +2,7 @@
 import * as P from './plan.js';
 import * as Party from './party.js';
 import { qrSVG, canScan, scan } from './qr.js';
+import * as S from './studio.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const view = $('#view');
@@ -113,13 +114,24 @@ function loginView() {
 }
 
 
+// 倒數：自己的主要賽事 → 最近的自己的賽事 → 協會預設
+function paintCountdown() {
+  const r = cfg.race;
+  if (!r?.date) { $('#countdown').innerHTML = ''; return; }
+  const t = new Date(`${r.date}T00:00:00`), now = new Date(); now.setHours(0, 0, 0, 0);
+  const days = Math.round((t - now) / 864e5);
+  const short = r.name.replace(/^20\d\d\s*/, '').replace('馬拉松', '馬').slice(0, 6);
+  $('#countdown').innerHTML = days > 0 ? `<b class="num">${days}</b>天到${esc(short)}` : days === 0 ? `<b>今天</b>${esc(short)}` : '';
+  $('#countdown').title = `${r.name}（${r.date}）`;
+}
+
 // ---------- 隱私權政策（個人資料保護法第 8 條告知事項）----------
 // 聯絡信箱與保存期限要由協會確認後填入
 const PRIVACY = {
   org: '台灣耕跑團協會（耕跑團）',
   contact: '請透過 LINE 群組聯絡協會行政人員',
   retention: '帳號存續期間；帳號刪除後立即刪除，惟中獎紀錄匿名化後保留 3 年供贊助對帳',
-  version: '2026-10-02',
+  version: '2026-10-02.2',
 };
 function privacyView() {
   view.innerHTML = `
@@ -132,6 +144,9 @@ function privacyView() {
       <p>識別類（C001）：姓名、暱稱、LINE 顯示名稱與大頭貼、電話（選填）。<br>
          活動相關：項目與組別、所屬跑團、餐點偏好、報名與報到紀錄、中獎紀錄。<br>
          系統紀錄：登入時間、裝置型號摘要、IP 位址的單向雜湊值（無法還原）。<br>
+         個人賽事：你自己加入的賽事名稱、日期與目標成績（用於倒數）。<br>
+         Strava（選用）：只在你按下匯入時讀取活動的距離、時間、配速、爬升與路線，用來合成數據照，<b>不保存活動內容</b>；授權權杖以 AES-GCM 加密保存，解除連結或刪除帳號時即刪除並向 Strava 撤銷授權。<br>
+         照片：數據照在你的裝置上合成，照片不會上傳到我們的伺服器。<br>
          <b>我們不蒐集</b>身分證字號、地址、生日；協會入會申請另以協會的 Google 表單辦理。</p>
       <h3>三、利用期間、地區、對象與方式</h3>
       <p>期間：${PRIVACY.retention}。<br>
@@ -884,6 +899,178 @@ function confetti() {
   })();
 }
 
+
+// ---------- 數據照（Strava／檔案／手動 → 照片合成 → 分享 IG）----------
+const studio = { stats: null, bg: null, template: 'minimal', size: 'story', source: 'manual', acts: null };
+const TEMPLATES = { minimal: '極簡', route: '路線', bib: '號碼布' };
+function defaultStats() {
+  return { title: '週四團練', date: new Date().toISOString().slice(0, 10), distance: 10000, seconds: 3300, elevation: 42, avg_hr: null, route: [] };
+}
+async function studioView() {
+  studio.stats ||= defaultStats();
+  const q = new URLSearchParams(location.hash.split('?')[1] || '');
+  const st = q.get('strava');
+  if (st) studio.source = 'strava';
+  view.innerHTML = `
+    ${largeTitle('數據照', '把跑步數據疊在照片上，分享到 IG')}
+    ${st && st !== 'ok' ? `<div class="notice">${{ denied: '你取消了 Strava 授權', scope: '要勾選「查看活動資料」才能匯入', expired: '授權逾時，請再試一次', fail: 'Strava 連結失敗，請稍後再試' }[st] || 'Strava 連結失敗'}</div>` : ''}
+    <div class="dash studio">
+      <section class="card stage-card">
+        <div class="frame ${studio.size}"><canvas id="cv" aria-label="數據照預覽"></canvas></div>
+        <div class="seg" role="group" aria-label="尺寸">${Object.entries(S.SIZES).map(([k, v]) => `<button data-size="${k}" aria-pressed="${studio.size === k}">${v[2]}</button>`).join('')}</div>
+      </section>
+      <div style="display:grid;gap:14px">
+        <section class="card">
+          <h3>1　跑步數據</h3>
+          <div class="seg" role="group" aria-label="資料來源">
+            ${[['manual', '手動輸入'], ['file', '匯入檔案'], ['strava', 'Strava']].map(([k, v]) => `<button data-src="${k}" aria-pressed="${studio.source === k}">${v}</button>`).join('')}
+          </div>
+          <div id="srcPanel"></div>
+        </section>
+        <section class="card">
+          <h3>2　照片</h3>
+          <div class="row">
+            <label class="btn ghost sm filebtn">選照片／拍照<input type="file" accept="image/*" id="photoIn" hidden></label>
+            <button class="btn sm" id="arBtn">AR 相機</button>
+            ${studio.bg ? '<button class="btn ghost sm" id="noPhoto">移除照片</button>' : ''}
+          </div>
+          <p class="tiny" style="margin:0">照片只在你的手機裡合成，不會上傳。</p>
+        </section>
+        <section class="card">
+          <h3>3　版型</h3>
+          <div class="tpls">${Object.entries(TEMPLATES).map(([k, v]) => `<button class="tpl" data-tpl="${k}" aria-pressed="${studio.template === k}">${v}</button>`).join('')}</div>
+        </section>
+        <section class="card actions">
+          <button class="btn block" id="shareImg">分享圖片</button>
+          <button class="btn ghost block" id="makeReel">產生 Reels 短片（6 秒）</button>
+          <p class="tiny center" style="margin:0">分享時選 Instagram，就能發到限時動態、貼文或 Reels。</p>
+        </section>
+      </div>
+    </div>`;
+  for (const b of document.querySelectorAll('[data-size]')) b.onclick = () => { studio.size = b.dataset.size; studioView(); };
+  for (const b of document.querySelectorAll('[data-src]')) b.onclick = () => { studio.source = b.dataset.src; studioView(); };
+  for (const b of document.querySelectorAll('[data-tpl]')) b.onclick = () => { studio.template = b.dataset.tpl; studioView(); };
+  $('#photoIn').onchange = async (e) => {
+    const f = e.target.files[0]; if (!f) return;
+    studio.bg = await createImageBitmap(f).catch(() => null);
+    if (!studio.bg) return toast('這張照片讀不出來，換一張試試');
+    studioView();
+  };
+  $('#noPhoto')?.addEventListener('click', () => { studio.bg = null; studioView(); });
+  $('#arBtn').onclick = () => arCamera();
+  $('#shareImg').onclick = async () => {
+    const blob = await S.toBlob($('#cv'));
+    const r = await S.shareFile(blob, `耕跑團-${studio.stats.date}.jpg`, studio.stats.title);
+    if (r === 'downloaded') toast('已下載圖片，可以從相簿分享到 IG');
+  };
+  $('#makeReel').onclick = async () => {
+    const btn = $('#makeReel'); btn.disabled = true; btn.textContent = '錄製中…';
+    try {
+      const blob = await S.recordVideo($('#cv'), studio.bg, studio.stats, opts());
+      const ext = blob.type.includes('mp4') ? 'mp4' : 'webm';
+      const r = await S.shareFile(blob, `耕跑團-${studio.stats.date}.${ext}`, studio.stats.title);
+      if (r === 'downloaded') toast(ext === 'mp4' ? '已下載短片' : '已下載短片（webm 格式，IG 可能不支援，建議用手機操作）');
+    } catch (e) { toast(e.message); }
+    btn.disabled = false; btn.textContent = '產生 Reels 短片（6 秒）';
+    draw();
+  };
+  await sourcePanel();
+  draw();
+}
+const opts = () => ({ template: studio.template, size: studio.size, name: me?.nickname || me?.name || '' });
+const draw = () => S.render($('#cv'), studio.bg, studio.stats, opts());
+
+async function sourcePanel() {
+  const box = $('#srcPanel'), st = studio.stats;
+  if (studio.source === 'manual') {
+    box.innerHTML = `<form id="mform" class="mform">
+      <label>標題<input name="title" value="${esc(st.title)}" maxlength="20"></label>
+      <div class="grid2">
+        <label>距離（公里）<input name="km" inputmode="decimal" value="${(st.distance / 1000).toFixed(2)}"></label>
+        <label>時間<input name="time" value="${S.fmtDuration(st.seconds)}" placeholder="55:00"></label>
+      </div>
+      <div class="grid2">
+        <label>爬升（公尺）<input name="elev" inputmode="numeric" value="${st.elevation || ''}"></label>
+        <label>日期<input type="date" name="date" value="${esc(st.date)}"></label>
+      </div></form>`;
+    $('#mform').oninput = (e) => {
+      const f = e.currentTarget;
+      Object.assign(studio.stats, { title: f.title.value, distance: (parseFloat(f.km.value) || 0) * 1000,
+        seconds: S.parseHMS(f.time.value), elevation: parseInt(f.elev.value, 10) || 0, date: f.date.value });
+      draw();
+    };
+  } else if (studio.source === 'file') {
+    box.innerHTML = `<label class="drop"><input type="file" accept=".gpx,.tcx,application/gpx+xml" id="trackIn" hidden>
+        <b>選擇 GPX 或 TCX 檔</b><span class="tiny">Garmin Connect：活動 → 齒輪 → 匯出 GPX／TCX<br>Apple 健康：個人頭像 → 輸出所有健康資料（workout-routes 裡的 GPX）</span></label>`;
+    $('#trackIn').onchange = async (e) => {
+      const f = e.target.files[0]; if (!f) return;
+      try { studio.stats = S.parseTrack(await f.text(), f.name); studio.source = 'manual'; toast(`已匯入 ${(studio.stats.distance / 1000).toFixed(2)} 公里`); studioView(); }
+      catch (err) { toast(err.message); }
+    };
+  } else {
+    if (!cfg.strava) { box.innerHTML = '<p class="muted" style="margin:0">管理員還沒設定 Strava 串接。</p>'; return; }
+    if (!cfg.stravaLinked) {
+      box.innerHTML = `<a class="btn strava block" href="/api/strava/start">連結 Strava</a>
+        <p class="tiny" style="margin:0">只讀取你公開或追蹤者可見的活動，不會發文，也可以隨時在這裡解除連結。Garmin、Apple Watch 同步到 Strava 後也能用。</p>`;
+      return;
+    }
+    box.innerHTML = '<div class="skel"><i style="height:56px"></i><i style="height:56px"></i></div>';
+    try {
+      studio.acts ||= (await api('/strava/activities')).activities;
+      box.innerHTML = `<div class="acts">${studio.acts.map((x) => `<button class="act" data-act="${esc(x.id)}">
+          <b>${esc(x.name)}</b><span class="tiny">${esc((x.start || '').slice(0, 10))}・${(x.distance / 1000).toFixed(2)} km・${S.fmtDuration(x.moving_time)}</span></button>`).join('') || '<p class="muted">最近沒有活動。</p>'}</div>
+        <div class="row spread"><span class="tiny">Powered by Strava</span><button class="btn ghost sm" id="unlink">解除連結</button></div>`;
+      for (const b of box.querySelectorAll('[data-act]')) b.onclick = async () => {
+        const { activity } = await api(`/strava/activities/${b.dataset.act}`);
+        studio.stats = S.fromStrava(activity); toast('已匯入 Strava 活動'); studio.source = 'manual'; studioView();
+      };
+      $('#unlink').onclick = async () => { await api('/strava/disconnect', { method: 'POST' }); cfg.stravaLinked = false; studio.acts = null; toast('已解除 Strava 連結'); studioView(); };
+    } catch (e) { box.innerHTML = `<p class="muted" style="margin:0">${esc(e.message)}</p>`; }
+  }
+}
+
+// AR 相機：鏡頭畫面上即時疊數據，按快門把當下畫面當成照片
+async function arCamera() {
+  const host = document.createElement('div');
+  host.className = 'ar';
+  host.innerHTML = `<canvas id="arCv"></canvas>
+    <div class="arbar">
+      <button class="btn ghost sm" id="arClose">取消</button>
+      <button class="shutter" id="arShot" aria-label="拍照"></button>
+      <button class="btn ghost sm" id="arFlip">翻轉</button>
+    </div>`;
+  document.body.append(host);
+  document.body.style.overflow = 'hidden';
+  const video = document.createElement('video');
+  video.playsInline = true; video.muted = true;
+  let facing = 'environment', stream = null, live = true;
+  const start = async () => {
+    stream?.getTracks().forEach((t) => t.stop());
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: facing, width: { ideal: 1920 }, height: { ideal: 1080 } }, audio: false });
+      video.srcObject = stream; await video.play();
+    } catch { toast('無法開啟相機，請確認已允許相機權限'); close(); }
+  };
+  const close = () => { live = false; stream?.getTracks().forEach((t) => t.stop()); host.remove(); document.body.style.overflow = ''; };
+  const loop = async () => {
+    if (!live) return;
+    if (video.readyState >= 2) await S.render($('#arCv'), video, studio.stats, opts());
+    requestAnimationFrame(loop);
+  };
+  $('#arClose').onclick = close;
+  $('#arFlip').onclick = () => { facing = facing === 'environment' ? 'user' : 'environment'; start(); };
+  $('#arShot').onclick = async () => {
+    const c = document.createElement('canvas');
+    c.width = video.videoWidth; c.height = video.videoHeight;
+    c.getContext('2d').drawImage(video, 0, 0);
+    studio.bg = await createImageBitmap(c);
+    host.classList.add('flash');
+    setTimeout(() => { close(); studioView(); }, 180);
+  };
+  await start();
+  loop();
+}
+
 // ---------- 我的課表 ----------
 async function planView(n) {
   const week = n || P.currentWeek();
@@ -1028,6 +1215,31 @@ async function meView() {
       <p class="tiny">填好之後，報名任何活動都會直接帶入這些資料，不用再填一次。</p>
     </section>
 
+    <section class="card" id="racesCard">
+      <div class="row spread"><h3>我的賽事</h3><span class="tiny">標題列會倒數主要賽事</span></div>
+      <div id="raceList" class="roster"></div>
+      <form id="raceForm">
+        <div class="grid2">
+          <label>賽事名稱<input name="name" maxlength="30" placeholder="2026 臺北馬拉松" required></label>
+          <label>日期<input type="date" name="date" required></label>
+        </div>
+        <div class="grid2">
+          <label>距離<select name="dist"><option>全馬</option><option>半馬</option><option>10K</option><option>5K</option><option>超馬</option><option>其他</option></select></label>
+          <label>目標成績<input name="goal" maxlength="10" placeholder="3:39:59"></label>
+        </div>
+        <button class="btn ghost block">加入賽事</button>
+      </form>
+    </section>
+    ${allow('event') ? `<section class="card">
+      <h3>協會預設倒數</h3>
+      <p class="tiny" style="margin:0">沒有設定個人賽事的跑友，標題列會倒數這一場。</p>
+      <form id="clubRace" class="grid2">
+        <input name="name" maxlength="30" placeholder="賽事名稱" value="${esc(cfg.race && !cfg.race.mine ? cfg.race.name : '')}">
+        <input type="date" name="date" value="${esc(cfg.race && !cfg.race.mine ? cfg.race.date : '')}">
+        <button class="btn ghost sm" style="grid-column:1/-1">儲存</button>
+      </form>
+    </section>` : ''}
+
     <section class="card">
       <h3>通知</h3>
       ${cfg.vapid
@@ -1094,6 +1306,30 @@ async function meView() {
     try { me = (await api('/me/admin', { method: 'POST', body: { code: e.target.code.value } })).member; toast('已設定為理事長'); render(); }
     catch (err) { toast(err.message); }
   });
+  const refreshCfg = async () => { const r = await api('/me'); me = r.member; cfg = r; paintCountdown(); };
+  const loadRaces = async () => {
+    const { races } = await api('/races');
+    $('#raceList').innerHTML = races.map((r) => {
+      const d = Math.round((new Date(`${r.date}T00:00:00`) - new Date().setHours(0, 0, 0, 0)) / 864e5);
+      return `<div class="r"><span class="av num" style="font-size:11px">${d >= 0 ? d : '✓'}</span>
+        <span><b>${esc(r.name)}</b>${r.is_primary ? ' <span class="pill solid">主要</span>' : ''}
+          <span class="tiny" style="display:block">${esc(r.date)}・${esc(r.dist || '')}${r.goal ? `・目標 ${esc(r.goal)}` : ''}${d >= 0 ? `・還有 ${d} 天` : '・已完賽'}</span></span>
+        <span class="row" style="gap:6px">${r.is_primary ? '' : `<button class="btn ghost sm" data-prim="${r.id}">設為主要</button>`}<button class="btn danger sm" data-delrace="${r.id}" aria-label="刪除">刪除</button></span></div>`;
+    }).join('') || '<p class="tiny" style="margin:0">還沒有賽事，加一場吧。</p>';
+    for (const b of document.querySelectorAll('[data-prim]')) b.onclick = async () => { await api(`/races/${b.dataset.prim}/primary`, { method: 'POST' }); await loadRaces(); await refreshCfg(); toast('已設為主要賽事'); };
+    for (const b of document.querySelectorAll('[data-delrace]')) b.onclick = async () => { if (!confirm('刪除這場賽事？')) return; await api(`/races/${b.dataset.delrace}`, { method: 'DELETE' }); await loadRaces(); await refreshCfg(); };
+  };
+  loadRaces();
+  $('#raceForm').onsubmit = async (e) => {
+    e.preventDefault(); const f = e.target;
+    try { await api('/races', { method: 'POST', body: { name: f.name.value, date: f.date.value, dist: f.dist.value, goal: f.goal.value } });
+      f.reset(); await loadRaces(); await refreshCfg(); toast('已加入賽事'); } catch (err) { toast(err.message); }
+  };
+  $('#clubRace')?.addEventListener('submit', async (e) => {
+    e.preventDefault(); const f = e.target;
+    try { await api('/settings/club-race', { method: 'POST', body: { name: f.name.value, date: f.date.value } }); await refreshCfg(); toast('已更新協會預設倒數'); }
+    catch (err) { toast(err.message); }
+  });
   $('#applyBtn')?.addEventListener('click', async () => {
     try { me = (await api('/me/apply', { method: 'POST' })).member; toast('已送出申請'); render(); } catch (e) { toast(e.message); }
   });
@@ -1150,11 +1386,11 @@ async function render() {
     const on = a.dataset.tab === '/' ? hash === '/' : hash.startsWith(a.dataset.tab);
     a.toggleAttribute('aria-current', on);
   }
-  const days = Math.ceil((P.RACE - new Date()) / 864e5);
-  $('#countdown').innerHTML = days > 0 ? `<b class="num">${days}</b>天到臺北馬` : '';
+  paintCountdown();
   if (!me) {
     try { const r = await api('/me'); me = r.member; cfg = r; } catch { me = null; }
   }
+  paintCountdown();
   if (hash === '/privacy') { if (!me) { try { const r = await api('/me'); me = r.member; cfg = r; } catch {} } return privacyView(); }
   if (!me) return loginView();
   if (cfg.needConsent) { location.hash = '#/privacy'; return; }
@@ -1170,6 +1406,7 @@ async function route(hash) {
     if (hash === '/') return await listView();
     if (hash === '/past') return await pastView();
     if (hash === '/coach') return coachView();
+    if (hash === '/studio') return await studioView();
     if (hash === '/notifications') return await notificationsView();
     if (hash === '/roster') return await rosterView();
     if (hash === '/admin') return await adminView();
