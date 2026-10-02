@@ -422,7 +422,7 @@ const MEMBERSHIP_NAME = { none: '跑友', applied: '申請中', active: '協會�
 async function adminView(tab = 'members') {
   if (!allow('members') && !allow('roles')) { view.innerHTML = '<div class="card"><p class="muted">沒有管理權限。</p></div>'; return; }
   const data = await api('/members');
-  const tabs = [['members', '會員管理'], ['roles', '身分與權限'], ['events', '活動設定']];
+  const tabs = [['members', '會員管理'], ['roles', '身分與權限'], ['events', '活動設定'], ...(allow('audit') ? [['audit', '稽核紀錄']] : [])];
   const list = data.members;
   const counts = list.reduce((m, x) => { m[x.membership] = (m[x.membership] || 0) + 1; return m; }, {});
   view.innerHTML = `
@@ -430,6 +430,7 @@ async function adminView(tab = 'members') {
     <div class="seg">${tabs.map(([k, v]) => `<button data-tab="${k}" aria-pressed="${tab === k}">${v}</button>`).join('')}</div>
     ${tab === 'members' ? membersPanel(list, counts)
       : tab === 'roles' ? rolesPanel(data)
+      : tab === 'audit' ? await auditPanel()
       : await eventsPanel()}`;
   for (const b of document.querySelectorAll('[data-tab]')) b.onclick = () => adminView(b.dataset.tab);
   if (tab === 'members') bindMembers();
@@ -536,6 +537,24 @@ async function eventsPanel() {
       </div>
       <button class="btn block">儲存座位圖</button>
     </form>` : '<p class="muted" style="margin:0">還沒有春酒類型的活動。</p>'}
+  </section>`;
+}
+const AUDIT_NAME = {
+  'role.change': '變更身分', 'membership.update': '更新會籍', checkin: '報到', 'lottery.draw': '抽獎', 'lottery.claim': '確認領獎',
+  'lottery.undo': '取消中獎', 'event.create': '建立活動', 'event.delete': '刪除活動', 'plan.publish': '發布課表', 'plan.delete': '刪除課表',
+  'layout.update': '修改座位圖', 'account.create': '建立帳號', login: '登入', 'join.denied': '邀請碼錯誤', 'bootstrap.chair': '初始理事長',
+  'bootstrap.denied': '初始設定被拒', 'privacy.export': '下載個資', 'privacy.delete': '刪除帳號',
+};
+async function auditPanel() {
+  const { items } = await api('/audit');
+  return `<section class="card">
+    <div class="row spread"><h3>稽核紀錄</h3><span class="tiny">最近 ${items.length} 筆</span></div>
+    <p class="tiny">所有特權操作都會留下紀錄，應用程式內無法修改或刪除。IP 只存雜湊值。</p>
+    <div class="audit">${items.map((x) => `<div class="arow">
+      <span class="num tiny">${esc(x.at.slice(5, 16))}</span>
+      <span><b>${esc(AUDIT_NAME[x.action] || x.action)}</b>
+        <span class="tiny" style="display:block">${esc(x.actor_name || '未登入')}${x.actor_role ? `（${esc(ROLE_NAME[x.actor_role] || x.actor_role)}）` : ''}${x.detail ? `・${esc(x.detail)}` : ''}</span></span>
+    </div>`).join('') || '<p class="muted">沒有紀錄。</p>'}</div>
   </section>`;
 }
 function bindEventsPanel() {
@@ -954,13 +973,14 @@ async function meView() {
     ${(allow('members') || allow('roles')) ? '<a class="card" href="#/admin"><div class="row spread"><h3>管理後台</h3><span class="tiny">會員・身分・座位圖 ›</span></div></a>' : ''}
     ${allow('roster') ? `<a class="card" href="#/roster"><div class="row spread"><h3>團員名冊</h3><span class="tiny">${allow('roles') ? '可指派幹部角色' : '查看'} ›</span></div></a>` : ''}
     ${allow('plan') ? '<a class="card" href="#/plan/new"><div class="row spread"><h3>發布課表</h3><span class="tiny">教練 ›</span></div></a>' : ''}
-    ${me.role !== 'member' ? '' : `<section class="card">
-      <h3>我是幹部</h3>
+    ${me.role !== 'member' ? '' : `<details class="card tight">
+      <summary class="tiny" style="cursor:pointer">系統初始設定（只限第一位理事長）</summary>
+      <p class="tiny">幹部身分一律由理事長在後台指派。這裡只用在系統剛建立、還沒有理事長的時候。</p>
       <form id="af" class="row" style="gap:8px">
-        <input name="code" placeholder="幹部碼" style="flex:1;min-width:140px" autocomplete="off">
-        <button class="btn sm">升級</button>
+        <input name="code" placeholder="初始設定碼" style="flex:1;min-width:140px" autocomplete="off">
+        <button class="btn sm">設定</button>
       </form>
-    </section>`}
+    </details>`}
 
     <section class="card">
       <div class="row spread"><h3>台灣耕跑團協會</h3>
@@ -973,6 +993,15 @@ async function meView() {
     </section>
     <section class="card" id="myPrizes"></section>
 
+    <section class="card">
+      <h3>隱私與帳號</h3>
+      <p class="tiny" style="margin:0">我們只存姓名、暱稱、組別、跑團、餐點偏好與報名紀錄；電話只有行政人員看得到完整號碼。你可以隨時下載或刪除自己的資料。</p>
+      <div class="row">
+        <a class="btn ghost sm" href="/api/me/export" download>下載我的資料</a>
+        <button class="btn ghost sm" id="logoutAll">登出所有裝置</button>
+        <button class="btn danger sm" id="delAcct">刪除帳號</button>
+      </div>
+    </section>
     <button class="btn ghost block" id="logout">登出</button>
     <p class="tiny center">課表來源：耕跑團記事本。W9 以後為系統推估，以教練公告為準。</p>`;
 
@@ -994,7 +1023,7 @@ async function meView() {
   };
   $('#af')?.addEventListener('submit', async (e) => {
     e.preventDefault();
-    try { me = (await api('/me/admin', { method: 'POST', body: { code: e.target.code.value } })).member; toast('已升級為幹部'); render(); }
+    try { me = (await api('/me/admin', { method: 'POST', body: { code: e.target.code.value } })).member; toast('已設定為理事長'); render(); }
     catch (err) { toast(err.message); }
   });
   $('#applyBtn')?.addEventListener('click', async () => {
@@ -1011,6 +1040,15 @@ async function meView() {
       : '';
     box.hidden = !prizes.length;
   }).catch(() => {});
+  $('#logoutAll').onclick = async () => {
+    if (!confirm('要登出所有裝置嗎？包含這一台。')) return;
+    await api('/logout', { method: 'POST', body: { all: true } }); me = null; location.hash = '#/'; render();
+  };
+  $('#delAcct').onclick = async () => {
+    if (!confirm('刪除後無法復原：報名、入場券與通知都會刪除，中獎紀錄會匿名保留給協會對帳。確定刪除？')) return;
+    try { await api('/me', { method: 'DELETE' }); me = null; toast('帳號已刪除'); location.hash = '#/'; render(); }
+    catch (e) { toast(e.message); }
+  };
   $('#logout').onclick = async () => { await api('/logout', { method: 'POST' }); me = null; location.hash = '#/'; render(); };
   $('#pushBtn')?.addEventListener('click', () => togglePush(sub));
   $('#pushTest')?.addEventListener('click', async () => {

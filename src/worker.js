@@ -1,13 +1,32 @@
 // 耕跑團 Cultivation in Life Run — API（Cloudflare Worker ＋ D1）
-// 身分：用 LINE 群公告的邀請碼加入（JOIN_CODE 是團員，ADMIN_CODE 是幹部），工作階段權杖放 HttpOnly cookie，D1 只存 SHA-256。
-// 寫入類 API 只接受同源的 JSON 請求，用來擋 CSRF。
+// 資安設計對應 ISO/IEC 27001:2022 附錄 A（詳見 docs/SECURITY.md）：
+//   A.5.15／A.5.18 存取控制：最小權限，特權身分只能由理事長指派，不能靠共用代碼取得
+//   A.8.2 特權存取：幹部的工作階段閒置 8 小時、絕對 7 天就失效；身分變更後舊工作階段立即作廢
+//   A.8.5 安全鑑別：LINE OIDC（state＋nonce 驗證）；邀請碼與報到代碼有嘗試次數限制
+//   A.8.15 日誌：特權操作寫入 audit_log，監事可查
+//   A.5.34 個資：最小蒐集、電話遮罩、IP 只存雜湊、本人可匯出與刪除
+// 工作階段權杖放 HttpOnly cookie，D1 只存 SHA-256；寫入類 API 只接受同源 JSON（擋 CSRF）。
 import { subscribe, unsubscribe, push, validEndpoint } from './push.js';
 
 const COOKIE = '__Host-cil_sess';
-const SESSION_DAYS = 180;          // 跑團是長期使用，給長一點；登出或換裝置會重發
+// 工作階段期限：一般跑友長期使用；幹部看得到別人的資料，期限短很多
+const SESSION_POLICY = {
+  member:     { idleMs: 30 * 864e5, absDays: 180 },
+  privileged: { idleMs: 8 * 3600e3, absDays: 7 },
+};
+const policyOf = (role) => (norm(role) === 'member' ? SESSION_POLICY.member : SESSION_POLICY.privileged);
 const rid = (n = 16) => [...crypto.getRandomValues(new Uint8Array(n))].map((b) => b.toString(36).padStart(2, '0')).join('').slice(0, n * 2);
 const sha = async (s) => [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s)))].map((b) => b.toString(16).padStart(2, '0')).join('');
-const json = (data, status = 200, headers = {}) => new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', ...headers } });
+// API 回應一律帶安全標頭（靜態檔的標頭在 public/_headers）
+const SEC_HEADERS = {
+  'x-content-type-options': 'nosniff',
+  'referrer-policy': 'strict-origin-when-cross-origin',
+  'strict-transport-security': 'max-age=31536000; includeSubDomains',
+  'x-frame-options': 'DENY',
+  'cross-origin-resource-policy': 'same-origin',
+};
+const json = (data, status = 200, headers = {}) => new Response(JSON.stringify(data), { status,
+  headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', ...SEC_HEADERS, ...headers } });
 const fail = (status, msg) => json({ error: msg }, status);
 const str = (v, max = 200) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
 const FM = ['S', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I'];
@@ -22,31 +41,73 @@ function validGroup(dist, grp) {
 }
 
 // ---- 工作階段 ----
+const tokenOf = (req) => (req.headers.get('cookie') || '').match(new RegExp(`${COOKIE}=([\\w]+)`))?.[1];
+const ipHash = async (req, env) => (await sha(`${req.headers.get('cf-connecting-ip') || 'local'}|${env.HASH_SALT || 'cil'}`)).slice(0, 16);
+
 async function currentMember(req, env) {
-  const token = (req.headers.get('cookie') || '').match(new RegExp(`${COOKIE}=([\\w]+)`))?.[1];
+  const token = tokenOf(req);
   if (!token) return null;
+  const th = await sha(token);
   const row = await env.DB.prepare(
-    `SELECT m.* FROM sessions s JOIN members m ON m.id = s.member_id
-     WHERE s.token_hash = ? AND s.expires_at > datetime('now')`).bind(await sha(token)).first();
-  if (row) env.ctx?.waitUntil(env.DB.prepare("UPDATE members SET last_seen = datetime('now') WHERE id = ?").bind(row.id).run());
-  return row || null;
+    `SELECT m.*, s.last_seen_at AS s_seen, s.role_at_issue AS s_role, s.created_at AS s_created
+     FROM sessions s JOIN members m ON m.id = s.member_id
+     WHERE s.token_hash = ? AND s.expires_at > datetime('now')`).bind(th).first();
+  if (!row) return null;
+  const pol = policyOf(row.role), now = Date.now();
+  const seen = Date.parse(`${(row.s_seen || row.s_created).replace(' ', 'T')}Z`);
+  // 閒置逾時，或簽發後身分被改過（升級或降級都要重新登入）
+  if (now - seen > pol.idleMs || (row.s_role && norm(row.s_role) !== norm(row.role))) {
+    await env.DB.prepare('DELETE FROM sessions WHERE token_hash = ?').bind(th).run();
+    return null;
+  }
+  if (now - seen > 5 * 60e3) {   // 最多每 5 分鐘更新一次，減少寫入
+    env.ctx?.waitUntil(env.DB.batch([
+      env.DB.prepare("UPDATE sessions SET last_seen_at = datetime('now') WHERE token_hash = ?").bind(th),
+      env.DB.prepare("UPDATE members SET last_seen = datetime('now') WHERE id = ?").bind(row.id),
+    ]));
+  }
+  return row;
 }
 
-async function startSession(env, memberId) {
-  const token = rid(24);
-  await env.DB.prepare(`INSERT INTO sessions (token_hash, member_id, expires_at) VALUES (?, ?, datetime('now', '+${SESSION_DAYS} days'))`)
-    .bind(await sha(token), memberId).run();
-  return `${COOKIE}=${token}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${SESSION_DAYS * 86400}`;
+async function startSession(env, member, req) {
+  const token = rid(24), pol = policyOf(member.role);
+  await env.DB.prepare(`INSERT INTO sessions (token_hash, member_id, expires_at, last_seen_at, role_at_issue, ip_hash, ua)
+    VALUES (?, ?, datetime('now', '+${pol.absDays} days'), datetime('now'), ?, ?, ?)`)
+    .bind(await sha(token), member.id, norm(member.role), await ipHash(req, env), str(req.headers.get('user-agent'), 120)).run();
+  return `${COOKIE}=${token}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${pol.absDays * 86400}`;
 }
+const revokeSessions = (env, memberId) => env.DB.prepare('DELETE FROM sessions WHERE member_id = ?').bind(memberId).run();
+
+// 嘗試次數限制：在 window 秒內超過 limit 次就擋
+async function limited(env, key, limit, windowSec) {
+  const row = await env.DB.prepare("SELECT count, window_end > datetime('now') AS live FROM rate_limits WHERE key = ?").bind(key).first();
+  if (row?.live && row.count >= limit) return true;
+  if (row?.live) await env.DB.prepare('UPDATE rate_limits SET count = count + 1 WHERE key = ?').bind(key).run();
+  else await env.DB.prepare(`INSERT INTO rate_limits (key, count, window_end) VALUES (?, 1, datetime('now', '+${windowSec} seconds'))
+    ON CONFLICT(key) DO UPDATE SET count = 1, window_end = excluded.window_end`).bind(key).run();
+  return false;
+}
+
+// 稽核紀錄：特權操作一律記下（detail 只放摘要，不放個資原文）
+async function audit(env, req, actor, action, targetType, targetId, detail) {
+  try {
+    await env.DB.prepare(`INSERT INTO audit_log (id, actor_id, actor_name, actor_role, action, target_type, target_id, detail, ip_hash)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .bind(rid(10), actor?.id || null, actor?.name || null, actor ? norm(actor.role) : null, action,
+            targetType || null, targetId || null, str(detail, 300) || null, await ipHash(req, env)).run();
+  } catch (e) { console.error('audit', e); }
+}
+// LINE 大頭貼只接受 LINE 自己的圖床
+const safeAvatar = (u) => (/^https:\/\/(profile|obs)\.line-scdn\.net\//.test(u || '') ? u.slice(0, 300) : null);
 
 // 角色：參考人民團體的組織分層。chair 理事長｜director 理事｜supervisor 監事｜staff 行政人員｜coach 教練｜member 團員
 export const ROLES = { chair: '理事長', director: '理事', supervisor: '監事', staff: '行政人員', coach: '教練', member: '團員' };
 const norm = (r) => (r === 'admin' ? 'staff' : ROLES[r] ? r : 'member');   // 相容舊的 admin
 // 權限：活動（建立與編輯）、課表（發布）、報到、抽獎、名冊、角色指派
 const PERMS = {
-  chair:      ['event', 'plan', 'checkin', 'lottery', 'roster', 'roles', 'members', 'layout'],
+  chair:      ['event', 'plan', 'checkin', 'lottery', 'roster', 'roles', 'members', 'layout', 'audit'],
   director:   ['event', 'checkin', 'lottery', 'roster', 'members'],
-  supervisor: ['roster', 'members'],                 // 監事只看，寫入在各 API 另外擋
+  supervisor: ['roster', 'members', 'audit'],        // 監事：監督角色，只看名冊、會籍與稽核紀錄
   staff:      ['event', 'checkin', 'lottery', 'roster', 'members', 'layout'],
   coach:      ['event', 'plan', 'checkin'],
   member:     [],
@@ -97,23 +158,28 @@ function lineStart(env, url) {
   auth.searchParams.set('nonce', nonce);
   return new Response(null, { status: 302, headers: {
     location: auth.toString(),
-    'set-cookie': `${LINE_STATE}=${state}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=600`,
+    // state 與 nonce 一起綁在發起登入的瀏覽器上，callback 時兩個都要對得上
+    'set-cookie': `${LINE_STATE}=${state}.${nonce}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=600`,
   } });
 }
 
 async function lineCallback(req, env, url) {
   const clear = `${LINE_STATE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`;
   const back = (msg) => new Response(null, { status: 302, headers: { location: `/#/?err=${encodeURIComponent(msg)}`, 'set-cookie': clear } });
-  const want = (req.headers.get('cookie') || '').match(new RegExp(`${LINE_STATE}=([\\w]+)`))?.[1];
+  const [want, nonce] = ((req.headers.get('cookie') || '').match(new RegExp(`${LINE_STATE}=([\\w]+\\.[\\w]+)`))?.[1] || '').split('.');
   const code = url.searchParams.get('code'), state = url.searchParams.get('state');
   if (!code || !state || !want || state !== want) return back('登入逾時，請再試一次');
   const form = new URLSearchParams({ grant_type: 'authorization_code', code, redirect_uri: redirectUri(url), client_id: env.LINE_CHANNEL_ID, client_secret: env.LINE_CHANNEL_SECRET });
   const tok = await (await fetch('https://api.line.me/oauth2/v2.1/token', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: form })).json();
-  if (!tok.access_token) return back('LINE 登入失敗');
+  if (!tok.access_token || !tok.id_token) return back('LINE 登入失敗');
+  // 驗證 ID Token：簽章、發行者、對象、期限與 nonce 都交給 LINE 的驗證端點檢查
+  const vf = new URLSearchParams({ id_token: tok.id_token, client_id: env.LINE_CHANNEL_ID, nonce });
+  const idt = await (await fetch('https://api.line.me/oauth2/v2.1/verify', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: vf })).json();
+  if (!idt.sub || idt.nonce !== nonce) return back('LINE 登入驗證失敗');
   const prof = await (await fetch('https://api.line.me/v2/profile', { headers: { authorization: `Bearer ${tok.access_token}` } })).json();
-  if (!prof.userId) return back('拿不到 LINE 資料');
-  const pic = str(prof.pictureUrl, 300) || null;
-  let m = await env.DB.prepare('SELECT id FROM members WHERE line_id = ?').bind(prof.userId).first();
+  if (!prof.userId || prof.userId !== idt.sub) return back('LINE 登入驗證失敗');
+  const pic = safeAvatar(prof.pictureUrl);
+  let m = await env.DB.prepare('SELECT id, name, role FROM members WHERE line_id = ?').bind(prof.userId).first();
   let isNew = false;
   if (m) {
     await env.DB.prepare('UPDATE members SET avatar = ? WHERE id = ?').bind(pic, m.id).run();
@@ -122,11 +188,12 @@ async function lineCallback(req, env, url) {
     const id = rid(8);
     await env.DB.prepare('INSERT INTO members (id, name, dist, grp, role, line_id, avatar) VALUES (?, ?, ?, ?, ?, ?, ?)')
       .bind(id, str(prof.displayName, 40) || '跑者', 'fm', 'D', 'member', prof.userId, pic).run();
-    m = { id };
+    m = { id, name: str(prof.displayName, 40), role: 'member' };
   }
+  await audit(env, req, m, isNew ? 'account.create' : 'login', 'member', m.id, 'LINE');
   return new Response(null, { status: 302, headers: [
     ['location', isNew ? '/#/me?welcome=1' : '/#/'],
-    ['set-cookie', await startSession(env, m.id)],
+    ['set-cookie', await startSession(env, m, req)],
     ['set-cookie', clear],
   ] });
 }
@@ -226,23 +293,34 @@ async function api(req, env, path, method) {
     return json({ member: member ? pub(member) : null, vapid: env.VAPID_PUBLIC_KEY || null, lineLogin: !!(env.LINE_CHANNEL_ID && env.LINE_CHANNEL_SECRET) });
 
   // 已登入的人輸入幹部碼或理事長碼升級
+  // 初始設定：系統裡還沒有理事長時，才能用 CHAIR_CODE 把自己設為理事長（只能用一次）。
+  // 之後所有幹部身分一律由理事長在後台指派，不再有共用的幹部碼（A.5.18 存取權限）。
   if (path === '/api/me/admin' && method === 'POST') {
     const g = need(); if (g) return g;
-    const code = str((await body()).code, 60);
-    const role = env.CHAIR_CODE && code === env.CHAIR_CODE ? 'chair' : env.ADMIN_CODE && code === env.ADMIN_CODE ? 'staff' : null;
-    if (!role) return fail(403, '幹部碼不正確');
-    await env.DB.prepare('UPDATE members SET role = ? WHERE id = ?').bind(role, member.id).run();
-    return json({ member: pub({ ...member, role }) });
+    if (await limited(env, `bootstrap:${await ipHash(req, env)}`, 5, 900)) return fail(429, '嘗試太多次，請 15 分鐘後再試');
+    const code = str((await body()).code, 80);
+    const hasChair = await env.DB.prepare("SELECT 1 FROM members WHERE role = 'chair' LIMIT 1").first();
+    if (hasChair || !env.CHAIR_CODE || code !== env.CHAIR_CODE) {
+      await audit(env, req, member, 'bootstrap.denied', 'member', member.id, hasChair ? '已有理事長' : '代碼錯誤');
+      return fail(403, '幹部身分由理事長在後台指派');
+    }
+    await env.DB.prepare("UPDATE members SET role = 'chair' WHERE id = ?").bind(member.id).run();
+    await audit(env, req, member, 'bootstrap.chair', 'member', member.id, '初始理事長');
+    await revokeSessions(env, member.id);
+    return json({ member: pub({ ...member, role: 'chair' }), relogin: true },
+      200, { 'set-cookie': await startSession(env, { ...member, role: 'chair' }, req) });
   }
 
   if (path === '/api/join' && method === 'POST') {
+    if (await limited(env, `join:${await ipHash(req, env)}`, 8, 600)) return fail(429, '嘗試太多次，請 10 分鐘後再試');
     const b = await body();
-    const code = str(b.code, 60);
-    // 三種邀請碼：理事長碼、幹部碼、團員碼
-    const role = env.CHAIR_CODE && code === env.CHAIR_CODE ? 'chair'
-      : env.ADMIN_CODE && code === env.ADMIN_CODE ? 'staff'
-      : (env.JOIN_CODE && code === env.JOIN_CODE) ? 'member' : null;
-    if (!role) return fail(403, '邀請碼不正確');
+    const code = str(b.code, 80);
+    // 邀請碼只能加入成為跑友；任何特權身分都要由理事長指派
+    if (!env.JOIN_CODE || code !== env.JOIN_CODE) {
+      await audit(env, req, null, 'join.denied', null, null, '邀請碼錯誤');
+      return fail(403, '邀請碼不正確');
+    }
+    const role = 'member';
     const name = str(b.name, 40);
     const dist = b.dist === 'hm' ? 'hm' : 'fm';
     const grp = (str(b.grp, 2) || (dist === 'hm' ? 'C' : 'D')).toUpperCase();
@@ -251,7 +329,8 @@ async function api(req, env, path, method) {
     const id = rid(8);
     await env.DB.prepare('INSERT INTO members (id, name, dist, grp, role) VALUES (?, ?, ?, ?, ?)').bind(id, name, dist, grp, role).run();
     const m = await env.DB.prepare('SELECT * FROM members WHERE id = ?').bind(id).first();
-    return json({ member: pub(m) }, 200, { 'set-cookie': await startSession(env, id) });
+    await audit(env, req, m, 'account.create', 'member', id, '邀請碼');
+    return json({ member: pub(m) }, 200, { 'set-cookie': await startSession(env, m, req) });
   }
 
   if (path === '/api/me' && method === 'PUT') {
@@ -268,8 +347,9 @@ async function api(req, env, path, method) {
   }
 
   if (path === '/api/logout' && method === 'POST') {
-    const token = (req.headers.get('cookie') || '').match(new RegExp(`${COOKIE}=([\\w]+)`))?.[1];
-    if (token) await env.DB.prepare('DELETE FROM sessions WHERE token_hash = ?').bind(await sha(token)).run();
+    const token = tokenOf(req);
+    if ((await body()).all && member) await revokeSessions(env, member.id);
+    else if (token) await env.DB.prepare('DELETE FROM sessions WHERE token_hash = ?').bind(await sha(token)).run();
     return json({ ok: true }, 200, { 'set-cookie': `${COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0` });
   }
 
@@ -294,6 +374,7 @@ async function api(req, env, path, method) {
     await env.DB.prepare(`INSERT INTO events (id, kind, title, date, gather_time, end_time, place, lead, note, week_no, plan_text, capacity, signup_open, deadline, created_by, fee, guest_max, meal_options, link_url, link_label)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       .bind(id, e.kind, e.title, e.date, e.gather_time, e.end_time, e.place, e.lead, e.note, e.week_no, e.plan_text, e.capacity, e.signup_open, e.deadline, member.id, e.fee, e.guest_max, e.meal_options, e.link_url, e.link_label).run();
+    await audit(env, req, member, 'event.create', 'event', id, e.title);
     await notify(env, await allMemberIds(env, member.id), 'event',
       { title: `新活動：${e.title}`, body: `${e.date}${e.gather_time ? ` ${e.gather_time}` : ''}　${e.place || ''}`, url: `/#/e/${id}` });
     return json({ id });
@@ -318,6 +399,7 @@ async function api(req, env, path, method) {
     if (method === 'DELETE') {
       const ga = needAdmin(); if (ga) return ga;
       await env.DB.prepare('DELETE FROM events WHERE id = ?').bind(id).run();
+      await audit(env, req, member, 'event.delete', 'event', id, '');
       return json({ ok: true });
     }
   }
@@ -340,6 +422,48 @@ async function api(req, env, path, method) {
     const lines = ev.signups.filter((s) => s.status === 'in').map((s, i) => `${i + 1}. ${s.grp}　${s.name}${s.note ? `（${s.note}）` : ''}`);
     const wait = ev.signups.filter((s) => s.status === 'wait').map((s, i) => `候補${i + 1}. ${s.grp}　${s.name}`);
     return json({ text: [`${ev.title}　${ev.date}`, ...lines, ...wait].join('\n') });
+  }
+
+  // ---- 個資：本人可以匯出與刪除（A.5.34） ----
+  if (path === '/api/me/export' && method === 'GET') {
+    const g = need(); if (g) return g;
+    const q = (sql) => env.DB.prepare(sql).bind(member.id).all().then((r) => r.results);
+    const data = {
+      exported_at: new Date().toISOString(),
+      profile: (({ s_seen, s_role, s_created, line_id, ...rest }) => ({ ...rest, line_linked: !!line_id }))(member),
+      signups: await q('SELECT event_id, name, grp, dist, note, status, created_at FROM signups WHERE member_id = ?'),
+      tickets: await q('SELECT event_id, code, guests, meal, table_no, checked_in_at FROM tickets WHERE member_id = ?'),
+      prizes: await q('SELECT event_id, prize_id, created_at, claimed_at FROM draws WHERE member_id = ?'),
+      notifications: await q('SELECT kind, title, body, created_at, read_at FROM notifications WHERE member_id = ?'),
+      sessions: await q('SELECT created_at, last_seen_at, ua FROM sessions WHERE member_id = ?'),
+    };
+    await audit(env, req, member, 'privacy.export', 'member', member.id, '');
+    return json(data, 200, { 'content-disposition': 'attachment; filename="my-data.json"' });
+  }
+  if (path === '/api/me' && method === 'DELETE') {
+    const g = need(); if (g) return g;
+    if (norm(member.role) === 'chair') {
+      const n = (await env.DB.prepare("SELECT COUNT(*) AS n FROM members WHERE role = 'chair'").first()).n;
+      if (n <= 1) return fail(400, '你是唯一的理事長，請先指派新的理事長再刪除帳號');
+    }
+    // 得獎紀錄要留給協會對帳，所以只匿名化，不刪除
+    await env.DB.batch([
+      env.DB.prepare("UPDATE draws SET name = '已刪除帳號', member_id = NULL WHERE member_id = ?").bind(member.id),
+      env.DB.prepare('DELETE FROM members WHERE id = ?').bind(member.id),
+    ]);
+    await audit(env, req, member, 'privacy.delete', 'member', member.id, '本人刪除帳號');
+    return json({ ok: true }, 200, { 'set-cookie': `${COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0` });
+  }
+
+  // ---- 稽核紀錄（理事長、監事）----
+  if (path === '/api/audit' && method === 'GET') {
+    const g = need(); if (g) return g;
+    if (!can(member, 'audit')) return fail(403, '只有理事長與監事可以查看稽核紀錄');
+    const u = new URL(req.url), action = str(u.searchParams.get('action'), 40);
+    const rows = (await env.DB.prepare(
+      `SELECT at, actor_name, actor_role, action, target_type, target_id, detail FROM audit_log
+       ${action ? 'WHERE action LIKE ?' : ''} ORDER BY at DESC LIMIT 200`).bind(...(action ? [`${action}%`] : [])).all()).results;
+    return json({ items: rows });
   }
 
   // ---- 通知中心 ----
@@ -383,6 +507,7 @@ async function api(req, env, path, method) {
     const id = rid(8);
     await env.DB.prepare('INSERT INTO plan_posts (id, week_no, title, phase, body, author_id) VALUES (?, ?, ?, ?, ?, ?)')
       .bind(id, week, title, str(b.phase, 20), bodyText, member.id).run();
+    await audit(env, req, member, 'plan.publish', 'plan', id, title);
     if (b.notify !== false) await notify(env, await allMemberIds(env), 'plan', { title: `新課表：${title}`, body: `${member.name} 發布了${week ? ` W${week}` : ''}課表`, url: `/#/plan` });
     return json({ id });
   }
@@ -391,6 +516,7 @@ async function api(req, env, path, method) {
     const g = need(); if (g) return g;
     if (!can(member, 'plan')) return fail(403, '只有教練可以刪除課表');
     await env.DB.prepare('DELETE FROM plan_posts WHERE id = ?').bind(pdel[1]).run();
+    await audit(env, req, member, 'plan.delete', 'plan', pdel[1], '');
     return json({ ok: true });
   }
 
@@ -425,6 +551,7 @@ async function api(req, env, path, method) {
       if (!rows?.length) return fail(400, '座位佈局格式不正確');
       const layout = { rows, stage: str(b.stage, 20) || '舞台', foot: str(b.foot, 40), entry: str(b.entry, 20) || '↑ 入口' };
       await env.DB.prepare('UPDATE events SET seat_layout = ? WHERE id = ?').bind(JSON.stringify(layout), ml[1]).run();
+      await audit(env, req, member, 'layout.update', 'event', ml[1], `${rows.length} 排`);
       return json({ ok: true, layout });
     }
   }
@@ -473,6 +600,7 @@ async function api(req, env, path, method) {
   if (mc && method === 'POST') {
     const g = need(); if (g) return g;
     if (!can(member, 'checkin')) return fail(403, '只有幹部可以報到');
+    if (await limited(env, `checkin:${member.id}`, 90, 60)) return fail(429, '報到太頻繁，請稍候');
     const b = await body(), code = str(b.code, 8).toUpperCase();
     const t = await env.DB.prepare('SELECT t.*, m.name FROM tickets t JOIN members m ON m.id = t.member_id WHERE t.event_id = ? AND t.code = ?')
       .bind(mc[1], code).first();
@@ -480,6 +608,7 @@ async function api(req, env, path, method) {
     if (t.checked_in_at) return json({ ok: true, already: true, name: t.name, guests: t.guests, meal: t.meal, seat: t.seat });
     await env.DB.prepare("UPDATE tickets SET checked_in_at = datetime('now'), seat = COALESCE(?, seat) WHERE id = ?")
       .bind(str(b.seat, 20) || null, t.id).run();
+    await audit(env, req, member, 'checkin', 'ticket', t.id, `活動 ${mc[1]}`);
     return json({ ok: true, name: t.name, guests: t.guests, meal: t.meal, seat: str(b.seat, 20) || t.seat });
   }
   const mp = path.match(/^\/api\/events\/([\w-]{1,32})\/prizes$/);
@@ -545,6 +674,7 @@ async function api(req, env, path, method) {
     }
     await env.DB.batch(winners.map((w) => env.DB.prepare('INSERT INTO draws (id, event_id, prize_id, member_id, name) VALUES (?, ?, ?, ?, ?)')
       .bind(rid(8), eid, prizeId, w.member_id, w.name)));
+    await audit(env, req, member, 'lottery.draw', 'prize', prizeId, `${winners.length} 位`);
     await notify(env, winners.map((w) => w.member_id), 'lottery', { title: `恭喜中獎：${prize.name}`, body: '請到台前領獎', url: `/#/e/${eid}` });
     return json({ winners: winners.map((w) => ({ name: w.name, nickname: w.nickname || '', table_no: w.table_no || null })), prize: prize.name, stage: prize.stage || '' });
   }
@@ -569,6 +699,7 @@ async function api(req, env, path, method) {
     const g = need(); if (g) return g;
     if (!can(member, 'lottery')) return fail(403, '只有幹部可以確認領獎');
     await env.DB.prepare("UPDATE draws SET claimed_at = datetime('now') WHERE id = ?").bind(mclaim[1]).run();
+    await audit(env, req, member, 'lottery.claim', 'draw', mclaim[1], '');
     return json({ ok: true });
   }
 
@@ -577,6 +708,7 @@ async function api(req, env, path, method) {
     const g = need(); if (g) return g;
     if (!can(member, 'lottery')) return fail(403, '只有幹部可以重抽');
     await env.DB.prepare('DELETE FROM draws WHERE id = ?').bind(mdd[1]).run();
+    await audit(env, req, member, 'lottery.undo', 'draw', mdd[1], '');
     return json({ ok: true });
   }
 
@@ -588,8 +720,11 @@ async function api(req, env, path, method) {
       `SELECT id, name, nickname, club, dist, grp, role, title, avatar, created_at,
               membership, member_type, member_no, joined_on, paid_until, membership_note, phone
        FROM members ORDER BY created_at`).all()).results;
+    const fullPhone = can(member, 'members') && !READONLY[norm(member.role)];
+    const mask = (p) => (p ? `${p.slice(0, 4)}***${p.slice(-3)}` : '');
     return json({
-      members: rows.map((m) => ({ ...m, role: norm(m.role), roleName: ROLES[norm(m.role)], membershipName: MEMBERSHIP[m.membership || 'none'] })),
+      members: rows.map((m) => ({ ...m, phone: fullPhone ? m.phone : mask(m.phone),
+        role: norm(m.role), roleName: ROLES[norm(m.role)], membershipName: MEMBERSHIP[m.membership || 'none'] })),
       roles: ROLES, perms: PERMS, membership: MEMBERSHIP, memberTypes: MEMBER_TYPES,
     });
   }
@@ -603,6 +738,7 @@ async function api(req, env, path, method) {
     await env.DB.prepare('UPDATE members SET membership = ?, member_type = ?, member_no = ?, joined_on = ?, paid_until = ?, membership_note = ? WHERE id = ?')
       .bind(st, str(b.member_type, 10) || null, str(b.member_no, 20) || null, str(b.joined_on, 10) || null,
             str(b.paid_until, 10) || null, str(b.membership_note, 100) || null, mm[1]).run();
+    await audit(env, req, member, 'membership.update', 'member', mm[1], `${MEMBERSHIP[st]}${b.member_type ? `／${str(b.member_type, 10)}` : ''}`);
     if (st === 'active') await notify(env, [mm[1]], 'system', { title: '入會完成', body: '你已經是台灣耕跑團協會會員', url: '/#/me' });
     return json({ ok: true });
   }
@@ -625,6 +761,8 @@ async function api(req, env, path, method) {
     if (!role) return fail(400, '角色不正確');
     if (mr[1] === member.id && role !== 'chair') return fail(400, '不能把自己降級，請先指派新的理事長');
     await env.DB.prepare('UPDATE members SET role = ?, title = ? WHERE id = ?').bind(role, str(b.title, 20) || null, mr[1]).run();
+    await revokeSessions(env, mr[1]);
+    await audit(env, req, member, 'role.change', 'member', mr[1], `${ROLES[role]}${b.title ? `／${str(b.title, 20)}` : ''}`);
     await notify(env, [mr[1]], 'system', { title: '身分更新', body: `你的身分已設定為${ROLES[role]}`, url: '/#/me' });
     return json({ ok: true });
   }

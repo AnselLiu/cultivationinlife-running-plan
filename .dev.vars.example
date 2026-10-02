@@ -1,3 +1,5 @@
 JOIN_CODE="run2026"
-ADMIN_CODE="coach2026"
-CHAIR_CODE="chair2026"
+# 只在系統還沒有理事長時有效（一次性），之後幹部一律由理事長指派
+CHAIR_CODE="chair-bootstrap-2026"
+# IP 雜湊用的鹽，正式環境請設一組長亂數
+HASH_SALT="dev-salt"

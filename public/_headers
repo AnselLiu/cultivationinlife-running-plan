@@ -1,0 +1,13 @@
+# 靜態檔的安全標頭（API 的標頭由 src/worker.js 加）
+# CSP 用 <meta> 寫在各頁面裡：index.html 是嚴格版，coach.html 需要 Google Fonts 與行內程式，另外放寬
+/*
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+  Referrer-Policy: strict-origin-when-cross-origin
+  Strict-Transport-Security: max-age=31536000; includeSubDomains
+  Permissions-Policy: camera=(self), geolocation=(), microphone=(), payment=(), usb=(), interest-cohort=()
+  Cross-Origin-Opener-Policy: same-origin
+
+/sw.js
+  Cache-Control: no-cache
+  Service-Worker-Allowed: /

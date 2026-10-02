@@ -344,3 +344,9 @@ button.seatrow:active{background:var(--accent-soft)}
 .permtable .rw{padding:5px 0;border-top:1px solid var(--stroke)}
 .permtable .rw span:first-child{font-weight:650}
 .permtable .rw span:not(:first-child){text-align:center;color:var(--accent);font-weight:700}
+
+/* 稽核紀錄 */
+.audit{display:grid;max-height:60vh;overflow:auto}
+.arow{display:grid;grid-template-columns:88px 1fr;gap:10px;padding:8px 0;border-bottom:1px solid var(--stroke);font-size:14px}
+details.card summary{list-style:none}
+details.card summary::-webkit-details-marker{display:none}
