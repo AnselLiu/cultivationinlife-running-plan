@@ -281,3 +281,50 @@ pre.out{white-space:pre-wrap;word-break:break-word;background:var(--glass-hi);bo
 @keyframes pop{from{transform:scale(.6);opacity:0}to{transform:scale(1);opacity:1}}
 
 .bell b[hidden]{display:none}
+
+/* ---- 春酒：橘綠主題（呼應春酒視覺）＋座位圖 ---- */
+.party{--accent:#E8691A;--accent-soft:rgba(232,105,26,.12)}
+.seatlist{display:grid;gap:4px;margin-top:8px;max-height:320px;overflow:auto}
+.seatrow{display:grid;grid-template-columns:auto 1fr;gap:10px;align-items:center;padding:8px 6px;border-bottom:1px solid var(--stroke);
+  background:none;border-left:0;border-right:0;border-top:0;text-align:left;width:100%;cursor:default;border-radius:0}
+button.seatrow{cursor:pointer}
+button.seatrow:active{background:var(--accent-soft)}
+.tblbadge{display:grid;place-items:center;width:34px;height:34px;border-radius:11px;background:#E8691A;color:#fff;font-weight:800;font-size:15px}
+.seatmap{margin-top:10px;display:grid;gap:8px}
+.seatmap .stage{text-align:center;padding:8px;border-radius:10px;background:#2D5016;color:#fff;font-weight:700;letter-spacing:.2em}
+.seatmap .grid{display:grid;grid-template-columns:repeat(7,1fr);gap:6px}
+.seatmap .tbl{aspect-ratio:1;border-radius:12px;border:1px solid var(--stroke);background:var(--glass-hi);display:grid;place-items:center;gap:0;cursor:pointer;padding:0}
+.seatmap .tbl b{font-size:15px;font-weight:700;line-height:1}
+.seatmap .tbl span{font-size:10px;color:var(--ink-3)}
+.seatmap .tbl.on{background:#E8691A;color:#fff;border-color:transparent;animation:pulse 1.4s ease-in-out infinite}
+.seatmap .tbl.on span{color:rgba(255,255,255,.85)}
+@keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(232,105,26,.5)}50%{box-shadow:0 0 0 8px rgba(232,105,26,0)}}
+.seatmap .gap{display:block}
+.seatmap .ibm{text-align:center;font-size:12px;color:var(--ink-3);border:1px dashed var(--stroke);border-radius:10px;padding:6px}
+.seatmap .entry{text-align:center;font-size:12px;color:var(--ink-3)}
+.tabledetail{margin-top:10px}
+
+/* ---- 抽獎舞台 ---- */
+.lottery{position:fixed;inset:0;z-index:60;display:flex;flex-direction:column;color:#fff;
+  background:radial-gradient(90% 70% at 50% 0%,#24559F 0%,#0B1B33 60%,#060F1C 100%)}
+.lottery .lhead{display:flex;flex-wrap:wrap;gap:10px;align-items:center;padding:calc(12px + env(safe-area-inset-top,0px)) 16px 12px;
+  background:rgba(0,0,0,.25);-webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px)}
+.lottery select{width:auto;min-width:220px;flex:1;background:rgba(255,255,255,.1);border-color:rgba(255,255,255,.25);color:#fff}
+.lottery select option{color:#0B1B33}
+.lottery .inline{color:rgba(255,255,255,.85)}
+.lottery .lbody{flex:1;display:grid;grid-template-columns:1fr 300px;min-height:0}
+.lottery .lmain{display:grid;align-content:center;justify-items:center;gap:14px;padding:24px;position:relative;overflow:hidden}
+.lottery .lmain::before{content:"";position:absolute;width:120%;aspect-ratio:1;top:-55%;border-radius:50%;
+  background:radial-gradient(circle,rgba(253,243,109,.22),transparent 62%);pointer-events:none}
+.lottery .lstage{margin:0;letter-spacing:.3em;color:var(--yellow);font-weight:700;font-size:15px}
+.lottery .lname{font-size:clamp(44px,11vw,120px);font-weight:800;letter-spacing:.04em;text-align:center;line-height:1.1;
+  text-shadow:0 10px 60px rgba(253,243,109,.35)}
+.lottery .lname.pop{animation:winner .5s var(--tap)}
+@keyframes winner{0%{transform:scale(.7);opacity:.4}60%{transform:scale(1.08)}100%{transform:scale(1)}}
+.lottery .lsub{margin:0;color:rgba(255,255,255,.8);font-size:18px}
+.lottery .lbtn{background:var(--yellow);color:#0B1B33;font-size:20px;padding:16px 42px;box-shadow:0 14px 40px -14px rgba(253,243,109,.8)}
+.lottery .lside{border-left:1px solid rgba(255,255,255,.14);padding:16px;overflow:auto;background:rgba(0,0,0,.18)}
+.lottery .lrow{display:flex;justify-content:space-between;gap:8px;padding:8px 0;border-bottom:1px solid rgba(255,255,255,.1);font-size:15px}
+.lottery .lside .tiny{color:rgba(255,255,255,.6)}
+@media (max-width:700px){.lottery .lbody{grid-template-columns:1fr}.lottery .lside{display:none}}
+.confetti{position:fixed;inset:0;z-index:70;pointer-events:none}

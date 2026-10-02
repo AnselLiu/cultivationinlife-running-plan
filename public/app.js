@@ -1,14 +1,17 @@
 // 耕跑團 PWA — 畫面：團練列表、活動詳情與報名、我的課表、課表教練、幹部的新增活動與公告產生器
 import * as P from './plan.js';
+import * as Party from './party.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const view = $('#view');
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const api = async (path, opt = {}) => {
+  const method = opt.method || 'GET';
   const res = await fetch(`/api${path}`, {
-    method: opt.method || 'GET',
-    headers: opt.body ? { 'content-type': 'application/json' } : undefined,
-    body: opt.body ? JSON.stringify(opt.body) : undefined,
+    method,
+    // 寫入類請求一律帶 JSON（伺服器用這個擋 CSRF）
+    headers: method === 'GET' ? undefined : { 'content-type': 'application/json' },
+    body: method === 'GET' ? undefined : JSON.stringify(opt.body ?? {}),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || `錯誤 ${res.status}`);
@@ -167,6 +170,7 @@ async function eventView(id) {
   const closed = !ev.signup_open || ev.status !== 'open' || (ev.deadline && new Date(ev.deadline) < new Date());
   const party = ev.kind === 'party';
   const myTicket = party ? (await api('/my/tickets')).tickets.find((t) => t.event_id === ev.id) : null;
+  const seatData = party ? (await api(`/events/${id}/seats`)).seats : [];
   const plan = ev.week_no ? await P.weekPlan(ev.week_no, me.dist, me.grp) : null;
   const myDay = plan?.find((d) => new RegExp(dayPattern(ev.date)).test(d.d));
 
@@ -196,11 +200,12 @@ async function eventView(id) {
         <h3>報名 ${ins.length}${ev.capacity ? ` / ${ev.capacity}` : ''} 人</h3>
         ${mine && mine.status !== 'cancel'
           ? '<button class="btn danger sm" id="cancel">取消報名</button>'
-          : closed ? '<span class="tiny">未開放報名</span>' : (party ? '' : '<button class="btn sm" id="signup">我要報名</button>')}
+          : closed ? '<span class="tiny">未開放報名</span>' : (party ? '' : `<button class="btn sm" id="signup">我要報名</button>`)}
       </div>
       ${party && !closed ? partySignupForm(ev, mine && mine.status !== 'cancel') : ''}
       ${party && (ev.fee || ev.guest_max || ev.meal_options) ? `<p class="tiny">${ev.fee ? `費用 ${ev.fee} 元　` : ''}${ev.guest_max ? `可攜伴 ${ev.guest_max} 位　` : ''}${ev.meal_options ? `餐點：${esc(ev.meal_options)}` : ''}</p>` : ''}
       ${mine?.status === 'wait' ? '<p class="notice" style="margin:0">你在候補名單，有人取消會自動遞補並通知你。</p>' : ''}
+      ${!party && !mine && !closed ? `<p class="tiny">會用你的基本資料報名：${esc(me.name)}${me.nickname ? `（${esc(me.nickname)}）` : ''}・${me.dist === 'hm' ? '半馬' : '全馬'} ${esc(me.grp)} 組。要改去「我的」。</p>` : ''}
       <div class="roster">
         ${ins.map((s) => `<div class="r">${avatar(s)}<span>${esc(s.name)}${s.note ? ` <span class="tiny">${esc(s.note)}</span>` : ''}</span><span class="pill">${esc(s.grp)}</span></div>`).join('')
           || '<p class="muted" style="margin:0">還沒有人報名，當第一個吧。</p>'}
@@ -209,6 +214,7 @@ async function eventView(id) {
       ${admin ? '<button class="btn ghost sm" id="copyRoster">複製名單</button>' : ''}
     </section>
 
+    ${party ? Party.seatSection(seatData) : ''}
     ${party && allow('checkin') ? await partyAdmin(ev) : ''}
 
     ${admin ? `<section class="card">
@@ -263,8 +269,40 @@ async function eventView(id) {
   };
   $('#prizeForm')?.addEventListener('submit', async (e) => {
     e.preventDefault();
-    try { await api(`/events/${id}/prizes`, { method: 'POST', body: { name: e.target.name.value, qty: Number(e.target.qty.value) } }); toast('已新增獎項'); render(); }
+    const f = e.target;
+    try {
+      await api(`/events/${id}/prizes`, { method: 'POST', body: {
+        name: f.name.value, qty: Number(f.qty.value), stage: f.stage.value, sponsor: f.sponsor.value } });
+      toast('已新增獎項'); render();
+    } catch (err) { toast(err.message); }
+  });
+  $('#bulkPrize')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    try { const r = await api(`/events/${id}/prizes`, { method: 'POST', body: { text: e.target.text.value } }); toast(`已匯入 ${r.added} 項`); render(); }
     catch (err) { toast(err.message); }
+  });
+  if (party && $('#seatCard')) {
+    const seated = seatData.filter((s) => s.table_no);
+    const show = (t) => { $('#tableDetail').innerHTML = Party.tableList(seated, Number(t));
+      for (const b of document.querySelectorAll('.tbl')) b.classList.toggle('on', b.dataset.table === String(t));
+      $('#tableDetail').scrollIntoView({ behavior: 'smooth', block: 'nearest' }); };
+    const bindTables = () => { for (const b of document.querySelectorAll('[data-table]')) b.onclick = () => show(b.dataset.table); };
+    $('#seatResult').innerHTML = Party.seatResults(seated, '');
+    $('#seatQ').oninput = (e) => { $('#seatResult').innerHTML = Party.seatResults(seated, e.target.value); bindTables(); };
+    $('#tabSearch').onclick = () => { $('#seatSearch').hidden = false; $('#seatMapWrap').hidden = true;
+      $('#tabSearch').setAttribute('aria-pressed', 'true'); $('#tabMap').setAttribute('aria-pressed', 'false'); };
+    $('#tabMap').onclick = () => { $('#seatSearch').hidden = true; $('#seatMapWrap').hidden = false;
+      $('#tabMap').setAttribute('aria-pressed', 'true'); $('#tabSearch').setAttribute('aria-pressed', 'false'); bindTables(); };
+    bindTables();
+  }
+  $('#openStage')?.addEventListener('click', () => lotteryStage(ev));
+  $('#seatForm')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const f = e.target;
+    try {
+      const r = await api(`/events/${id}/seats/assign`, { method: 'POST', body: { seats: [{ code: f.code.value, table_no: Number(f.table_no.value), note: f.note.value }] } });
+      toast(r.updated ? '已排桌' : '找不到這個代碼'); f.code.value = ''; render();
+    } catch (err) { toast(err.message); }
   });
   $('#copyRoster')?.addEventListener('click', async () => copy((await api(`/events/${id}/roster`)).text));
   $('#del')?.addEventListener('click', async () => {
@@ -412,7 +450,7 @@ function partySignupForm(ev, mine) {
   const meals = (ev.meal_options || '').split(',').map((s) => s.trim()).filter(Boolean);
   return `<form id="pform">
     ${ev.guest_max ? `<label>攜伴人數<select name="guests">${Array.from({ length: ev.guest_max + 1 }, (_, i) => `<option value="${i}">${i ? `${i} 位` : '不帶'}</option>`).join('')}</select></label>` : ''}
-    ${meals.length ? `<label>餐點<select name="meal">${meals.map((m) => `<option>${esc(m)}</option>`).join('')}</select></label>` : ''}
+    ${meals.length ? `<label>餐點<select name="meal">${meals.map((m) => `<option ${m === me.meal_pref ? 'selected' : ''}>${esc(m)}</option>`).join('')}</select></label>` : ''}
     <label>備註（選填）<input name="note" maxlength="40" placeholder="素食、座位需求…"></label>
     <button class="btn block">${mine ? '更新報名' : '我要報名'}</button>
   </form>`;
@@ -435,6 +473,16 @@ async function partyAdmin(ev) {
   const won = new Map(draws.map((d) => [d.member_id, d]));
   return `
     <section class="card">
+      <div class="row spread"><h3>排桌</h3><span class="tiny">輸入入場代碼指定桌次</span></div>
+      <form id="seatForm" class="row" style="gap:8px">
+        <input name="code" placeholder="入場代碼" style="flex:1;min-width:120px;text-transform:uppercase" autocomplete="off">
+        <input name="table_no" type="number" min="1" max="31" placeholder="桌次" style="width:84px">
+        <input name="note" placeholder="備註" style="width:110px">
+        <button class="btn sm">儲存</button>
+      </form>
+    </section>
+
+    <section class="card">
       <div class="row spread"><h3>報到台</h3><span class="tiny">${checkedIn}/${tickets.length} 人報到・含攜伴 ${people} 位</span></div>
       <form id="cform" class="row" style="gap:8px">
         <input name="code" placeholder="輸入入場代碼" style="flex:1;min-width:150px;text-transform:uppercase" autocomplete="off">
@@ -443,7 +491,7 @@ async function partyAdmin(ev) {
       </form>
       <div class="roster">${tickets.map((t) => `
         <div class="r">${avatar(t)}
-          <span>${esc(t.name)}<span class="tiny" style="display:block">${esc(t.code)}${t.guests ? `・攜伴 ${t.guests}` : ''}${t.meal ? `・${esc(t.meal)}` : ''}${t.seat ? `・${esc(t.seat)}` : ''}</span></span>
+          <span>${esc(t.name)}${t.nickname ? ` <span class="tiny">${esc(t.nickname)}</span>` : ''}<span class="tiny" style="display:block">${esc(t.code)}${t.table_no ? `・第 ${t.table_no} 桌` : ''}${t.guests ? `・攜伴 ${t.guests}` : ''}${t.meal ? `・${esc(t.meal)}` : ''}</span></span>
           ${t.checked_in_at ? '<span class="pill solid">到</span>' : `<button class="btn ghost sm" data-ci="${esc(t.code)}">報到</button>`}
         </div>`).join('') || '<p class="muted">還沒有人報名。</p>'}</div>
     </section>
@@ -453,18 +501,86 @@ async function partyAdmin(ev) {
       ${prizes.map((p) => {
         const w = draws.filter((d) => d.prize_id === p.id);
         return `<div class="prize">
-          <div class="row spread"><b>${esc(p.name)}</b><span class="tiny">${w.length}/${p.qty}${p.sponsor ? `・${esc(p.sponsor)}` : ''}</span></div>
+          <div class="row spread"><b>${p.stage ? `<span class="pill">${esc(p.stage)}</span> ` : ''}${esc(p.name)}</b><span class="tiny">${w.length}/${p.qty}${p.sponsor ? `・${esc(p.sponsor)}` : ''}</span></div>
           ${w.length ? `<div class="winners">${w.map((d) => `<span class="pill solid">${esc(d.name)}</span>`).join('')}</div>` : ''}
           ${w.length < p.qty ? `<button class="btn sm" data-draw="${p.id}">抽出 1 位</button>` : '<span class="tiny">已抽完</span>'}
         </div>`;
       }).join('') || '<p class="muted" style="margin:0">還沒有獎項。</p>'}
       <form id="prizeForm" class="row" style="gap:8px">
         <input name="name" placeholder="獎項名稱" style="flex:1;min-width:140px">
-        <input name="qty" type="number" min="1" max="200" value="1" style="width:76px">
+        <select name="stage" style="width:110px"><option value="">階段</option>${Party.STAGES.map((s) => `<option>${s}</option>`).join('')}</select>
+        <input name="qty" type="number" min="1" max="400" value="1" style="width:70px">
+        <input name="sponsor" placeholder="贊助商" style="width:110px">
         <button class="btn ghost sm">新增獎項</button>
       </form>
+      <details><summary class="tiny" style="cursor:pointer">批次匯入獎項（每行一項：[階段] 名稱 x數量 / 贊助商）</summary>
+        <form id="bulkPrize" style="margin-top:8px">
+          <textarea name="text" placeholder="[暖身] NAUTICA 毛巾 x30&#10;[R1] 按摩槍 x2 / 贊助商&#10;[R2(大)] JBL Pace 運動耳機 x1 / JBL"></textarea>
+          <button class="btn ghost sm">匯入</button>
+        </form></details>
+      <button class="btn block" id="openStage">進入抽獎舞台</button>
       <p class="tiny">預設從「已報到」的人裡面抽，而且一個人只會中一次。</p>
     </section>`;
+}
+
+
+// 全螢幕抽獎舞台（投影用）
+async function lotteryStage(ev) {
+  const { prizes, draws } = await api(`/events/${ev.id}/prizes`);
+  if (!prizes.length) return toast('請先新增獎項');
+  const host = document.createElement('div');
+  host.innerHTML = Party.stageHTML(prizes, draws);
+  document.body.append(host);
+  document.body.style.overflow = 'hidden';
+  const close = () => { host.remove(); document.body.style.overflow = ''; render(); };
+  $('#lClose').onclick = close;
+  $('#lCsv').onclick = () => open(`/api/events/${ev.id}/draws.csv`, '_blank');
+  $('#lPrize').onchange = () => {
+    const p = prizes.find((x) => x.id === $('#lPrize').value);
+    $('#lStage').textContent = p?.stage ? `[${p.stage}]` : '抽獎';
+    $('#lName').textContent = '準備開始'; $('#lSub').textContent = p ? p.name : '';
+  };
+  $('#lPrize').onchange();
+  $('#lGo').onclick = async () => {
+    const btn = $('#lGo'); btn.disabled = true;
+    try {
+      const prizeId = $('#lPrize').value;
+      const r = await api(`/events/${ev.id}/draw`, { method: 'POST', body: {
+        prize_id: prizeId, count: 1,
+        onlyCheckedIn: $('#lCheckedIn').checked, allowRepeat: $('#lRepeat').checked } });
+      const w = r.winners[0];
+      const { tickets } = await api(`/events/${ev.id}/tickets`).catch(() => ({ tickets: [] }));
+      await Party.spin($('#lName'), tickets.map((t) => t.name), w.name);
+      $('#lSub').textContent = `${r.prize}${w.nickname ? `・${w.nickname}` : ''}${w.table_no ? `・第 ${w.table_no} 桌` : ''}`;
+      $('#lLog').insertAdjacentHTML('afterbegin', `<div class="lrow"><span>${esc(w.name)}</span><span class="tiny">${esc(r.prize)}</span></div>`);
+      confetti();
+    } catch (e) { toast(e.message); }
+    btn.disabled = false;
+  };
+}
+// 彩帶：用 canvas 畫，不載外部套件
+function confetti() {
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  const c = document.createElement('canvas');
+  c.className = 'confetti'; c.width = innerWidth; c.height = innerHeight;
+  document.body.append(c);
+  const ctx = c.getContext('2d');
+  const colors = ['#FDF36D', '#B9D04C', '#1C4698', '#E8691A', '#fff'];
+  const bits = Array.from({ length: 120 }, () => ({
+    x: Math.random() * c.width, y: -20 - Math.random() * c.height * .5,
+    r: 4 + Math.random() * 6, vy: 2 + Math.random() * 4, vx: -1 + Math.random() * 2,
+    rot: Math.random() * 6, vr: -.2 + Math.random() * .4, color: colors[Math.floor(Math.random() * colors.length)],
+  }));
+  let t = 0;
+  (function frame() {
+    ctx.clearRect(0, 0, c.width, c.height);
+    for (const b of bits) {
+      b.x += b.vx; b.y += b.vy; b.rot += b.vr;
+      ctx.save(); ctx.translate(b.x, b.y); ctx.rotate(b.rot);
+      ctx.fillStyle = b.color; ctx.fillRect(-b.r / 2, -b.r / 2, b.r, b.r * 1.6); ctx.restore();
+    }
+    if (++t < 180) requestAnimationFrame(frame); else c.remove();
+  })();
 }
 
 // ---------- 我的課表 ----------
@@ -585,13 +701,26 @@ async function meView() {
           <div class="tiny">${esc(me.title || me.roleName || ROLE_NAME[me.role] || '團員')}${me.line ? '・LINE 登入' : ''}</div></div>
       </div>
       <form id="mf">
-        <label>姓名<input name="name" value="${esc(me.name)}" maxlength="20"></label>
+        <div class="grid2">
+          <label>姓名<input name="name" value="${esc(me.name)}" maxlength="20"></label>
+          <label>暱稱<input name="nickname" value="${esc(me.nickname || '')}" maxlength="20" placeholder="團裡怎麼叫你"></label>
+        </div>
         <div class="grid2">
           <label>項目<select name="dist"><option value="fm" ${me.dist === 'fm' ? 'selected' : ''}>全馬</option><option value="hm" ${me.dist === 'hm' ? 'selected' : ''}>半馬</option></select></label>
           <label>組別<select name="grp"></select></label>
         </div>
+        <label>所屬跑團<input name="club" list="clubs" value="${esc(me.club || '')}" maxlength="30" placeholder="耕跑團">
+          <datalist id="clubs">${Party.CLUBS.map((c) => `<option value="${esc(c)}">`).join('')}</datalist></label>
+        <div class="grid2">
+          <label>餐點偏好<select name="meal_pref">
+            <option value="" ${!me.meal_pref ? 'selected' : ''}>未指定</option>
+            <option ${me.meal_pref === '葷食' ? 'selected' : ''}>葷食</option>
+            <option ${me.meal_pref === '素食' ? 'selected' : ''}>素食</option></select></label>
+          <label>電話（選填）<input name="phone" value="${esc(me.phone || '')}" maxlength="20" inputmode="tel" placeholder="餐會聯絡用"></label>
+        </div>
         <button class="btn block">儲存</button>
       </form>
+      <p class="tiny">填好之後，報名任何活動都會直接帶入這些資料，不用再填一次。</p>
     </section>
 
     <section class="card">
@@ -630,7 +759,12 @@ async function meView() {
   f.dist.onchange = sync; sync();
   f.onsubmit = async (e) => {
     e.preventDefault();
-    try { me = (await api('/me', { method: 'PUT', body: { name: f.name.value, dist: f.dist.value, grp: f.grp.value } })).member; toast('已儲存'); }
+    try {
+      me = (await api('/me', { method: 'PUT', body: {
+        name: f.name.value, dist: f.dist.value, grp: f.grp.value,
+        nickname: f.nickname.value, club: f.club.value, meal_pref: f.meal_pref.value, phone: f.phone.value } })).member;
+      toast('已儲存');
+    }
     catch (err) { toast(err.message); }
   };
   $('#af')?.addEventListener('submit', async (e) => {

@@ -55,6 +55,7 @@ const can = (m, p) => !!m && PERMS[norm(m.role)].includes(p);
 const pub = (m) => ({
   id: m.id, name: m.name, dist: m.dist, grp: m.grp, role: norm(m.role), roleName: ROLES[norm(m.role)],
   title: m.title || null, avatar: m.avatar || null, line: !!m.line_id,
+  nickname: m.nickname || '', club: m.club || '', meal_pref: m.meal_pref || '', phone: m.phone || '',
   can: PERMS[norm(m.role)],
 });
 
@@ -180,10 +181,10 @@ async function doSignup(env, ev, member, b) {
   }
   if (ev.kind === 'party' && status === 'in') {
     const guests = Math.max(0, Math.min(Number(b.guests) || 0, ev.guest_max || 0));
-    const meal = str(b.meal, 20);
-    await env.DB.prepare(`INSERT INTO tickets (id, event_id, member_id, code, guests, meal) VALUES (?, ?, ?, ?, ?, ?)
-      ON CONFLICT(event_id, member_id) DO UPDATE SET guests = excluded.guests, meal = excluded.meal`)
-      .bind(rid(8), ev.id, member.id, ticketCode(), guests, meal).run();
+    const meal = str(b.meal, 20) || member.meal_pref || '';
+    await env.DB.prepare(`INSERT INTO tickets (id, event_id, member_id, code, guests, meal, note) VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(event_id, member_id) DO UPDATE SET guests = excluded.guests, meal = excluded.meal, note = excluded.note`)
+      .bind(rid(8), ev.id, member.id, ticketCode(), guests, meal, str(b.note, 60)).run();
   }
   return json({ ok: true, status });
 }
@@ -253,8 +254,10 @@ async function api(req, env, path, method) {
     const dist = b.dist === 'hm' ? 'hm' : 'fm';
     const grp = (str(b.grp, 2) || member.grp).toUpperCase();
     if (!validGroup(dist, grp)) return fail(400, '組別不正確');
-    await env.DB.prepare('UPDATE members SET name = ?, dist = ?, grp = ? WHERE id = ?').bind(name, dist, grp, member.id).run();
-    return json({ member: { ...pub(member), name, dist, grp } });
+    const extra = { nickname: str(b.nickname, 20), club: str(b.club, 30), meal_pref: str(b.meal_pref, 10), phone: str(b.phone, 20) };
+    await env.DB.prepare('UPDATE members SET name = ?, dist = ?, grp = ?, nickname = ?, club = ?, meal_pref = ?, phone = ? WHERE id = ?')
+      .bind(name, dist, grp, extra.nickname, extra.club, extra.meal_pref, extra.phone, member.id).run();
+    return json({ member: pub({ ...member, name, dist, grp, ...extra }) });
   }
 
   if (path === '/api/logout' && method === 'POST') {
@@ -388,18 +391,46 @@ async function api(req, env, path, method) {
   if (path === '/api/my/tickets' && method === 'GET') {
     const g = need(); if (g) return g;
     const rows = (await env.DB.prepare(
-      `SELECT t.code, t.guests, t.meal, t.seat, t.checked_in_at, e.id AS event_id, e.title, e.date, e.gather_time, e.place
+      `SELECT t.code, t.guests, t.meal, t.seat, t.table_no, t.checked_in_at, e.id AS event_id, e.title, e.date, e.gather_time, e.place
        FROM tickets t JOIN events e ON e.id = t.event_id WHERE t.member_id = ? AND e.date >= ? ORDER BY e.date`)
       .bind(member.id, today()).all()).results;
     return json({ tickets: rows });
   }
+  const ms = path.match(/^\/api\/events\/([\w-]{1,32})\/seats$/);
+  if (ms && method === 'GET') {
+    const g = need(); if (g) return g;
+    const rows = (await env.DB.prepare(
+      `SELECT t.table_no, t.note, t.guests, m.name, m.nickname, m.club
+       FROM tickets t JOIN members m ON m.id = t.member_id
+       WHERE t.event_id = ? ORDER BY t.table_no, m.name`).bind(ms[1]).all()).results;
+    return json({ seats: rows, tables: [...new Set(rows.map((r) => r.table_no).filter(Boolean))].sort((a, b) => a - b) });
+  }
+  // 幹部：排桌（單筆或整批）
+  const msa = path.match(/^\/api\/events\/([\w-]{1,32})\/seats\/assign$/);
+  if (msa && method === 'POST') {
+    const g = need(); if (g) return g;
+    if (!can(member, 'checkin')) return fail(403, '只有幹部可以排桌');
+    const b = await body();
+    const list = Array.isArray(b.seats) ? b.seats.slice(0, 400) : [];
+    if (!list.length) return fail(400, '沒有要排的資料');
+    let n = 0;
+    for (const row of list) {
+      const code = str(row.code, 8).toUpperCase(), tableNo = Number(row.table_no) || null;
+      if (!code) continue;
+      const r = await env.DB.prepare('UPDATE tickets SET table_no = ?, note = COALESCE(?, note) WHERE event_id = ? AND code = ?')
+        .bind(tableNo, str(row.note, 60) || null, msa[1], code).run();
+      n += r.meta.changes;
+    }
+    return json({ updated: n });
+  }
+
   const mt = path.match(/^\/api\/events\/([\w-]{1,32})\/tickets$/);
   if (mt && method === 'GET') {
     const g = need(); if (g) return g;
     if (!can(member, 'checkin')) return fail(403, '只有幹部可以看報到名單');
     const rows = (await env.DB.prepare(
-      `SELECT t.code, t.guests, t.meal, t.seat, t.checked_in_at, m.id AS member_id, m.name, m.avatar
-       FROM tickets t JOIN members m ON m.id = t.member_id WHERE t.event_id = ? ORDER BY m.name`).bind(mt[1]).all()).results;
+      `SELECT t.code, t.guests, t.meal, t.seat, t.table_no, t.note, t.checked_in_at, m.id AS member_id, m.name, m.nickname, m.club, m.avatar
+       FROM tickets t JOIN members m ON m.id = t.member_id WHERE t.event_id = ? ORDER BY t.table_no, m.name`).bind(mt[1]).all()).results;
     return json({ tickets: rows, checkedIn: rows.filter((r) => r.checked_in_at).length,
       people: rows.reduce((n, r) => n + 1 + (r.guests || 0), 0) });
   }
@@ -421,17 +452,35 @@ async function api(req, env, path, method) {
     const g = need(); if (g) return g;
     const eid = mp[1];
     if (method === 'GET') {
-      const prizes = (await env.DB.prepare('SELECT id, name, qty, sponsor, sort FROM prizes WHERE event_id = ? ORDER BY sort, rowid').bind(eid).all()).results;
+      const prizes = (await env.DB.prepare('SELECT id, name, qty, sponsor, sort, stage, note FROM prizes WHERE event_id = ? ORDER BY sort, rowid').bind(eid).all()).results;
       const draws = (await env.DB.prepare('SELECT id, prize_id, member_id, name, created_at FROM draws WHERE event_id = ? ORDER BY created_at').bind(eid).all()).results;
       return json({ prizes, draws });
     }
     if (method === 'POST') {
       if (!can(member, 'lottery')) return fail(403, '只有幹部可以設定獎項');
-      const b = await body(), name = str(b.name, 60);
+      const b = await body();
+      // 批次匯入：{ list: [{stage,name,qty,sponsor,note}, …] }，或貼上文字（每行「[階段] 獎項 x數量 / 贊助」）
+      if (Array.isArray(b.list) || typeof b.text === 'string') {
+        const rows = Array.isArray(b.list) ? b.list : b.text.split('\n').map((line) => {
+          const t = line.trim(); if (!t) return null;
+          const stage = t.match(/^\[([^\]]{1,12})\]\s*/)?.[1] || '';
+          const rest = t.replace(/^\[[^\]]{1,12}\]\s*/, '');
+          const [main, sponsor = ''] = rest.split('/');
+          const qty = Number(main.match(/[x×]\s*(\d+)\s*$/i)?.[1]) || 1;
+          return { stage, name: main.replace(/[x×]\s*\d+\s*$/i, '').trim(), qty, sponsor: sponsor.trim() };
+        }).filter((r) => r && r.name);
+        if (!rows.length) return fail(400, '沒有可匯入的獎項');
+        let sort = (await env.DB.prepare('SELECT COALESCE(MAX(sort), 0) AS m FROM prizes WHERE event_id = ?').bind(eid).first()).m;
+        await env.DB.batch(rows.slice(0, 200).map((r) => env.DB.prepare(
+          'INSERT INTO prizes (id, event_id, name, qty, sponsor, sort, stage, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+          .bind(rid(8), eid, str(r.name, 60), Math.max(1, Math.min(Number(r.qty) || 1, 400)), str(r.sponsor, 40), ++sort, str(r.stage, 12), str(r.note, 80))));
+        return json({ added: Math.min(rows.length, 200) });
+      }
+      const name = str(b.name, 60);
       if (!name) return fail(400, '請填獎項名稱');
       const id = rid(8);
-      await env.DB.prepare('INSERT INTO prizes (id, event_id, name, qty, sponsor, sort) VALUES (?, ?, ?, ?, ?, ?)')
-        .bind(id, eid, name, Math.max(1, Math.min(Number(b.qty) || 1, 200)), str(b.sponsor, 40), Number(b.sort) || 0).run();
+      await env.DB.prepare('INSERT INTO prizes (id, event_id, name, qty, sponsor, sort, stage, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+        .bind(id, eid, name, Math.max(1, Math.min(Number(b.qty) || 1, 400)), str(b.sponsor, 40), Number(b.sort) || 0, str(b.stage, 12), str(b.note, 80)).run();
       return json({ id });
     }
   }
@@ -447,11 +496,12 @@ async function api(req, env, path, method) {
     if (want <= 0) return fail(400, '這個獎項已經抽完了');
     // 候選：已報到的人優先；沒有人報到就用已報名的人。預設一個人只中一次
     const onlyCheckedIn = b.onlyCheckedIn !== false;
+    const allowRepeat = b.allowRepeat === true;
     const pool = (await env.DB.prepare(
-      `SELECT t.member_id, m.name FROM tickets t JOIN members m ON m.id = t.member_id
+      `SELECT t.member_id, m.name, m.nickname, t.table_no FROM tickets t JOIN members m ON m.id = t.member_id
        WHERE t.event_id = ? ${onlyCheckedIn ? 'AND t.checked_in_at IS NOT NULL' : ''}
-         AND t.member_id NOT IN (SELECT member_id FROM draws WHERE event_id = ? AND member_id IS NOT NULL)`)
-      .bind(eid, eid).all()).results;
+         ${allowRepeat ? '' : 'AND t.member_id NOT IN (SELECT member_id FROM draws WHERE event_id = ? AND member_id IS NOT NULL)'}`)
+      .bind(...(allowRepeat ? [eid] : [eid, eid])).all()).results;
     if (!pool.length) return fail(400, onlyCheckedIn ? '還沒有人報到，或大家都中過獎了' : '沒有可抽的名單');
     const winners = [];
     for (let i = 0; i < want && pool.length; i++) {
@@ -461,8 +511,24 @@ async function api(req, env, path, method) {
     await env.DB.batch(winners.map((w) => env.DB.prepare('INSERT INTO draws (id, event_id, prize_id, member_id, name) VALUES (?, ?, ?, ?, ?)')
       .bind(rid(8), eid, prizeId, w.member_id, w.name)));
     await notify(env, winners.map((w) => w.member_id), 'lottery', { title: `恭喜中獎：${prize.name}`, body: '請到台前領獎', url: `/#/e/${eid}` });
-    return json({ winners: winners.map((w) => w.name), prize: prize.name });
+    return json({ winners: winners.map((w) => ({ name: w.name, nickname: w.nickname || '', table_no: w.table_no || null })), prize: prize.name, stage: prize.stage || '' });
   }
+  const mdc = path.match(/^\/api\/events\/([\w-]{1,32})\/draws\.csv$/);
+  if (mdc && method === 'GET') {
+    const g = need(); if (g) return g;
+    if (!can(member, 'lottery')) return fail(403, '只有幹部可以匯出');
+    const rows = (await env.DB.prepare(
+      `SELECT d.created_at, p.stage, p.name AS prize, p.sponsor, d.name, m.nickname, t.table_no
+       FROM draws d JOIN prizes p ON p.id = d.prize_id
+       LEFT JOIN members m ON m.id = d.member_id
+       LEFT JOIN tickets t ON t.member_id = d.member_id AND t.event_id = d.event_id
+       WHERE d.event_id = ? ORDER BY d.created_at`).bind(mdc[1]).all()).results;
+    const esc2 = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+    const csv = ['時間,階段,獎項,贊助,得獎人,暱稱,桌次',
+      ...rows.map((r) => [r.created_at, r.stage, r.prize, r.sponsor, r.name, r.nickname, r.table_no].map(esc2).join(','))].join('\n');
+    return new Response(`\ufeff${csv}`, { headers: { 'content-type': 'text/csv; charset=utf-8', 'content-disposition': 'attachment; filename="draws.csv"' } });
+  }
+
   const mdd = path.match(/^\/api\/draws\/([\w-]{1,32})$/);
   if (mdd && method === 'DELETE') {
     const g = need(); if (g) return g;
