@@ -8,13 +8,13 @@
   --navy:#0B1B33; --blue:#1C4698; --yellow:#FDF36D; --lime:#B9D04C;
 
   --bg:#E9EEF7; --bg-2:#DFE6F3;
-  --ink:#0B1B33; --ink-2:#4E5C74; --ink-3:#8590A3;
+  --ink:#0B1B33; --ink-2:#4E5C74; --ink-3:#5A6578;
   /* 玻璃材質：底色要夠透，背景才看得到；邊緣用亮線模擬折射 */
   --glass:rgba(255,255,255,.52); --glass-2:rgba(255,255,255,.66); --glass-hi:rgba(255,255,255,.88);
   --rim:rgba(255,255,255,.9); --rim-2:rgba(255,255,255,.25);
   --stroke:rgba(11,27,51,.08);
   --accent:#1C4698; --on-accent:#fff; --accent-soft:rgba(28,70,152,.10);
-  --easy:#4F7A12; --q:#B64400; --long:#1C4698; --rest:#55637A; --str:#6D45B0; --race:#C41E3A;
+  --easy:#456B0F; --q:#B64400; --long:#1C4698; --rest:#55637A; --str:#6D45B0; --race:#C41E3A;
   --warn:#6B5B00; --warn-bg:rgba(253,243,109,.5);
   --shadow-s:0 1px 1px rgba(11,27,51,.04), 0 2px 8px -2px rgba(11,27,51,.10);
   --shadow-l:0 1px 2px rgba(11,27,51,.05), 0 12px 32px -14px rgba(11,27,51,.30);
@@ -25,7 +25,7 @@
 }
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
   --bg:#050C18; --bg-2:#02060D;
-  --ink:#EEF3FB; --ink-2:#A3B1C8; --ink-3:#6E7F9A;
+  --ink:#EEF3FB; --ink-2:#A3B1C8; --ink-3:#8F9EB6;
   --glass:rgba(20,38,64,.46); --glass-2:rgba(24,44,72,.62); --glass-hi:rgba(34,58,92,.85);
   --rim:rgba(255,255,255,.22); --rim-2:rgba(255,255,255,.04);
   --stroke:rgba(255,255,255,.08);
@@ -36,7 +36,7 @@
 }}
 :root[data-theme="dark"]{
   --bg:#050C18; --bg-2:#02060D;
-  --ink:#EEF3FB; --ink-2:#A3B1C8; --ink-3:#6E7F9A;
+  --ink:#EEF3FB; --ink-2:#A3B1C8; --ink-3:#8F9EB6;
   --glass:rgba(20,38,64,.46); --glass-2:rgba(24,44,72,.62); --glass-hi:rgba(34,58,92,.85);
   --rim:rgba(255,255,255,.22); --rim-2:rgba(255,255,255,.04);
   --stroke:rgba(255,255,255,.08);
@@ -515,7 +515,7 @@ fieldset.group legend{font-size:13px;font-weight:700;color:var(--ink-2);padding:
 .kpi{gap:2px;padding:14px 16px}
 .kpi b{font-size:30px;font-weight:700;letter-spacing:-.02em;line-height:1.1}
 .statgrid{display:grid;gap:12px}
-@media (min-width:860px){.statgrid{grid-template-columns:1fr 1fr}}
+@media (min-width:860px){.statgrid{grid-template-columns:1fr 1fr;align-items:start}}
 .bars{display:grid;gap:9px}
 .bar-row{display:grid;grid-template-columns:minmax(64px,30%) 1fr auto;gap:10px;align-items:center;font-size:14px}
 .bar-row .k{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -653,3 +653,20 @@ h3 svg.ic{width:18px;height:18px}
 .seg button{flex:1 0 auto}
 .mfabar{display:flex;align-items:center;gap:12px;justify-content:space-between;border:1.5px solid color-mix(in srgb,var(--accent) 45%,transparent)}
 .r > svg.ic{width:22px;height:22px;color:var(--accent);justify-self:center}
+
+/* 首頁「今天」卡片 */
+.todaycard{gap:10px;border:1px solid color-mix(in srgb,var(--accent) 22%,transparent)}
+.todaycard h2{font-size:24px;line-height:1.3;letter-spacing:-.01em}
+.todaycard h2.quality{color:var(--q)}.todaycard h2.long{color:var(--long)}.todaycard h2.easy{color:var(--easy)}.todaycard h2.strength{color:var(--str)}.todaycard h2.race{color:var(--race)}
+.todayev{display:grid;grid-template-columns:24px 1fr auto;gap:10px;align-items:center;padding:10px 12px;border-radius:var(--r-m);background:var(--accent-soft);color:var(--ink)}
+.todayev svg.ic{color:var(--accent);width:22px;height:22px}
+
+/* 進場動畫：卡片依序淡入（減少動態效果時不播） */
+@media (prefers-reduced-motion:no-preference){
+  #view > *{animation:cardin .42s var(--tap) both}
+  #view > *:nth-child(2){animation-delay:.03s}#view > *:nth-child(3){animation-delay:.06s}#view > *:nth-child(4){animation-delay:.09s}
+  #view > *:nth-child(5){animation-delay:.12s}#view > *:nth-child(n+6){animation-delay:.15s}
+  @keyframes cardin{from{opacity:0;transform:translateY(10px)}}
+}
+.updbar{width:max-content;max-width:calc(100vw - 24px)}
+.updbar span{white-space:nowrap}

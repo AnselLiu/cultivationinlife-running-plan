@@ -35,7 +35,8 @@ const HM = ['A', 'B', 'C', 'D', 'E'];
 const KINDS = ['track', 'core', 'long', 'race', 'party', 'survey', 'other'];
 const isDate = (s) => /^\d{4}-\d{2}-\d{2}$/.test(s);
 const isTime = (s) => !s || /^\d{2}:\d{2}$/.test(s);
-const today = () => new Date().toISOString().slice(0, 10);
+// 「今天」一律用台北時間（UTC 會在台灣早上 8 點前還停在前一天）
+const today = () => new Date(Date.now() + 8 * 3600e3).toISOString().slice(0, 10);
 const url0 = (req) => new URL(req.url);
 // 隱私權政策版本：預設值；實際版本由後台「系統設定」決定，改版後使用者下次開啟會被要求重新同意
 const PRIVACY_VERSION = '2026-10-03.1';
@@ -483,6 +484,14 @@ async function api(req, env, path, method) {
       'content-disposition': 'inline; filename="cil-run.ics"' } });
   }
 
+  // 前端錯誤回報：只寫進 Workers Logs，不存資料庫；有次數限制
+  if (path === '/api/client-error' && method === 'POST') {
+    if (await limited(env, `cerr:${await ipHash(req, env)}`, 20, 600)) return json({ ok: true });
+    const b = await body();
+    console.error('client-error', JSON.stringify({ message: str(b.message, 300), source: str(b.source, 120), line: Number(b.line) || 0,
+      page: str(b.page, 60), device: deviceLabel(req.headers.get('user-agent') || ''), member: member ? 'yes' : 'no' }));
+    return json({ ok: true });
+  }
   // 分團小圖：網址帶版本號，可以長期快取
   const mic = path.match(/^\/api\/teams\/([\w-]{1,16})\/icon$/);
   if (mic && method === 'GET') {

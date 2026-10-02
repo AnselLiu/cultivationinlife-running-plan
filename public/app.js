@@ -31,6 +31,15 @@ function offlineBar(on) {
   document.body.append(el);
 }
 addEventListener('online', () => { offlineBar(false); flushLogQueue(); });
+// 前端錯誤回報：送到伺服器記錄（Cloudflare 後台 Logs 看得到），每個頁面最多回報 5 次，不含個資
+let errSent = 0;
+const reportError = (message, source, line) => {
+  if (errSent++ >= 5) return;
+  fetch('/api/client-error', { method: 'POST', keepalive: true, headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ message: String(message || '').slice(0, 300), source: String(source || '').replace(location.origin, '').slice(0, 120), line: line || 0, page: location.hash.split('?')[0].slice(0, 60) }) }).catch(() => {});
+};
+addEventListener('error', (e) => reportError(e.message, e.filename, e.lineno));
+addEventListener('unhandledrejection', (e) => { const r = e.reason; if (r?.name === 'AbortError' || /Transition was aborted/.test(r?.message || '')) return; reportError(`unhandled: ${r?.message || r}`, '', 0); });
 addEventListener('offline', () => offlineBar(true));
 // 登出、刪除帳號：清掉這台裝置暫存的個人資料
 const clearDeviceData = () => {
@@ -332,7 +341,7 @@ async function listView() {
   if (pick && pick !== 'assoc' && !mine.some((t) => t.id === pick)) pick = '';
   const events = !pick ? all : pick === 'assoc' ? all.filter((e) => !e.team_id) : all.filter((e) => e.team_id === pick);
   const next = events[0];
-  const strip = await weekStrip();
+  const [strip, today] = await Promise.all([weekStrip(), todayCard(all)]);
   const chips = mine.length ? `<div class="chipbar" role="tablist" aria-label="依分團篩選">
       <button role="tab" data-tf="" aria-selected="${!pick}">全部</button>
       <button role="tab" data-tf="assoc" aria-selected="${pick === 'assoc'}">全協會</button>
@@ -350,12 +359,13 @@ async function listView() {
     ${visits >= 2 ? installCard('home') : ''}
     ${chips}
     <div class="dash"><div style="display:grid;gap:14px">
+    ${today}
     ${strip}
     ${next ? heroCard(next) : `<section class="card hero"><span class="sweep"></span><h2>還沒有排定的團練</h2><p class="muted" style="margin:0">幹部發布後，這裡就會出現，也會推播通知你。</p></section>`}
     </div><div style="display:grid;gap:12px">
     <div class="section-h">
       <h2>接下來</h2>
-      ${anyTeamAllow('event') ? `<a class="btn ghost sm" href="#/new${pick && pick !== 'assoc' ? `?team=${esc(pick)}` : ''}">＋ 新增活動</a>` : ''}
+      ${anyTeamAllow('event') ? `<a class="btn ghost sm iconbtn" href="#/new${pick && pick !== 'assoc' ? `?team=${esc(pick)}` : ''}">${IC.plus}新增活動</a>` : ''}
     </div>
     <div class="evgrid">${events.slice(1).map(eventCard).join('') || `<div class="card">${emptyState('calendar', '目前沒有其他排定的活動')}</div>`}</div>
     <a class="tiny center" href="#/past" style="padding:4px">看過去的團練 ›</a>
@@ -364,6 +374,24 @@ async function listView() {
   bindInstall();
   bindStepup();
   flushLogQueue();
+}
+// 今天：我這組今天的課表、今天報名的活動、一鍵記錄（打開 App 第一眼就知道今天要做什麼）
+async function todayCard(events) {
+  const t = ymd(new Date()), w = P.currentWeek();
+  const plan = (await P.weekPlan(w, me.dist, me.grp)) || [];
+  const idx = plan.findIndex((d) => dayDates(w, d.d).includes(t));
+  const day = idx >= 0 ? plan[idx] : null;
+  const { logs } = await api(`/logs?from=${t}&to=${t}`).catch(() => ({ logs: [] }));
+  const done = logs.find((l) => l.status !== 'skip') || logs[0];
+  const todays = events.filter((e) => e.date === t && (e.mine === 'in' || e.mine === 'wait'));
+  if (!day && !todays.length && !done) return '';
+  return `<section class="card todaycard">
+    <div class="row spread"><span class="tiny">今天・${me.dist === 'hm' ? '半馬' : '全馬'} ${esc(me.grp)} 組</span>${done ? `<span class="pill solid">${LOG_ICON[done.status]}${LOG_STATUS_NAME[done.status]}</span>` : ''}</div>
+    ${day ? (day.kind === 'rest' ? '<h2>今天休息</h2><p class="muted" style="margin:0">好好睡、補充水分，明天再練。</p>'
+      : `<h2 class="${day.kind}">${esc(fixText(day.t))}</h2><p class="muted" style="margin:0">${P.KIND_LABEL[day.kind]}${P.paceHint(day.t, me.dist, me.grp) ? `・${P.paceHint(day.t, me.dist, me.grp)}` : ''}</p>`) : ''}
+    ${todays.map((e) => `<a class="todayev" href="#/e/${e.id}">${IC.calendar}<span><b>${esc(e.title)}</b><span class="tiny" style="display:block">${e.gather_time ? `${e.gather_time} 集合` : ''}${e.place ? `・${esc(e.place)}` : ''}${e.mine === 'wait' ? '・候補中' : ''}</span></span><span class="tiny">›</span></a>`).join('')}
+    ${day && day.kind !== 'rest' ? (done ? `<a class="btn ghost sm" href="#/log?id=${done.id}">看今天的紀錄</a>` : `<a class="btn block iconbtn" href="#/log?w=${w}&i=${idx}" style="justify-content:center">${IC.check}練完了，記錄一下</a>`) : ''}
+  </section>`;
 }
 // 本週在整季的哪裡：階段、週次進度與三堂重點課
 async function weekStrip() {
@@ -388,7 +416,7 @@ function heroCard(e) {
     <span class="sweep" aria-hidden="true"></span>
     <div class="row spread">
       <span class="row" style="gap:6px"><span class="pill" style="background:rgba(255,255,255,.22);color:#fff">${KIND_NAME[e.kind]}</span>${e.team_id && teamOf(e.team_id) ? `<span class="pill" style="background:rgba(255,255,255,.14);color:#fff">${esc(teamOf(e.team_id).name)}</span>` : ''}</span>
-      <span class="tiny">${days === 0 ? '就是今天' : days === 1 ? '明天' : `${days} 天後`}</span>
+      <span class="tiny">${days <= 0 ? '就是今天' : days === 1 ? '明天' : `${days} 天後`}</span>
     </div>
     <h2>${esc(e.title)}</h2>
     <p class="muted" style="margin:0">${dstr(e.date)}${e.gather_time ? ` ${e.gather_time} 集合` : ''}${e.place ? `・${esc(e.place)}` : ''}</p>
@@ -826,7 +854,7 @@ function bindOverview() {
 const memberCache = new Map();
 function memberFilterForm(id, { membership = true } = {}) {
   return `<form id="${id}" class="filters">
-    <input name="q" placeholder="姓名、暱稱、跑團或會員編號" autocomplete="off" enterkeyhint="search">
+    <input name="q" placeholder="姓名、暱稱、跑團或會員編號" aria-label="搜尋跑友" autocomplete="off" enterkeyhint="search">
     <div class="grid3">
       ${membership ? `<select name="membership" aria-label="會籍"><option value="">所有會籍</option>${Object.entries(MEMBERSHIP_NAME).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select>` : ''}
       <select name="role" aria-label="身分"><option value="">所有身分</option><option value="officers">所有幹部</option>${Object.entries(ROLE_NAME).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select>
@@ -1146,7 +1174,7 @@ function settingsPanel() {
       <button class="btn ghost sm" style="grid-column:1/-1">儲存預設倒數</button>
     </form>
     <form id="scForm2" class="row" style="gap:8px">
-      <input name="url" placeholder="Apple 健康捷徑 iCloud 連結" value="${esc(cfg.shortcut || '')}" style="flex:1;min-width:200px">
+      <input name="url" placeholder="Apple 健康捷徑 iCloud 連結" aria-label="Apple 健康捷徑 iCloud 連結" value="${esc(cfg.shortcut || '')}" style="flex:1;min-width:200px">
       <button class="btn ghost sm">儲存捷徑</button>
     </form>
   </section>`;
@@ -1231,12 +1259,12 @@ function inviteCard(ev) {
   return `<section class="card" id="invCard">
     <div class="row spread"><h3 class="row" style="gap:6px">${IC.lock}受邀名單</h3><span class="tiny"><b class="num">${ev.invite?.count || 0}</b> 人受邀</span></div>
     <p class="tiny" style="margin:0">只有名單上的人看得到這個活動。移出名單會一併取消他的報名與入場券。</p>
-    <form id="invSearch" class="row" style="gap:8px"><input name="q" placeholder="搜尋姓名或暱稱邀請" style="flex:1" autocomplete="off"><button class="btn ghost sm">搜尋</button></form>
+    <form id="invSearch" class="row" style="gap:8px" role="search"><input name="q" placeholder="搜尋姓名或暱稱邀請" aria-label="搜尋要邀請的人" style="flex:1" autocomplete="off"><button class="btn ghost sm">搜尋</button></form>
     <div class="roster" id="invHits"></div>
     ${teamOpts.length ? `<form id="invTeam" class="row" style="gap:8px"><select name="team" style="flex:1">${teamOpts.map((t) => `<option value="${esc(t.id)}">整個${esc(t.name)}（${t.count} 人）</option>`).join('')}</select><button class="btn ghost sm">邀請整團</button></form>` : ''}
     <div class="invlink">
       <div class="row spread"><b>邀請連結</b><label class="switch" style="border:0;padding:0"><input type="checkbox" id="invLinkOn" ${link ? 'checked' : ''}><i></i></label></div>
-      ${link ? `<div class="row" style="gap:8px"><input readonly value="${esc(link)}" style="flex:1;font-size:13px" onfocus="this.select()">
+      ${link ? `<div class="row" style="gap:8px"><input readonly value="${esc(link)}" aria-label="邀請連結" style="flex:1;font-size:13px" onfocus="this.select()">
         <button class="btn sm" id="invCopy">複製</button></div>
         <div class="row" style="gap:8px"><button class="btn ghost sm" id="invRotate">重新產生（舊連結失效）</button></div>`
         : '<p class="tiny" style="margin:0">打開後會產生一條連結，拿到連結的人登入就自動加入受邀名單；不想再讓人加入時關掉即可。</p>'}
@@ -2031,12 +2059,14 @@ async function reportView(range = '12w') {
       <div class="card kpi"><span class="tiny">總時間</span><b class="num">${S.fmtDuration(totalSec) || '0:00'}</b></div>
       <div class="card kpi"><span class="tiny">平均配速</span><b class="num">${totalKm && totalSec ? S.fmtPace(totalKm * 1000, totalSec) : '—'}</b></div>
     </section>
+    <div class="statgrid">
     <section class="card"><h3>每週里程</h3>${barChart(kmItems, { unit: ' km' })}</section>
     ${done.length ? `<section class="card"><h3>課表完成率</h3>${barChart(done, { unit: '%', h: 120, max: 100 })}<p class="tiny" style="margin:0">完成算 1 堂、部分完成算半堂，休息日不算。</p></section>` : ''}
     <section class="card"><h3>自覺強度（RPE）</h3>${lineChart(rpeItems)}<p class="tiny" style="margin:0">一般來說，輕鬆跑 3–4、質量課 7–8；長期都在 7 以上要注意恢復。</p></section>
     <section class="card"><h3>個人最佳</h3><div class="prs">${prs.map((x) => `<div class="pr"><span class="tiny">${x.name}</span>
       ${x.best ? `<b class="num">${S.fmtDuration(Math.round(x.best.seconds / x.best.km * ({ '5K': 5, '10K': 10, 半馬: 21.0975, 全馬: 42.195 }[x.name])))}</b><span class="tiny">${esc(x.best.date)}・${S.fmtPace(x.best.km * 1000, x.best.seconds)}</span>` : '<b class="num muted">—</b>'}</div>`).join('')}</div>
       <p class="tiny" style="margin:0">依距離接近的紀錄換算，比賽成績以官方為準。</p></section>
+    </div>
     <section class="card"><h3>每月</h3><div class="mtable">${Object.entries(months).sort().reverse().map(([k, m]) => `<div><span>${k.replace('-', ' 年 ')} 月</span><span class="num">${m.km.toFixed(1)} km</span><span class="num">${m.n} 次</span><span class="num">${S.fmtDuration(m.sec) || '—'}</span></div>`).join('') || '<p class="muted" style="margin:0">這段期間沒有紀錄</p>'}</div></section>`;
   for (const b of document.querySelectorAll('[data-range]')) b.onclick = () => reportView(b.dataset.range);
 }
@@ -2278,7 +2308,7 @@ async function statsView(id) {
     </section>`).join('')}
     ${survey ? '' : `<section class="card">
       <div class="row spread"><h3>名單</h3><span class="tiny">${st.people.length} 人</span></div>
-      <input id="pq" placeholder="搜尋姓名" autocomplete="off">
+      <input id="pq" placeholder="搜尋姓名" aria-label="搜尋名單" autocomplete="off">
       <div class="roster" id="plist">${st.people.map((x) => `<div class="r prow" data-name="${esc(`${x.name} ${x.nickname || ''}`)}">
         <label class="attend" title="出席"><input type="checkbox" data-att="${esc(x.member_id)}" ${x.attended ? 'checked' : ''} ${st.kind === 'party' ? 'disabled' : ''}><i>${IC.check}</i></label>
         <span><b>${esc(x.name)}</b>${x.nickname ? ` <span class="tiny">${esc(x.nickname)}</span>` : ''}<span class="tiny" style="display:block">${x.status === 'wait' ? '候補・' : ''}${x.guests ? `攜伴 ${x.guests}・` : ''}${esc(x.paid_note || '')}</span></span>
@@ -2363,12 +2393,14 @@ async function teamView(tid, q = '') {
       ${allow('settings') ? '' : '<p class="tiny" style="margin:0">名稱、顏色與加入方式由行政人員設定。</p>'}
     </section>` : ''}
 
+    <div class="statgrid">
     ${!t.private || inTeam || manage ? `<section class="card" id="boardCard"><div class="row spread"><h3>公告欄</h3>
       ${teamAllow(tid, 'event') ? '<button class="btn ghost sm" id="newPost">發公告</button>' : ''}</div><div id="board" class="board"><p class="muted" style="margin:0">載入中…</p></div></section>` : ''}
     ${inTeam || manage ? `<section class="card"><div class="row spread"><h3>里程排行榜</h3>
       <div class="seg" style="width:auto"><button data-lb="week" aria-pressed="true">本週</button><button data-lb="month" aria-pressed="false">本月</button></div></div>
       <div id="lb" class="roster"></div>
       <p class="tiny" style="margin:0" id="lbHint"></p></section>` : ''}
+    </div>
     <a class="card" href="#/plan/new?team=${esc(tid)}" ${teamAllow(tid, 'appoint') ? '' : 'hidden'}><div class="row spread"><h3>發布分團課表</h3><span class="tiny">團長 ›</span></div></a>
     ${manage ? teamRosterCard(t, roster, q) : ''}`;
   loadBoard(t); if (inTeam || manage) loadBoardRank(tid, 'week');
@@ -2456,13 +2488,13 @@ function teamRosterCard(t, r, q) {
     ${pending.length ? `<section class="card"><h3>待審核（${pending.length}）</h3><div class="roster">${pending.map(row).join('')}</div></section>` : ''}
     <section class="card">
       <div class="row spread"><h3>分團名冊</h3><span class="tiny">${q ? `符合 ${r.total} 人` : `${r.total} 人`}</span></div>
-      <form id="tmq" class="row" style="gap:8px"><input name="q" value="${esc(q)}" placeholder="搜尋姓名或暱稱" style="flex:1" autocomplete="off"><button class="btn ghost sm">搜尋</button></form>
+      <form id="tmq" class="row" style="gap:8px" role="search"><input name="q" value="${esc(q)}" placeholder="搜尋姓名或暱稱" aria-label="搜尋分團名冊" style="flex:1" autocomplete="off"><button class="btn ghost sm">搜尋</button></form>
       <div class="roster" id="tmList">${active.map(row).join('') || '<p class="muted" style="margin:0">沒有符合的團員</p>'}</div>
       ${r.next ? '<button class="btn ghost sm block" id="tmMore">載入更多</button>' : ''}
       <p class="tiny" style="margin:0">團長由理事長指派；團長可以指派分團幹部。分團名冊不顯示電話。</p>
     </section>
     ${r.can.add ? `<section class="card"><h3>把跑友加進${esc(t.name)}</h3>
-      <form id="tmAdd" class="row" style="gap:8px"><input name="q" placeholder="輸入姓名搜尋（至少 1 個字）" style="flex:1" autocomplete="off"><button class="btn ghost sm">搜尋</button></form>
+      <form id="tmAdd" class="row" style="gap:8px" role="search"><input name="q" placeholder="輸入姓名搜尋（至少 1 個字）" aria-label="搜尋要加入的跑友" style="flex:1" autocomplete="off"><button class="btn ghost sm">搜尋</button></form>
       <div id="tmAddList" class="roster"></div></section>` : ''}`;
 }
 function bindTeamRoster(t, r, q) {
@@ -2600,7 +2632,7 @@ async function meView() {
       <summary class="tiny" style="cursor:pointer">系統初始設定（只限第一位理事長）</summary>
       <p class="tiny">幹部身分一律由理事長在後台指派。這裡只用在系統剛建立、還沒有理事長的時候。</p>
       <form id="af" class="row" style="gap:8px">
-        <input name="code" placeholder="初始設定碼" style="flex:1;min-width:140px" autocomplete="off">
+        <input name="code" placeholder="初始設定碼" aria-label="初始設定碼" style="flex:1;min-width:140px" autocomplete="off">
         <button class="btn sm">設定</button>
       </form>
     </details>`}
@@ -2738,7 +2770,7 @@ async function meView() {
       cfg.calendarOn = true;
       const webcal = url.replace(/^https:/, 'webcal:');
       $('#calBox').outerHTML = `<div style="display:grid;gap:8px"><a class="btn block" href="${esc(webcal)}">加到 iPhone／Mac 行事曆</a>
-        <div class="row" style="gap:8px"><input readonly value="${esc(url)}" style="flex:1;font-size:13px" onfocus="this.select()"><button class="btn ghost sm" id="calCopy">複製</button></div>
+        <div class="row" style="gap:8px"><input readonly value="${esc(url)}" aria-label="行事曆訂閱網址" style="flex:1;font-size:13px" onfocus="this.select()"><button class="btn ghost sm" id="calCopy">複製</button></div>
         <p class="tiny" style="margin:0">Google 行事曆：電腦版左側「其他日曆 → 透過網址新增」，貼上這個網址。這個網址只會顯示這一次。</p></div>`;
       $('#calCopy').onclick = () => copy(url);
     } catch (e) { toast(e.message); }

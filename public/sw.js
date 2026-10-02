@@ -4,7 +4,7 @@
 //   更新：新版本裝好後先等待，畫面提示「有新版本」，使用者按下才切換（不會在填表單時突然重整）
 //   推播：顯示通知並更新主畫面圖示的未讀數字
 //   分享：從其他 App 分享 GPX／TCX 檔過來，暫存後打開數據照
-const CACHE = 'cil-v15';
+const CACHE = 'cil-v16';
 const API_CACHE = 'cil-api';
 const SHARE_CACHE = 'cil-share';
 const SHELL = ['/', '/index.html', '/style.css', '/app.js', '/plan.js', '/data/season-2026.json', '/manifest.webmanifest', '/coach.html', '/party.js', '/qr.js', '/vendor/qrcode.js', '/studio.js',
