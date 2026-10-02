@@ -169,6 +169,8 @@ async function lineCallback(req, env, url) {
   const clear = `${LINE_STATE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`;
   const back = (msg) => new Response(null, { status: 302, headers: { location: `/#/?err=${encodeURIComponent(msg)}`, 'set-cookie': clear } });
   const [want, nonce] = ((req.headers.get('cookie') || '').match(new RegExp(`${LINE_STATE}=([\\w]+\\.[\\w]+)`))?.[1] || '').split('.');
+  // 使用者在 LINE 授權頁按了取消
+  if (url.searchParams.get('error')) return back(url.searchParams.get('error') === 'access_denied' ? '你取消了 LINE 登入' : 'LINE 登入失敗，請再試一次');
   const code = url.searchParams.get('code'), state = url.searchParams.get('state');
   if (!code || !state || !want || state !== want) return back('登入逾時，請再試一次');
   const form = new URLSearchParams({ grant_type: 'authorization_code', code, redirect_uri: redirectUri(url), client_id: env.LINE_CHANNEL_ID, client_secret: env.LINE_CHANNEL_SECRET });
