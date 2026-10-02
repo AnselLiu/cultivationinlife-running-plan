@@ -37,12 +37,31 @@ const ROLE_NAME = { chair: '理事長', director: '理事', supervisor: '監事'
 const allow = (p) => !!me?.can?.includes(p);
 const WD = ['日', '一', '二', '三', '四', '五', '六'];
 const d2 = (d) => new Date(`${d}T00:00:00`);
+const dayLabel = (s) => s.replace('週五或週六', '週五／六').replace('週一或週三', '週一／三').replace('週二或週三', '週二／三').replace('週四或週五', '週四／五').replace('週三或週五', '週三／五').replace('週三或週六', '週三／六');
+const fixText = (s) => s.replace(/\brep(\d)/g, 'rpe$1');
 const dstr = (d) => { const x = d2(d); return `${x.getMonth() + 1}/${x.getDate()}（${WD[x.getDay()]}）`; };
 const avatar = (s) => s.avatar
   ? `<img class="av" src="${esc(s.avatar)}" alt="" loading="lazy" referrerpolicy="no-referrer">`
   : `<span class="av" aria-hidden="true">${esc((s.name || '?').slice(0, 1))}</span>`;
 
 let me = null, cfg = {};
+
+// 大標題：頁面最上方的 Large Title；捲出畫面後，標題縮到頂部列中間（iOS 行為）
+function largeTitle(title, sub = '', action = '') {
+  $('#ctitle').textContent = title;
+  return `<header class="lt"><div><h1>${esc(title)}</h1>${sub ? `<p>${sub}</p>` : ''}</div>${action}</header>`;
+}
+const ICONS = {
+  calendar: '<svg viewBox="0 0 24 24"><rect x="3.2" y="4.8" width="17.6" height="15.4" rx="3.4"/><path d="M3.4 9.6h17.2M8 3.2v3.4M16 3.2v3.4"/></svg>',
+  bell: '<svg viewBox="0 0 24 24"><path d="M6.4 9.6a5.6 5.6 0 0 1 11.2 0c0 4 1.4 5.4 1.4 5.4H5s1.4-1.4 1.4-5.4Z"/><path d="M10.2 18.4a2 2 0 0 0 3.6 0"/></svg>',
+  runner: '<svg viewBox="0 0 24 24"><circle cx="14" cy="4.6" r="1.6"/><path d="M6 20.5l2.6-5 2.4-1.6-1-4.2 3.6-1.4 1.8 3.2 3.4 1"/><path d="M11 13.9l1.3 3.2 3.4 2.6"/></svg>',
+};
+const emptyState = (icon, text) => `<div class="empty">${ICONS[icon] || ''}<span>${text}</span></div>`;
+function avatarStack(peek, total) {
+  if (!total) return '<span class="stack empty">還沒有人</span>';
+  return `<span class="stack">${peek.slice(0, 3).map((p) => avatar({ name: p.n, avatar: p.a })).join('')}${total > 3 ? `<span class="more">+${total - 3}</span>` : ''}</span>`;
+}
+const todayLabel = () => { const d = new Date(); return `${d.getMonth() + 1}月${d.getDate()}日 星期${WD[d.getDay()]}`; };
 
 // ---------- 登入 ----------
 function loginView() {
@@ -96,15 +115,20 @@ function loginView() {
 async function listView() {
   const { events } = await api('/events');
   const next = events[0];
+  const strip = await weekStrip();
   view.innerHTML = `
-    ${await weekStrip()}
-    ${next ? heroCard(next) : `<section class="card hero"><h2>還沒有排定的團練</h2><p class="muted" style="margin:0">幹部發布後，這裡就會出現，也會推播通知你。</p></section>`}
-    ${events.length > 1 || allow('event') ? `<div class="row spread" style="padding:4px 4px 0">
-      <h3>接下來</h3>
+    ${largeTitle('團練', todayLabel())}
+    <div class="dash"><div style="display:grid;gap:14px">
+    ${strip}
+    ${next ? heroCard(next) : `<section class="card hero"><span class="sweep"></span><h2>還沒有排定的團練</h2><p class="muted" style="margin:0">幹部發布後，這裡就會出現，也會推播通知你。</p></section>`}
+    </div><div style="display:grid;gap:12px">
+    <div class="section-h">
+      <h2>接下來</h2>
       ${allow('event') ? '<a class="btn ghost sm" href="#/new">＋ 新增活動</a>' : ''}
-    </div>` : ''}
-    <div class="evgrid">${events.slice(1).map(eventCard).join('')}</div>
-    <a class="tiny center" href="#/past" style="padding:4px">看過去的團練 ›</a>`;
+    </div>
+    <div class="evgrid">${events.slice(1).map(eventCard).join('') || `<div class="card">${emptyState('calendar', '目前沒有其他排定的活動')}</div>`}</div>
+    <a class="tiny center" href="#/past" style="padding:4px">看過去的團練 ›</a>
+    </div></div>`;
 }
 // 本週在整季的哪裡：階段、週次進度與三堂重點課
 async function weekStrip() {
@@ -118,7 +142,7 @@ async function weekStrip() {
     </div>
     <div class="dots" aria-hidden="true">${Array.from({ length: 21 }, (_, i) =>
       `<i class="${i + 1 < w ? 'done' : i + 1 === w ? 'now' : ''}"></i>`).join('')}</div>
-    <div class="keys">${key.map((d) => `<div><span class="d">${esc(d.d)}</span><span>${esc(d.t)} <span class="hint">${P.paceHint(d.t, me.dist, me.grp)}</span></span></div>`).join('')
+    <div class="keys">${key.map((d) => `<div><span class="d">${esc(dayLabel(d.d))}</span><span>${esc(fixText(d.t))} <span class="hint">${P.paceHint(d.t, me.dist, me.grp)}</span></span></div>`).join('')
       || '<div class="muted">這週沒有重點課。</div>'}</div>
   </section>`;
 }
@@ -126,15 +150,15 @@ async function weekStrip() {
 function heroCard(e) {
   const d = d2(e.date), days = Math.round((d - new Date().setHours(0, 0, 0, 0)) / 864e5);
   return `<a class="card hero" href="#/e/${e.id}">
+    <span class="sweep" aria-hidden="true"></span>
     <div class="row spread">
       <span class="pill" style="background:rgba(255,255,255,.22);color:#fff">${KIND_NAME[e.kind]}</span>
       <span class="tiny">${days === 0 ? '就是今天' : days === 1 ? '明天' : `${days} 天後`}</span>
     </div>
-    <span class="big num" aria-hidden="true">${days === 0 ? '今日' : days}</span>
     <h2>${esc(e.title)}</h2>
     <p class="muted" style="margin:0">${dstr(e.date)}${e.gather_time ? ` ${e.gather_time} 集合` : ''}${e.place ? `・${esc(e.place)}` : ''}</p>
     <div class="row spread">
-      <span class="tiny">${e.signed} 人報名${e.waiting ? `・候補 ${e.waiting}` : ''}${e.capacity ? `　上限 ${e.capacity}` : ''}</span>
+      <span class="row" style="gap:8px">${avatarStack(e.peek || [], e.signed)}<span class="tiny">${e.signed} 人報名${e.waiting ? `・候補 ${e.waiting}` : ''}${e.capacity ? `／${e.capacity}` : ''}</span></span>
       ${e.mine === 'in' ? '<span class="pill" style="background:#fff;color:#1C4698">已報名</span>'
         : e.mine === 'wait' ? '<span class="pill wait">候補中</span>' : '<span class="pill" style="background:rgba(255,255,255,.22);color:#fff">去報名 ›</span>'}
     </div>
@@ -142,23 +166,23 @@ function heroCard(e) {
 }
 function eventCard(e) {
   const pct = e.capacity ? Math.min(100, Math.round(e.signed / e.capacity * 100)) : 0;
-  return `<a class="card" href="#/e/${e.id}">
+  return `<a class="card lit" href="#/e/${e.id}">
     <div class="ev">
       <span class="cal"><u>${d2(e.date).getMonth() + 1}月</u><b class="num">${e.date.slice(8)}</b><span>週${WD[d2(e.date).getDay()]}</span></span>
       <span class="body">
-        <span class="row" style="gap:6px"><span class="pill ${e.kind}">${KIND_NAME[e.kind]}</span>
+        <span class="row" style="gap:6px"><span class="pill ${e.kind}">${KIND_NAME[e.kind] || '活動'}</span>
           ${e.mine === 'in' ? '<span class="pill solid">已報名</span>' : e.mine === 'wait' ? '<span class="pill wait">候補</span>' : ''}</span>
         <span class="t">${esc(e.title)}</span>
         <span class="tiny">${e.gather_time ? `${e.gather_time}　` : ''}${esc(e.place || '')}</span>
         ${e.capacity ? `<span class="bar"><i style="width:${pct}%"></i></span>` : ''}
       </span>
-      <span class="count">${e.signed ? `<b class="num">${e.signed}</b>${e.capacity ? `/${e.capacity}` : ' 人'}` : '<b class="num">—</b>還沒人'}</span>
+      <span style="display:grid;justify-items:end;gap:4px">${avatarStack(e.peek || [], e.signed)}${e.signed ? `<span class="tiny num">${e.signed}${e.capacity ? `/${e.capacity}` : ' 人'}</span>` : ''}</span>
     </div>
   </a>`;
 }
 async function pastView() {
   const { events } = await api('/events?past=1');
-  view.innerHTML = `<h2 style="padding:4px">過去的團練</h2>${events.map(eventCard).join('') || '<div class="card"><p class="muted">沒有紀錄。</p></div>'}`;
+  view.innerHTML = `${largeTitle('過去的團練')}${events.map(eventCard).join('') || `<div class="card">${emptyState('calendar', '沒有紀錄')}</div>`}`;
 }
 
 // ---------- 活動詳情 ----------
@@ -351,10 +375,7 @@ async function notificationsView() {
   const { items } = await api('/notifications');
   const ICON = { event: '📣', plan: '📅', signup: '✅', lottery: '🎁', system: '⚙️' };
   view.innerHTML = `
-    <div class="row spread" style="padding:4px">
-      <h2>通知</h2>
-      ${items.some((x) => !x.read_at) ? '<button class="btn ghost sm" id="readAll">全部標為已讀</button>' : ''}
-    </div>
+    ${largeTitle('通知', '', items.some((x) => !x.read_at) ? '<button class="btn ghost sm" id="readAll">全部已讀</button>' : '')}
     ${items.length ? items.map((n) => `
       <a class="card tight notif ${n.read_at ? '' : 'unread'}" href="${esc(n.url || '#/')}">
         <div class="row" style="gap:12px;align-items:flex-start">
@@ -365,7 +386,7 @@ async function notificationsView() {
             <span class="tiny">${ago(n.created_at)}</span>
           </span>
         </div>
-      </a>`).join('') : '<div class="card"><p class="muted">還沒有通知。</p></div>'}`;
+      </a>`).join('') : `<div class="card">${emptyState('bell', '還沒有通知，新活動與課表發布時會出現在這裡')}</div>`}`;
   $('#readAll')?.addEventListener('click', async () => { await api('/notifications/read', { method: 'POST' }); bell(); render(); });
   // 進到通知頁就當作看過了
   if (items.some((x) => !x.read_at)) setTimeout(async () => { await api('/notifications/read', { method: 'POST' }); bell(); }, 1200);
@@ -426,7 +447,7 @@ async function adminView(tab = 'members') {
   const list = data.members;
   const counts = list.reduce((m, x) => { m[x.membership] = (m[x.membership] || 0) + 1; return m; }, {});
   view.innerHTML = `
-    <div class="row spread" style="padding:4px"><h2>管理後台</h2><span class="tiny">${list.length} 位跑友</span></div>
+    ${largeTitle('管理後台', `${list.length} 位跑友`)}
     <div class="seg">${tabs.map(([k, v]) => `<button data-tab="${k}" aria-pressed="${tab === k}">${v}</button>`).join('')}</div>
     ${tab === 'members' ? membersPanel(list, counts)
       : tab === 'roles' ? rolesPanel(data)
@@ -583,7 +604,7 @@ async function rosterView() {
   for (const m of members) (byRole[m.role] ||= []).push(m);
   const order = ['chair', 'director', 'supervisor', 'staff', 'coach', 'member'];
   view.innerHTML = `
-    <div class="row spread" style="padding:4px"><h2>團員名冊</h2><span class="tiny">${members.length} 人</span></div>
+    ${largeTitle('團員名冊', `${members.length} 位跑友`)}
     ${order.filter((r) => byRole[r]?.length).map((r) => `
       <section class="card">
         <div class="row spread"><h3>${ROLE_NAME[r]}</h3><span class="tiny">${byRole[r].length} 人</span></div>
@@ -825,6 +846,7 @@ async function planView(n) {
   const s = P.weekStart(week), e = new Date(s.getTime() + 6 * 864e5);
   const isNow = week === P.currentWeek();
   view.innerHTML = `
+    ${largeTitle('課表', `${me.dist === 'hm' ? '半馬' : '全馬'} ${me.grp} 組・${me.dist === 'hm' ? 'HMP' : 'MP'} ${P.fmtPace(P.goalPace(me.dist, me.grp))}/km`)}
     <section class="card">
       <div class="row spread">
         <div>
@@ -835,10 +857,6 @@ async function planView(n) {
           <button class="btn ghost sm" id="prev" ${week === 1 ? 'disabled' : ''} aria-label="上一週">‹</button>
           <button class="btn ghost sm" id="next" ${week === 21 ? 'disabled' : ''} aria-label="下一週">›</button>
         </div>
-      </div>
-      <div class="row spread">
-        <span class="muted">${me.dist === 'hm' ? '半馬' : '全馬'} ${me.grp} 組</span>
-        <span class="pill">${me.dist === 'hm' ? 'HMP' : 'MP'} ${P.fmtPace(P.goalPace(me.dist, me.grp))}/km</span>
       </div>
       ${posts.length ? '' : info?.src?.startsWith('推估') ? '<p class="notice" style="margin:0">這週教練還沒發課表，內容是照 2025 臺北馬同一階段推估的，實際以教練公告為準。</p>' : ''}
       ${allow('plan') ? '<a class="btn ghost sm" href="#/plan/new">發布這週課表</a>' : ''}
@@ -851,8 +869,8 @@ async function planView(n) {
     </section>`).join('')}
     <div class="days">${days ? days.map((d) => `
       <div class="day ${d.kind}">
-        <span class="dl"><span>${esc(d.d)}</span><span class="k">${P.KIND_LABEL[d.kind]}</span></span>
-        <span class="t">${esc(d.t)} <span class="hint">${P.paceHint(d.t, me.dist, me.grp)}</span></span>
+        <span class="dl"><span>${esc(dayLabel(d.d))}</span><span class="k">${P.KIND_LABEL[d.kind]}</span></span>
+        <span class="t">${esc(fixText(d.t))} <span class="hint">${P.paceHint(d.t, me.dist, me.grp)}</span></span>
       </div>`).join('') : '<div class="card"><p class="muted">這週沒有課表資料。</p></div>'}</div>`;
   for (const b of document.querySelectorAll('[data-delplan]')) b.onclick = async () => {
     if (!confirm('確定刪除這則課表？')) return;
@@ -865,6 +883,7 @@ async function planView(n) {
 // ---------- 課表教練（原本的 GitHub Pages 頁面）----------
 function coachView() {
   view.innerHTML = `
+    ${largeTitle('教練')}
     <section class="card hero">
       <h2>課表教練</h2>
       <p class="muted" style="margin:0">回答幾個選擇題，產生整季逐週課表、配速換算、年齡分級與比賽補給試算。</p>
@@ -931,6 +950,7 @@ async function meView() {
   const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone;
   const welcome = new URLSearchParams(location.hash.split('?')[1] || '').get('welcome');
   view.innerHTML = `
+    ${largeTitle('我的')}
     ${welcome ? '<div class="notice">歡迎加入！先確認你的項目和組別，課表和報名都會照這個設定。</div>' : ''}
     <section class="card">
       <div class="row">
@@ -1089,6 +1109,13 @@ async function render() {
   }
   if (!me) return loginView();
   bell();
+  $('#ctitle').textContent = '';
+  const skel = setTimeout(() => { view.innerHTML = '<div class="skel" aria-label="載入中"><i></i><i></i><i></i></div>'; }, 150);
+  try { await route(hash); } finally { clearTimeout(skel); }
+  $('.top').classList.toggle('titled', false);
+}
+
+async function route(hash) {
   try {
     if (hash === '/') return await listView();
     if (hash === '/past') return await pastView();
@@ -1109,9 +1136,9 @@ async function render() {
     if (ev) return await eventView(ev[1]);
     const pl = hash.match(/^\/plan(?:\/(\d+))?$/);
     if (pl) return await planView(pl[1] ? Number(pl[1]) : 0);
-    view.innerHTML = '<div class="card"><p class="muted">找不到這個頁面。</p></div>';
+    view.innerHTML = `<div class="card">${emptyState('runner', '找不到這個頁面')}</div>`;
   } catch (e) {
-    view.innerHTML = `<div class="card"><p class="muted">${esc(e.message)}</p></div>`;
+    view.innerHTML = `<div class="card">${emptyState('runner', esc(e.message))}</div>`;
   }
 }
 
@@ -1130,6 +1157,27 @@ $('#theme').onclick = () => {
   theme.set(dark ? 'light' : 'dark');
   applyTheme();
 };
+
+// 捲動：超過一點點就讓頂部列變成玻璃；大標題捲出畫面就把標題顯示在頂部列；往下捲時分頁列縮小
+let lastY = 0;
+addEventListener('scroll', () => {
+  const y = scrollY, top = $('.top'), lt = $('.lt h1');
+  top.classList.toggle('stuck', y > 4);
+  top.classList.toggle('titled', !!lt && lt.getBoundingClientRect().bottom < top.offsetHeight);
+  $('#tabs').classList.toggle('mini', y > lastY && y > 120);
+  lastY = y;
+}, { passive: true });
+
+// 滑鼠反光：只在有游標的裝置，追蹤游標在卡片上的位置
+if (matchMedia('(hover:hover) and (pointer:fine)').matches) {
+  addEventListener('pointermove', (e) => {
+    const c = e.target.closest?.('.card.lit');
+    if (!c) return;
+    const r = c.getBoundingClientRect();
+    c.style.setProperty('--mx', `${e.clientX - r.left}px`);
+    c.style.setProperty('--my', `${e.clientY - r.top}px`);
+  }, { passive: true });
+}
 
 // 換頁用 View Transition（支援的瀏覽器才有）
 const go = () => { render(); scrollTo({ top: 0, behavior: 'instant' }); };

@@ -360,10 +360,13 @@ async function api(req, env, path, method) {
     const rows = (await env.DB.prepare(
       `SELECT ${eventCols}, (SELECT COUNT(*) FROM signups s WHERE s.event_id = events.id AND s.status = 'in') AS signed,
               (SELECT COUNT(*) FROM signups s WHERE s.event_id = events.id AND s.status = 'wait') AS waiting,
-              (SELECT s.status FROM signups s WHERE s.event_id = events.id AND s.member_id = ?) AS mine
+              (SELECT s.status FROM signups s WHERE s.event_id = events.id AND s.member_id = ?) AS mine,
+              (SELECT json_group_array(json_object('n', x.name, 'a', x.avatar)) FROM (
+                 SELECT s.name, m.avatar FROM signups s LEFT JOIN members m ON m.id = s.member_id
+                 WHERE s.event_id = events.id AND s.status = 'in' ORDER BY s.created_at LIMIT 4) x) AS peek
        FROM events WHERE date ${past ? '<' : '>='} ? ORDER BY date ${past ? 'DESC' : 'ASC'}, gather_time LIMIT 60`)
       .bind(member.id, today()).all()).results;
-    return json({ events: rows });
+    return json({ events: rows.map((r) => ({ ...r, peek: JSON.parse(r.peek || '[]') })) });
   }
 
   if (path === '/api/events' && method === 'POST') {
@@ -798,6 +801,12 @@ export default {
     // LINE 登入是瀏覽器導向（GET、不是 JSON），走在下面的 CSRF 檢查之前
     if (path === '/api/line/start' && req.method === 'GET') return lineStart(env, url);
     if (path === '/api/line/callback' && req.method === 'GET') return lineCallback(req, env, url);
+    // 開發用登入：只有 .dev.vars 設 DEV_LOGIN=1 而且在 localhost 才有效，正式環境不會有這個設定
+    if (path === '/api/dev/login' && req.method === 'GET' && env.DEV_LOGIN === '1' && ['localhost', '127.0.0.1'].includes(url.hostname)) {
+      const m = await env.DB.prepare('SELECT * FROM members WHERE id = ?').bind(str(url.searchParams.get('id'), 32)).first();
+      if (!m) return fail(404, '找不到這個帳號');
+      return new Response(null, { status: 302, headers: { location: '/#/', 'set-cookie': await startSession(env, m, req) } });
+    }
     env.ctx = ctx;
     env.defer = (p) => ctx.waitUntil(Promise.resolve(p).catch((e) => console.error('defer', e)));
     // 擋 CSRF：寫入類請求只收同源的 JSON
