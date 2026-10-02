@@ -511,7 +511,7 @@ fieldset.group legend{font-size:13px;font-weight:700;color:var(--ink-2);padding:
 [hidden]{display:none!important}
 
 /* 統計 */
-.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(104px,1fr));gap:10px}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
 .kpi{gap:2px;padding:14px 16px}
 .kpi b{font-size:30px;font-weight:700;letter-spacing:-.02em;line-height:1.1}
 .statgrid{display:grid;gap:12px}
@@ -617,3 +617,25 @@ h3 svg.ic{width:18px;height:18px}
 .paysel.unpaid{background:var(--warn-bg);border-color:transparent}
 .attendok{justify-items:center;text-align:center}
 .attendok .big svg.ic{width:64px;height:64px;color:#34C759;stroke-width:1.6}
+
+/* 訓練報表 */
+.chart{width:100%;height:auto;display:block;overflow:visible}
+.chart .grid{stroke:var(--stroke);stroke-width:1}
+.chart .axis{font-size:15px;fill:var(--ink-3);font-family:inherit}
+.chart rect{transition:opacity .2s}
+.chart .line{fill:none;stroke:var(--accent);stroke-width:3;stroke-linejoin:round;stroke-linecap:round}
+.chart .dot{fill:var(--accent);stroke:var(--glass-hi);stroke-width:2}
+.kpi b small{font-size:14px;font-weight:600;color:var(--ink-2)}
+.prs{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+@media (max-width:480px){.prs{grid-template-columns:1fr 1fr}}
+.pr{display:grid;gap:2px;padding:12px;border-radius:var(--r-m);background:color-mix(in srgb,var(--ink) 4%,transparent)}
+.pr b{font-size:22px;font-weight:700}
+.mtable{display:grid}
+.mtable div{display:grid;grid-template-columns:1.4fr 1fr .7fr 1fr;gap:8px;padding:9px 0;border-bottom:1px solid var(--stroke);font-size:15px}
+.mtable div span:not(:first-child){text-align:right}
+.mlog{display:grid;gap:4px;padding:12px 0;border-bottom:1px solid var(--stroke);font-size:15px}
+.cmts{display:grid;gap:8px;margin:8px 0}
+.cmt{display:grid;gap:2px;padding:10px 12px;border-radius:var(--r-m);background:var(--accent-soft)}
+.cmt b{font-size:13px}
+@media (max-width:480px){.kpi b{font-size:26px}}
+.kpi b{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}

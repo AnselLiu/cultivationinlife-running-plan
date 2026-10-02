@@ -828,6 +828,7 @@ async function api(req, env, path, method) {
       sessions: await q('SELECT created_at, last_seen_at, ua FROM sessions WHERE member_id = ?'),
       races: await q('SELECT name, date, dist, goal, is_primary FROM races WHERE member_id = ?'),
       training_logs: await q('SELECT date, week_no, plan_day, plan_text, status, km, seconds, hr, rpe, feel, note, source FROM training_logs WHERE member_id = ? ORDER BY date'),
+      log_comments: await q('SELECT l.date, c.author_name, c.body, c.created_at FROM log_comments c JOIN training_logs l ON l.id = c.log_id WHERE l.member_id = ? ORDER BY c.created_at'),
     };
     await audit(env, req, member, 'privacy.export', 'member', member.id, '');
     return json(data, 200, { 'content-disposition': 'attachment; filename="my-data.json"' });
@@ -973,11 +974,13 @@ async function api(req, env, path, method) {
   const LOG_KINDS = ['easy', 'quality', 'long', 'strength', 'race', 'rest'];
   if (path === '/api/logs' && method === 'GET') {
     const g = need(); if (g) return g;
-    const r = rangeOf(new URL(req.url), 120, 6);
-    if (!r) return fail(400, '查詢區間最長 120 天');
+    const r = rangeOf(new URL(req.url), 370, 6);
+    if (!r) return fail(400, '查詢區間最長一年');
     const rows = (await env.DB.prepare(
-      `SELECT id, date, week_no, plan_day, kind, plan_text, status, km, seconds, hr, rpe, feel, note, source FROM training_logs
-       WHERE member_id = ? AND date BETWEEN ? AND ? ORDER BY date, created_at LIMIT 400`).bind(member.id, ...r).all()).results;
+      `SELECT id, date, week_no, plan_day, kind, plan_text, status, km, seconds, hr, rpe, feel, note, source,
+              (SELECT COUNT(*) FROM log_comments c WHERE c.log_id = training_logs.id) AS comments,
+              (SELECT COUNT(*) FROM log_comments c WHERE c.log_id = training_logs.id AND c.read_at IS NULL) AS unread
+       FROM training_logs WHERE member_id = ? AND date BETWEEN ? AND ? ORDER BY date, created_at LIMIT 1000`).bind(member.id, ...r).all()).results;
     return json({ logs: rows, from: r[0], to: r[1] });
   }
   if (path === '/api/logs' && method === 'POST') {
@@ -1012,6 +1015,50 @@ async function api(req, env, path, method) {
     const g = need(); if (g) return g;
     await env.DB.prepare('DELETE FROM training_logs WHERE id = ? AND member_id = ?').bind(mlog[1], member.id).run();
     return json({ ok: true });
+  }
+  // 教練看某位團員的紀錄（本人要有打開分享；不含備註）；以及教練留言
+  const canCoach = async (mid) => {
+    const m = await env.DB.prepare('SELECT id, name, nickname, share_logs, dist, grp FROM members WHERE id = ?').bind(mid).first();
+    if (!m || !m.share_logs) return null;
+    if (can(member, 'plan')) return m;
+    const shared = (await env.DB.prepare("SELECT team_id FROM team_members WHERE member_id = ? AND status = 'active'").bind(mid).all()).results;
+    return shared.some((t) => teamCan(t.team_id, 'roster')) ? m : null;
+  };
+  const mlm = path.match(/^\/api\/logs\/member\/([\w-]{1,32})$/);
+  if (mlm && method === 'GET') {
+    const g = need(); if (g) return g;
+    const who = await canCoach(mlm[1]);
+    if (!who) return fail(403, '這位團員沒有分享訓練紀錄，或不在你帶的分團');
+    const r = rangeOf(new URL(req.url), 62, 6);
+    if (!r) return fail(400, '查詢區間最長兩個月');
+    const rows = (await env.DB.prepare(
+      `SELECT id, date, week_no, plan_day, kind, plan_text, status, km, seconds, hr, rpe, feel,
+              (SELECT COUNT(*) FROM log_comments c WHERE c.log_id = training_logs.id) AS comments
+       FROM training_logs WHERE member_id = ? AND date BETWEEN ? AND ? ORDER BY date DESC LIMIT 200`).bind(who.id, ...r).all()).results;
+    return json({ member: { id: who.id, name: who.name, nickname: who.nickname, dist: who.dist, grp: who.grp }, logs: rows, from: r[0], to: r[1] });
+  }
+  const mlc = path.match(/^\/api\/logs\/([\w-]{1,32})\/comments$/);
+  if (mlc) {
+    const g = need(); if (g) return g;
+    const log = await env.DB.prepare('SELECT id, member_id, date, plan_day FROM training_logs WHERE id = ?').bind(mlc[1]).first();
+    if (!log) return fail(404, '找不到這筆紀錄');
+    const own = log.member_id === member.id;
+    if (!own && !(await canCoach(log.member_id))) return fail(403, '沒有權限');
+    if (method === 'GET') {
+      const rows = (await env.DB.prepare('SELECT id, author_name, body, created_at FROM log_comments WHERE log_id = ? ORDER BY created_at LIMIT 100').bind(log.id).all()).results;
+      if (own) await env.DB.prepare("UPDATE log_comments SET read_at = datetime('now') WHERE log_id = ? AND read_at IS NULL").bind(log.id).run();
+      return json({ comments: rows });
+    }
+    if (method === 'POST') {
+      if (own) return fail(400, '留言是給教練用的');
+      const text = str((await body()).body, 500);
+      if (!text) return fail(400, '請輸入留言');
+      if (await limited(env, `comment:${member.id}`, 60, 3600)) return fail(429, '留言太頻繁');
+      await env.DB.prepare('INSERT INTO log_comments (id, log_id, author_id, author_name, body) VALUES (?, ?, ?, ?, ?)')
+        .bind(rid(8), log.id, member.id, member.nickname || member.name, text).run();
+      await notify(env, [log.member_id], 'log', { title: `${member.nickname || member.name} 回饋了你的訓練`, body: text.slice(0, 60), url: `/#/log?id=${log.id}` });
+      return json({ ok: true });
+    }
   }
   if (path === '/api/me/share-logs' && method === 'POST') {
     const g = need(); if (g) return g;
@@ -1669,9 +1716,33 @@ async function retention(env, now) {
   return out;
 }
 
+// 每天 21:00：疲勞提醒（只通知本人，不通知教練）
+//   最近 7 天有 3 次以上 RPE ≥ 8，或最近 7 天里程超過前三週平均的 1.3 倍（而且超過 20 公里）
+async function fatigueCheck(env, now) {
+  if (taipei(now).getUTCHours() !== 21 || !(await onceOn(env, 'fatigue', tpDate(now)))) return 0;
+  const d7 = tpDate(new Date(now.getTime() - 6 * 864e5)), d28 = tpDate(new Date(now.getTime() - 27 * 864e5)), today0 = tpDate(now);
+  const rows = (await env.DB.prepare(`SELECT member_id,
+      SUM(CASE WHEN date >= ?1 AND rpe >= 8 THEN 1 ELSE 0 END) AS hard,
+      SUM(CASE WHEN date >= ?1 THEN COALESCE(km, 0) ELSE 0 END) AS km7,
+      SUM(CASE WHEN date < ?1 THEN COALESCE(km, 0) ELSE 0 END) AS km21
+    FROM training_logs WHERE date BETWEEN ?2 AND ?3 GROUP BY member_id`).bind(d7, d28, today0).all()).results;
+  let n = 0;
+  for (const r of rows) {
+    const jump = r.km7 > 20 && r.km21 > 0 && r.km7 > (r.km21 / 3) * 1.3;
+    if (!(r.hard >= 3 || jump)) continue;
+    const m = await env.DB.prepare('SELECT fatigue_notified FROM members WHERE id = ?').bind(r.member_id).first();
+    if (m?.fatigue_notified && Date.parse(today0) - Date.parse(m.fatigue_notified) < 7 * 864e5) continue;
+    await notify(env, [r.member_id], 'log', { title: '這週練得很兇，注意恢復',
+      body: r.hard >= 3 ? `最近 7 天有 ${r.hard} 次自覺強度 8 以上，安排一兩天輕鬆跑或休息吧` : `最近 7 天跑了 ${Math.round(r.km7)} 公里，比前三週平均多了不少，小心受傷`, url: '/#/report' });
+    await env.DB.prepare('UPDATE members SET fatigue_notified = ? WHERE id = ?').bind(today0, r.member_id).run();
+    n += 1;
+  }
+  return n;
+}
+
 async function scheduled(env, now = new Date()) {
   const res = {};
-  for (const [k, fn] of [['events', remindEvents], ['renewals', remindRenewals], ['review', quarterlyReview], ['retention', retention]]) {
+  for (const [k, fn] of [['events', remindEvents], ['renewals', remindRenewals], ['review', quarterlyReview], ['retention', retention], ['fatigue', fatigueCheck]]) {
     try { res[k] = await fn(env, now); } catch (e) { console.error('cron', k, e); res[k] = `error: ${e.message}`; }
   }
   return res;
