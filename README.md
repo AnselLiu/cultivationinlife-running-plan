@@ -6,7 +6,10 @@
 - **報名**：取代 LINE 接龍。可設人數上限與報名截止，額滿自動排候補，有人取消時候補遞補並推播通知。
 - **課表**：全馬 S–I、半馬 A–E 分組課表，`MP+20''` 這種寫法會自動換算成該組的實際配速。
 - **公告產生器**：幹部建立活動後，依週次帶出各組課表，產生可直接貼回 LINE 的公告文字。
-- **登入**：LINE 登入（帶名稱與大頭貼），或用協會發的邀請碼加入。
+- **春酒**：報名（攜伴人數、葷素）、入場券代碼、現場報到（含桌次）、抽獎（預設只抽已報到的人，一人只中一次，中獎自動通知）。
+- **通知中心**：活動、課表、報名與中獎都會留一則通知，右上角鈴鐺顯示未讀數；有設推播金鑰時同時推播。
+- **教練發布課表**：教練把 LINE 記事本的原文貼上就能發布，團員在「課表」頁看到該週課表並收到通知。
+- **登入與身分**：LINE 登入（帶名稱與大頭貼），或用邀請碼加入。
 
 ## 架構
 
@@ -23,6 +26,19 @@
 | `docs/` | GitHub Pages 的轉址頁（App 本體在 Cloudflare） |
 
 **設計**：品牌色沿用課表教練頁（深藍 `#0B1B33`、藍 `#1C4698`、黃 `#FDF36D`、萊姆 `#B9D04C`），介面走 macOS／iOS 的毛玻璃風格：背景極光＋`backdrop-filter` 玻璃卡片，支援深淺色切換與 `prefers-reduced-motion`。
+
+**角色分層**（參考人民團體組織）：
+
+| 角色 | 權限 |
+|---|---|
+| `chair` 理事長 | 全部，含指派角色與職稱 |
+| `director` 理事 | 建立活動、報到、抽獎、看名冊 |
+| `supervisor` 監事 | 看名冊 |
+| `staff` 行政人員 | 建立活動、報到、抽獎、看名冊 |
+| `coach` 教練 | 建立活動、**發布課表**、報到 |
+| `member` 團員 | 報名、看課表與通知 |
+
+職稱（例如「副理事長」「活動組長」）另外用 `title` 欄位顯示，不影響權限。三組邀請碼分別對應理事長、幹部與團員：`CHAIR_CODE`、`ADMIN_CODE`、`JOIN_CODE`。
 
 **身分與安全**：工作階段權杖放 HttpOnly cookie，資料庫只存 SHA-256；寫入類 API 只收同源 JSON 請求（擋 CSRF）；LINE 登入用 state cookie 防 CSRF。
 
@@ -42,7 +58,8 @@ npm run dev                        # http://localhost:8790
 ```bash
 npx wrangler d1 create cil-run          # 把回傳的 database_id 貼進 wrangler.jsonc
 npx wrangler secret put JOIN_CODE       # 團員邀請碼
-npx wrangler secret put ADMIN_CODE      # 幹部碼
+npx wrangler secret put ADMIN_CODE      # 幹部碼（行政人員）
+npx wrangler secret put CHAIR_CODE      # 理事長碼（之後由理事長在名冊指派其他角色）
 npm run deploy
 ```
 

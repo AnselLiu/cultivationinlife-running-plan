@@ -28,7 +28,9 @@ const copy = async (text) => {
   catch { toast('複製失敗，請長按文字手動複製'); }
 };
 
-const KIND_NAME = { track: '田徑場團練', core: '核心日', long: '長跑團練', race: '賽事', other: '活動' };
+const KIND_NAME = { track: '田徑場團練', core: '核心日', long: '長跑團練', race: '賽事', party: '春酒餐敘', other: '活動' };
+const ROLE_NAME = { chair: '理事長', director: '理事', supervisor: '監事', staff: '行政人員', coach: '教練', member: '團員' };
+const allow = (p) => !!me?.can?.includes(p);
 const WD = ['日', '一', '二', '三', '四', '五', '六'];
 const d2 = (d) => new Date(`${d}T00:00:00`);
 const dstr = (d) => { const x = d2(d); return `${x.getMonth() + 1}/${x.getDate()}（${WD[x.getDay()]}）`; };
@@ -93,9 +95,9 @@ async function listView() {
   view.innerHTML = `
     ${await weekStrip()}
     ${next ? heroCard(next) : `<section class="card hero"><h2>還沒有排定的團練</h2><p class="muted" style="margin:0">幹部發布後，這裡就會出現，也會推播通知你。</p></section>`}
-    ${events.length > 1 || me.role === 'admin' ? `<div class="row spread" style="padding:4px 4px 0">
+    ${events.length > 1 || allow('event') ? `<div class="row spread" style="padding:4px 4px 0">
       <h3>接下來</h3>
-      ${me.role === 'admin' ? '<a class="btn ghost sm" href="#/new">＋ 新增活動</a>' : ''}
+      ${allow('event') ? '<a class="btn ghost sm" href="#/new">＋ 新增活動</a>' : ''}
     </div>` : ''}
     <div class="evgrid">${events.slice(1).map(eventCard).join('')}</div>
     <a class="tiny center" href="#/past" style="padding:4px">看過去的團練 ›</a>`;
@@ -158,11 +160,13 @@ async function pastView() {
 // ---------- 活動詳情 ----------
 async function eventView(id) {
   const ev = await api(`/events/${id}`);
-  const admin = me.role === 'admin';
+  const admin = allow('event');
   const ins = ev.signups.filter((s) => s.status === 'in');
   const waits = ev.signups.filter((s) => s.status === 'wait');
   const mine = ev.signups.find((s) => s.member_id === me.id);
   const closed = !ev.signup_open || ev.status !== 'open' || (ev.deadline && new Date(ev.deadline) < new Date());
+  const party = ev.kind === 'party';
+  const myTicket = party ? (await api('/my/tickets')).tickets.find((t) => t.event_id === ev.id) : null;
   const plan = ev.week_no ? await P.weekPlan(ev.week_no, me.dist, me.grp) : null;
   const myDay = plan?.find((d) => new RegExp(dayPattern(ev.date)).test(d.d));
 
@@ -185,13 +189,17 @@ async function eventView(id) {
       </div></section>` : ''}
     ${ev.plan_text ? `<section class="card"><h3>課表</h3><pre class="out">${esc(ev.plan_text)}</pre></section>` : ''}
 
+    ${party && myTicket ? ticketCard(myTicket, ev) : ''}
+
     <section class="card">
       <div class="row spread">
         <h3>報名 ${ins.length}${ev.capacity ? ` / ${ev.capacity}` : ''} 人</h3>
         ${mine && mine.status !== 'cancel'
           ? '<button class="btn danger sm" id="cancel">取消報名</button>'
-          : closed ? '<span class="tiny">未開放報名</span>' : '<button class="btn sm" id="signup">我要報名</button>'}
+          : closed ? '<span class="tiny">未開放報名</span>' : (party ? '' : '<button class="btn sm" id="signup">我要報名</button>')}
       </div>
+      ${party && !closed ? partySignupForm(ev, mine && mine.status !== 'cancel') : ''}
+      ${party && (ev.fee || ev.guest_max || ev.meal_options) ? `<p class="tiny">${ev.fee ? `費用 ${ev.fee} 元　` : ''}${ev.guest_max ? `可攜伴 ${ev.guest_max} 位　` : ''}${ev.meal_options ? `餐點：${esc(ev.meal_options)}` : ''}</p>` : ''}
       ${mine?.status === 'wait' ? '<p class="notice" style="margin:0">你在候補名單，有人取消會自動遞補並通知你。</p>' : ''}
       <div class="roster">
         ${ins.map((s) => `<div class="r">${avatar(s)}<span>${esc(s.name)}${s.note ? ` <span class="tiny">${esc(s.note)}</span>` : ''}</span><span class="pill">${esc(s.grp)}</span></div>`).join('')
@@ -200,6 +208,8 @@ async function eventView(id) {
       </div>
       ${admin ? '<button class="btn ghost sm" id="copyRoster">複製名單</button>' : ''}
     </section>
+
+    ${party && allow('checkin') ? await partyAdmin(ev) : ''}
 
     ${admin ? `<section class="card">
       <h3>LINE 公告文字</h3>
@@ -220,6 +230,41 @@ async function eventView(id) {
   $('#cancel')?.addEventListener('click', async () => {
     if (!confirm('確定取消報名？')) return;
     try { await api(`/events/${id}/signup`, { method: 'DELETE' }); toast('已取消報名'); render(); } catch (e) { toast(e.message); }
+  });
+  $('#pform')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const f = e.target;
+    try {
+      const r = await api(`/events/${id}/signup`, { method: 'POST', body: {
+        name: me.name, grp: me.grp, dist: me.dist, note: f.note?.value || '',
+        guests: Number(f.guests?.value || 0), meal: f.meal?.value || '' } });
+      toast(r.status === 'wait' ? '人數已滿，已排入候補' : '報名完成，入場券在上方'); render();
+    } catch (err) { toast(err.message); }
+  });
+  $('#cform')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const f = e.target;
+    try {
+      const r = await api(`/events/${id}/checkin`, { method: 'POST', body: { code: f.code.value, seat: f.seat.value } });
+      toast(r.already ? `${r.name} 已經報到過了` : `${r.name} 報到完成${r.guests ? `（攜伴 ${r.guests}）` : ''}`);
+      f.code.value = ''; render();
+    } catch (err) { toast(err.message); }
+  });
+  for (const b of document.querySelectorAll('[data-ci]')) b.onclick = async () => {
+    try { const r = await api(`/events/${id}/checkin`, { method: 'POST', body: { code: b.dataset.ci } }); toast(`${r.name} 報到完成`); render(); }
+    catch (err) { toast(err.message); }
+  };
+  for (const b of document.querySelectorAll('[data-draw]')) b.onclick = async () => {
+    b.disabled = true; b.textContent = '抽獎中…';
+    try {
+      const r = await api(`/events/${id}/draw`, { method: 'POST', body: { prize_id: b.dataset.draw, count: 1 } });
+      toast(`🎉 ${r.prize}：${r.winners.join('、')}`); render();
+    } catch (err) { toast(err.message); b.disabled = false; b.textContent = '抽出 1 位'; }
+  };
+  $('#prizeForm')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    try { await api(`/events/${id}/prizes`, { method: 'POST', body: { name: e.target.name.value, qty: Number(e.target.qty.value) } }); toast('已新增獎項'); render(); }
+    catch (err) { toast(err.message); }
   });
   $('#copyRoster')?.addEventListener('click', async () => copy((await api(`/events/${id}/roster`)).text));
   $('#del')?.addEventListener('click', async () => {
@@ -253,11 +298,181 @@ async function announceText(ev) {
 }
 const dayPattern = (date) => { const w = d2(date).getDay(); return w === 0 || w === 6 ? '週末|週日' : `週${WD[w]}`; };
 
+
+// ---------- 通知中心 ----------
+async function notificationsView() {
+  const { items } = await api('/notifications');
+  const ICON = { event: '📣', plan: '📅', signup: '✅', lottery: '🎁', system: '⚙️' };
+  view.innerHTML = `
+    <div class="row spread" style="padding:4px">
+      <h2>通知</h2>
+      ${items.some((x) => !x.read_at) ? '<button class="btn ghost sm" id="readAll">全部標為已讀</button>' : ''}
+    </div>
+    ${items.length ? items.map((n) => `
+      <a class="card tight notif ${n.read_at ? '' : 'unread'}" href="${esc(n.url || '#/')}">
+        <div class="row" style="gap:12px;align-items:flex-start">
+          <span class="nicon" aria-hidden="true">${ICON[n.kind] || '•'}</span>
+          <span style="flex:1;min-width:0">
+            <b>${esc(n.title)}</b>
+            ${n.body ? `<span class="muted" style="display:block">${esc(n.body)}</span>` : ''}
+            <span class="tiny">${ago(n.created_at)}</span>
+          </span>
+        </div>
+      </a>`).join('') : '<div class="card"><p class="muted">還沒有通知。</p></div>'}`;
+  $('#readAll')?.addEventListener('click', async () => { await api('/notifications/read', { method: 'POST' }); bell(); render(); });
+  // 進到通知頁就當作看過了
+  if (items.some((x) => !x.read_at)) setTimeout(async () => { await api('/notifications/read', { method: 'POST' }); bell(); }, 1200);
+}
+function ago(ts) {
+  const m = Math.floor((Date.now() - new Date(`${ts.replace(' ', 'T')}Z`)) / 60000);
+  if (m < 1) return '剛剛';
+  if (m < 60) return `${m} 分鐘前`;
+  if (m < 1440) return `${Math.floor(m / 60)} 小時前`;
+  return `${Math.floor(m / 1440)} 天前`;
+}
+async function bell() {
+  try {
+    const { unread } = await api('/notifications/count');
+    const b = $('#bellCount');
+    b.textContent = unread > 99 ? '99+' : unread;
+    b.hidden = !unread;
+  } catch {}
+}
+
+// ---------- 教練發布課表 ----------
+async function planNewView() {
+  if (!allow('plan')) { view.innerHTML = '<div class="card"><p class="muted">只有教練可以發布課表。</p></div>'; return; }
+  view.innerHTML = `<section class="card">
+    <h2>發布課表</h2>
+    <p class="muted" style="margin:0">把 LINE 記事本的課表原文貼進來就好，團員會在通知中心看到，也會收到推播。</p>
+    <form id="pf">
+      <div class="grid2">
+        <label>週次（選填）<input type="number" name="week_no" min="1" max="21" placeholder="例如 10"></label>
+        <label>階段（選填）<input name="phase" maxlength="10" placeholder="強化期"></label>
+      </div>
+      <label>標題<input name="title" required maxlength="40" placeholder="2026 台北馬 W10 課表"></label>
+      <label>課表內容<textarea name="body" required style="min-height:220px" placeholder="全馬組&#10;S SUB 2:55~03:00&#10;週一:…"></textarea></label>
+      <label class="inline"><input type="checkbox" name="notify" checked> 發布後通知全團</label>
+      <button class="btn block">發布</button>
+    </form>
+  </section>`;
+  $('#pf').onsubmit = async (e) => {
+    e.preventDefault();
+    const f = e.target;
+    try {
+      await api('/plans', { method: 'POST', body: {
+        title: f.title.value, body: f.body.value, phase: f.phase.value,
+        week_no: f.week_no.value ? Number(f.week_no.value) : null, notify: f.notify.checked } });
+      toast('已發布'); location.hash = '#/plan';
+    } catch (err) { toast(err.message); }
+  };
+}
+
+// ---------- 名冊與角色 ----------
+async function rosterView() {
+  const { members } = await api('/members');
+  const byRole = {};
+  for (const m of members) (byRole[m.role] ||= []).push(m);
+  const order = ['chair', 'director', 'supervisor', 'staff', 'coach', 'member'];
+  view.innerHTML = `
+    <div class="row spread" style="padding:4px"><h2>團員名冊</h2><span class="tiny">${members.length} 人</span></div>
+    ${order.filter((r) => byRole[r]?.length).map((r) => `
+      <section class="card">
+        <div class="row spread"><h3>${ROLE_NAME[r]}</h3><span class="tiny">${byRole[r].length} 人</span></div>
+        <div class="roster">${byRole[r].map((m) => `
+          <div class="r">
+            ${avatar(m)}
+            <span>${esc(m.name)}${m.title ? ` <span class="tiny">${esc(m.title)}</span>` : ''}
+              <span class="tiny" style="display:block">${m.dist === 'hm' ? '半馬' : '全馬'} ${esc(m.grp)} 組</span></span>
+            ${allow('roles') ? `<button class="btn ghost sm" data-role="${m.id}" data-name="${esc(m.name)}" data-cur="${m.role}">變更</button>` : ''}
+          </div>`).join('')}</div>
+      </section>`).join('')}`;
+  for (const b of document.querySelectorAll('[data-role]')) b.onclick = () => roleDialog(b.dataset.role, b.dataset.name, b.dataset.cur);
+}
+function roleDialog(id, name, cur) {
+  const opts = Object.entries(ROLE_NAME).map(([k, v]) => `<option value="${k}" ${k === cur ? 'selected' : ''}>${v}</option>`).join('');
+  view.insertAdjacentHTML('afterbegin', `<section class="card" id="rd">
+    <h3>變更 ${esc(name)} 的身分</h3>
+    <form id="rf">
+      <label>身分<select name="role">${opts}</select></label>
+      <label>職稱（選填）<input name="title" maxlength="12" placeholder="例如 副理事長、活動組長"></label>
+      <div class="row"><button class="btn sm">儲存</button><button type="button" class="btn ghost sm" id="rc">取消</button></div>
+    </form>
+  </section>`);
+  $('#rc').onclick = () => $('#rd').remove();
+  $('#rf').onsubmit = async (e) => {
+    e.preventDefault();
+    try { await api(`/members/${id}/role`, { method: 'POST', body: { role: e.target.role.value, title: e.target.title.value } }); toast('已更新'); render(); }
+    catch (err) { toast(err.message); }
+  };
+}
+
+// ---------- 春酒：入場券、報到、抽獎 ----------
+function partySignupForm(ev, mine) {
+  const meals = (ev.meal_options || '').split(',').map((s) => s.trim()).filter(Boolean);
+  return `<form id="pform">
+    ${ev.guest_max ? `<label>攜伴人數<select name="guests">${Array.from({ length: ev.guest_max + 1 }, (_, i) => `<option value="${i}">${i ? `${i} 位` : '不帶'}</option>`).join('')}</select></label>` : ''}
+    ${meals.length ? `<label>餐點<select name="meal">${meals.map((m) => `<option>${esc(m)}</option>`).join('')}</select></label>` : ''}
+    <label>備註（選填）<input name="note" maxlength="40" placeholder="素食、座位需求…"></label>
+    <button class="btn block">${mine ? '更新報名' : '我要報名'}</button>
+  </form>`;
+}
+function ticketCard(t, ev) {
+  return `<section class="card ticket">
+    <div class="row spread"><h3>我的入場券</h3>${t.checked_in_at ? '<span class="pill solid">已報到</span>' : '<span class="pill">未報到</span>'}</div>
+    <div class="code num">${esc(t.code)}</div>
+    <p class="tiny center">入場時把這組代碼給工作人員</p>
+    <div class="row spread tiny">
+      <span>${esc(ev.title)}</span>
+      <span>${t.guests ? `攜伴 ${t.guests} 位・` : ''}${t.meal ? esc(t.meal) : ''}${t.seat ? `・${esc(t.seat)}` : ''}</span>
+    </div>
+  </section>`;
+}
+async function partyAdmin(ev) {
+  const [{ tickets, checkedIn, people }, { prizes, draws }] = await Promise.all([
+    api(`/events/${ev.id}/tickets`), api(`/events/${ev.id}/prizes`),
+  ]);
+  const won = new Map(draws.map((d) => [d.member_id, d]));
+  return `
+    <section class="card">
+      <div class="row spread"><h3>報到台</h3><span class="tiny">${checkedIn}/${tickets.length} 人報到・含攜伴 ${people} 位</span></div>
+      <form id="cform" class="row" style="gap:8px">
+        <input name="code" placeholder="輸入入場代碼" style="flex:1;min-width:150px;text-transform:uppercase" autocomplete="off">
+        <input name="seat" placeholder="桌次" style="width:90px">
+        <button class="btn sm">報到</button>
+      </form>
+      <div class="roster">${tickets.map((t) => `
+        <div class="r">${avatar(t)}
+          <span>${esc(t.name)}<span class="tiny" style="display:block">${esc(t.code)}${t.guests ? `・攜伴 ${t.guests}` : ''}${t.meal ? `・${esc(t.meal)}` : ''}${t.seat ? `・${esc(t.seat)}` : ''}</span></span>
+          ${t.checked_in_at ? '<span class="pill solid">到</span>' : `<button class="btn ghost sm" data-ci="${esc(t.code)}">報到</button>`}
+        </div>`).join('') || '<p class="muted">還沒有人報名。</p>'}</div>
+    </section>
+
+    <section class="card">
+      <h3>抽獎</h3>
+      ${prizes.map((p) => {
+        const w = draws.filter((d) => d.prize_id === p.id);
+        return `<div class="prize">
+          <div class="row spread"><b>${esc(p.name)}</b><span class="tiny">${w.length}/${p.qty}${p.sponsor ? `・${esc(p.sponsor)}` : ''}</span></div>
+          ${w.length ? `<div class="winners">${w.map((d) => `<span class="pill solid">${esc(d.name)}</span>`).join('')}</div>` : ''}
+          ${w.length < p.qty ? `<button class="btn sm" data-draw="${p.id}">抽出 1 位</button>` : '<span class="tiny">已抽完</span>'}
+        </div>`;
+      }).join('') || '<p class="muted" style="margin:0">還沒有獎項。</p>'}
+      <form id="prizeForm" class="row" style="gap:8px">
+        <input name="name" placeholder="獎項名稱" style="flex:1;min-width:140px">
+        <input name="qty" type="number" min="1" max="200" value="1" style="width:76px">
+        <button class="btn ghost sm">新增獎項</button>
+      </form>
+      <p class="tiny">預設從「已報到」的人裡面抽，而且一個人只會中一次。</p>
+    </section>`;
+}
+
 // ---------- 我的課表 ----------
 async function planView(n) {
   const week = n || P.currentWeek();
   const info = await P.weekInfo(week);
   const days = await P.weekPlan(week, me.dist, me.grp);
+  const posts = (await api(`/plans?week=${week}`).catch(() => ({ plans: [] }))).plans;
   const s = P.weekStart(week), e = new Date(s.getTime() + 6 * 864e5);
   const isNow = week === P.currentWeek();
   view.innerHTML = `
@@ -276,13 +491,24 @@ async function planView(n) {
         <span class="muted">${me.dist === 'hm' ? '半馬' : '全馬'} ${me.grp} 組</span>
         <span class="pill">${me.dist === 'hm' ? 'HMP' : 'MP'} ${P.fmtPace(P.goalPace(me.dist, me.grp))}/km</span>
       </div>
-      ${info?.src?.startsWith('推估') ? '<p class="notice" style="margin:0">這週教練還沒發課表，內容是照 2025 臺北馬同一階段推估的，實際以教練公告為準。</p>' : ''}
+      ${posts.length ? '' : info?.src?.startsWith('推估') ? '<p class="notice" style="margin:0">這週教練還沒發課表，內容是照 2025 臺北馬同一階段推估的，實際以教練公告為準。</p>' : ''}
+      ${allow('plan') ? '<a class="btn ghost sm" href="#/plan/new">發布這週課表</a>' : ''}
     </section>
+    ${posts.map((po) => `<section class="card">
+      <div class="row spread"><h3>${esc(po.title)}</h3><span class="pill">教練發布</span></div>
+      <p class="tiny">${esc(po.author || '')}・${ago(po.created_at)}</p>
+      <pre class="out">${esc(po.body)}</pre>
+      ${allow('plan') ? `<button class="btn danger sm" data-delplan="${po.id}">刪除</button>` : ''}
+    </section>`).join('')}
     <div class="days">${days ? days.map((d) => `
       <div class="day ${d.kind}">
         <span class="dl"><span>${esc(d.d)}</span><span class="k">${P.KIND_LABEL[d.kind]}</span></span>
         <span class="t">${esc(d.t)} <span class="hint">${P.paceHint(d.t, me.dist, me.grp)}</span></span>
       </div>`).join('') : '<div class="card"><p class="muted">這週沒有課表資料。</p></div>'}</div>`;
+  for (const b of document.querySelectorAll('[data-delplan]')) b.onclick = async () => {
+    if (!confirm('確定刪除這則課表？')) return;
+    await api(`/plans/${b.dataset.delplan}`, { method: 'DELETE' }); toast('已刪除'); render();
+  };
   $('#prev').onclick = () => { location.hash = `#/plan/${week - 1}`; };
   $('#next').onclick = () => { location.hash = `#/plan/${week + 1}`; };
 }
@@ -356,7 +582,7 @@ async function meView() {
       <div class="row">
         ${avatar(me)}
         <div style="flex:1"><b>${esc(me.name)}</b>
-          <div class="tiny">${me.role === 'admin' ? '幹部・可建立活動與公告' : '團員'}${me.line ? '・LINE 登入' : ''}</div></div>
+          <div class="tiny">${esc(me.title || me.roleName || ROLE_NAME[me.role] || '團員')}${me.line ? '・LINE 登入' : ''}</div></div>
       </div>
       <form id="mf">
         <label>姓名<input name="name" value="${esc(me.name)}" maxlength="20"></label>
@@ -377,7 +603,9 @@ async function meView() {
         : '<p class="muted" style="margin:0">還沒設定推播金鑰，通知功能尚未啟用。</p>'}
     </section>
 
-    ${me.role === 'admin' ? '' : `<section class="card">
+    ${allow('roster') ? `<a class="card" href="#/roster"><div class="row spread"><h3>團員名冊</h3><span class="tiny">${allow('roles') ? '可指派幹部角色' : '查看'} ›</span></div></a>` : ''}
+    ${allow('plan') ? '<a class="card" href="#/plan/new"><div class="row spread"><h3>發布課表</h3><span class="tiny">教練 ›</span></div></a>' : ''}
+    ${me.role !== 'member' ? '' : `<section class="card">
       <h3>我是幹部</h3>
       <form id="af" class="row" style="gap:8px">
         <input name="code" placeholder="幹部碼" style="flex:1;min-width:140px" autocomplete="off">
@@ -448,10 +676,14 @@ async function render() {
     try { const r = await api('/me'); me = r.member; cfg = r; } catch { me = null; }
   }
   if (!me) return loginView();
+  bell();
   try {
     if (hash === '/') return await listView();
     if (hash === '/past') return await pastView();
     if (hash === '/coach') return coachView();
+    if (hash === '/notifications') return await notificationsView();
+    if (hash === '/roster') return await rosterView();
+    if (hash === '/plan/new') return planNewView();
     if (hash === '/me') return await meView();
     if (hash === '/new') return await formView(null);
     const edit = hash.match(/^\/edit\/([\w-]+)$/);

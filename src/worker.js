@@ -12,7 +12,7 @@ const fail = (status, msg) => json({ error: msg }, status);
 const str = (v, max = 200) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
 const FM = ['S', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I'];
 const HM = ['A', 'B', 'C', 'D', 'E'];
-const KINDS = ['track', 'core', 'long', 'race', 'other'];
+const KINDS = ['track', 'core', 'long', 'race', 'party', 'other'];
 const isDate = (s) => /^\d{4}-\d{2}-\d{2}$/.test(s);
 const isTime = (s) => !s || /^\d{2}:\d{2}$/.test(s);
 const today = () => new Date().toISOString().slice(0, 10);
@@ -39,7 +39,40 @@ async function startSession(env, memberId) {
   return `${COOKIE}=${token}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${SESSION_DAYS * 86400}`;
 }
 
-const pub = (m) => ({ id: m.id, name: m.name, dist: m.dist, grp: m.grp, role: m.role, avatar: m.avatar || null, line: !!m.line_id });
+// 角色：參考人民團體的組織分層。chair 理事長｜director 理事｜supervisor 監事｜staff 行政人員｜coach 教練｜member 團員
+export const ROLES = { chair: '理事長', director: '理事', supervisor: '監事', staff: '行政人員', coach: '教練', member: '團員' };
+const norm = (r) => (r === 'admin' ? 'staff' : ROLES[r] ? r : 'member');   // 相容舊的 admin
+// 權限：活動（建立與編輯）、課表（發布）、報到、抽獎、名冊、角色指派
+const PERMS = {
+  chair:      ['event', 'plan', 'checkin', 'lottery', 'roster', 'roles'],
+  director:   ['event', 'checkin', 'lottery', 'roster'],
+  supervisor: ['roster'],
+  staff:      ['event', 'checkin', 'lottery', 'roster'],
+  coach:      ['event', 'plan', 'checkin'],
+  member:     [],
+};
+const can = (m, p) => !!m && PERMS[norm(m.role)].includes(p);
+const pub = (m) => ({
+  id: m.id, name: m.name, dist: m.dist, grp: m.grp, role: norm(m.role), roleName: ROLES[norm(m.role)],
+  title: m.title || null, avatar: m.avatar || null, line: !!m.line_id,
+  can: PERMS[norm(m.role)],
+});
+
+// ---- 通知中心：推播成功與否都留一份 ----
+async function notify(env, memberIds, kind, msg) {
+  const ids = [...new Set(memberIds)].filter(Boolean);
+  if (!ids.length) return;
+  for (let i = 0; i < ids.length; i += 40) {
+    const part = ids.slice(i, i + 40);
+    await env.DB.batch(part.map((id) => env.DB.prepare(
+      'INSERT INTO notifications (id, member_id, kind, title, body, url) VALUES (?, ?, ?, ?, ?, ?)')
+      .bind(rid(8), id, kind, str(msg.title, 80), str(msg.body, 300), str(msg.url, 200) || null)));
+  }
+  env.defer(push(env, ids, msg));
+}
+const allMemberIds = async (env, exceptId) =>
+  (await env.DB.prepare('SELECT id FROM members' + (exceptId ? ' WHERE id != ?' : '')).bind(...(exceptId ? [exceptId] : [])).all())
+    .results.map((r) => r.id);
 
 // ---- LINE 登入（OpenID Connect 授權碼流程）----
 // 需要 secrets：LINE_CHANNEL_ID、LINE_CHANNEL_SECRET；LINE Developers 的 Callback URL 填 https://網域/api/line/callback
@@ -93,7 +126,7 @@ async function lineCallback(req, env, url) {
 }
 
 // ---- 活動 ----
-const eventCols = 'id, kind, title, date, gather_time, end_time, place, lead, note, week_no, plan_text, capacity, signup_open, deadline, status, created_at';
+const eventCols = 'id, kind, title, date, gather_time, end_time, place, lead, note, week_no, plan_text, capacity, signup_open, deadline, status, created_at, fee, guest_max, meal_options';
 
 function readEvent(b) {
   const e = {
@@ -110,6 +143,9 @@ function readEvent(b) {
     capacity: Number.isInteger(b.capacity) && b.capacity > 0 ? Math.min(b.capacity, 999) : null,
     signup_open: b.signup_open === false ? 0 : 1,
     deadline: str(b.deadline, 16),
+    fee: Number.isInteger(b.fee) && b.fee >= 0 ? b.fee : null,
+    guest_max: Number.isInteger(b.guest_max) && b.guest_max > 0 ? Math.min(b.guest_max, 9) : null,
+    meal_options: str(b.meal_options, 60),
   };
   if (!e.title || !isDate(e.date) || !isTime(e.gather_time) || !isTime(e.end_time)) return null;
   return e;
@@ -142,8 +178,17 @@ async function doSignup(env, ev, member, b) {
     await env.DB.prepare('INSERT INTO signups (id, event_id, member_id, name, grp, dist, note, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
       .bind(rid(8), ev.id, member.id, name, grp, dist, str(b.note, 100), status).run();
   }
+  if (ev.kind === 'party' && status === 'in') {
+    const guests = Math.max(0, Math.min(Number(b.guests) || 0, ev.guest_max || 0));
+    const meal = str(b.meal, 20);
+    await env.DB.prepare(`INSERT INTO tickets (id, event_id, member_id, code, guests, meal) VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(event_id, member_id) DO UPDATE SET guests = excluded.guests, meal = excluded.meal`)
+      .bind(rid(8), ev.id, member.id, ticketCode(), guests, meal).run();
+  }
   return json({ ok: true, status });
 }
+// 入場代碼：去掉容易看錯的 0/O/1/I
+const ticketCode = () => [...crypto.getRandomValues(new Uint8Array(6))].map((b) => 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[b % 32]).join('');
 
 // 取消報名後，候補的第一位自動遞補
 async function cancelSignup(env, ev, member) {
@@ -154,7 +199,7 @@ async function cancelSignup(env, ev, member) {
       const next = await env.DB.prepare("SELECT id, member_id, name FROM signups WHERE event_id = ? AND status = 'wait' ORDER BY created_at LIMIT 1").bind(ev.id).first();
       if (next) {
         await env.DB.prepare("UPDATE signups SET status = 'in' WHERE id = ?").bind(next.id).run();
-        env.defer(push(env, [next.member_id], { title: '候補遞補成功', body: `${ev.title} 有人取消，你已經排進正取名單。`, url: `/#/e/${ev.id}` }));
+        await notify(env, [next.member_id], 'signup', { title: '候補遞補成功', body: `${ev.title} 有人取消，你已經排進正取名單。`, url: `/#/e/${ev.id}` });
       }
     }
   }
@@ -165,33 +210,38 @@ async function cancelSignup(env, ev, member) {
 async function api(req, env, path, method) {
   const member = await currentMember(req, env);
   const need = () => (member ? null : fail(401, '請先加入'));
-  const needAdmin = () => (member?.role === 'admin' ? null : fail(403, '只有幹部可以操作'));
+  const needPerm = (p) => (can(member, p) ? null : fail(403, '沒有這個權限'));
+  const needAdmin = () => needPerm('event');
   const body = async () => { try { return await req.json(); } catch { return {}; } };
 
   if (path === '/api/me' && method === 'GET')
     return json({ member: member ? pub(member) : null, vapid: env.VAPID_PUBLIC_KEY || null, lineLogin: !!(env.LINE_CHANNEL_ID && env.LINE_CHANNEL_SECRET) });
 
-  // 已登入的人輸入幹部碼升級成幹部
+  // 已登入的人輸入幹部碼或理事長碼升級
   if (path === '/api/me/admin' && method === 'POST') {
     const g = need(); if (g) return g;
     const code = str((await body()).code, 60);
-    if (!env.ADMIN_CODE || code !== env.ADMIN_CODE) return fail(403, '幹部碼不正確');
-    await env.DB.prepare("UPDATE members SET role = 'admin' WHERE id = ?").bind(member.id).run();
-    return json({ member: { ...pub(member), role: 'admin' } });
+    const role = env.CHAIR_CODE && code === env.CHAIR_CODE ? 'chair' : env.ADMIN_CODE && code === env.ADMIN_CODE ? 'staff' : null;
+    if (!role) return fail(403, '幹部碼不正確');
+    await env.DB.prepare('UPDATE members SET role = ? WHERE id = ?').bind(role, member.id).run();
+    return json({ member: pub({ ...member, role }) });
   }
 
   if (path === '/api/join' && method === 'POST') {
     const b = await body();
     const code = str(b.code, 60);
-    const admin = env.ADMIN_CODE && code === env.ADMIN_CODE;
-    if (!admin && (!env.JOIN_CODE || code !== env.JOIN_CODE)) return fail(403, '邀請碼不正確');
+    // 三種邀請碼：理事長碼、幹部碼、團員碼
+    const role = env.CHAIR_CODE && code === env.CHAIR_CODE ? 'chair'
+      : env.ADMIN_CODE && code === env.ADMIN_CODE ? 'staff'
+      : (env.JOIN_CODE && code === env.JOIN_CODE) ? 'member' : null;
+    if (!role) return fail(403, '邀請碼不正確');
     const name = str(b.name, 40);
     const dist = b.dist === 'hm' ? 'hm' : 'fm';
     const grp = (str(b.grp, 2) || (dist === 'hm' ? 'C' : 'D')).toUpperCase();
     if (!name) return fail(400, '請填姓名');
     if (!validGroup(dist, grp)) return fail(400, '組別不正確');
     const id = rid(8);
-    await env.DB.prepare('INSERT INTO members (id, name, dist, grp, role) VALUES (?, ?, ?, ?, ?)').bind(id, name, dist, grp, admin ? 'admin' : 'member').run();
+    await env.DB.prepare('INSERT INTO members (id, name, dist, grp, role) VALUES (?, ?, ?, ?, ?)').bind(id, name, dist, grp, role).run();
     const m = await env.DB.prepare('SELECT * FROM members WHERE id = ?').bind(id).first();
     return json({ member: pub(m) }, 200, { 'set-cookie': await startSession(env, id) });
   }
@@ -231,10 +281,11 @@ async function api(req, env, path, method) {
     const e = readEvent(await body());
     if (!e) return fail(400, '活動資料不完整');
     const id = rid(8);
-    await env.DB.prepare(`INSERT INTO events (id, kind, title, date, gather_time, end_time, place, lead, note, week_no, plan_text, capacity, signup_open, deadline, created_by)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .bind(id, e.kind, e.title, e.date, e.gather_time, e.end_time, e.place, e.lead, e.note, e.week_no, e.plan_text, e.capacity, e.signup_open, e.deadline, member.id).run();
-    env.defer(push(env, null, { title: `新活動：${e.title}`, body: `${e.date}${e.gather_time ? ` ${e.gather_time}` : ''}　${e.place || ''}`, url: `/#/e/${id}` }));
+    await env.DB.prepare(`INSERT INTO events (id, kind, title, date, gather_time, end_time, place, lead, note, week_no, plan_text, capacity, signup_open, deadline, created_by, fee, guest_max, meal_options)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .bind(id, e.kind, e.title, e.date, e.gather_time, e.end_time, e.place, e.lead, e.note, e.week_no, e.plan_text, e.capacity, e.signup_open, e.deadline, member.id, e.fee, e.guest_max, e.meal_options).run();
+    await notify(env, await allMemberIds(env, member.id), 'event',
+      { title: `新活動：${e.title}`, body: `${e.date}${e.gather_time ? ` ${e.gather_time}` : ''}　${e.place || ''}`, url: `/#/e/${id}` });
     return json({ id });
   }
 
@@ -250,8 +301,8 @@ async function api(req, env, path, method) {
       const ga = needAdmin(); if (ga) return ga;
       const e = readEvent(await body());
       if (!e) return fail(400, '活動資料不完整');
-      const r = await env.DB.prepare(`UPDATE events SET kind=?, title=?, date=?, gather_time=?, end_time=?, place=?, lead=?, note=?, week_no=?, plan_text=?, capacity=?, signup_open=?, deadline=? WHERE id = ?`)
-        .bind(e.kind, e.title, e.date, e.gather_time, e.end_time, e.place, e.lead, e.note, e.week_no, e.plan_text, e.capacity, e.signup_open, e.deadline, id).run();
+      const r = await env.DB.prepare(`UPDATE events SET kind=?, title=?, date=?, gather_time=?, end_time=?, place=?, lead=?, note=?, week_no=?, plan_text=?, capacity=?, signup_open=?, deadline=?, fee=?, guest_max=?, meal_options=? WHERE id = ?`)
+        .bind(e.kind, e.title, e.date, e.gather_time, e.end_time, e.place, e.lead, e.note, e.week_no, e.plan_text, e.capacity, e.signup_open, e.deadline, e.fee, e.guest_max, e.meal_options, id).run();
       return r.meta.changes ? json({ ok: true }) : fail(404, '找不到這個活動');
     }
     if (method === 'DELETE') {
@@ -279,6 +330,164 @@ async function api(req, env, path, method) {
     const lines = ev.signups.filter((s) => s.status === 'in').map((s, i) => `${i + 1}. ${s.grp}　${s.name}${s.note ? `（${s.note}）` : ''}`);
     const wait = ev.signups.filter((s) => s.status === 'wait').map((s, i) => `候補${i + 1}. ${s.grp}　${s.name}`);
     return json({ text: [`${ev.title}　${ev.date}`, ...lines, ...wait].join('\n') });
+  }
+
+  // ---- 通知中心 ----
+  if (path === '/api/notifications' && method === 'GET') {
+    const g = need(); if (g) return g;
+    const items = (await env.DB.prepare(
+      'SELECT id, kind, title, body, url, created_at, read_at FROM notifications WHERE member_id = ? ORDER BY created_at DESC LIMIT 60')
+      .bind(member.id).all()).results;
+    const unread = items.filter((x) => !x.read_at).length;
+    return json({ items, unread });
+  }
+  if (path === '/api/notifications/read' && method === 'POST') {
+    const g = need(); if (g) return g;
+    await env.DB.prepare("UPDATE notifications SET read_at = datetime('now') WHERE member_id = ? AND read_at IS NULL").bind(member.id).run();
+    return json({ ok: true });
+  }
+  if (path === '/api/notifications/count' && method === 'GET') {
+    if (!member) return json({ unread: 0 });
+    const r = await env.DB.prepare('SELECT COUNT(*) AS n FROM notifications WHERE member_id = ? AND read_at IS NULL').bind(member.id).first();
+    return json({ unread: r.n });
+  }
+
+  // ---- 教練發布課表 ----
+  if (path === '/api/plans' && method === 'GET') {
+    const g = need(); if (g) return g;
+    const u = new URL(req.url), week = Number(u.searchParams.get('week'));
+    const rows = (await env.DB.prepare(
+      `SELECT p.id, p.week_no, p.title, p.phase, p.body, p.created_at, m.name AS author
+       FROM plan_posts p LEFT JOIN members m ON m.id = p.author_id
+       ${week ? 'WHERE p.week_no = ?' : ''} ORDER BY p.created_at DESC LIMIT ${week ? 1 : 20}`)
+      .bind(...(week ? [week] : [])).all()).results;
+    return json({ plans: rows });
+  }
+  if (path === '/api/plans' && method === 'POST') {
+    const g = need(); if (g) return g;
+    if (!can(member, 'plan')) return fail(403, '只有教練可以發布課表');
+    const b = await body();
+    const title = str(b.title, 60), bodyText = str(b.body, 8000);
+    const week = Number.isInteger(b.week_no) && b.week_no >= 1 && b.week_no <= 21 ? b.week_no : null;
+    if (!title || !bodyText) return fail(400, '標題和課表內容都要填');
+    const id = rid(8);
+    await env.DB.prepare('INSERT INTO plan_posts (id, week_no, title, phase, body, author_id) VALUES (?, ?, ?, ?, ?, ?)')
+      .bind(id, week, title, str(b.phase, 20), bodyText, member.id).run();
+    if (b.notify !== false) await notify(env, await allMemberIds(env), 'plan', { title: `新課表：${title}`, body: `${member.name} 發布了${week ? ` W${week}` : ''}課表`, url: `/#/plan` });
+    return json({ id });
+  }
+  const pdel = path.match(/^\/api\/plans\/([\w-]{1,32})$/);
+  if (pdel && method === 'DELETE') {
+    const g = need(); if (g) return g;
+    if (!can(member, 'plan')) return fail(403, '只有教練可以刪除課表');
+    await env.DB.prepare('DELETE FROM plan_posts WHERE id = ?').bind(pdel[1]).run();
+    return json({ ok: true });
+  }
+
+  // ---- 春酒：入場券、報到、獎項與抽獎 ----
+  if (path === '/api/my/tickets' && method === 'GET') {
+    const g = need(); if (g) return g;
+    const rows = (await env.DB.prepare(
+      `SELECT t.code, t.guests, t.meal, t.seat, t.checked_in_at, e.id AS event_id, e.title, e.date, e.gather_time, e.place
+       FROM tickets t JOIN events e ON e.id = t.event_id WHERE t.member_id = ? AND e.date >= ? ORDER BY e.date`)
+      .bind(member.id, today()).all()).results;
+    return json({ tickets: rows });
+  }
+  const mt = path.match(/^\/api\/events\/([\w-]{1,32})\/tickets$/);
+  if (mt && method === 'GET') {
+    const g = need(); if (g) return g;
+    if (!can(member, 'checkin')) return fail(403, '只有幹部可以看報到名單');
+    const rows = (await env.DB.prepare(
+      `SELECT t.code, t.guests, t.meal, t.seat, t.checked_in_at, m.id AS member_id, m.name, m.avatar
+       FROM tickets t JOIN members m ON m.id = t.member_id WHERE t.event_id = ? ORDER BY m.name`).bind(mt[1]).all()).results;
+    return json({ tickets: rows, checkedIn: rows.filter((r) => r.checked_in_at).length,
+      people: rows.reduce((n, r) => n + 1 + (r.guests || 0), 0) });
+  }
+  const mc = path.match(/^\/api\/events\/([\w-]{1,32})\/checkin$/);
+  if (mc && method === 'POST') {
+    const g = need(); if (g) return g;
+    if (!can(member, 'checkin')) return fail(403, '只有幹部可以報到');
+    const b = await body(), code = str(b.code, 8).toUpperCase();
+    const t = await env.DB.prepare('SELECT t.*, m.name FROM tickets t JOIN members m ON m.id = t.member_id WHERE t.event_id = ? AND t.code = ?')
+      .bind(mc[1], code).first();
+    if (!t) return fail(404, '找不到這個入場代碼');
+    if (t.checked_in_at) return json({ ok: true, already: true, name: t.name, guests: t.guests, meal: t.meal, seat: t.seat });
+    await env.DB.prepare("UPDATE tickets SET checked_in_at = datetime('now'), seat = COALESCE(?, seat) WHERE id = ?")
+      .bind(str(b.seat, 20) || null, t.id).run();
+    return json({ ok: true, name: t.name, guests: t.guests, meal: t.meal, seat: str(b.seat, 20) || t.seat });
+  }
+  const mp = path.match(/^\/api\/events\/([\w-]{1,32})\/prizes$/);
+  if (mp) {
+    const g = need(); if (g) return g;
+    const eid = mp[1];
+    if (method === 'GET') {
+      const prizes = (await env.DB.prepare('SELECT id, name, qty, sponsor, sort FROM prizes WHERE event_id = ? ORDER BY sort, rowid').bind(eid).all()).results;
+      const draws = (await env.DB.prepare('SELECT id, prize_id, member_id, name, created_at FROM draws WHERE event_id = ? ORDER BY created_at').bind(eid).all()).results;
+      return json({ prizes, draws });
+    }
+    if (method === 'POST') {
+      if (!can(member, 'lottery')) return fail(403, '只有幹部可以設定獎項');
+      const b = await body(), name = str(b.name, 60);
+      if (!name) return fail(400, '請填獎項名稱');
+      const id = rid(8);
+      await env.DB.prepare('INSERT INTO prizes (id, event_id, name, qty, sponsor, sort) VALUES (?, ?, ?, ?, ?, ?)')
+        .bind(id, eid, name, Math.max(1, Math.min(Number(b.qty) || 1, 200)), str(b.sponsor, 40), Number(b.sort) || 0).run();
+      return json({ id });
+    }
+  }
+  const md = path.match(/^\/api\/events\/([\w-]{1,32})\/draw$/);
+  if (md && method === 'POST') {
+    const g = need(); if (g) return g;
+    if (!can(member, 'lottery')) return fail(403, '只有幹部可以抽獎');
+    const eid = md[1], b = await body(), prizeId = str(b.prize_id, 32);
+    const prize = await env.DB.prepare('SELECT * FROM prizes WHERE id = ? AND event_id = ?').bind(prizeId, eid).first();
+    if (!prize) return fail(404, '找不到這個獎項');
+    const drawnForPrize = (await env.DB.prepare('SELECT COUNT(*) AS n FROM draws WHERE prize_id = ?').bind(prizeId).first()).n;
+    const want = Math.max(1, Math.min(Number(b.count) || 1, prize.qty - drawnForPrize));
+    if (want <= 0) return fail(400, '這個獎項已經抽完了');
+    // 候選：已報到的人優先；沒有人報到就用已報名的人。預設一個人只中一次
+    const onlyCheckedIn = b.onlyCheckedIn !== false;
+    const pool = (await env.DB.prepare(
+      `SELECT t.member_id, m.name FROM tickets t JOIN members m ON m.id = t.member_id
+       WHERE t.event_id = ? ${onlyCheckedIn ? 'AND t.checked_in_at IS NOT NULL' : ''}
+         AND t.member_id NOT IN (SELECT member_id FROM draws WHERE event_id = ? AND member_id IS NOT NULL)`)
+      .bind(eid, eid).all()).results;
+    if (!pool.length) return fail(400, onlyCheckedIn ? '還沒有人報到，或大家都中過獎了' : '沒有可抽的名單');
+    const winners = [];
+    for (let i = 0; i < want && pool.length; i++) {
+      const k = crypto.getRandomValues(new Uint32Array(1))[0] % pool.length;
+      winners.push(pool.splice(k, 1)[0]);
+    }
+    await env.DB.batch(winners.map((w) => env.DB.prepare('INSERT INTO draws (id, event_id, prize_id, member_id, name) VALUES (?, ?, ?, ?, ?)')
+      .bind(rid(8), eid, prizeId, w.member_id, w.name)));
+    await notify(env, winners.map((w) => w.member_id), 'lottery', { title: `恭喜中獎：${prize.name}`, body: '請到台前領獎', url: `/#/e/${eid}` });
+    return json({ winners: winners.map((w) => w.name), prize: prize.name });
+  }
+  const mdd = path.match(/^\/api\/draws\/([\w-]{1,32})$/);
+  if (mdd && method === 'DELETE') {
+    const g = need(); if (g) return g;
+    if (!can(member, 'lottery')) return fail(403, '只有幹部可以重抽');
+    await env.DB.prepare('DELETE FROM draws WHERE id = ?').bind(mdd[1]).run();
+    return json({ ok: true });
+  }
+
+  // ---- 名冊與角色（理事長指派）----
+  if (path === '/api/members' && method === 'GET') {
+    const g = need(); if (g) return g;
+    if (!can(member, 'roster')) return fail(403, '只有幹部可以看名冊');
+    const rows = (await env.DB.prepare('SELECT id, name, dist, grp, role, title, avatar, created_at FROM members ORDER BY created_at').all()).results;
+    return json({ members: rows.map((m) => ({ ...m, role: norm(m.role), roleName: ROLES[norm(m.role)] })) });
+  }
+  const mr = path.match(/^\/api\/members\/([\w-]{1,32})\/role$/);
+  if (mr && method === 'POST') {
+    const g = need(); if (g) return g;
+    if (!can(member, 'roles')) return fail(403, '只有理事長可以指派角色');
+    const b = await body(), role = ROLES[b.role] ? b.role : null;
+    if (!role) return fail(400, '角色不正確');
+    if (mr[1] === member.id && role !== 'chair') return fail(400, '不能把自己降級，請先指派新的理事長');
+    await env.DB.prepare('UPDATE members SET role = ?, title = ? WHERE id = ?').bind(role, str(b.title, 20) || null, mr[1]).run();
+    await notify(env, [mr[1]], 'system', { title: '身分更新', body: `你的身分已設定為${ROLES[role]}`, url: '/#/me' });
+    return json({ ok: true });
   }
 
   if (path === '/api/push/subscribe' && method === 'POST') {
