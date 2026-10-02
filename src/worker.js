@@ -35,6 +35,8 @@ const KINDS = ['track', 'core', 'long', 'race', 'party', 'other'];
 const isDate = (s) => /^\d{4}-\d{2}-\d{2}$/.test(s);
 const isTime = (s) => !s || /^\d{2}:\d{2}$/.test(s);
 const today = () => new Date().toISOString().slice(0, 10);
+// 隱私權政策版本：內容有重大變更時改這裡，使用者下次登入會被要求重新同意
+const PRIVACY_VERSION = '2026-10-02';
 
 function validGroup(dist, grp) {
   return dist === 'hm' ? HM.includes(grp) : FM.includes(grp);
@@ -186,8 +188,8 @@ async function lineCallback(req, env, url) {
   } else {
     isNew = true;
     const id = rid(8);
-    await env.DB.prepare('INSERT INTO members (id, name, dist, grp, role, line_id, avatar) VALUES (?, ?, ?, ?, ?, ?, ?)')
-      .bind(id, str(prof.displayName, 40) || '跑者', 'fm', 'D', 'member', prof.userId, pic).run();
+    await env.DB.prepare("INSERT INTO members (id, name, dist, grp, role, line_id, avatar, consent_at, consent_version) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), ?)")
+      .bind(id, str(prof.displayName, 40) || '跑者', 'fm', 'D', 'member', prof.userId, pic, PRIVACY_VERSION).run();
     m = { id, name: str(prof.displayName, 40), role: 'member' };
   }
   await audit(env, req, m, isNew ? 'account.create' : 'login', 'member', m.id, 'LINE');
@@ -290,7 +292,8 @@ async function api(req, env, path, method) {
   const body = async () => { try { return await req.json(); } catch { return {}; } };
 
   if (path === '/api/me' && method === 'GET')
-    return json({ member: member ? pub(member) : null, vapid: env.VAPID_PUBLIC_KEY || null, lineLogin: !!(env.LINE_CHANNEL_ID && env.LINE_CHANNEL_SECRET) });
+    return json({ member: member ? pub(member) : null, vapid: env.VAPID_PUBLIC_KEY || null, lineLogin: !!(env.LINE_CHANNEL_ID && env.LINE_CHANNEL_SECRET),
+      privacyVersion: PRIVACY_VERSION, needConsent: !!member && member.consent_version !== PRIVACY_VERSION });
 
   // 已登入的人輸入幹部碼或理事長碼升級
   // 初始設定：系統裡還沒有理事長時，才能用 CHAIR_CODE 把自己設為理事長（只能用一次）。
@@ -321,13 +324,15 @@ async function api(req, env, path, method) {
       return fail(403, '邀請碼不正確');
     }
     const role = 'member';
+    if (b.consent !== true) return fail(400, '請先閱讀並同意隱私權政策');
     const name = str(b.name, 40);
     const dist = b.dist === 'hm' ? 'hm' : 'fm';
     const grp = (str(b.grp, 2) || (dist === 'hm' ? 'C' : 'D')).toUpperCase();
     if (!name) return fail(400, '請填姓名');
     if (!validGroup(dist, grp)) return fail(400, '組別不正確');
     const id = rid(8);
-    await env.DB.prepare('INSERT INTO members (id, name, dist, grp, role) VALUES (?, ?, ?, ?, ?)').bind(id, name, dist, grp, role).run();
+    await env.DB.prepare("INSERT INTO members (id, name, dist, grp, role, consent_at, consent_version) VALUES (?, ?, ?, ?, ?, datetime('now'), ?)")
+      .bind(id, name, dist, grp, role, PRIVACY_VERSION).run();
     const m = await env.DB.prepare('SELECT * FROM members WHERE id = ?').bind(id).first();
     await audit(env, req, m, 'account.create', 'member', id, '邀請碼');
     return json({ member: pub(m) }, 200, { 'set-cookie': await startSession(env, m, req) });
@@ -425,6 +430,13 @@ async function api(req, env, path, method) {
     const lines = ev.signups.filter((s) => s.status === 'in').map((s, i) => `${i + 1}. ${s.grp}　${s.name}${s.note ? `（${s.note}）` : ''}`);
     const wait = ev.signups.filter((s) => s.status === 'wait').map((s, i) => `候補${i + 1}. ${s.grp}　${s.name}`);
     return json({ text: [`${ev.title}　${ev.date}`, ...lines, ...wait].join('\n') });
+  }
+
+  if (path === '/api/me/consent' && method === 'POST') {
+    const g = need(); if (g) return g;
+    await env.DB.prepare("UPDATE members SET consent_at = datetime('now'), consent_version = ? WHERE id = ?").bind(PRIVACY_VERSION, member.id).run();
+    await audit(env, req, member, 'privacy.consent', 'member', member.id, PRIVACY_VERSION);
+    return json({ ok: true });
   }
 
   // ---- 個資：本人可以匯出與刪除（A.5.34） ----

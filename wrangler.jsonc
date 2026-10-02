@@ -16,7 +16,7 @@
       "binding": "DB",
       "database_name": "cil-run",
       // 第一次部署前先建資料庫：npx wrangler d1 create cil-run，再把 id 貼到這裡
-      "database_id": "PLACEHOLDER_RUN_WRANGLER_D1_CREATE",
+      "database_id": "e246d3a3-a537-4c20-afcf-c0002ef669c2",
       "migrations_dir": "migrations"
     }
   ]

@@ -76,7 +76,7 @@ function loginView() {
       ${cfg.lineLogin ? `<a class="btn line block" href="/api/line/start">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2C6.5 2 2 5.6 2 10c0 3.9 3.5 7.2 8.2 7.9.3.1.8.2.9.5.1.3.1.7 0 1l-.1.9c-.1.3-.3 1.1 1 .6s7-4.1 9.5-7c1.7-1.9 2.5-3.8 2.5-5.9C24 5.6 19.5 2 12 2z"/></svg>
         用 LINE 登入</a>
-      <p class="tiny center">只取得你的 LINE 名稱和大頭貼，不會讀取聊天內容，也不會替你發訊息。</p>` : ''}
+      <p class="tiny center">只取得你的 LINE 名稱和大頭貼，不會讀取聊天內容，也不會替你發訊息。<br>登入即表示你已閱讀並同意<a href="#/privacy">隱私權政策</a>。</p>` : ''}
       <details ${cfg.lineLogin ? '' : 'open'}>
         <summary class="muted" style="cursor:pointer">用邀請碼加入</summary>
         <form id="joinForm" style="margin-top:12px">
@@ -86,6 +86,7 @@ function loginView() {
             <label>項目<select name="dist"><option value="fm">全馬</option><option value="hm">半馬</option></select></label>
             <label>組別<select name="grp"></select></label>
           </div>
+          <label class="inline"><input type="checkbox" name="consent" required> 我已閱讀並同意<a href="#/privacy">隱私權政策</a></label>
           <button class="btn block">加入</button>
         </form>
       </details>
@@ -105,10 +106,56 @@ function loginView() {
   f.onsubmit = async (e) => {
     e.preventDefault();
     try {
-      me = (await api('/join', { method: 'POST', body: { code: f.code.value, name: f.name.value, dist: f.dist.value, grp: f.grp.value } })).member;
+      me = (await api('/join', { method: 'POST', body: { code: f.code.value, name: f.name.value, dist: f.dist.value, grp: f.grp.value, consent: f.consent.checked } })).member;
       location.hash = '#/'; render();
     } catch (err) { toast(err.message); }
   };
+}
+
+
+// ---------- 隱私權政策（個人資料保護法第 8 條告知事項）----------
+// 聯絡信箱與保存期限要由協會確認後填入
+const PRIVACY = {
+  org: '台灣耕跑團協會（耕跑團）',
+  contact: '請透過 LINE 群組聯絡協會行政人員',
+  retention: '帳號存續期間；帳號刪除後立即刪除，惟中獎紀錄匿名化後保留 3 年供贊助對帳',
+  version: '2026-10-02',
+};
+function privacyView() {
+  view.innerHTML = `
+    ${largeTitle('隱私權政策', `版本 ${PRIVACY.version}`)}
+    <section class="card prose">
+      <p>依個人資料保護法第 8 條，${PRIVACY.org}在蒐集您的個人資料前，告知以下事項。</p>
+      <h3>一、蒐集目的</h3>
+      <p>〇五二 法人或團體對會員之內部管理（團練報名、分組課表、會籍管理）；〇六九 契約、類似契約或其他法律關係事務（活動報名、入場與抽獎）；一三五 資（通）訊服務（通知推播）。</p>
+      <h3>二、蒐集的資料</h3>
+      <p>識別類（C001）：姓名、暱稱、LINE 顯示名稱與大頭貼、電話（選填）。<br>
+         活動相關：項目與組別、所屬跑團、餐點偏好、報名與報到紀錄、中獎紀錄。<br>
+         系統紀錄：登入時間、裝置型號摘要、IP 位址的單向雜湊值（無法還原）。<br>
+         <b>我們不蒐集</b>身分證字號、地址、生日；協會入會申請另以協會的 Google 表單辦理。</p>
+      <h3>三、利用期間、地區、對象與方式</h3>
+      <p>期間：${PRIVACY.retention}。<br>
+         地區：台灣，以及雲端服務（Cloudflare）的資料中心所在地。<br>
+         對象：依職務最小權限開放給協會幹部；電話完整號碼只有行政人員看得到。不提供給第三方行銷使用。<br>
+         方式：以電子方式處理，全程加密傳輸。</p>
+      <h3>四、您的權利</h3>
+      <p>您可以隨時行使個人資料保護法第 3 條的權利：</p>
+      <ul>
+        <li>查詢、閱覽、製給複本：「我的 → 下載我的資料」</li>
+        <li>補充或更正：「我的」頁面直接修改</li>
+        <li>停止蒐集、處理、利用及刪除：「我的 → 刪除帳號」</li>
+      </ul>
+      <h3>五、不提供資料的影響</h3>
+      <p>姓名與組別是報名與排課表的必要資料；不提供就無法報名活動。其他欄位都是選填，不影響使用。</p>
+      <h3>六、安全措施</h3>
+      <p>存取控制依職務分級、特權操作留有稽核紀錄、登入權杖只存雜湊值，並設有嘗試次數限制。詳見專案的資訊安全設計說明。</p>
+      <h3>七、聯絡方式</h3>
+      <p>${PRIVACY.contact}。</p>
+    </section>
+    ${me && cfg.needConsent ? '<button class="btn block" id="consentBtn">我已閱讀並同意</button>' : ''}`;
+  $('#consentBtn')?.addEventListener('click', async () => {
+    await api('/me/consent', { method: 'POST' }); cfg.needConsent = false; toast('已同意'); location.hash = '#/';
+  });
 }
 
 // ---------- 團練列表 ----------
@@ -1017,6 +1064,7 @@ async function meView() {
       <h3>隱私與帳號</h3>
       <p class="tiny" style="margin:0">我們只存姓名、暱稱、組別、跑團、餐點偏好與報名紀錄；電話只有行政人員看得到完整號碼。你可以隨時下載或刪除自己的資料。</p>
       <div class="row">
+        <a class="btn ghost sm" href="#/privacy">隱私權政策</a>
         <a class="btn ghost sm" href="/api/me/export" download>下載我的資料</a>
         <button class="btn ghost sm" id="logoutAll">登出所有裝置</button>
         <button class="btn danger sm" id="delAcct">刪除帳號</button>
@@ -1107,7 +1155,9 @@ async function render() {
   if (!me) {
     try { const r = await api('/me'); me = r.member; cfg = r; } catch { me = null; }
   }
+  if (hash === '/privacy') { if (!me) { try { const r = await api('/me'); me = r.member; cfg = r; } catch {} } return privacyView(); }
   if (!me) return loginView();
+  if (cfg.needConsent) { location.hash = '#/privacy'; return; }
   bell();
   $('#ctitle').textContent = '';
   const skel = setTimeout(() => { view.innerHTML = '<div class="skel" aria-label="載入中"><i></i><i></i><i></i></div>'; }, 150);
