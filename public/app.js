@@ -95,6 +95,24 @@ const ICONS = {
   bell: '<svg viewBox="0 0 24 24"><path d="M6.4 9.6a5.6 5.6 0 0 1 11.2 0c0 4 1.4 5.4 1.4 5.4H5s1.4-1.4 1.4-5.4Z"/><path d="M10.2 18.4a2 2 0 0 0 3.6 0"/></svg>',
   runner: '<svg viewBox="0 0 24 24"><circle cx="14" cy="4.6" r="1.6"/><path d="M6 20.5l2.6-5 2.4-1.6-1-4.2 3.6-1.4 1.8 3.2 3.4 1"/><path d="M11 13.9l1.3 3.2 3.4 2.6"/></svg>',
 };
+// 介面圖示：一律用同一套線條 SVG（不用 emoji），顏色跟著文字
+const ic = (d) => `<svg class="ic" viewBox="0 0 24 24" aria-hidden="true">${d}</svg>`;
+const IC = {
+  lock: ic('<rect x="5" y="10.5" width="14" height="10" rx="2.6"/><path d="M8.2 10.5V7.8a3.8 3.8 0 0 1 7.6 0v2.7"/>'),
+  megaphone: ic('<path d="M4 10v4a1 1 0 0 0 1 1h2l6 4V5L7 9H5a1 1 0 0 0-1 1Z"/><path d="M16.5 9a4 4 0 0 1 0 6M19 6.5a7.5 7.5 0 0 1 0 11"/>'),
+  calendar: ic('<rect x="3.2" y="4.8" width="17.6" height="15.4" rx="3.4"/><path d="M3.4 9.6h17.2M8 3.2v3.4M16 3.2v3.4"/>'),
+  checkCircle: ic('<circle cx="12" cy="12" r="8.6"/><path d="M8 12.3l2.8 2.8L16.2 9.6"/>'),
+  check: ic('<path d="M5 12.5l4.2 4.2L19 7"/>'),
+  half: ic('<circle cx="12" cy="12" r="7.6"/><path d="M12 4.4a7.6 7.6 0 0 1 0 15.2Z" fill="currentColor" stroke="none"/>'),
+  minus: ic('<path d="M6.5 12h11"/>'),
+  plus: ic('<path d="M12 6.5v11M6.5 12h11"/>'),
+  gift: ic('<rect x="3.6" y="8.4" width="16.8" height="4.2" rx="1.2"/><path d="M5.2 12.6v6.4a1.4 1.4 0 0 0 1.4 1.4h10.8a1.4 1.4 0 0 0 1.4-1.4v-6.4M12 8.4v12M12 8.4S10.6 3.8 8.2 4.5c-2 .6-1.1 3.9 3.8 3.9ZM12 8.4s1.4-4.6 3.8-3.9c2 .6 1.1 3.9-3.8 3.9Z"/>'),
+  gear: ic('<circle cx="12" cy="12" r="3"/><path d="M12 3.5v2.2M12 18.3v2.2M3.5 12h2.2M18.3 12h2.2M6 6l1.6 1.6M16.4 16.4 18 18M6 18l1.6-1.6M16.4 7.6 18 6"/>'),
+  runner: ic('<circle cx="14" cy="4.6" r="1.6"/><path d="M6 20.5l2.6-5 2.4-1.6-1-4.2 3.6-1.4 1.8 3.2 3.4 1"/><path d="M11 13.9l1.3 3.2 3.4 2.6"/>'),
+  scan: ic('<path d="M4 8V5.5A1.5 1.5 0 0 1 5.5 4H8M16 4h2.5A1.5 1.5 0 0 1 20 5.5V8M20 16v2.5a1.5 1.5 0 0 1-1.5 1.5H16M8 20H5.5A1.5 1.5 0 0 1 4 18.5V16M4 12h16"/>'),
+  doc: ic('<path d="M7 3.5h6.5L18 8v11a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 6 19V5a1.5 1.5 0 0 1 1-1.5Z"/><path d="M13.5 3.5V8H18M9 12.5h6M9 16h4"/>'),
+  external: ic('<path d="M14 4.5h5.5V10M19.5 4.5 11 13M17 14v4a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 5 18V8.5A1.5 1.5 0 0 1 6.5 7h4"/>'),
+};
 const emptyState = (icon, text) => `<div class="empty">${ICONS[icon] || ''}<span>${text}</span></div>`;
 function avatarStack(peek, total) {
   if (!total) return '<span class="stack empty">還沒有人</span>';
@@ -144,7 +162,7 @@ function loginView() {
     try { sessionStorage.setItem('cil-after-login', `#/e/${shared}${sharedTok ? `?t=${encodeURIComponent(sharedTok)}` : ''}`); } catch {}
     api(`/public/e/${shared}${sharedTok ? `?t=${encodeURIComponent(sharedTok)}` : ''}`).then(({ event: e }) => {
       $('#sharedEv').innerHTML = `<section class="card shared">
-        <span class="tiny">${e.visibility === 'invite' ? '🔒 你收到一個邀請制活動的邀請' : `有人邀請你${e.kind === 'survey' ? '填寫問卷' : '報名'}`}</span>
+        <span class="tiny">${e.visibility === 'invite' ? `${IC.lock} 你收到一個邀請制活動的邀請` : `有人邀請你${e.kind === 'survey' ? '填寫問卷' : '報名'}`}</span>
         <div class="row" style="gap:6px">${e.team ? `<span class="pill">${esc(e.team)}</span>` : ''}<span class="pill ${e.kind}">${KIND_NAME[e.kind] || '活動'}</span></div>
         <h2 style="margin:0">${esc(e.title)}</h2>
         <p class="muted" style="margin:0">${dstr(e.date)}${e.gather_time ? ` ${e.gather_time}` : ''}${e.place ? `・${esc(e.place)}` : ''}</p>
@@ -322,7 +340,7 @@ function eventCard(e) {
     <div class="ev">
       <span class="cal"><u>${d2(e.date).getMonth() + 1}月</u><b class="num">${e.date.slice(8)}</b><span>週${WD[d2(e.date).getDay()]}</span></span>
       <span class="body">
-        <span class="row" style="gap:6px"><span class="pill ${e.kind}">${KIND_NAME[e.kind] || '活動'}</span>${teamTag(teamOf(e.team_id))}${e.visibility === 'invite' ? '<span class="pill lock">🔒 邀請制</span>' : ''}
+        <span class="row" style="gap:6px"><span class="pill ${e.kind}">${KIND_NAME[e.kind] || '活動'}</span>${teamTag(teamOf(e.team_id))}${e.visibility === 'invite' ? `<span class="pill lock">${IC.lock}邀請制</span>` : ''}
           ${e.mine === 'in' ? '<span class="pill solid">已報名</span>' : e.mine === 'wait' ? '<span class="pill wait">候補</span>' : ''}</span>
         <span class="t">${esc(e.title)}</span>
         <span class="tiny">${e.gather_time ? `${e.gather_time}　` : ''}${esc(e.place || '')}</span>
@@ -373,13 +391,13 @@ async function eventView(id) {
   view.innerHTML = `
     <section class="card hero">
       <div class="row spread">
-        <span class="row" style="gap:6px"><span class="pill" style="background:rgba(255,255,255,.22);color:#fff">${KIND_NAME[ev.kind]}</span>${ev.team ? `<a class="pill" style="background:rgba(255,255,255,.14);color:#fff" href="#/t/${esc(ev.team.id)}">${esc(ev.team.name)}</a>` : ''}${inviteOnly ? '<span class="pill" style="background:rgba(255,255,255,.14);color:#fff">🔒 邀請制</span>' : ''}</span>
+        <span class="row" style="gap:6px"><span class="pill" style="background:rgba(255,255,255,.22);color:#fff">${KIND_NAME[ev.kind]}</span>${ev.team ? `<a class="pill" style="background:rgba(255,255,255,.14);color:#fff" href="#/t/${esc(ev.team.id)}">${esc(ev.team.name)}</a>` : ''}${inviteOnly ? `<span class="pill" style="background:rgba(255,255,255,.14);color:#fff">${IC.lock}邀請制</span>` : ''}</span>
         <span class="tiny">${survey ? `${dstr(ev.date)} 前` : dstr(ev.date)}</span>
       </div>
       <h2>${esc(ev.title)}</h2>
       <p class="muted" style="margin:0">${ev.gather_time ? `${ev.gather_time} 集合` : ''}${ev.end_time ? `－${ev.end_time}` : ''}${ev.place ? `　${esc(ev.place)}` : ''}${ev.lead ? `　帶團：${esc(ev.lead)}` : ''}</p>
       ${ev.note ? `<p class="muted" style="margin:0;white-space:pre-wrap">${esc(ev.note)}</p>` : ''}
-      ${ev.link_url ? `<a class="btn block" style="background:#fff;color:#1C4698" href="${esc(ev.link_url)}" target="_blank" rel="noopener">${esc(ev.link_label || '前往登記')} ↗</a>` : ''}
+      ${ev.link_url ? `<a class="btn block" style="background:#fff;color:#1C4698" href="${esc(ev.link_url)}" target="_blank" rel="noopener">${esc(ev.link_label || '前往登記')} ${IC.external}</a>` : ''}
       ${inviteOnly && !admin ? '' : `<div class="row sharebar">
         <button class="btn sm glassbtn" id="shareEv"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V3.5M7.5 8 12 3.5 16.5 8M5 12.5v6A2.5 2.5 0 0 0 7.5 21h9a2.5 2.5 0 0 0 2.5-2.5v-6"/></svg>分享</button>
         <button class="btn sm glassbtn" id="copyLink">${inviteOnly ? '複製邀請連結' : '複製報名連結'}</button>
@@ -483,7 +501,7 @@ async function eventView(id) {
     b.disabled = true; b.textContent = '抽獎中…';
     try {
       const r = await api(`/events/${id}/draw`, { method: 'POST', body: { prize_id: b.dataset.draw, count: 1 } });
-      toast(`🎉 ${r.prize}：${r.winners.join('、')}`); render();
+      toast(`抽出 ${r.prize}：${r.winners.join('、')}`); render();
     } catch (err) { toast(err.message); b.disabled = false; b.textContent = '抽出 1 位'; }
   };
   $('#prizeForm')?.addEventListener('submit', async (e) => {
@@ -538,7 +556,7 @@ async function eventView(id) {
 
 // 依活動資料組出 LINE 公告（格式照團裡原本的貼文）
 async function announceText(ev) {
-  const L = [`🏃 ${/\d{1,2}\/\d{1,2}/.test(ev.title) ? '' : `${dstr(ev.date)} `}${ev.title}`];
+  const L = [`【${KIND_NAME[ev.kind] || '活動'}】${/\d{1,2}\/\d{1,2}/.test(ev.title) ? '' : `${dstr(ev.date)} `}${ev.title}`];
   L.push(`時間：${dstr(ev.date)}${ev.gather_time ? ` ${ev.gather_time}${ev.end_time ? `–${ev.end_time}` : ''} 集合` : ''}`);
   if (ev.place) L.push(`地點：${ev.place}`);
   if (ev.lead) L.push(`帶團：${ev.lead}`);
@@ -576,7 +594,7 @@ async function notificationsView() {
   // 進到通知頁就當作看過了
   if (unread) setTimeout(async () => { await api('/notifications/read', { method: 'POST' }); bell(); }, 1200);
 }
-const NICON = { event: '📣', plan: '📅', signup: '✅', lottery: '🎁', system: '⚙️', log: '🏃' };
+const NICON = { event: IC.megaphone, plan: IC.calendar, signup: IC.checkCircle, lottery: IC.gift, system: IC.gear, log: IC.runner };
 const notifRow = (n) => `
       <a class="card tight notif ${n.read_at ? '' : 'unread'}" href="${esc(n.url || '#/')}">
         <div class="row" style="gap:12px;align-items:flex-start">
@@ -1034,7 +1052,7 @@ function inviteCard(ev) {
   const link = ev.invite?.token ? `${eventUrl(ev.id)}?t=${ev.invite.token}` : '';
   const teamOpts = teams().filter((t) => teamAllow(t.id, 'roster'));
   return `<section class="card" id="invCard">
-    <div class="row spread"><h3>🔒 受邀名單</h3><span class="tiny"><b class="num">${ev.invite?.count || 0}</b> 人受邀</span></div>
+    <div class="row spread"><h3 class="row" style="gap:6px">${IC.lock}受邀名單</h3><span class="tiny"><b class="num">${ev.invite?.count || 0}</b> 人受邀</span></div>
     <p class="tiny" style="margin:0">只有名單上的人看得到這個活動。移出名單會一併取消他的報名與入場券。</p>
     <form id="invSearch" class="row" style="gap:8px"><input name="q" placeholder="搜尋姓名或暱稱邀請" style="flex:1" autocomplete="off"><button class="btn ghost sm">搜尋</button></form>
     <div class="roster" id="invHits"></div>
@@ -1180,7 +1198,7 @@ async function scanView(eventId) {
       busy = true;
       try {
         const r = await api(`/events/${eventId}/checkin`, { method: 'POST', body: { code } });
-        $('#scanMsg').textContent = `${r.already ? '已報到過：' : '✅ '}${r.name}${r.table_no ? `・第 ${r.table_no} 桌` : ''}`;
+        $('#scanMsg').textContent = `${r.already ? '已報到過：' : '報到完成：'}${r.name}${r.table_no ? `・第 ${r.table_no} 桌` : ''}`;
         toast(`${r.name} 報到完成`);
       } catch (err) { $('#scanMsg').textContent = err.message; }
       setTimeout(() => { busy = false; }, 1800);
@@ -1205,7 +1223,7 @@ async function partyAdmin(ev) {
 
     <section class="card">
       <div class="row spread"><h3>報到台</h3><span class="tiny">${checkedIn}/${tickets.length} 人報到・含攜伴 ${people} 位</span></div>
-      <a class="btn sm" href="#/e/${ev.id}/scan">📷 掃碼報到</a>
+      <a class="btn sm iconbtn" href="#/e/${ev.id}/scan">${IC.scan}掃碼報到</a>
       <form id="cform" class="row" style="gap:8px">
         <input name="code" placeholder="輸入入場代碼" style="flex:1;min-width:150px;text-transform:uppercase" autocomplete="off">
         <input name="seat" placeholder="桌次" style="width:90px">
@@ -1224,7 +1242,7 @@ async function partyAdmin(ev) {
         const w = draws.filter((d) => d.prize_id === p.id);
         return `<div class="prize">
           <div class="row spread"><b>${p.stage ? `<span class="pill">${esc(p.stage)}</span> ` : ''}${esc(p.name)}</b><span class="tiny">${w.length}/${p.qty}${p.sponsor ? `・${esc(p.sponsor)}` : ''}</span></div>
-          ${w.length ? `<div class="winners">${w.map((d) => `<button class="pill ${d.claimed_at ? 'solid' : 'wait'}" data-claim="${d.id}" title="${d.claimed_at ? '已領獎' : '點一下確認領獎'}">${esc(d.name)}${d.claimed_at ? ' ✓' : ''}</button>`).join('')}</div>` : ''}
+          ${w.length ? `<div class="winners">${w.map((d) => `<button class="pill ${d.claimed_at ? 'solid' : 'wait'}" data-claim="${d.id}" title="${d.claimed_at ? '已領獎' : '點一下確認領獎'}">${esc(d.name)}${d.claimed_at ? IC.check : ''}</button>`).join('')}</div>` : ''}
           ${w.length < p.qty ? `<button class="btn sm" data-draw="${p.id}">抽出 1 位</button>` : '<span class="tiny">已抽完</span>'}
         </div>`;
       }).join('') || '<p class="muted" style="margin:0">還沒有獎項。</p>'}
@@ -1587,8 +1605,8 @@ async function planView(n) {
 
 // ---------- 訓練紀錄 ----------
 const LOG_STATUS_NAME = { done: '完成', partial: '部分完成', skip: '沒練', extra: '自主加練' };
-const LOG_ICON = { done: '✓', partial: '◐', skip: '–', extra: '＋' };
-const FEEL = ['', '😫', '😕', '🙂', '😄', '🤩'];
+const LOG_ICON = { done: IC.check, partial: IC.half, skip: IC.minus, extra: IC.plus };
+const FEEL = ['', '很累', '有點累', '普通', '不錯', '很好'];
 const pad2 = (n) => String(n).padStart(2, '0');
 const ymd = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 // 課表上的「週二」「週五或週六」「週末」→ 那一週實際的日期
@@ -1646,7 +1664,7 @@ async function logView() {
           <label>平均心率（選填）<input name="hr" inputmode="numeric" value="${v.hr ?? ''}" placeholder="152"></label>
           <label>RPE 自覺強度 <b class="num" id="rpeOut">${v.rpe || 5}</b><input type="range" name="rpe" min="1" max="10" value="${v.rpe || 5}"></label>
         </div>
-        <fieldset class="qset"><legend>身體感覺</legend><div class="chips feel">${[1, 2, 3, 4, 5].map((n) => `<label class="chip"><input type="radio" name="feel" value="${n}" ${Number(v.feel) === n ? 'checked' : ''}><span aria-label="${n} 分">${FEEL[n]}</span></label>`).join('')}</div></fieldset>
+        <fieldset class="qset"><legend>身體感覺</legend><div class="chips feel">${[1, 2, 3, 4, 5].map((n) => `<label class="chip"><input type="radio" name="feel" value="${n}" ${Number(v.feel) === n ? 'checked' : ''}><span>${FEEL[n]}</span></label>`).join('')}</div></fieldset>
         <label>備註（只有你看得到）<input name="note" maxlength="300" value="${esc(v.note || '')}" placeholder="腳踝有點緊、風很大…"></label>
         <button class="btn block">儲存</button>
         ${log ? '<button type="button" class="btn danger block" id="delLog">刪除這筆紀錄</button>' : ''}
@@ -1739,7 +1757,7 @@ async function formView(id) {
       <label>標題<input name="title" required maxlength="40" value="${esc(d.title || '')}" placeholder="10/8（四）耕跑團練"></label>
       <fieldset class="qset"><legend>誰看得到</legend><div class="chips">
         <label class="chip"><input type="radio" name="visibility" value="public" ${d.visibility !== 'invite' ? 'checked' : ''}><span>公開</span></label>
-        <label class="chip"><input type="radio" name="visibility" value="invite" ${d.visibility === 'invite' ? 'checked' : ''}><span>🔒 邀請制</span></label></div>
+        <label class="chip"><input type="radio" name="visibility" value="invite" ${d.visibility === 'invite' ? 'checked' : ''}><span>${IC.lock}邀請制</span></label></div>
         <span class="tiny" id="visHint"></span></fieldset>
       <div class="grid2">
         <label><span data-when="survey">截止日期</span><span data-when="!survey">日期</span><input type="date" name="date" required value="${esc(d.date)}"></label>
@@ -2127,10 +2145,10 @@ async function meView() {
     </section>
     ${(cfg.settings?.docs || []).length || org().contact || org().parent ? `<section class="card">
       <h3>協會資訊</h3>
-      ${org().parent ? `<p class="tiny" style="margin:0">所屬企業：${org().parent_url ? `<a href="${esc(org().parent_url)}" target="_blank" rel="noopener">${esc(org().parent)} ↗</a>` : esc(org().parent)}${org().parent_note ? `・${esc(org().parent_note)}` : ''}</p>` : ''}
+      ${org().parent ? `<p class="tiny" style="margin:0">所屬企業：${org().parent_url ? `<a href="${esc(org().parent_url)}" target="_blank" rel="noopener">${esc(org().parent)} ${IC.external}</a>` : esc(org().parent)}${org().parent_note ? `・${esc(org().parent_note)}` : ''}</p>` : ''}
       ${org().contact ? `<p class="tiny" style="margin:0">聯絡方式：${esc(org().contact)}</p>` : ''}
       <div class="doclist">${(cfg.settings?.docs || []).map((d) => `<a class="docrow" href="${esc(d.url)}" target="_blank" rel="noopener">
-        <span>📄</span><span><b>${esc(d.title)}</b>${d.note ? `<span class="tiny" style="display:block">${esc(d.note)}</span>` : ''}</span><span class="tiny">↗</span></a>`).join('')}</div>
+        <span class="docic">${IC.doc}</span><span><b>${esc(d.title)}</b>${d.note ? `<span class="tiny" style="display:block">${esc(d.note)}</span>` : ''}</span><span class="tiny">${IC.external}</span></a>`).join('')}</div>
     </section>` : ''}
     <section class="card" id="myPrizes"></section>
 
@@ -2174,7 +2192,7 @@ async function meView() {
     const { races } = await api('/races');
     $('#raceList').innerHTML = races.map((r) => {
       const d = Math.round((new Date(`${r.date}T00:00:00`) - new Date().setHours(0, 0, 0, 0)) / 864e5);
-      return `<div class="r"><span class="av num" style="font-size:11px">${d >= 0 ? d : '✓'}</span>
+      return `<div class="r"><span class="av num" style="font-size:11px">${d >= 0 ? d : IC.check}</span>
         <span><b>${esc(r.name)}</b>${r.is_primary ? ' <span class="pill solid">主要</span>' : ''}
           <span class="tiny" style="display:block">${esc(r.date)}・${esc(r.dist || '')}${r.goal ? `・目標 ${esc(r.goal)}` : ''}${d >= 0 ? `・還有 ${d} 天` : '・已完賽'}</span></span>
         <span class="row" style="gap:6px">${r.is_primary ? '' : `<button class="btn ghost sm" data-prim="${r.id}">設為主要</button>`}<button class="btn danger sm" data-delrace="${r.id}" aria-label="刪除">刪除</button></span></div>`;
@@ -2200,7 +2218,7 @@ async function meView() {
     const box = $('#myPrizes');
     if (!box) return;
     box.innerHTML = prizes.length
-      ? `<h3>我的中獎紀錄</h3>${prizes.map((p) => `<div class="r"><span>🎁</span>
+      ? `<h3>我的中獎紀錄</h3>${prizes.map((p) => `<div class="r"><span class="docic">${IC.gift}</span>
           <span><b>${esc(p.prize)}</b>${p.stage ? ` <span class="tiny">${esc(p.stage)}</span>` : ''}
             <span class="tiny" style="display:block">${esc(p.title)}${p.sponsor ? `・${esc(p.sponsor)}` : ''}</span></span>
           <span class="pill ${p.claimed_at ? 'solid' : 'wait'}">${p.claimed_at ? '已領獎' : '待領獎'}</span></div>`).join('')}`

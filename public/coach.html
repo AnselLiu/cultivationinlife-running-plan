@@ -1347,7 +1347,7 @@ function renderToday(){
   else{
     const r=todayItems(), w=r.w, it=r.items;
     h=`<h3>${L('今天的課','Today')}<small>${mdw(t)} · ${wkName(w.n)} ${w.n===21?L('賽後恢復','Recovery'):phaseName(w.phase)}</small></h3>`;
-    if(dayDiff(raceDay(),t)===0) h+=`<p class="hi">🏁 ${L(`${nm}，今天就是 ${rn}！加油！`,`${nm}, it’s ${rn} today — go get it!`)}</p><button type="button" class="go" onclick="document.getElementById('raceCard').scrollIntoView({behavior:'smooth',block:'start'})">${L('看比賽日流程 ›','Race-day plan ›')}</button>`;
+    if(dayDiff(raceDay(),t)===0) h+=`<p class="hi">${L(`${nm}，今天就是 ${rn}！加油！`,`${nm}, it’s ${rn} today — go get it!`)}</p><button type="button" class="go" onclick="document.getElementById('raceCard').scrollIntoView({behavior:'smooth',block:'start'})">${L('看比賽日流程 ›','Race-day plan ›')}</button>`;
     else if(!it.length||it.every(x=>x.k==='rest')) h+=`<p class="hi">${L(`${nm}，今天休息`,`${nm}, rest day today`)}</p><p class="muted">${L('好好睡、補充碳水，把體力留給下一堂課。','Sleep well, eat your carbs and save your legs for the next session.')}</p>`;
     else h+=`<p class="hi">${L(`${nm}，今天這樣練：`,`${nm}, here’s today’s session:`)}</p>`+it.filter(x=>x.k!=='race').map(x=>{const p=paceNotes(x.t);
       return `<div class="item${x.opt?' opt':''}"><span class="t">${esc(dispDay(x))} · ${kindLabel(x)}</span><span class="x">${esc(dispText(x))}</span>${p.length?`<span class="pc num">≈ ${p.join(LIST_SEP())}/km</span>`:''}${explainHTML(x)}</div>`;}).join('');
@@ -1722,7 +1722,7 @@ function openPop(btn){
   const p=$('termPop');
   const w=S.view==='all'?null:WEEKS[S.week-1];
   const cnt=w?(planDays(w)||[]).filter(x=>termsIn(dispText(x)).includes(k)).length:0;
-  p.innerHTML=`<div class="tp-h"><b>${esc(g.name)}</b><button type="button" class="tp-x" aria-label="${L('關閉','Close')}">✕</button></div>
+  p.innerHTML=`<div class="tp-h"><b>${esc(g.name)}</b><button type="button" class="tp-x" aria-label="${L('關閉','Close')}"><svg viewBox="0 0 24 24" width="12" height="12" aria-hidden="true" style="fill:none;stroke:currentColor;stroke-width:2.4;stroke-linecap:round"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
     <p>${esc(L(g.zh,g.en))}</p>
     <div class="tp-a">${w?`<span>${L(`本週 ${cnt} 堂課用到`,`Used in ${cnt} session${cnt===1?'':'s'} this week`)}</span>`:''}
       <button type="button" class="tp-hl">${S.hl===k?L('取消標示','Clear highlight'):L('標示本週全部','Highlight all')}</button>
@@ -1967,7 +1967,7 @@ function tickClock(){
   const el=$('cdClock');if(!el)return;
   let ms=raceStart()-Date.now();
   if(ms<=0){const ago=dayDiff(today0(),raceDay());
-    el.innerHTML=ago===0?`<div style="grid-column:1/-1"><b>🏁</b><small>${L('今天比賽，加油！','Race day — go!')}</small></div>`
+    el.innerHTML=ago===0?`<div style="grid-column:1/-1"><b>RACE</b><small>${L('今天比賽，加油！','Race day — go!')}</small></div>`
       :`<div style="grid-column:1/-1"><b>${ago}</b><small>${L('天前完賽・好好恢復','days since the race · recover well')}</small></div>`;return;}
   const s=Math.floor(ms/1000),d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60),sec=s%60,p=v=>String(v).padStart(2,'0');
   el.innerHTML=`<div><b>${d}</b><small>${L('天','DAYS')}</small></div><div><b>${p(h)}</b><small>${L('時','HRS')}</small></div><div><b>${p(m)}</b><small>${L('分','MIN')}</small></div><div><b>${p(sec)}</b><small>${L('秒','SEC')}</small></div>`;
@@ -2268,7 +2268,7 @@ async function buildPlanPdf(opts){
     rr(ctx,M,y,CW,56,12);const gr=ctx.createLinearGradient(M,y,M+CW,y);gr.addColorStop(0,'#1C4698');gr.addColorStop(1,'#0B1B33');ctx.fillStyle=gr;ctx.fill();
     ctx.fillStyle='#FDF36D';rr(ctx,M,y,6,56,3);ctx.fill();
     txt(L('比賽日建議','RACE-DAY PLAN'),M+18,y+22,10,'#FDF36D',700);
-    {const tt=`🏁 ${raceName()} · ${mdw(raceDay())}${S.start?' '+S.start:''}`;ctx.font=font(17,800);let sz=17;while(sz>11&&ctx.measureText(tt).width>CW-150){sz-=.5;ctx.font=font(sz,800);}txt(tt,M+18,y+44,sz,'#FFFFFF',800);}
+    {const tt=`${raceName()} · ${mdw(raceDay())}${S.start?' '+S.start:''}`;ctx.font=font(17,800);let sz=17;while(sz>11&&ctx.measureText(tt).width>CW-150){sz-=.5;ctx.font=font(sz,800);}txt(tt,M+18,y+44,sz,'#FFFFFF',800);}
     txt(`${fmtP(mp)}/km`,M+CW-14,y+36,20,'#FDF36D',800,'right');txt(L('目標配速','Goal pace'),M+CW-14,y+49,8,'#D9E2F5',500,'right');
     y+=70;
     const sec=(t)=>{txt(t,M,y+10,11,PDF_C.accent,800);y+=18;};
@@ -2424,7 +2424,7 @@ function buildIcs(){
       x.notes.forEach(n=>desc.push(n));
       if(isRace){const rp=raceDayPlan();desc.push('',L('— 比賽日流程 —','— Race-day plan —'),...rp.timeline.map(([t,a,b])=>`${t} ${a}：${b}`.replace('：',L('：',': '))),rp.gelNote,'');}
       desc.push(L('課表以教練每週發布的為準','The coach’s weekly post takes priority'));
-      const title=isRace?`🏁 ${raceName()}`:`${x.opt?L('（可省略）','(Optional) '):''}${KIND[x.k]} | ${trPlan(x.t)}${p.length?` (≈${p.join(LIST_SEP())})`:''}`;
+      const title=isRace?`${raceName()}`:`${x.opt?L('（可省略）','(Optional) '):''}${KIND[x.k]} | ${trPlan(x.t)}${p.length?` (≈${p.join(LIST_SEP())})`:''}`;
       out.push('BEGIN:VEVENT',`UID:gengpao-${key}-w${w.n}-${i}@gengpao-coach`,`DTSTAMP:${stamp}`);
       const st=/^(\d{1,2}):(\d{2})$/.exec(S.start||'');
       if(isRace&&st){
