@@ -845,7 +845,7 @@ const AUDIT_NAME = {
   'settings.club_race': '修改預設倒數', 'event.update': '編輯活動', 'event.export': '匯出報名名單',
   'team.create': '新增分團', 'team.update': '修改分團', 'team.delete': '刪除分團', 'team.join': '加入分團', 'team.leave': '退出分團',
   'team.approve': '通過入團', 'team.reject': '婉拒入團', 'team.remove': '移出分團', 'team.role': '變更分團身分', 'team.add': '加進分團', 'team.icon': '更新分團圖示', 'event.invite': '邀請參加活動', 'event.uninvite': '移出受邀名單', 'event.invite_link': '設定邀請連結',
-  'event.invite_accept': '用邀請連結加入', 'event.invite_denied': '邀請連結無效', 'privacy.share_logs': '訓練紀錄分享設定', 'settings.shortcut': '修改捷徑連結',
+  'event.invite_accept': '用邀請連結加入', 'review.reminder': '每季權限檢視提醒', 'retention.cleanup': '資料保存期限清理', 'event.invite_denied': '邀請連結無效', 'privacy.share_logs': '訓練紀錄分享設定', 'settings.shortcut': '修改捷徑連結',
 };
 // 稽核紀錄：一定要選時間區間（預設最近 7 天），再依類型、操作者、對象縮小；一次 50 筆
 const AUDIT_GROUPS = { '': '所有類型', role: '身分變更', membership: '會籍', team: '分團', event: '活動', checkin: '報到', lottery: '抽獎',
@@ -963,7 +963,15 @@ function settingsPanel() {
       <label>企業說明（登入頁與「我的」會顯示）<input name="parent_note" maxlength="80" value="${esc(o.parent_note || '')}" placeholder="耕建築企業支持的跑團"></label>
       <label>入會表單連結<input name="join_form" type="url" value="${esc(o.join_form || '')}" placeholder="https://docs.google.com/forms/…"></label>
       <label>聯絡方式<input name="contact" maxlength="200" value="${esc(o.contact || '')}" placeholder="Email 或 LINE 官方帳號"></label>
-      <label>個資保存期限<input name="retention" maxlength="200" value="${esc(o.retention || '')}"></label>
+      <label>個資保存期限（寫進隱私權政策的文字）<input name="retention" maxlength="200" value="${esc(o.retention || '')}"></label>
+      <fieldset class="group"><legend>自動清理（每天 03:00 執行）</legend>
+        <div class="grid3">
+          <label>活動報名資料保存<select name="event_data_years">${[0, 1, 2, 3, 5].map((y) => `<option value="${y}" ${Number(o.event_data_years || 0) === y ? 'selected' : ''}>${y ? `${y} 年` : '不自動刪除'}</option>`).join('')}</select></label>
+          <label>訓練紀錄保存<select name="log_years">${[0, 1, 2, 3, 5].map((y) => `<option value="${y}" ${Number(o.log_years || 0) === y ? 'selected' : ''}>${y ? `${y} 年` : '不自動刪除'}</option>`).join('')}</select></label>
+          <label>稽核紀錄保存<select name="audit_years">${[1, 2, 3, 5, 7].map((y) => `<option value="${y}" ${Number(o.audit_years || 3) === y ? 'selected' : ''}>${y} 年</option>`).join('')}</select></label>
+        </div>
+        <p class="tiny" style="margin:0">活動超過保存年限後，報名、入場券與受邀名單會刪除，中獎紀錄只留獎項不留姓名。過期的登入工作階段、180 天前的通知每天都會清掉。</p>
+      </fieldset>
       <button class="btn sm">儲存協會資訊</button>
     </form>
   </section>
@@ -1017,7 +1025,8 @@ function bindSettings() {
   const save = async (key, body, msg) => { try { await api(`/settings/${key}`, { method: 'POST', body }); await reload(msg); } catch (e) { toast(e.message); } };
   $('#orgForm').onsubmit = (e) => { e.preventDefault(); const f = e.target;
     save('org', { name: f.name.value, short: f.short.value, join_form: f.join_form.value.trim(), contact: f.contact.value, retention: f.retention.value,
-      parent: f.parent.value, parent_url: f.parent_url.value.trim(), parent_note: f.parent_note.value }, '已儲存協會資訊'); };
+      parent: f.parent.value, parent_url: f.parent_url.value.trim(), parent_note: f.parent_note.value,
+      event_data_years: Number(f.event_data_years.value), log_years: Number(f.log_years.value), audit_years: Number(f.audit_years.value) }, '已儲存協會資訊'); };
   $('#featForm').onsubmit = (e) => { e.preventDefault(); const f = e.target, body = {};
     for (const k of Object.keys(FEATURE_NAME)) body[k] = f[k].checked;
     save('features', body, '已儲存功能開關'); };

@@ -54,7 +54,7 @@ function validGroup(dist, grp) {
 
 // ---- 工作階段 ----
 const tokenOf = (req) => (req.headers.get('cookie') || '').match(new RegExp(`${COOKIE}=([\\w]+)`))?.[1];
-const ipHash = async (req, env) => (await sha(`${req.headers.get('cf-connecting-ip') || 'local'}|${env.HASH_SALT || 'cil'}`)).slice(0, 16);
+const ipHash = async (req, env) => (await sha(`${req?.headers.get('cf-connecting-ip') || (req ? 'local' : 'system')}|${env.HASH_SALT || 'cil'}`)).slice(0, 16);
 
 async function currentMember(req, env) {
   const token = tokenOf(req);
@@ -105,7 +105,7 @@ async function audit(env, req, actor, action, targetType, targetId, detail) {
   try {
     await env.DB.prepare(`INSERT INTO audit_log (id, actor_id, actor_name, actor_role, action, target_type, target_id, detail, ip_hash)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .bind(rid(10), actor?.id || null, actor?.name || null, actor ? norm(actor.role) : null, action,
+      .bind(rid(10), actor?.id || null, actor?.name || (req ? null : '系統排程'), actor ? norm(actor.role) : null, action,
             targetType || null, targetId || null, str(detail, 300) || null, await ipHash(req, env)).run();
   } catch (e) { console.error('audit', e); }
 }
@@ -806,7 +806,10 @@ async function api(req, env, path, method) {
     let value;
     if (key === 'org') {
       value = { name: str(b.name, 40), short: str(b.short, 12), contact: str(b.contact, 200), retention: str(b.retention, 200), join_form: httpsUrl(b.join_form),
-        parent: str(b.parent, 30), parent_url: httpsUrl(b.parent_url), parent_note: str(b.parent_note, 80) };
+        parent: str(b.parent, 30), parent_url: httpsUrl(b.parent_url), parent_note: str(b.parent_note, 80),
+        event_data_years: Math.max(0, Math.min(Math.round(Number(b.event_data_years) || 0), 20)),
+        log_years: Math.max(0, Math.min(Math.round(Number(b.log_years) || 0), 20)),
+        audit_years: Math.max(1, Math.min(Math.round(Number(b.audit_years) || 3), 10)) };
       if (!value.name) return fail(400, '請填協會名稱');
       if (b.join_form && !value.join_form) return fail(400, '入會表單連結要是 https:// 開頭的網址');
       if (b.parent_url && !value.parent_url) return fail(400, '企業網站要是 https:// 開頭的網址');
@@ -1443,7 +1446,115 @@ async function api(req, env, path, method) {
   return fail(404, '沒有這個 API');
 }
 
+// ---- 排程工作（wrangler.jsonc 的 cron：每小時整點）----
+// 時間一律用台北時間判斷；每項工作都有防重複的標記，重跑也不會重複通知
+const taipei = (d = new Date()) => new Date(d.getTime() + 8 * 3600e3);   // 只拿來讀年月日時，不當成真的時區物件
+const tpDate = (d) => taipei(d).toISOString().slice(0, 10);
+async function onceOn(env, job, key) {
+  // 同一個 key（例如日期、季別）只執行一次
+  const r = await env.DB.prepare('SELECT last_run FROM job_runs WHERE job = ?').bind(job).first();
+  if (r?.last_run === key) return false;
+  await env.DB.prepare('INSERT INTO job_runs (job, last_run) VALUES (?, ?) ON CONFLICT(job) DO UPDATE SET last_run = excluded.last_run').bind(job, key).run();
+  return true;
+}
+const signedIds = async (env, eid) => (await env.DB.prepare("SELECT member_id FROM signups WHERE event_id = ? AND status = 'in' AND member_id IS NOT NULL").bind(eid).all()).results.map((r) => r.member_id);
+
+// 活動提醒：前一晚 20:00 提醒明天的活動；集合前 1–2 小時再提醒一次
+async function remindEvents(env, now) {
+  const hour = taipei(now).getUTCHours(), today0 = tpDate(now), tomorrow = tpDate(new Date(now.getTime() + 864e5));
+  let sent = 0;
+  if (hour === 20) {
+    const evs = (await env.DB.prepare(`SELECT id, title, date, gather_time, place, kind FROM events
+      WHERE date = ? AND status = 'open' AND kind != 'survey' AND remind_day_at IS NULL`).bind(tomorrow).all()).results;
+    for (const ev of evs) {
+      const ids = await signedIds(env, ev.id);
+      await env.DB.prepare("UPDATE events SET remind_day_at = datetime('now') WHERE id = ?").bind(ev.id).run();
+      if (!ids.length) continue;
+      await notify(env, ids, 'event', { title: `明天：${ev.title}`, body: `${ev.gather_time ? `${ev.gather_time} 集合` : '明天'}${ev.place ? `・${ev.place}` : ''}${ev.kind === 'party' ? '・記得帶入場券 QR Code' : ''}`, url: `/#/e/${ev.id}`, tag: `day-${ev.id}` });
+      sent += ids.length;
+    }
+  }
+  // 集合時間落在 (現在 + 60 分, 現在 + 120 分]
+  const nowMin = taipei(now).getUTCHours() * 60 + taipei(now).getUTCMinutes();
+  const evs = (await env.DB.prepare(`SELECT id, title, gather_time, place, kind FROM events
+    WHERE date = ? AND status = 'open' AND kind != 'survey' AND gather_time != '' AND gather_time IS NOT NULL AND remind_hour_at IS NULL`).bind(today0).all()).results;
+  for (const ev of evs) {
+    const [h, m] = ev.gather_time.split(':').map(Number), diff = h * 60 + m - nowMin;
+    if (!(diff > 60 && diff <= 120)) continue;
+    const ids = await signedIds(env, ev.id);
+    await env.DB.prepare("UPDATE events SET remind_hour_at = datetime('now') WHERE id = ?").bind(ev.id).run();
+    if (!ids.length) continue;
+    await notify(env, ids, 'event', { title: `${ev.gather_time} 集合：${ev.title}`, body: `${ev.place || ''}${ev.kind === 'party' ? '　入場券在「我的入場券」' : '　出門前記得暖身補水'}`, url: ev.kind === 'party' ? '/#/tickets' : `/#/e/${ev.id}`, tag: `hour-${ev.id}` });
+    sent += ids.length;
+  }
+  return sent;
+}
+
+// 會費到期：到期前 30 天提醒本人一次（同一個到期日只提醒一次）
+async function remindRenewals(env, now) {
+  const until = tpDate(new Date(now.getTime() + 30 * 864e5)), today0 = tpDate(now);
+  const rows = (await env.DB.prepare(`SELECT id, paid_until FROM members WHERE membership = 'active' AND paid_until IS NOT NULL
+    AND paid_until BETWEEN ? AND ? AND (renew_notified IS NULL OR renew_notified != paid_until) LIMIT 500`).bind(today0, until).all()).results;
+  for (const r of rows) {
+    await notify(env, [r.id], 'system', { title: '會費即將到期', body: `你的協會會費繳至 ${r.paid_until}，記得續繳`, url: '/#/me' });
+    await env.DB.prepare('UPDATE members SET renew_notified = ? WHERE id = ?').bind(r.paid_until, r.id).run();
+  }
+  return rows.length;
+}
+
+// 每季第一天 09:00：提醒理事長與監事檢視幹部名單與權限（ISO 27001 A.5.18）
+async function quarterlyReview(env, now) {
+  const t = taipei(now);
+  if (t.getUTCDate() !== 1 || ![0, 3, 6, 9].includes(t.getUTCMonth()) || t.getUTCHours() !== 9) return 0;
+  if (!(await onceOn(env, 'quarterly_review', `${t.getUTCFullYear()}Q${t.getUTCMonth() / 3 + 1}`))) return 0;
+  const ids = (await env.DB.prepare("SELECT id FROM members WHERE role IN ('chair', 'supervisor')").all()).results.map((r) => r.id);
+  const n = (await env.DB.prepare("SELECT COUNT(*) AS n FROM members WHERE role != 'member'").first()).n;
+  const leads = (await env.DB.prepare("SELECT COUNT(*) AS n FROM team_members WHERE role IN ('lead', 'officer') AND status = 'active'").first()).n;
+  await notify(env, ids, 'system', { title: '每季權限檢視', body: `目前協會幹部 ${n} 位、分團團長與幹部 ${leads} 位。請確認卸任的人已移除權限。`, url: '/#/admin?tab=roles' });
+  await audit(env, null, null, 'review.reminder', 'system', null, `幹部 ${n}、分團幹部 ${leads}`);
+  return ids.length;
+}
+
+// 每天 03:00：清掉過期資料；活動個資依後台設定的保存年限清除（沒設定就不動）
+async function retention(env, now) {
+  const t = taipei(now);
+  if (t.getUTCHours() !== 3 || !(await onceOn(env, 'retention', tpDate(now)))) return null;
+  const org = (await getSettings(env)).org || {};
+  const out = {};
+  const run = async (k, sql, ...args) => { out[k] = (await env.DB.prepare(sql).bind(...args).run()).meta.changes; };
+  await run('sessions', "DELETE FROM sessions WHERE expires_at < datetime('now')");
+  await run('rate_limits', "DELETE FROM rate_limits WHERE window_end < datetime('now')");
+  await run('notifications', "DELETE FROM notifications WHERE created_at < datetime('now', '-180 days')");
+  const auditYears = Math.max(1, Math.min(Number(org.audit_years) || 3, 10));
+  await run('audit', `DELETE FROM audit_log WHERE at < datetime('now', '-${auditYears} years')`);
+  const evYears = Math.max(0, Math.min(Number(org.event_data_years) || 0, 20));
+  if (evYears) {
+    const cut = `${t.getUTCFullYear() - evYears}${tpDate(now).slice(4)}`;
+    const old = `SELECT id FROM events WHERE date < ?`;
+    await run('signups', `DELETE FROM signups WHERE event_id IN (${old})`, cut);
+    await run('tickets', `DELETE FROM tickets WHERE event_id IN (${old})`, cut);
+    await run('invites', `DELETE FROM event_invites WHERE event_id IN (${old})`, cut);
+    await run('draws', `UPDATE draws SET name = '已清除', member_id = NULL WHERE member_id IS NOT NULL AND event_id IN (${old})`, cut);
+  }
+  const logYears = Math.max(0, Math.min(Number(org.log_years) || 0, 20));
+  if (logYears) await run('training_logs', `DELETE FROM training_logs WHERE date < date('now', '-${logYears} years')`);
+  await audit(env, null, null, 'retention.cleanup', 'system', null, Object.entries(out).map(([k, v]) => `${k} ${v}`).join('、'));
+  return out;
+}
+
+async function scheduled(env, now = new Date()) {
+  const res = {};
+  for (const [k, fn] of [['events', remindEvents], ['renewals', remindRenewals], ['review', quarterlyReview], ['retention', retention]]) {
+    try { res[k] = await fn(env, now); } catch (e) { console.error('cron', k, e); res[k] = `error: ${e.message}`; }
+  }
+  return res;
+}
+
 export default {
+  async scheduled(event, env, ctx) {
+    env.defer = (p) => ctx.waitUntil(Promise.resolve(p).catch((e) => console.error('defer', e)));
+    ctx.waitUntil(scheduled(env, new Date(event.scheduledTime)).then((r) => console.log('cron', JSON.stringify(r))));
+  },
   async fetch(req, env, ctx) {
     const url = new URL(req.url);
     const path = decodeURIComponent(url.pathname);
@@ -1452,6 +1563,11 @@ export default {
     // LINE 登入是瀏覽器導向（GET、不是 JSON），走在下面的 CSRF 檢查之前
     if (path === '/api/line/start' && req.method === 'GET') return lineStart(env, url);
     if (path === '/api/line/callback' && req.method === 'GET') return lineCallback(req, env, url);
+    // 開發用：手動觸發排程，可指定時間 ?at=2026-10-03T12:00:00Z（只有 DEV_LOGIN=1 的本機有效）
+    if (path === '/api/dev/cron' && env.DEV_LOGIN === '1' && ['localhost', '127.0.0.1'].includes(url.hostname)) {
+      env.defer = (p) => ctx.waitUntil(Promise.resolve(p).catch(() => {}));
+      return json(await scheduled(env, url.searchParams.get('at') ? new Date(url.searchParams.get('at')) : new Date()));
+    }
     // 開發用登入：只有 .dev.vars 設 DEV_LOGIN=1 而且在 localhost 才有效，正式環境不會有這個設定
     if (path === '/api/dev/login' && req.method === 'GET' && env.DEV_LOGIN === '1' && ['localhost', '127.0.0.1'].includes(url.hostname)) {
       const m = await env.DB.prepare('SELECT * FROM members WHERE id = ?').bind(str(url.searchParams.get('id'), 32)).first();

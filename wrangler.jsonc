@@ -20,10 +20,15 @@
       "migrations_dir": "migrations"
     }
   ]
-  // 設定值全部用 secrets（npx wrangler secret put 名稱），不寫在這裡：
-  //   JOIN_CODE             團員加入用的邀請碼（在 LINE 群公告）
-  //   ADMIN_CODE            幹部用的邀請碼，輸入後身分是管理員
-  //   VAPID_PUBLIC_KEY      推播公鑰（未壓縮公鑰 base64url）
-  //   VAPID_PRIVATE_JWK     推播私鑰（JWK JSON）
-  //   VAPID_SUBJECT         推播聯絡資訊，例如 mailto:xxx@example.com
+  ,
+  // 排程：每小時整點跑一次（活動提醒、會費到期、每季權限檢視、每天 03:00 資料清理），時間判斷都用台北時間
+  "triggers": { "crons": ["0 * * * *"] },
+  // 錯誤監控：Cloudflare 後台 Workers → cil-run → Logs 可以看到錯誤與排程結果
+  "observability": { "enabled": true, "head_sampling_rate": 1 }
+  // 設定值全部用 secrets（npx wrangler secret put 名稱 --name cil-run），不寫在這裡：
+  //   JOIN_CODE             跑友加入用的邀請碼（在 LINE 群公告）
+  //   CHAIR_CODE            一次性的初始理事長設定碼（有理事長之後自動失效）
+  //   HASH_SALT             IP 雜湊用的鹽
+  //   LINE_CHANNEL_ID／LINE_CHANNEL_SECRET   LINE Login
+  //   VAPID_PUBLIC_KEY／VAPID_PRIVATE_JWK／VAPID_SUBJECT   推播
 }
