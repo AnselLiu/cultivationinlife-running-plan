@@ -576,3 +576,5 @@ fieldset.group legend{font-size:13px;font-weight:700;color:var(--ink-2);padding:
 .r.tlog{grid-template-columns:32px 1fr 92px}
 .r.tlog .bar{height:6px;border-radius:3px;margin-top:6px}
 @media (max-width:400px){.day{grid-template-columns:62px 1fr auto}}
+.pill.lock{background:color-mix(in srgb,var(--ink) 9%,transparent);color:var(--ink-2)}
+.invlink{display:grid;gap:10px;padding:12px;border-radius:var(--r-m);background:color-mix(in srgb,var(--ink) 4%,transparent)}

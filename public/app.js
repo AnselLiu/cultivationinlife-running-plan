@@ -50,8 +50,9 @@ let me = null, cfg = {};
 const org = () => cfg.settings?.org || {};
 const feat = (k) => cfg.settings?.features?.[k] !== false;
 // 分團：自己在各分團的身分由 /api/me 帶回；伺服器每次都會再檢查一次，這裡只決定要不要顯示按鈕
-// 耕跑團本團沒有另外上傳圖示時，直接用原本的 logo
-const teams = () => (cfg.teams || []).map((t) => (t.id === 'main' && !t.icon ? { ...t, icon: '/icons/icon-192.png' } : t));
+// 分團沒有另外上傳圖示時，用內建的正式小圖（耕跑團本團用原本的 logo）
+const TEAM_ICONS = { main: '/icons/icon-192.png', youth: '/teams/youth.webp', kids: '/teams/kids.webp', core: '/teams/core.webp', geng: '/teams/geng.webp' };
+const teams = () => (cfg.teams || []).map((t) => (!t.icon && TEAM_ICONS[t.id] ? { ...t, icon: TEAM_ICONS[t.id] } : t));
 const teamOf = (id) => teams().find((t) => t.id === id);
 const myTeams = () => teams().filter((t) => t.my_status === 'active');
 const TEAM_PERMS = { lead: ['event', 'checkin', 'lottery', 'layout', 'roster', 'approve', 'appoint'], officer: ['event', 'checkin', 'lottery', 'roster', 'approve'] };
@@ -75,13 +76,13 @@ async function squareIcon(file) {
 const refreshMe = async () => { const r = await api('/me'); me = r.member; cfg = r; };
 // 分享活動：手機跳出分享選單（LINE、訊息…），不支援就複製文字＋連結
 const eventUrl = (id) => `${location.origin}/#/e/${id}`;
-async function shareEvent(ev) {
+async function shareEvent(ev, link = eventUrl(ev.id)) {
   const text = `${ev.title}｜${dstr(ev.date)}${ev.gather_time ? ` ${ev.gather_time}` : ''}${ev.place ? `・${ev.place}` : ''}`;
   if (navigator.share) {
-    try { await navigator.share({ title: ev.title, text, url: eventUrl(ev.id) }); return; }
+    try { await navigator.share({ title: ev.title, text, url: link }); return; }
     catch (e) { if (e.name === 'AbortError') return; }
   }
-  copy(`${text}\n${ev.kind === 'survey' ? '填寫' : '報名'}：${eventUrl(ev.id)}`);
+  copy(`${text}\n${ev.kind === 'survey' ? '填寫' : '報名'}：${link}`);
 }
 
 // 大標題：頁面最上方的 Large Title；捲出畫面後，標題縮到頂部列中間（iOS 行為）
@@ -105,6 +106,7 @@ const todayLabel = () => { const d = new Date(); return `${d.getMonth() + 1}月$
 function loginView() {
   const err = new URLSearchParams(location.hash.split('?')[1] || '').get('err');
   const shared = location.hash.match(/^#\/e\/([\w-]+)/)?.[1];
+  const sharedTok = new URLSearchParams(location.hash.split('?')[1] || '').get('t');
   view.innerHTML = `
     <div id="sharedEv"></div>
     <section class="card hero">
@@ -139,10 +141,10 @@ function loginView() {
     </section>`;
   // 從分享連結進來：記住要去的活動，登入後直接帶過去
   if (shared) {
-    try { sessionStorage.setItem('cil-after-login', `#/e/${shared}`); } catch {}
-    api(`/public/e/${shared}`).then(({ event: e }) => {
+    try { sessionStorage.setItem('cil-after-login', `#/e/${shared}${sharedTok ? `?t=${encodeURIComponent(sharedTok)}` : ''}`); } catch {}
+    api(`/public/e/${shared}${sharedTok ? `?t=${encodeURIComponent(sharedTok)}` : ''}`).then(({ event: e }) => {
       $('#sharedEv').innerHTML = `<section class="card shared">
-        <span class="tiny">有人邀請你${e.kind === 'survey' ? '填寫問卷' : '報名'}</span>
+        <span class="tiny">${e.visibility === 'invite' ? '🔒 你收到一個邀請制活動的邀請' : `有人邀請你${e.kind === 'survey' ? '填寫問卷' : '報名'}`}</span>
         <div class="row" style="gap:6px">${e.team ? `<span class="pill">${esc(e.team)}</span>` : ''}<span class="pill ${e.kind}">${KIND_NAME[e.kind] || '活動'}</span></div>
         <h2 style="margin:0">${esc(e.title)}</h2>
         <p class="muted" style="margin:0">${dstr(e.date)}${e.gather_time ? ` ${e.gather_time}` : ''}${e.place ? `・${esc(e.place)}` : ''}</p>
@@ -320,7 +322,7 @@ function eventCard(e) {
     <div class="ev">
       <span class="cal"><u>${d2(e.date).getMonth() + 1}月</u><b class="num">${e.date.slice(8)}</b><span>週${WD[d2(e.date).getDay()]}</span></span>
       <span class="body">
-        <span class="row" style="gap:6px"><span class="pill ${e.kind}">${KIND_NAME[e.kind] || '活動'}</span>${teamTag(teamOf(e.team_id))}
+        <span class="row" style="gap:6px"><span class="pill ${e.kind}">${KIND_NAME[e.kind] || '活動'}</span>${teamTag(teamOf(e.team_id))}${e.visibility === 'invite' ? '<span class="pill lock">🔒 邀請制</span>' : ''}
           ${e.mine === 'in' ? '<span class="pill solid">已報名</span>' : e.mine === 'wait' ? '<span class="pill wait">候補</span>' : ''}</span>
         <span class="t">${esc(e.title)}</span>
         <span class="tiny">${e.gather_time ? `${e.gather_time}　` : ''}${esc(e.place || '')}</span>
@@ -346,7 +348,14 @@ async function pastView(month) {
 
 // ---------- 活動詳情 ----------
 async function eventView(id) {
+  // 從邀請連結進來：先把自己加進受邀名單
+  const tok = new URLSearchParams(location.hash.split('?')[1] || '').get('t');
+  if (tok) {
+    try { await api(`/events/${id}/accept`, { method: 'POST', body: { t: tok } }); } catch (e) { toast(e.message); }
+    history.replaceState(null, '', `#/e/${id}`);
+  }
   const ev = await api(`/events/${id}`);
+  const inviteOnly = ev.visibility === 'invite';
   const admin = ev.manage;
   const survey = ev.kind === 'survey', qs = ev.questions || [];
   const useForm = ev.kind === 'party' || qs.length > 0;
@@ -364,19 +373,20 @@ async function eventView(id) {
   view.innerHTML = `
     <section class="card hero">
       <div class="row spread">
-        <span class="row" style="gap:6px"><span class="pill" style="background:rgba(255,255,255,.22);color:#fff">${KIND_NAME[ev.kind]}</span>${ev.team ? `<a class="pill" style="background:rgba(255,255,255,.14);color:#fff" href="#/t/${esc(ev.team.id)}">${esc(ev.team.name)}</a>` : ''}</span>
+        <span class="row" style="gap:6px"><span class="pill" style="background:rgba(255,255,255,.22);color:#fff">${KIND_NAME[ev.kind]}</span>${ev.team ? `<a class="pill" style="background:rgba(255,255,255,.14);color:#fff" href="#/t/${esc(ev.team.id)}">${esc(ev.team.name)}</a>` : ''}${inviteOnly ? '<span class="pill" style="background:rgba(255,255,255,.14);color:#fff">🔒 邀請制</span>' : ''}</span>
         <span class="tiny">${survey ? `${dstr(ev.date)} 前` : dstr(ev.date)}</span>
       </div>
       <h2>${esc(ev.title)}</h2>
       <p class="muted" style="margin:0">${ev.gather_time ? `${ev.gather_time} 集合` : ''}${ev.end_time ? `－${ev.end_time}` : ''}${ev.place ? `　${esc(ev.place)}` : ''}${ev.lead ? `　帶團：${esc(ev.lead)}` : ''}</p>
       ${ev.note ? `<p class="muted" style="margin:0;white-space:pre-wrap">${esc(ev.note)}</p>` : ''}
       ${ev.link_url ? `<a class="btn block" style="background:#fff;color:#1C4698" href="${esc(ev.link_url)}" target="_blank" rel="noopener">${esc(ev.link_label || '前往登記')} ↗</a>` : ''}
-      <div class="row sharebar">
+      ${inviteOnly && !admin ? '' : `<div class="row sharebar">
         <button class="btn sm glassbtn" id="shareEv"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V3.5M7.5 8 12 3.5 16.5 8M5 12.5v6A2.5 2.5 0 0 0 7.5 21h9a2.5 2.5 0 0 0 2.5-2.5v-6"/></svg>分享</button>
-        <button class="btn sm glassbtn" id="copyLink">複製報名連結</button>
+        <button class="btn sm glassbtn" id="copyLink">${inviteOnly ? '複製邀請連結' : '複製報名連結'}</button>
         ${admin ? `<a class="btn sm glassbtn" href="#/e/${ev.id}/stats">統計 ›</a>` : ''}
-      </div>
+      </div>`}
     </section>
+    ${inviteOnly && admin ? inviteCard(ev) : ''}
 
     ${myDay ? `<section class="card">
       <div class="row spread"><h3>你這天的課表</h3><span class="pill">${me.dist === 'hm' ? '半馬' : '全馬'} ${me.grp} 組</span></div>
@@ -423,8 +433,11 @@ async function eventView(id) {
         <button class="btn sm" id="copyAnn">複製公告</button>
       </details>
     </section>` : ''}`;
-  $('#shareEv').onclick = () => shareEvent(ev);
-  $('#copyLink').onclick = () => copy(eventUrl(ev.id));
+  // 邀請制：分享出去的一定是帶邀請代碼的連結；沒開邀請連結就提醒先開
+  const shareUrl = () => (inviteOnly ? (ev.invite?.token ? `${eventUrl(ev.id)}?t=${ev.invite.token}` : null) : eventUrl(ev.id));
+  $('#shareEv')?.addEventListener('click', () => (shareUrl() ? shareEvent(ev, shareUrl()) : toast('先在下方「邀請連結」開啟，才能分享')));
+  $('#copyLink')?.addEventListener('click', () => (shareUrl() ? copy(shareUrl()) : toast('先在下方「邀請連結」開啟，才能分享')));
+  if (inviteOnly && admin) bindInviteCard(ev);
 
   $('#signup')?.addEventListener('click', async () => {
     try {
@@ -539,7 +552,8 @@ async function announceText(ev) {
   } else if (ev.plan_text) { L.push('', ev.plan_text); }
   if (ev.note) L.push('', ev.note);
   if (ev.link_url) L.push('', `${ev.link_label || '登記'}：${ev.link_url}`);
-  if (ev.signup_open) L.push('', `報名：${location.origin}/#/e/${ev.id}`);
+  if (ev.signup_open && ev.visibility !== 'invite') L.push('', `報名：${location.origin}/#/e/${ev.id}`);
+  if (ev.signup_open && ev.visibility === 'invite' && ev.invite?.token) L.push('', `報名（邀請連結）：${location.origin}/#/e/${ev.id}?t=${ev.invite.token}`);
   return L.join('\n');
 }
 const dayPattern = (date) => { const w = d2(date).getDay(); return w === 0 || w === 6 ? '週末|週日' : `週${WD[w]}`; };
@@ -784,7 +798,8 @@ const AUDIT_NAME = {
   'settings.org': '修改協會資訊', 'settings.features': '修改功能開關', 'settings.docs': '修改協會文件', 'settings.privacy': '修改隱私權政策',
   'settings.club_race': '修改預設倒數', 'event.update': '編輯活動', 'event.export': '匯出報名名單',
   'team.create': '新增分團', 'team.update': '修改分團', 'team.delete': '刪除分團', 'team.join': '加入分團', 'team.leave': '退出分團',
-  'team.approve': '通過入團', 'team.reject': '婉拒入團', 'team.remove': '移出分團', 'team.role': '變更分團身分', 'team.add': '加進分團', 'team.icon': '更新分團圖示', 'privacy.share_logs': '訓練紀錄分享設定', 'settings.shortcut': '修改捷徑連結', 'strava.connect': '連結 Strava', 'strava.disconnect': '解除 Strava',
+  'team.approve': '通過入團', 'team.reject': '婉拒入團', 'team.remove': '移出分團', 'team.role': '變更分團身分', 'team.add': '加進分團', 'team.icon': '更新分團圖示', 'event.invite': '邀請參加活動', 'event.uninvite': '移出受邀名單', 'event.invite_link': '設定邀請連結',
+  'event.invite_accept': '用邀請連結加入', 'event.invite_denied': '邀請連結無效', 'privacy.share_logs': '訓練紀錄分享設定', 'settings.shortcut': '修改捷徑連結', 'strava.connect': '連結 Strava', 'strava.disconnect': '解除 Strava',
 };
 // 稽核紀錄：一定要選時間區間（預設最近 7 天），再依類型、操作者、對象縮小；一次 50 筆
 const AUDIT_GROUPS = { '': '所有類型', role: '身分變更', membership: '會籍', team: '分團', event: '活動', checkin: '報到', lottery: '抽獎',
@@ -1013,6 +1028,59 @@ function roleDialog(id, name, cur) {
 }
 
 // ---------- 春酒：入場券、報到、抽獎 ----------
+// ---------- 邀請制：受邀名單與邀請連結 ----------
+const VIA_NAME = { manual: '個別邀請', team: '分團', link: '邀請連結' };
+function inviteCard(ev) {
+  const link = ev.invite?.token ? `${eventUrl(ev.id)}?t=${ev.invite.token}` : '';
+  const teamOpts = teams().filter((t) => teamAllow(t.id, 'roster'));
+  return `<section class="card" id="invCard">
+    <div class="row spread"><h3>🔒 受邀名單</h3><span class="tiny"><b class="num">${ev.invite?.count || 0}</b> 人受邀</span></div>
+    <p class="tiny" style="margin:0">只有名單上的人看得到這個活動。移出名單會一併取消他的報名與入場券。</p>
+    <form id="invSearch" class="row" style="gap:8px"><input name="q" placeholder="搜尋姓名或暱稱邀請" style="flex:1" autocomplete="off"><button class="btn ghost sm">搜尋</button></form>
+    <div class="roster" id="invHits"></div>
+    ${teamOpts.length ? `<form id="invTeam" class="row" style="gap:8px"><select name="team" style="flex:1">${teamOpts.map((t) => `<option value="${esc(t.id)}">整個${esc(t.name)}（${t.count} 人）</option>`).join('')}</select><button class="btn ghost sm">邀請整團</button></form>` : ''}
+    <div class="invlink">
+      <div class="row spread"><b>邀請連結</b><label class="switch" style="border:0;padding:0"><input type="checkbox" id="invLinkOn" ${link ? 'checked' : ''}><i></i></label></div>
+      ${link ? `<div class="row" style="gap:8px"><input readonly value="${esc(link)}" style="flex:1;font-size:13px" onfocus="this.select()">
+        <button class="btn sm" id="invCopy">複製</button></div>
+        <div class="row" style="gap:8px"><button class="btn ghost sm" id="invRotate">重新產生（舊連結失效）</button></div>`
+        : '<p class="tiny" style="margin:0">打開後會產生一條連結，拿到連結的人登入就自動加入受邀名單；不想再讓人加入時關掉即可。</p>'}
+    </div>
+    <details id="invListWrap"><summary class="tiny" style="cursor:pointer">看受邀名單</summary><div class="roster" id="invList"><p class="muted">載入中…</p></div></details>
+  </section>`;
+}
+function bindInviteCard(ev) {
+  const reload = () => eventView(ev.id);
+  const add = async (body, msg) => { try { const r = await api(`/events/${ev.id}/invites`, { method: 'POST', body }); toast(r.added ? `${msg}（新增 ${r.added} 人，已通知）` : '他們都已經在名單上'); reload(); } catch (e) { toast(e.message); } };
+  $('#invSearch').onsubmit = async (e) => {
+    e.preventDefault();
+    const q = e.target.q.value.trim();
+    if (!q) return toast('請輸入姓名');
+    // 協會幹部從全體名冊找；分團幹部從自己分團找
+    const r = allow('roster') ? await api(`/members?q=${encodeURIComponent(q)}`)
+      : ev.team_id ? await api(`/teams/${ev.team_id}/members?q=${encodeURIComponent(q)}`) : { members: [] };
+    $('#invHits').innerHTML = r.members.map((m) => `<div class="r">${avatar(m)}<span>${esc(m.name)}${m.nickname ? ` <span class="tiny">${esc(m.nickname)}</span>` : ''}</span>
+      <button class="btn ghost sm" data-inv="${m.id}">邀請</button></div>`).join('') || '<p class="muted" style="margin:0">找不到</p>';
+    for (const b of document.querySelectorAll('[data-inv]')) b.onclick = () => add({ member_ids: [b.dataset.inv] }, '已邀請');
+  };
+  $('#invTeam')?.addEventListener('submit', (e) => { e.preventDefault(); add({ team_id: e.target.team.value }, '已邀請整團'); });
+  const setLink = async (on) => { try { await api(`/events/${ev.id}/invite-link`, { method: 'POST', body: { on } }); toast(on ? '邀請連結已開啟' : '邀請連結已關閉'); reload(); } catch (e) { toast(e.message); } };
+  $('#invLinkOn').onchange = (e) => setLink(e.target.checked);
+  $('#invRotate')?.addEventListener('click', () => confirm('重新產生後，舊的邀請連結會失效。確定？') && setLink(true));
+  $('#invCopy')?.addEventListener('click', () => copy(`${ev.invite?.token ? `${eventUrl(ev.id)}?t=${ev.invite.token}` : ''}`));
+  $('#invListWrap').ontoggle = async (e) => {
+    if (!e.target.open) return;
+    const { invites } = await api(`/events/${ev.id}/invites`);
+    $('#invList').innerHTML = invites.map((m) => `<div class="r">${avatar(m)}
+      <span>${esc(m.name)}<span class="tiny" style="display:block">${VIA_NAME[m.via] || ''}${m.status === 'in' ? '・已報名' : m.status === 'wait' ? '・候補' : ''}</span></span>
+      <button class="btn danger sm" data-uninv="${m.id}" data-name="${esc(m.name)}">移出</button></div>`).join('') || '<p class="muted" style="margin:0">還沒有邀請任何人</p>';
+    for (const b of document.querySelectorAll('[data-uninv]')) b.onclick = async () => {
+      if (!confirm(`把 ${b.dataset.name} 移出受邀名單？他的報名與入場券也會取消。`)) return;
+      try { await api(`/events/${ev.id}/invites/${b.dataset.uninv}`, { method: 'DELETE' }); toast('已移出'); reload(); } catch (err) { toast(err.message); }
+    };
+  };
+}
+
 // 報名表：春酒的攜伴與餐點、活動自訂問卷；基本資料一律帶入「我的」設定
 function signupForm(ev, mine) {
   const party = ev.kind === 'party', survey = ev.kind === 'survey';
@@ -1669,6 +1737,10 @@ async function formView(id) {
         <label>分團<select name="team_id">${teamOpts.map(([k, v]) => `<option value="${esc(k)}" ${(d.team_id || '') === k ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select></label>
       </div>
       <label>標題<input name="title" required maxlength="40" value="${esc(d.title || '')}" placeholder="10/8（四）耕跑團練"></label>
+      <fieldset class="qset"><legend>誰看得到</legend><div class="chips">
+        <label class="chip"><input type="radio" name="visibility" value="public" ${d.visibility !== 'invite' ? 'checked' : ''}><span>公開</span></label>
+        <label class="chip"><input type="radio" name="visibility" value="invite" ${d.visibility === 'invite' ? 'checked' : ''}><span>🔒 邀請制</span></label></div>
+        <span class="tiny" id="visHint"></span></fieldset>
       <div class="grid2">
         <label><span data-when="survey">截止日期</span><span data-when="!survey">日期</span><input type="date" name="date" required value="${esc(d.date)}"></label>
         <label data-when="!survey">集合時間<input type="time" name="gather_time" value="${esc(d.gather_time || '')}"></label>
@@ -1712,7 +1784,7 @@ async function formView(id) {
       </details>
       <label>說明與注意事項<textarea name="note" placeholder="攜帶瑜珈墊、水、彈力帶、毛巾">${esc(d.note || '')}</textarea></label>
       <label class="inline"><input type="checkbox" name="signup_open" ${d.signup_open ? 'checked' : ''}> 開放報名</label>
-      ${id ? '' : '<label class="inline"><input type="checkbox" name="notify" checked> 建立後通知（選了分團就只通知那個分團）</label>'}
+      ${id ? '' : '<label class="inline"><input type="checkbox" name="notify" checked> 建立後通知（選了分團就只通知那個分團；邀請制只通知受邀的人）</label>'}
       <button class="btn block">${id ? '儲存' : '建立'}</button>
     </form>
   </section>`;
@@ -1725,6 +1797,11 @@ async function formView(id) {
     }
   };
   f.kind.onchange = sync; sync();
+  const visHint = () => { $('#visHint').textContent = f.visibility.value === 'invite'
+    ? '只有受邀的人看得到，不會出現在其他人的列表，也不會通知其他人。建立後在活動頁邀請人或開邀請連結。'
+    : '選了分團就是分團的人看得到（私密分團只有團員），沒選就是全協會。'; };
+  for (const r of f.querySelectorAll('[name=visibility]')) r.onchange = visHint;
+  visHint();
   const bindQ = () => { for (const b of f.querySelectorAll('[data-rmq]')) b.onclick = () => b.closest('.qrow').remove(); };
   bindQ();
   for (const b of f.querySelectorAll('[data-addq]')) b.onclick = () => {
@@ -1747,7 +1824,7 @@ async function formView(id) {
       place: f.place.value, lead: f.lead.value, note: f.note.value, plan_text: f.plan_text.value,
       link_url: f.link_url.value, link_label: f.link_label.value, deadline: f.deadline.value,
       week_no: num(f.week_no), capacity: num(f.capacity), fee: num(f.fee), guest_max: num(f.guest_max), meal_options: f.meal_options.value,
-      signup_open: f.signup_open.checked, questions, notify: f.notify ? f.notify.checked : undefined, copy_from: from || undefined,
+      signup_open: f.signup_open.checked, questions, visibility: f.visibility.value, notify: f.notify ? f.notify.checked : undefined, copy_from: from || undefined,
     };
     try {
       if (id) { await api(`/events/${id}`, { method: 'PUT', body }); location.hash = `#/e/${id}`; }
@@ -1852,8 +1929,8 @@ async function teamView(tid, q = '') {
         ${allow('settings') ? `<div class="grid2"><label>名稱<input name="name" maxlength="20" value="${esc(t.name)}" required></label>
           <label>顏色<input name="color" type="color" value="${esc(t.color)}"></label></div>` : ''}
         <div class="iconedit">${teamIcon(t, 'lg')}<div class="row" style="gap:8px">
-          <label class="btn ghost sm filebtn">${t.icon ? '換分團圖示' : '上傳分團圖示'}<input type="file" accept="image/png,image/jpeg,image/webp" id="iconIn" hidden></label>
-          ${t.icon ? '<button type="button" class="btn ghost sm" id="iconRm">移除</button>' : ''}</div>
+          <label class="btn ghost sm filebtn">換分團圖示<input type="file" accept="image/png,image/jpeg,image/webp" id="iconIn" hidden></label>
+          ${t.icon?.startsWith('/api/') ? '<button type="button" class="btn ghost sm" id="iconRm">改回預設</button>' : ''}</div>
           <span class="tiny">正方形圖，會自動縮成小圖。生圖指令見 docs/team-icons-prompt.md。</span></div>
         <label>介紹<textarea name="intro" maxlength="300" placeholder="練什麼、什麼時候練、適合誰">${esc(t.intro)}</textarea></label>
         <label>LINE 群組邀請連結<input name="line_url" type="url" value="${esc(t.line_url)}" placeholder="https://line.me/ti/g/…"></label>

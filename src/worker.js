@@ -36,6 +36,7 @@ const KINDS = ['track', 'core', 'long', 'race', 'party', 'survey', 'other'];
 const isDate = (s) => /^\d{4}-\d{2}-\d{2}$/.test(s);
 const isTime = (s) => !s || /^\d{2}:\d{2}$/.test(s);
 const today = () => new Date().toISOString().slice(0, 10);
+const url0 = (req) => new URL(req.url);
 // 隱私權政策版本：預設值；實際版本由後台「系統設定」決定，改版後使用者下次開啟會被要求重新同意
 const PRIVACY_VERSION = '2026-10-03.1';
 const SETTING_KEYS = ['org', 'features', 'docs', 'privacy'];
@@ -219,7 +220,7 @@ async function lineCallback(req, env, url) {
 }
 
 // ---- 活動 ----
-const eventCols = 'id, kind, title, date, gather_time, end_time, place, lead, note, week_no, plan_text, capacity, signup_open, deadline, status, created_at, fee, guest_max, meal_options, link_url, link_label, team_id, questions';
+const eventCols = 'id, kind, title, date, gather_time, end_time, place, lead, note, week_no, plan_text, capacity, signup_open, deadline, status, created_at, fee, guest_max, meal_options, link_url, link_label, team_id, questions, visibility, created_by';
 
 // 報名問卷：單選、複選、簡答；最多 12 題
 const Q_TYPES = ['single', 'multi', 'text'];
@@ -273,6 +274,7 @@ function readEvent(b) {
     link_label: str(b.link_label, 20),
     team_id: str(b.team_id, 16) || null,
     questions: readQuestions(b.questions),
+    visibility: b.visibility === 'invite' ? 'invite' : 'public',
   };
   if (!e.title || !isDate(e.date) || !isTime(e.gather_time) || !isTime(e.end_time)) return null;
   return e;
@@ -364,13 +366,23 @@ async function api(req, env, path, method) {
     if (can(member, GLOBAL_EQ[p] || p) && !(READONLY[norm(member.role)] && p !== 'roster')) return true;
     return !!tid && inTeam(tid) && TEAM_PERMS[myTeams[tid].role]?.includes(p);
   };
-  // 看得到這個活動嗎：全協會、公開分團，或私密分團的團員；有協會建立活動權限的人都看得到
-  const seeSQL = `(events.team_id IS NULL OR events.team_id IN (SELECT id FROM teams WHERE private = 0)
-    OR events.team_id IN (SELECT team_id FROM team_members WHERE member_id = ?1 AND status = 'active') OR ?2 = 1)`;
+  // 看得到這個活動嗎：
+  //   邀請制：只有受邀的人，加上建立者、該分團團長與幹部、協會建立活動權限的人（管理用）
+  //   公開：全協會、公開分團，或私密分團的團員；協會建立活動權限的人都看得到
+  const seeSQL = `(CASE WHEN events.visibility = 'invite' THEN
+      (events.id IN (SELECT event_id FROM event_invites WHERE member_id = ?1) OR events.created_by = ?1 OR ?2 = 1
+       OR events.team_id IN (SELECT team_id FROM team_members WHERE member_id = ?1 AND status = 'active' AND role IN ('lead', 'officer')))
+    ELSE (events.team_id IS NULL OR events.team_id IN (SELECT id FROM teams WHERE private = 0)
+      OR events.team_id IN (SELECT team_id FROM team_members WHERE member_id = ?1 AND status = 'active') OR ?2 = 1) END)`;
+  const invited = async (eid) => !!(await env.DB.prepare('SELECT 1 FROM event_invites WHERE event_id = ? AND member_id = ?').bind(eid, member.id).first());
   const canSee = async (ev) => {
-    if (!ev.team_id || can(member, 'event') || inTeam(ev.team_id)) return true;
+    if (teamCan(ev.team_id, 'event') || ev.created_by === member.id) return true;
+    if (ev.visibility === 'invite') return invited(ev.id);
+    if (!ev.team_id || inTeam(ev.team_id)) return true;
     return !(await env.DB.prepare('SELECT private FROM teams WHERE id = ?').bind(ev.team_id).first())?.private;
   };
+  // 管理這個活動：該分團（或全協會）的建立活動權限；建立者後來被撤換就不能再管
+  const canManage = (ev) => teamCan(ev.team_id, 'event');
   const evById = (id) => env.DB.prepare(`SELECT ${eventCols} FROM events WHERE id = ?`).bind(id).first();
   const teamIds = async () => (await env.DB.prepare('SELECT id FROM teams').all()).results.map((r) => r.id);
   const teamMemberIds = async (tid, exceptId) => (await env.DB.prepare(
@@ -425,10 +437,13 @@ async function api(req, env, path, method) {
   // 分享連結的預覽：還沒登入的人點進來，先看到是什麼活動（私密分團的活動不顯示）
   const mpv = path.match(/^\/api\/public\/e\/([\w-]{1,32})$/);
   if (mpv && method === 'GET') {
-    const e = await env.DB.prepare(`SELECT e.title, e.date, e.gather_time, e.place, e.kind, t.name AS team, t.private
+    const e = await env.DB.prepare(`SELECT e.title, e.date, e.gather_time, e.place, e.kind, e.visibility, e.invite_token, t.name AS team, t.private
       FROM events e LEFT JOIN teams t ON t.id = e.team_id WHERE e.id = ?`).bind(mpv[1]).first();
-    if (!e || e.private) return fail(404, '找不到這個活動');
-    const { private: _, ...pub2 } = e;
+    // 邀請制：要帶正確的邀請代碼才看得到預覽
+    const tok = str(url0(req).searchParams.get('t'), 40);
+    const okInvite = e?.visibility === 'invite' && e.invite_token && tok === e.invite_token;
+    if (!e || (e.visibility === 'invite' ? !okInvite : e.private)) return fail(404, '找不到這個活動');
+    const { private: _, invite_token: _t, ...pub2 } = e;
     return json({ event: pub2 });
   }
 
@@ -530,17 +545,18 @@ async function api(req, env, path, method) {
     if (e.team_id && !(await teamIds()).includes(e.team_id)) return fail(400, '找不到這個分團');
     if (!teamCan(e.team_id, 'event')) return fail(403, e.team_id ? '只有這個分團的團長與幹部可以建立活動' : '只有幹部可以建立全協會活動');
     const id = rid(8);
-    await env.DB.prepare(`INSERT INTO events (id, kind, title, date, gather_time, end_time, place, lead, note, week_no, plan_text, capacity, signup_open, deadline, created_by, fee, guest_max, meal_options, link_url, link_label, team_id, questions)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .bind(id, e.kind, e.title, e.date, e.gather_time, e.end_time, e.place, e.lead, e.note, e.week_no, e.plan_text, e.capacity, e.signup_open, e.deadline, member.id, e.fee, e.guest_max, e.meal_options, e.link_url, e.link_label, e.team_id, e.questions).run();
+    await env.DB.prepare(`INSERT INTO events (id, kind, title, date, gather_time, end_time, place, lead, note, week_no, plan_text, capacity, signup_open, deadline, created_by, fee, guest_max, meal_options, link_url, link_label, team_id, questions, visibility)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .bind(id, e.kind, e.title, e.date, e.gather_time, e.end_time, e.place, e.lead, e.note, e.week_no, e.plan_text, e.capacity, e.signup_open, e.deadline, member.id, e.fee, e.guest_max, e.meal_options, e.link_url, e.link_label, e.team_id, e.questions, e.visibility).run();
     // 複製活動：沿用原活動的座位圖（獎項每年不同，不複製）
     const from = str(b.copy_from, 32);
     if (from) {
       const src = await evById(from);
       if (src && await canSee(src)) await env.DB.prepare('UPDATE events SET seat_layout = (SELECT seat_layout FROM events WHERE id = ?) WHERE id = ?').bind(from, id).run();
     }
-    await audit(env, req, member, 'event.create', 'event', id, `${e.title}${e.team_id ? `（${e.team_id}）` : ''}${from ? `，複製自 ${from}` : ''}`);
-    if (b.notify !== false) await notify(env, e.team_id ? await teamMemberIds(env, e.team_id, member.id) : await allMemberIds(env, member.id), 'event',
+    await audit(env, req, member, 'event.create', 'event', id, `${e.title}${e.team_id ? `（${e.team_id}）` : ''}${e.visibility === 'invite' ? '，邀請制' : ''}${from ? `，複製自 ${from}` : ''}`);
+    // 邀請制不廣播；之後邀請誰就通知誰
+    if (b.notify !== false && e.visibility !== 'invite') await notify(env, e.team_id ? await teamMemberIds(env, e.team_id, member.id) : await allMemberIds(env, member.id), 'event',
       { title: `${e.kind === 'survey' ? '新問卷' : '新活動'}：${e.title}`, body: `${e.date}${e.gather_time ? ` ${e.gather_time}` : ''}　${e.place || ''}`, url: `/#/e/${id}` });
     return json({ id });
   }
@@ -555,8 +571,12 @@ async function api(req, env, path, method) {
       const ev = await eventWithSignups(env, id);
       const mine = await env.DB.prepare('SELECT answers FROM signups WHERE event_id = ? AND member_id = ?').bind(id, member.id).first();
       const team = ev.team_id ? await env.DB.prepare('SELECT id, name, color FROM teams WHERE id = ?').bind(ev.team_id).first() : null;
+      const manage = canManage(ev);
+      const inv = ev.visibility === 'invite' && manage
+        ? { count: (await env.DB.prepare('SELECT COUNT(*) AS n FROM event_invites WHERE event_id = ?').bind(id).first()).n,
+            token: (await env.DB.prepare('SELECT invite_token FROM events WHERE id = ?').bind(id).first()).invite_token || null } : null;
       return json({ ...ev, questions: parseQ(ev.questions), myAnswers: mine?.answers ? JSON.parse(mine.answers) : null,
-        team, manage: teamCan(ev.team_id, 'event'), checkin: teamCan(ev.team_id, 'checkin') });
+        team, manage, checkin: teamCan(ev.team_id, 'checkin'), invite: inv });
     }
     if (method === 'PUT') {
       const e = readEvent(await body());
@@ -564,9 +584,9 @@ async function api(req, env, path, method) {
       if (e.team_id && !(await teamIds()).includes(e.team_id)) return fail(400, '找不到這個分團');
       // 原本的分團與改過去的分團都要有權限
       if (!teamCan(cur.team_id, 'event') || !teamCan(e.team_id, 'event')) return fail(403, '沒有編輯這個活動的權限');
-      await env.DB.prepare(`UPDATE events SET kind=?, title=?, date=?, gather_time=?, end_time=?, place=?, lead=?, note=?, week_no=?, plan_text=?, capacity=?, signup_open=?, deadline=?, fee=?, guest_max=?, meal_options=?, link_url=?, link_label=?, team_id=?, questions=? WHERE id = ?`)
-        .bind(e.kind, e.title, e.date, e.gather_time, e.end_time, e.place, e.lead, e.note, e.week_no, e.plan_text, e.capacity, e.signup_open, e.deadline, e.fee, e.guest_max, e.meal_options, e.link_url, e.link_label, e.team_id, e.questions, id).run();
-      await audit(env, req, member, 'event.update', 'event', id, e.title);
+      await env.DB.prepare(`UPDATE events SET kind=?, title=?, date=?, gather_time=?, end_time=?, place=?, lead=?, note=?, week_no=?, plan_text=?, capacity=?, signup_open=?, deadline=?, fee=?, guest_max=?, meal_options=?, link_url=?, link_label=?, team_id=?, questions=?, visibility=? WHERE id = ?`)
+        .bind(e.kind, e.title, e.date, e.gather_time, e.end_time, e.place, e.lead, e.note, e.week_no, e.plan_text, e.capacity, e.signup_open, e.deadline, e.fee, e.guest_max, e.meal_options, e.link_url, e.link_label, e.team_id, e.questions, e.visibility, id).run();
+      await audit(env, req, member, 'event.update', 'event', id, `${e.title}${cur.visibility !== e.visibility ? `（改為${e.visibility === 'invite' ? '邀請制' : '公開'}）` : ''}`);
       return json({ ok: true });
     }
     if (method === 'DELETE') {
@@ -584,6 +604,78 @@ async function api(req, env, path, method) {
     if (!ev || !(await canSee(ev))) return fail(404, '找不到這個活動');
     if (method === 'POST') return doSignup(env, ev, member, await body());
     if (method === 'DELETE') return cancelSignup(env, ev, member);
+  }
+
+  // ---- 邀請制活動：受邀名單、邀請連結 ----
+  const minv = path.match(/^\/api\/events\/([\w-]{1,32})\/(invites|invite-link|accept)(?:\/([\w-]{1,32}))?$/);
+  if (minv) {
+    const g = need(); if (g) return g;
+    const ev = await evById(minv[1]);
+    if (!ev) return fail(404, '找不到這個活動');
+    const kind = minv[2];
+    // 用邀請連結加入：代碼對了就把自己加進受邀名單
+    if (kind === 'accept' && method === 'POST') {
+      if (await limited(env, `accept:${member.id}`, 20, 600)) return fail(429, '嘗試太多次，請稍後再試');
+      const row = await env.DB.prepare('SELECT invite_token FROM events WHERE id = ?').bind(ev.id).first();
+      const t = str((await body()).t, 40);
+      if (ev.visibility !== 'invite') return json({ ok: true });
+      if (!row?.invite_token || t !== row.invite_token) {
+        await audit(env, req, member, 'event.invite_denied', 'event', ev.id, '邀請連結無效');
+        return fail(404, '邀請連結已失效，請向主辦人索取新的連結');
+      }
+      const r = await env.DB.prepare("INSERT OR IGNORE INTO event_invites (event_id, member_id, via) VALUES (?, ?, 'link')").bind(ev.id, member.id).run();
+      if (r.meta.changes) await audit(env, req, member, 'event.invite_accept', 'event', ev.id, ev.title);
+      return json({ ok: true });
+    }
+    if (!canManage(ev)) return fail(403, '只有這個活動的主辦幹部可以管理邀請');
+    if (kind === 'invites' && method === 'GET') {
+      const rows = (await env.DB.prepare(
+        `SELECT m.id, m.name, m.nickname, m.avatar, i.via, i.created_at, s.status
+         FROM event_invites i JOIN members m ON m.id = i.member_id
+         LEFT JOIN signups s ON s.event_id = i.event_id AND s.member_id = i.member_id
+         WHERE i.event_id = ? ORDER BY s.status = 'in' DESC, m.name LIMIT 1000`).bind(ev.id).all()).results;
+      return json({ invites: rows });
+    }
+    if (kind === 'invites' && method === 'POST') {
+      const b = await body();
+      let ids = Array.isArray(b.member_ids) ? b.member_ids.map((x) => str(x, 32)).filter(Boolean).slice(0, 300) : [];
+      let via = 'manual';
+      const tid = str(b.team_id, 16);
+      if (tid) {
+        // 整個分團：要看得到那個分團名冊的人才能這樣邀
+        if (!teamCan(tid, 'roster')) return fail(403, '沒有這個分團的名冊權限');
+        ids = await teamMemberIds(env, tid);
+        via = 'team';
+      }
+      if (!ids.length) return fail(400, '沒有要邀請的人');
+      const exist = new Set((await env.DB.prepare(`SELECT id FROM members WHERE id IN (${ids.map(() => '?').join(',')})`).bind(...ids).all()).results.map((r) => r.id));
+      const before = new Set((await env.DB.prepare('SELECT member_id FROM event_invites WHERE event_id = ?').bind(ev.id).all()).results.map((r) => r.member_id));
+      const fresh = ids.filter((x) => exist.has(x) && !before.has(x));
+      for (let i = 0; i < fresh.length; i += 50) await env.DB.batch(fresh.slice(i, i + 50).map((mid) =>
+        env.DB.prepare('INSERT OR IGNORE INTO event_invites (event_id, member_id, invited_by, via) VALUES (?, ?, ?, ?)').bind(ev.id, mid, member.id, via)));
+      if (fresh.length) {
+        await audit(env, req, member, 'event.invite', 'event', ev.id, `${fresh.length} 人${tid ? `（分團 ${tid}）` : ''}`);
+        if (b.notify !== false) await notify(env, fresh, 'event', { title: `你受邀參加：${ev.title}`, body: `${ev.date}${ev.gather_time ? ` ${ev.gather_time}` : ''}　${ev.place || ''}`, url: `/#/e/${ev.id}` });
+      }
+      return json({ added: fresh.length });
+    }
+    if (kind === 'invites' && method === 'DELETE' && minv[3]) {
+      // 取消邀請：一併取消報名與入場券，避免還能入場
+      await env.DB.batch([
+        env.DB.prepare('DELETE FROM event_invites WHERE event_id = ? AND member_id = ?').bind(ev.id, minv[3]),
+        env.DB.prepare("UPDATE signups SET status = 'cancel' WHERE event_id = ? AND member_id = ?").bind(ev.id, minv[3]),
+        env.DB.prepare('DELETE FROM tickets WHERE event_id = ? AND member_id = ?').bind(ev.id, minv[3]),
+      ]);
+      await audit(env, req, member, 'event.uninvite', 'member', minv[3], ev.title);
+      return json({ ok: true });
+    }
+    if (kind === 'invite-link' && method === 'POST') {
+      const on = (await body()).on !== false;
+      const token = on ? rid(12) : null;   // 每次開啟都換新代碼，舊連結立即失效
+      await env.DB.prepare('UPDATE events SET invite_token = ? WHERE id = ?').bind(token, ev.id).run();
+      await audit(env, req, member, 'event.invite_link', 'event', ev.id, on ? '開啟／重新產生' : '關閉');
+      return json({ token });
+    }
   }
 
   // 幹部：匯出報名名單（純文字，貼回 LINE 用）
@@ -1004,6 +1096,8 @@ async function api(req, env, path, method) {
   if (mp) {
     const g = need(); if (g) return g;
     const eid = mp[1];
+    const pev = await evById(eid);
+    if (!pev || !(await canSee(pev))) return fail(404, '找不到這個活動');
     if (method === 'GET') {
       const prizes = (await env.DB.prepare('SELECT id, name, qty, sponsor, sort, stage, note FROM prizes WHERE event_id = ? ORDER BY sort, rowid').bind(eid).all()).results;
       const draws = (await env.DB.prepare('SELECT id, prize_id, member_id, name, created_at, claimed_at FROM draws WHERE event_id = ? ORDER BY created_at').bind(eid).all()).results;
