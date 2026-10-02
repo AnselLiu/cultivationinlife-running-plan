@@ -453,6 +453,7 @@ async function eventView(id) {
       ${useForm && !closed ? signupForm(ev, mine && mine.status !== 'cancel') : ''}
       ${party && (ev.fee || ev.guest_max || ev.meal_options) ? `<p class="tiny">${ev.fee ? `費用 ${ev.fee} 元　` : ''}${ev.guest_max ? `可攜伴 ${ev.guest_max} 位　` : ''}${ev.meal_options ? `餐點：${esc(ev.meal_options)}` : ''}</p>` : ''}
       ${mine?.status === 'wait' ? '<p class="notice" style="margin:0">你在候補名單，有人取消會自動遞補並通知你。</p>' : ''}
+      ${mine && mine.status !== 'cancel' && (ev.fee || ev.myAttended) ? `<div class="row" style="gap:6px">${ev.fee ? `<span class="pill ${ev.myPaid === 'paid' ? 'solid' : ev.myPaid === 'unpaid' ? 'wait' : ''}">費用 ${ev.fee} 元・${PAID_NAME[ev.myPaid] || '未繳'}</span>` : ''}${ev.myAttended ? `<span class="pill solid">${IC.check}已出席</span>` : ''}</div>` : ''}
       ${!party && !survey && !mine && !closed ? `<p class="tiny">會用你的基本資料報名：${esc(me.name)}${me.nickname ? `（${esc(me.nickname)}）` : ''}・${me.dist === 'hm' ? '半馬' : '全馬'} ${esc(me.grp)} 組。要改去「我的」。</p>` : ''}
       <div class="roster">
         ${ins.map((s) => `<div class="r">${avatar(s)}<span>${esc(s.name)}${s.note ? ` <span class="tiny">${esc(s.note)}</span>` : ''}</span><span class="pill">${esc(s.grp)}</span></div>`).join('')
@@ -473,6 +474,19 @@ async function eventView(id) {
         <a class="btn ghost sm" href="#/new?from=${ev.id}">複製成新活動</a>
         <button class="btn danger sm" id="del">刪除</button>
       </div>
+      ${party || survey ? '' : `<details id="attendWrap" ${ev.attendToken ? 'open' : ''}><summary class="tiny" style="cursor:pointer">現場報到 QR（團員自己掃）</summary>
+        ${ev.attendToken ? `<div class="qrbox" id="attendQR"></div><p class="tiny center" style="margin:0">請團員用手機相機掃描，登入後就完成報到；沒報名的人掃了會自動加入。只在活動當天有效。</p>
+          <div class="row"><button class="btn ghost sm" id="attendRotate">換一組 QR</button><button class="btn ghost sm" id="attendOff">關閉</button></div>`
+          : '<button class="btn sm" id="attendOn">開啟現場報到 QR</button>'}
+      </details>`}
+      <details><summary class="tiny" style="cursor:pointer">整批匯入（從 Excel 貼上姓名）</summary>
+        <form id="bulkForm" style="display:grid;gap:10px;margin-top:10px">
+          <textarea name="names" placeholder="一行一個姓名或暱稱，可以直接從 Excel 複製一整欄貼上" style="min-height:120px"></textarea>
+          <div class="row" style="gap:8px"><select name="action" style="width:auto"><option value="signup">代為報名</option><option value="invite">只邀請（邀請制）</option></select>
+          <button class="btn sm">匯入</button></div>
+          <div id="bulkOut" class="tiny"></div>
+        </form>
+      </details>
       <details><summary class="tiny" style="cursor:pointer">LINE 公告文字</summary>
         <pre class="out" id="announce">產生中…</pre>
         <button class="btn sm" id="copyAnn">複製公告</button>
@@ -480,6 +494,21 @@ async function eventView(id) {
     </section>` : ''}`;
   // 邀請制：分享出去的一定是帶邀請代碼的連結；沒開邀請連結就提醒先開
   const shareUrl = () => (inviteOnly ? (ev.invite?.token ? `${eventUrl(ev.id)}?t=${ev.invite.token}` : null) : eventUrl(ev.id));
+  const attendLink = ev.attendToken ? `${eventUrl(ev.id)}/attend?t=${ev.attendToken}` : '';
+  if (attendLink && $('#attendQR')) qrSVG(attendLink, { size: 220, dark: '#0B1B33', light: '#fff' }).then((svg) => { $('#attendQR').innerHTML = svg; }).catch(() => {});
+  const setAttend = async (on) => { try { await api(`/events/${ev.id}/attend-token`, { method: 'POST', body: { on } }); eventView(ev.id); } catch (e) { toast(e.message); } };
+  $('#attendOn')?.addEventListener('click', () => setAttend(true));
+  $('#attendRotate')?.addEventListener('click', () => setAttend(true));
+  $('#attendOff')?.addEventListener('click', () => setAttend(false));
+  $('#bulkForm')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const f = e.target;
+    try {
+      const r = await api(`/events/${ev.id}/bulk`, { method: 'POST', body: { names: f.names.value, action: f.action.value } });
+      $('#bulkOut').innerHTML = `完成 ${r.added} 人。${r.unmatched.length ? `<br>找不到：${r.unmatched.map(esc).join('、')}` : ''}${r.ambiguous.length ? `<br>同名需要手動處理：${r.ambiguous.map(esc).join('、')}` : ''}${r.failed.length ? `<br>沒報成：${r.failed.map(esc).join('、')}` : ''}`;
+      if (r.added) toast(`已處理 ${r.added} 人`);
+    } catch (err) { toast(err.message); }
+  });
   $('#shareEv')?.addEventListener('click', () => (shareUrl() ? shareEvent(ev, shareUrl()) : toast('先在下方「邀請連結」開啟，才能分享')));
   $('#copyLink')?.addEventListener('click', () => (shareUrl() ? copy(shareUrl()) : toast('先在下方「邀請連結」開啟，才能分享')));
   if (inviteOnly && admin) bindInviteCard(ev);
@@ -845,7 +874,8 @@ const AUDIT_NAME = {
   'settings.club_race': '修改預設倒數', 'event.update': '編輯活動', 'event.export': '匯出報名名單',
   'team.create': '新增分團', 'team.update': '修改分團', 'team.delete': '刪除分團', 'team.join': '加入分團', 'team.leave': '退出分團',
   'team.approve': '通過入團', 'team.reject': '婉拒入團', 'team.remove': '移出分團', 'team.role': '變更分團身分', 'team.add': '加進分團', 'team.icon': '更新分團圖示', 'event.invite': '邀請參加活動', 'event.uninvite': '移出受邀名單', 'event.invite_link': '設定邀請連結',
-  'event.invite_accept': '用邀請連結加入', 'review.reminder': '每季權限檢視提醒', 'retention.cleanup': '資料保存期限清理', 'event.invite_denied': '邀請連結無效', 'privacy.share_logs': '訓練紀錄分享設定', 'settings.shortcut': '修改捷徑連結',
+  'event.invite_accept': '用邀請連結加入', 'review.reminder': '每季權限檢視提醒', 'event.payment': '更新繳費狀態', 'event.attend_token': '設定現場報到', 'event.bulk': '整批匯入',
+  'calendar.on': '產生行事曆訂閱', 'calendar.off': '停用行事曆訂閱', 'retention.cleanup': '資料保存期限清理', 'event.invite_denied': '邀請連結無效', 'privacy.share_logs': '訓練紀錄分享設定', 'settings.shortcut': '修改捷徑連結',
 };
 // 稽核紀錄：一定要選時間區間（預設最近 7 天），再依類型、操作者、對象縮小；一次 50 筆
 const AUDIT_GROUPS = { '': '所有類型', role: '身分變更', membership: '會籍', team: '分團', event: '活動', checkin: '報到', lottery: '抽獎',
@@ -1188,6 +1218,21 @@ async function paintQR(ev, code) {
   catch { box.innerHTML = '<p class="tiny">QR 產生失敗，請用下方代碼報到</p>'; }
 }
 
+// 現場自助報到：掃主辦人出示的 QR 進來
+async function attendView(id) {
+  const t = new URLSearchParams(location.hash.split('?')[1] || '').get('t');
+  view.innerHTML = '<p class="loading">報到中…</p>';
+  try {
+    const r = await api(`/events/${id}/attend`, { method: 'POST', body: { t } });
+    history.replaceState(null, '', `#/e/${id}/attend`);
+    view.innerHTML = `<section class="card ok attendok"><span class="big">${IC.checkCircle}</span><h2>報到完成</h2>
+      <p class="muted" style="margin:0">${r.walkIn ? '你原本沒有報名，已經幫你加入名單。' : '今天也辛苦了，練完記得記錄訓練。'}</p>
+      <a class="btn block" href="#/e/${esc(id)}">回活動頁</a><a class="btn ghost block" href="#/plan">記錄今天的訓練</a></section>`;
+  } catch (e) {
+    view.innerHTML = `<section class="card"><h2>報到沒有成功</h2><p class="muted">${esc(e.message)}</p><a class="btn ghost block" href="#/e/${esc(id)}">回活動頁</a></section>`;
+  }
+}
+
 // 我的入場券：所有即將到來的入場券集中在一頁（主畫面捷徑直達，離線也能出示）
 async function ticketsView() {
   const { tickets } = await api('/my/tickets');
@@ -1363,6 +1408,15 @@ async function lotteryStage(ev) {
     $('#lName').textContent = '準備開始'; $('#lSub').textContent = p ? p.name : '';
   };
   $('#lPrize').onchange();
+  // 大螢幕操作：空白鍵或 Enter 抽獎、F 全螢幕、Esc 關閉
+  const onKey = (e) => {
+    if (e.target.closest('select,input')) return;
+    if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); $('#lGo')?.click(); }
+    else if (e.key === 'f' || e.key === 'F') (document.fullscreenElement ? document.exitFullscreen() : host.firstElementChild.requestFullscreen?.())?.catch?.(() => {});
+    else if (e.key === 'Escape' && !document.fullscreenElement) { removeEventListener('keydown', onKey); close(); }
+  };
+  addEventListener('keydown', onKey);
+  $('#lClose').onclick = () => { removeEventListener('keydown', onKey); document.fullscreenElement && document.exitFullscreen().catch(() => {}); close(); };
   $('#lGo').onclick = async () => {
     const btn = $('#lGo'); btn.disabled = true;
     try {
@@ -1376,6 +1430,13 @@ async function lotteryStage(ev) {
       $('#lSub').textContent = `${r.prize}${w.nickname ? `・${w.nickname}` : ''}${w.table_no ? `・第 ${w.table_no} 桌` : ''}`;
       $('#lLog').insertAdjacentHTML('afterbegin', `<div class="lrow"><span>${esc(w.name)}</span><span class="tiny">${esc(r.prize)}</span></div>`);
       confetti();
+      // 這個獎項抽完了：自動切到下一個還有名額的獎項
+      const p = prizes.find((x) => x.id === prizeId);
+      p.done = (p.done ?? draws.filter((d) => d.prize_id === prizeId).length) + 1;
+      if (p.done >= p.qty) {
+        const next = prizes.find((x) => (x.done ?? draws.filter((d) => d.prize_id === x.id).length) < x.qty);
+        if (next) setTimeout(() => { $('#lPrize').value = next.id; $('#lPrize').onchange(); toast(`${p.name} 抽完了，下一個：${next.name}`); }, 2200);
+      }
     } catch (e) { toast(e.message); }
     btn.disabled = false;
   };
@@ -1953,6 +2014,7 @@ const qRow = (q = {}) => `<div class="qrow" data-type="${q.type || 'single'}" da
 </div>`;
 
 // ---------- 活動統計與問卷結果 ----------
+const PAID_NAME = { unpaid: '未繳', paid: '已繳', waived: '免繳', refunded: '已退費' };
 const bars = (entries, total) => {
   const max = Math.max(1, ...entries.map(([, n]) => n));
   return `<div class="bars">${entries.map(([k, n]) => `<div class="bar-row"><span class="k">${esc(k)}</span>
@@ -1963,12 +2025,17 @@ async function statsView(id) {
   const st = await api(`/events/${id}/stats`);
   const t = st.total, survey = st.kind === 'survey';
   const kpi = [[survey ? '回覆' : '正取', t.in], ...(survey ? [] : [['候補', t.wait]]), ['取消', t.cancel],
-    ...(st.kind === 'party' ? [['攜伴', t.guests], ['已報到', `${t.checkedIn}/${t.in}`]] : []), ['協會會員', t.members]];
+    ...(st.kind === 'party' ? [['攜伴', t.guests], ['已報到', `${t.checkedIn}/${t.in}`]] : survey ? [] : [['出席', `${t.attended}/${t.in}`]]), ['協會會員', t.members]];
+  const money = st.money, nf = (n) => n.toLocaleString('zh-TW');
   view.innerHTML = `
     ${largeTitle('統計', `${esc(st.title)}・${dstr(st.date)}`, `<a class="btn ghost sm" href="#/e/${id}">回活動</a>`)}
     <section class="kpis">${kpi.map(([k, v]) => `<div class="card kpi"><span class="tiny">${k}</span><b class="num">${v}</b></div>`).join('')}</section>
     ${st.capacity ? `<section class="card"><div class="row spread"><h3>名額</h3><span class="tiny num">${t.in}/${st.capacity}</span></div>
       <span class="bar big"><i style="width:${Math.min(100, Math.round(t.in / st.capacity * 100))}%"></i></span></section>` : ''}
+    ${money ? `<section class="card"><div class="row spread"><h3>繳費</h3><span class="tiny">每人 ${nf(st.fee)} 元（攜伴另計）</span></div>
+      <div class="lstats"><span>已收 <b class="num">${nf(money.collected)}</b> / ${nf(money.expected)} 元</span>
+        ${Object.entries(PAID_NAME).map(([k, v]) => `<span>${v} <b class="num">${money.counts[k] || 0}</b></span>`).join('')}</div>
+      <span class="bar big"><i style="width:${money.expected ? Math.round(money.collected / money.expected * 100) : 0}%"></i></span></section>` : ''}
     <div class="statgrid">
       <section class="card"><h3>各分團</h3>${bars(st.byTeam.map((x) => [x.k, x.n]).sort((a, b) => b[1] - a[1]), t.in)}
         <p class="tiny" style="margin:0">同時在兩個分團的人，兩邊都會算到。</p></section>
@@ -1982,6 +2049,16 @@ async function statsView(id) {
         ? `<div class="answers">${q.answers.map((a) => `<div><b>${esc(a.name)}</b><span>${esc(a.text)}</span></div>`).join('') || '<p class="muted" style="margin:0">還沒有回答</p>'}</div>`
         : bars(q.counts.map((c) => [c.o, c.n]), q.answered)}
     </section>`).join('')}
+    ${survey ? '' : `<section class="card">
+      <div class="row spread"><h3>名單</h3><span class="tiny">${st.people.length} 人</span></div>
+      <input id="pq" placeholder="搜尋姓名" autocomplete="off">
+      <div class="roster" id="plist">${st.people.map((x) => `<div class="r prow" data-name="${esc(`${x.name} ${x.nickname || ''}`)}">
+        <label class="attend" title="出席"><input type="checkbox" data-att="${esc(x.member_id)}" ${x.attended ? 'checked' : ''} ${st.kind === 'party' ? 'disabled' : ''}><i>${IC.check}</i></label>
+        <span><b>${esc(x.name)}</b>${x.nickname ? ` <span class="tiny">${esc(x.nickname)}</span>` : ''}<span class="tiny" style="display:block">${x.status === 'wait' ? '候補・' : ''}${x.guests ? `攜伴 ${x.guests}・` : ''}${esc(x.paid_note || '')}</span></span>
+        ${money ? `<select data-pay="${esc(x.member_id)}" aria-label="繳費狀態" class="paysel ${x.paid}">${Object.entries(PAID_NAME).map(([k, v]) => `<option value="${k}" ${x.paid === k ? 'selected' : ''}>${v}</option>`).join('')}</select>` : '<span></span>'}
+      </div>`).join('')}</div>
+      <p class="tiny" style="margin:0">左邊勾選是點名出席${st.kind === 'party' ? '（春酒以入場券報到為準）' : ''}${money ? '；右邊切換繳費狀態，只做紀錄，不串金流' : ''}。</p>
+    </section>`}
     <section class="card">
       <h3>匯出</h3>
       <p class="tiny" style="margin:0">Excel 可以直接開啟的 CSV，含每個人的問卷回答${allow('members') && me.role !== 'supervisor' ? '與電話' : ''}。匯出會留下稽核紀錄，檔案請妥善保管、用完刪除。</p>
@@ -1989,6 +2066,14 @@ async function statsView(id) {
         <button class="btn ghost sm" id="copyRoster2">複製名單（貼 LINE）</button></div>
     </section>`;
   $('#copyRoster2').onclick = async () => { try { copy((await api(`/events/${id}/roster`)).text); } catch (e) { toast(e.message); } };
+  $('#pq')?.addEventListener('input', (e) => { const q = e.target.value.trim(); for (const r of document.querySelectorAll('.prow')) r.hidden = !!q && !r.dataset.name.includes(q); });
+  for (const c of document.querySelectorAll('[data-att]')) c.onchange = async () => {
+    try { await api(`/events/${id}/attendance`, { method: 'POST', body: { member_id: c.dataset.att, present: c.checked } }); } catch (e) { c.checked = !c.checked; toast(e.message); }
+  };
+  for (const sel of document.querySelectorAll('[data-pay]')) sel.onchange = async () => {
+    try { await api(`/events/${id}/payments`, { method: 'POST', body: { member_ids: [sel.dataset.pay], paid: sel.value } }); sel.className = `paysel ${sel.value}`; toast(`已標記為${PAID_NAME[sel.value]}`); }
+    catch (e) { toast(e.message); }
+  };
 }
 
 // ---------- 分團 ----------
@@ -2208,6 +2293,13 @@ async function meView() {
 
     ${installCard('me')}
     <a class="card" href="#/tickets"><div class="row spread"><h3>我的入場券</h3><span class="tiny">春酒等活動的入場 QR Code ›</span></div></a>
+    <section class="card" id="calCard">
+      <div class="row spread"><h3>訂閱到手機行事曆</h3>${cfg.calendarOn ? '<span class="pill solid">已開啟</span>' : ''}</div>
+      <p class="tiny" style="margin:0">報名的團練與活動會自動出現在 iPhone、Google 行事曆，取消報名也會跟著消失。訂閱網址等同你的個人鑰匙，不要分享給別人。</p>
+      <div id="calBox" class="row" style="gap:8px">${cfg.calendarOn
+        ? '<button class="btn ghost sm" id="calNew">重新產生網址</button><button class="btn ghost sm" id="calOff">停用</button>'
+        : '<button class="btn sm" id="calNew">產生訂閱網址</button>'}</div>
+    </section>
     <section class="card">
       <h3>通知</h3>
       ${cfg.vapid
@@ -2332,6 +2424,20 @@ async function meView() {
   $('#logout').onclick = async () => { await api('/logout', { method: 'POST' }); clearDeviceData(); me = null; location.hash = '#/'; render(); };
   $('#pushBtn')?.addEventListener('click', () => togglePush(sub));
   bindInstall();
+  // 行事曆訂閱：每次產生都是新網址，舊的立即失效
+  $('#calNew').onclick = async () => {
+    if (cfg.calendarOn && !confirm('重新產生後，已經訂閱的舊網址會失效，要在行事曆重新訂閱。確定？')) return;
+    try {
+      const { url } = await api('/me/calendar', { method: 'POST' });
+      cfg.calendarOn = true;
+      const webcal = url.replace(/^https:/, 'webcal:');
+      $('#calBox').outerHTML = `<div style="display:grid;gap:8px"><a class="btn block" href="${esc(webcal)}">加到 iPhone／Mac 行事曆</a>
+        <div class="row" style="gap:8px"><input readonly value="${esc(url)}" style="flex:1;font-size:13px" onfocus="this.select()"><button class="btn ghost sm" id="calCopy">複製</button></div>
+        <p class="tiny" style="margin:0">Google 行事曆：電腦版左側「其他日曆 → 透過網址新增」，貼上這個網址。這個網址只會顯示這一次。</p></div>`;
+      $('#calCopy').onclick = () => copy(url);
+    } catch (e) { toast(e.message); }
+  };
+  $('#calOff')?.addEventListener('click', async () => { await api('/me/calendar', { method: 'DELETE' }); cfg.calendarOn = false; toast('已停用行事曆訂閱'); meView(); });
   $('#shareLogs').onchange = async (e) => {
     try { await api('/me/share-logs', { method: 'POST', body: { share: e.target.checked } }); me.share_logs = e.target.checked; toast(e.target.checked ? '已分享給教練' : '已停止分享'); }
     catch (err) { e.target.checked = !e.target.checked; toast(err.message); }
@@ -2415,6 +2521,8 @@ async function route(hash) {
     if (hash === '/new') return await formView(null);
     const edit = hash.match(/^\/edit\/([\w-]+)$/);
     if (edit) return await formView(edit[1]);
+    const at = hash.match(/^\/e\/([\w-]+)\/attend$/);
+    if (at) return await attendView(at[1]);
     const ci = hash.match(/^\/e\/([\w-]+)\/in\/([\w-]+)$/);
     if (ci) return await checkinView(ci[1], ci[2].toUpperCase());
     const sc = hash.match(/^\/e\/([\w-]+)\/scan$/);

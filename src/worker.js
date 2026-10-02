@@ -413,6 +413,39 @@ async function api(req, env, path, method) {
     return t;
   };
 
+  // 行事曆訂閱的 .ics：只列本人有報名（正取或候補）的活動，過去 30 天到未來 180 天
+  const mcal = path.match(/^\/api\/cal\/([\w]{16,64})\.ics$/);
+  if (mcal && method === 'GET') {
+    const th = await sha(mcal[1]);
+    if (await limited(env, `cal:${th.slice(0, 16)}`, 60, 3600)) return fail(429, '更新太頻繁');
+    const who = await env.DB.prepare('SELECT id FROM members WHERE cal_token_hash = ?').bind(th).first();
+    if (!who) return fail(404, '訂閱網址已失效');
+    const rows = (await env.DB.prepare(`SELECT e.id, e.title, e.date, e.gather_time, e.end_time, e.place, e.note, e.kind, s.status
+      FROM signups s JOIN events e ON e.id = s.event_id WHERE s.member_id = ? AND s.status IN ('in', 'wait')
+      AND e.date BETWEEN date('now', '-30 days') AND date('now', '+180 days') ORDER BY e.date LIMIT 300`).bind(who.id).all()).results;
+    const icsEsc = (t) => String(t || '').replace(/\\/g, '\\\\').replace(/\n/g, '\\n').replace(/[,;]/g, (c) => `\\${c}`);
+    const fold = (line) => { const out = []; let cur = ''; for (const ch of line) { if (new TextEncoder().encode(cur + ch).length > 73) { out.push(cur); cur = ` ${ch}`; } else cur += ch; } out.push(cur); return out.join('\r\n'); };
+    const d8 = (d) => d.replace(/-/g, ''), t6 = (t) => `${t.replace(':', '')}00`;
+    const origin = new URL(req.url).origin, stamp = new Date().toISOString().replace(/[-:]/g, '').slice(0, 15) + 'Z';
+    const plus1 = (d) => new Date(Date.parse(`${d}T00:00:00Z`) + 864e5).toISOString().slice(0, 10);
+    const ev = rows.map((r) => {
+      const timed = /^\d{2}:\d{2}$/.test(r.gather_time || '');
+      const end = timed ? (/^\d{2}:\d{2}$/.test(r.end_time || '') && r.end_time > r.gather_time ? r.end_time
+        : `${String(Math.min(23, Number(r.gather_time.slice(0, 2)) + 2)).padStart(2, '0')}${r.gather_time.slice(2)}`) : null;
+      return ['BEGIN:VEVENT', `UID:${r.id}@cil-run`, `DTSTAMP:${stamp}`,
+        timed ? `DTSTART;TZID=Asia/Taipei:${d8(r.date)}T${t6(r.gather_time)}` : `DTSTART;VALUE=DATE:${d8(r.date)}`,
+        timed ? `DTEND;TZID=Asia/Taipei:${d8(r.date)}T${t6(end)}` : `DTEND;VALUE=DATE:${d8(plus1(r.date))}`,
+        `SUMMARY:${icsEsc(`${r.status === 'wait' ? '（候補）' : ''}${r.title}`)}`, r.place ? `LOCATION:${icsEsc(r.place)}` : '',
+        `DESCRIPTION:${icsEsc(`${r.note ? `${r.note}\n` : ''}${origin}/#/e/${r.id}`)}`, `URL:${origin}/#/e/${r.id}`, 'END:VEVENT'].filter(Boolean).map(fold).join('\r\n');
+    });
+    const body2 = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Cultivation in Life Run//cil-run//ZH', 'CALSCALE:GREGORIAN', 'METHOD:PUBLISH',
+      'X-WR-CALNAME:耕跑團', 'X-WR-TIMEZONE:Asia/Taipei', 'REFRESH-INTERVAL;VALUE=DURATION:PT6H',
+      'BEGIN:VTIMEZONE', 'TZID:Asia/Taipei', 'BEGIN:STANDARD', 'DTSTART:19700101T000000', 'TZOFFSETFROM:+0800', 'TZOFFSETTO:+0800', 'TZNAME:CST', 'END:STANDARD', 'END:VTIMEZONE',
+      ...ev, 'END:VCALENDAR'].join('\r\n');
+    return new Response(body2, { headers: { ...SEC_HEADERS, 'content-type': 'text/calendar; charset=utf-8', 'cache-control': 'no-store',
+      'content-disposition': 'inline; filename="cil-run.ics"' } });
+  }
+
   // 分團小圖：網址帶版本號，可以長期快取
   const mic = path.match(/^\/api\/teams\/([\w-]{1,16})\/icon$/);
   if (mic && method === 'GET') {
@@ -451,7 +484,7 @@ async function api(req, env, path, method) {
       ...(await (async () => { const st = await getSettings(env);
         return { settings: st, privacyVersion: st.privacy.version, needConsent: !!member && member.consent_version !== st.privacy.version }; })()),
       race: await countdownTarget(env, member),
-      teams: member ? await listTeams() : [],
+      teams: member ? await listTeams() : [], calendarOn: !!member?.cal_token_hash,
       shortcut: await env.DB.prepare("SELECT value FROM settings WHERE key = 'health_shortcut'").first().then((r) => r?.value || null) });
 
   // 已登入的人輸入幹部碼或理事長碼升級
@@ -567,14 +600,16 @@ async function api(req, env, path, method) {
     if (!cur || !(await canSee(cur))) return fail(404, '找不到這個活動');
     if (method === 'GET') {
       const ev = await eventWithSignups(env, id);
-      const mine = await env.DB.prepare('SELECT answers FROM signups WHERE event_id = ? AND member_id = ?').bind(id, member.id).first();
+      const mine = await env.DB.prepare('SELECT answers, paid, attended_at FROM signups WHERE event_id = ? AND member_id = ?').bind(id, member.id).first();
       const team = ev.team_id ? await env.DB.prepare('SELECT id, name, color FROM teams WHERE id = ?').bind(ev.team_id).first() : null;
       const manage = canManage(ev);
       const inv = ev.visibility === 'invite' && manage
         ? { count: (await env.DB.prepare('SELECT COUNT(*) AS n FROM event_invites WHERE event_id = ?').bind(id).first()).n,
             token: (await env.DB.prepare('SELECT invite_token FROM events WHERE id = ?').bind(id).first()).invite_token || null } : null;
+      const attendTok = manage ? (await env.DB.prepare('SELECT attend_token FROM events WHERE id = ?').bind(id).first()).attend_token : null;
       return json({ ...ev, questions: parseQ(ev.questions), myAnswers: mine?.answers ? JSON.parse(mine.answers) : null,
-        team, manage, checkin: teamCan(ev.team_id, 'checkin'), invite: inv });
+        myPaid: mine?.paid || null, myAttended: mine?.attended_at || null,
+        team, manage, checkin: teamCan(ev.team_id, 'checkin'), invite: inv, attendToken: attendTok });
     }
     if (method === 'PUT') {
       const e = readEvent(await body());
@@ -676,6 +711,88 @@ async function api(req, env, path, method) {
     }
   }
 
+  // ---- 活動營運：繳費、點名、自助報到、整批匯入 ----
+  const mops = path.match(/^\/api\/events\/([\w-]{1,32})\/(payments|attendance|attend|attend-token|bulk)$/);
+  if (mops && method === 'POST') {
+    const g = need(); if (g) return g;
+    const ev = await evById(mops[1]);
+    if (!ev || !(await canSee(ev))) return fail(404, '找不到這個活動');
+    const op = mops[2], b = await body();
+    // 現場自助報到：掃主辦人手機上的 QR（帶代碼），活動當天前後一天內有效
+    if (op === 'attend') {
+      if (await limited(env, `attend:${member.id}`, 20, 600)) return fail(429, '嘗試太多次，請稍後再試');
+      const row = await env.DB.prepare('SELECT attend_token FROM events WHERE id = ?').bind(ev.id).first();
+      if (!row?.attend_token || str(b.t, 40) !== row.attend_token) return fail(400, '報到 QR 已失效，請主辦人重新出示');
+      if (Math.abs(Date.parse(ev.date) - Date.parse(tpDate(new Date()))) > 864e5) return fail(400, '只能在活動當天報到');
+      const mine = await env.DB.prepare('SELECT id, status FROM signups WHERE event_id = ? AND member_id = ?').bind(ev.id, member.id).first();
+      if (mine) await env.DB.prepare("UPDATE signups SET status = 'in', attended_at = COALESCE(attended_at, datetime('now')) WHERE id = ?").bind(mine.id).run();
+      else await env.DB.prepare("INSERT INTO signups (id, event_id, member_id, name, grp, dist, note, status, attended_at) VALUES (?, ?, ?, ?, ?, ?, '現場報到', 'in', datetime('now'))")
+        .bind(rid(8), ev.id, member.id, member.name, member.grp, member.dist).run();
+      return json({ ok: true, walkIn: !mine });
+    }
+    if (!canManage(ev) && !(op === 'attendance' && teamCan(ev.team_id, 'checkin'))) return fail(403, '只有這個活動的幹部可以操作');
+    if (op === 'payments') {
+      const PAID = ['unpaid', 'paid', 'waived', 'refunded'];
+      const ids = Array.isArray(b.member_ids) ? b.member_ids.map((x) => str(x, 32)).filter(Boolean).slice(0, 500) : [];
+      if (!ids.length || !PAID.includes(b.paid)) return fail(400, '繳費資料不正確');
+      await env.DB.batch(ids.map((mid) => env.DB.prepare(`UPDATE signups SET paid = ?, paid_note = COALESCE(?, paid_note),
+        paid_at = CASE WHEN ? = 'paid' THEN datetime('now') ELSE paid_at END WHERE event_id = ? AND member_id = ?`)
+        .bind(b.paid, str(b.note, 60) || null, b.paid, ev.id, mid)));
+      await audit(env, req, member, 'event.payment', 'event', ev.id, `${ids.length} 人 → ${b.paid}`);
+      return json({ ok: true });
+    }
+    if (op === 'attendance') {
+      const mid = str(b.member_id, 32);
+      await env.DB.prepare(`UPDATE signups SET attended_at = ${b.present === false ? 'NULL' : "COALESCE(attended_at, datetime('now'))"} WHERE event_id = ? AND member_id = ?`).bind(ev.id, mid).run();
+      return json({ ok: true });
+    }
+    if (op === 'attend-token') {
+      const token = b.on === false ? null : rid(10);
+      await env.DB.prepare('UPDATE events SET attend_token = ? WHERE id = ?').bind(token, ev.id).run();
+      await audit(env, req, member, 'event.attend_token', 'event', ev.id, token ? '開啟現場報到' : '關閉現場報到');
+      return json({ token });
+    }
+    if (op === 'bulk') {
+      // 貼上一欄姓名（從 Excel 複製）：完全符合姓名或暱稱、而且只有一位的才處理
+      const names = [...new Set((Array.isArray(b.names) ? b.names : String(b.names || '').split(/[\n,，、\t]+/)).map((x) => str(x, 40)).filter(Boolean))].slice(0, 300);
+      const action = b.action === 'invite' ? 'invite' : 'signup';
+      if (!names.length) return fail(400, '請貼上姓名');
+      const matched = [], ambiguous = [], unmatched = [], failed = [];
+      for (const n of names) {
+        const rows = (await env.DB.prepare('SELECT * FROM members WHERE name = ? OR nickname = ? LIMIT 3').bind(n, n).all()).results;
+        if (rows.length === 1) matched.push(rows[0]); else (rows.length ? ambiguous : unmatched).push(n);
+      }
+      let added = 0;
+      if (action === 'invite') {
+        for (const m of matched) added += (await env.DB.prepare("INSERT OR IGNORE INTO event_invites (event_id, member_id, invited_by, via) VALUES (?, ?, ?, 'manual')").bind(ev.id, m.id, member.id).run()).meta.changes;
+        if (added) await notify(env, matched.map((m) => m.id), 'event', { title: `你受邀參加：${ev.title}`, body: `${ev.date}${ev.gather_time ? ` ${ev.gather_time}` : ''}　${ev.place || ''}`, url: `/#/e/${ev.id}` });
+      } else {
+        for (const m of matched) {
+          if (ev.visibility === 'invite') await env.DB.prepare("INSERT OR IGNORE INTO event_invites (event_id, member_id, invited_by, via) VALUES (?, ?, ?, 'manual')").bind(ev.id, m.id, member.id).run();
+          const r = await doSignup(env, ev, m, { note: '幹部代為報名' });
+          if (r.ok) added += 1; else failed.push(`${m.name}（${(await r.json()).error}）`);
+        }
+        if (added) await notify(env, matched.map((m) => m.id), 'signup', { title: `已幫你報名：${ev.title}`, body: '如果不能參加，請到活動頁取消', url: `/#/e/${ev.id}` });
+      }
+      await audit(env, req, member, 'event.bulk', 'event', ev.id, `${action === 'invite' ? '邀請' : '代為報名'} ${added} 人，找不到 ${unmatched.length}、同名 ${ambiguous.length}`);
+      return json({ added, matched: matched.map((m) => m.name), ambiguous, unmatched, failed });
+    }
+  }
+
+  // ---- 行事曆訂閱：產生個人專屬網址（行事曆 App 不帶 cookie，所以用代碼；資料庫只存雜湊）----
+  if (path === '/api/me/calendar' && (method === 'POST' || method === 'DELETE')) {
+    const g = need(); if (g) return g;
+    if (method === 'DELETE') {
+      await env.DB.prepare('UPDATE members SET cal_token_hash = NULL WHERE id = ?').bind(member.id).run();
+      await audit(env, req, member, 'calendar.off', 'member', member.id, '');
+      return json({ ok: true });
+    }
+    const token = rid(16);
+    await env.DB.prepare('UPDATE members SET cal_token_hash = ? WHERE id = ?').bind(await sha(token), member.id).run();
+    await audit(env, req, member, 'calendar.on', 'member', member.id, '產生訂閱網址');
+    return json({ url: `${new URL(req.url).origin}/api/cal/${token}.ics` });
+  }
+
   // 幹部：匯出報名名單（純文字，貼回 LINE 用）
   const m3 = path.match(/^\/api\/events\/([\w-]{1,32})\/roster$/);
   if (m3 && method === 'GET') {
@@ -702,8 +819,8 @@ async function api(req, env, path, method) {
     const q = (sql) => env.DB.prepare(sql).bind(member.id).all().then((r) => r.results);
     const data = {
       exported_at: new Date().toISOString(),
-      profile: (({ s_seen, s_role, s_created, line_id, ...rest }) => ({ ...rest, line_linked: !!line_id }))(member),
-      signups: await q('SELECT event_id, name, grp, dist, note, status, answers, created_at FROM signups WHERE member_id = ?'),
+      profile: (({ s_seen, s_role, s_created, line_id, cal_token_hash, ...rest }) => ({ ...rest, line_linked: !!line_id, calendar_feed: !!cal_token_hash }))(member),
+      signups: await q('SELECT event_id, name, grp, dist, note, status, answers, paid, attended_at, created_at FROM signups WHERE member_id = ?'),
       teams: await q('SELECT team_id, role, title, status, created_at FROM team_members WHERE member_id = ?'),
       tickets: await q('SELECT event_id, code, guests, meal, table_no, checked_in_at FROM tickets WHERE member_id = ?'),
       prizes: await q('SELECT event_id, prize_id, created_at, claimed_at FROM draws WHERE member_id = ?'),
@@ -1186,7 +1303,7 @@ async function api(req, env, path, method) {
     if (!teamCan(ev.team_id, 'event') && !teamCan(ev.team_id, 'checkin')) return fail(403, '只有這個活動的幹部可以看統計');
     const qs = parseQ(ev.questions);
     const rows = (await env.DB.prepare(
-      `SELECT s.member_id, s.name, s.grp, s.dist, s.note, s.status, s.answers, s.created_at,
+      `SELECT s.member_id, s.name, s.grp, s.dist, s.note, s.status, s.answers, s.created_at, s.paid, s.paid_note, s.attended_at,
               m.nickname, m.club, m.phone, m.membership,
               t.guests, t.meal, t.table_no, t.checked_in_at,
               (SELECT group_concat(tm.team_id) FROM team_members tm WHERE tm.member_id = s.member_id AND tm.status = 'active') AS teams
@@ -1200,11 +1317,13 @@ async function api(req, env, path, method) {
       const fullPhone = can(member, 'members') && !READONLY[norm(member.role)];
       const cell = (v) => { let x = String(v ?? ''); if (/^[=+\-@\t\r]/.test(x)) x = `'${x}`; return `"${x.replace(/"/g, '""')}"`; };
       const STATUS = { in: '正取', wait: '候補', cancel: '已取消' };
-      const head = ['報名時間', '狀態', '姓名', '暱稱', '分團', '跑團', '項目', '組別', ...(fullPhone ? ['電話'] : []),
+      const PAID = { unpaid: '未繳', paid: '已繳', waived: '免繳', refunded: '已退費' };
+      const head = ['報名時間', '狀態', '姓名', '暱稱', '分團', '跑團', '項目', '組別', ...(fullPhone ? ['電話'] : []), ...(ev.fee ? ['繳費', '繳費備註'] : []), '出席',
         ...(ev.kind === 'party' ? ['攜伴', '餐點', '桌次', '報到時間'] : []), ...qs.map((q) => q.label), '備註'];
       const lines = rows.map((r) => { const a = ans(r); return [r.created_at, STATUS[r.status] || r.status, r.name, r.nickname,
         (r.teams || '').split(',').filter(Boolean).map((t) => teamName[t] || t).join('、'), r.club, r.dist === 'hm' ? '半馬' : '全馬', r.grp,
-        ...(fullPhone ? [r.phone] : []), ...(ev.kind === 'party' ? [r.guests ?? '', r.meal, r.table_no ?? '', r.checked_in_at] : []),
+        ...(fullPhone ? [r.phone] : []), ...(ev.fee ? [PAID[r.paid] || '', r.paid_note] : []), r.attended_at || r.checked_in_at || '',
+        ...(ev.kind === 'party' ? [r.guests ?? '', r.meal, r.table_no ?? '', r.checked_in_at] : []),
         ...qs.map((q) => (Array.isArray(a[q.id]) ? a[q.id].join('、') : a[q.id] ?? '')), r.note].map(cell).join(','); });
       await audit(env, req, member, 'event.export', 'event', ev.id, `${rows.length} 筆`);
       const fname = encodeURIComponent(`${ev.date}-${ev.title}.csv`);
@@ -1218,7 +1337,15 @@ async function api(req, env, path, method) {
       title: ev.title, date: ev.date, kind: ev.kind, capacity: ev.capacity,
       total: { in: ins.length, wait: live.length - ins.length, cancel: rows.length - live.length,
         guests: ins.reduce((n, r) => n + (r.guests || 0), 0), checkedIn: ins.filter((r) => r.checked_in_at).length,
+        attended: ins.filter((r) => r.attended_at || r.checked_in_at).length,
         members: ins.filter((r) => r.membership === 'active').length },
+      fee: ev.fee || 0,
+      money: ev.fee ? (() => { const due = (r) => ev.fee * (1 + (r.guests || 0));
+        return { expected: ins.filter((r) => r.paid !== 'waived').reduce((n, r) => n + due(r), 0),
+          collected: ins.filter((r) => r.paid === 'paid').reduce((n, r) => n + due(r), 0),
+          counts: tally(ins, (r) => r.paid || 'unpaid') }; })() : null,
+      people: live.map((r) => ({ member_id: r.member_id, name: r.name, nickname: r.nickname, status: r.status, guests: r.guests || 0,
+        paid: r.paid, paid_note: r.paid_note, attended: !!(r.attended_at || r.checked_in_at), created_at: r.created_at })),
       byTeam: Object.entries(tally(ins, (r) => (r.teams || '').split(',').filter(Boolean))).map(([k, n]) => ({ k: teamName[k] || k, n })),
       byGroup: tally(ins, (r) => `${r.dist === 'hm' ? '半馬' : '全馬'} ${r.grp}`),
       byMeal: ev.kind === 'party' ? tally(ins, (r) => r.meal || '未指定') : null,
