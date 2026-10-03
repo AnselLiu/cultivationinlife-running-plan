@@ -7,7 +7,7 @@
   color-scheme:light dark;
   --navy:#0B1B33; --blue:#1C4698; --yellow:#FDF36D; --lime:#B9D04C;
 
-  --bg:#E9EEF7; --bg-2:#DFE6F3;
+  --bg:#E9EEF7; --bg-2:#DFE6F3; --sheet-solid:#FAFBFD;
   --ink:#0B1B33; --ink-2:#4E5C74; --ink-3:#5A6578;
   /* 玻璃材質：底色要夠透，背景才看得到；邊緣用亮線模擬折射 */
   --glass:rgba(255,255,255,.52); --glass-2:rgba(255,255,255,.66); --glass-hi:rgba(255,255,255,.88);
@@ -24,7 +24,7 @@
   --side:0px;
 }
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
-  --bg:#050C18; --bg-2:#02060D;
+  --bg:#050C18; --bg-2:#02060D; --sheet-solid:#1E3150;
   --ink:#EEF3FB; --ink-2:#A3B1C8; --ink-3:#8F9EB6;
   --glass:rgba(20,38,64,.46); --glass-2:rgba(24,44,72,.62); --glass-hi:rgba(34,58,92,.85);
   --rim:rgba(255,255,255,.22); --rim-2:rgba(255,255,255,.04);
@@ -35,7 +35,7 @@
   --shadow-s:0 1px 2px rgba(0,0,0,.4); --shadow-l:0 18px 44px -20px rgba(0,0,0,.85);
 }}
 :root[data-theme="dark"]{
-  --bg:#050C18; --bg-2:#02060D;
+  --bg:#050C18; --bg-2:#02060D; --sheet-solid:#1E3150;
   --ink:#EEF3FB; --ink-2:#A3B1C8; --ink-3:#8F9EB6;
   --glass:rgba(20,38,64,.46); --glass-2:rgba(24,44,72,.62); --glass-hi:rgba(34,58,92,.85);
   --rim:rgba(255,255,255,.22); --rim-2:rgba(255,255,255,.04);
@@ -1272,3 +1272,8 @@ body.fullmap .top .countdown{opacity:0;pointer-events:none}
 .spotrow.closed .ktile{filter:grayscale(1);opacity:.55}
 .spotrow.closed b{color:var(--ink-2)}
 #spotOpen[aria-pressed="true"]{background:var(--accent);color:var(--on-accent)}
+
+/* 地圖頁：iPhone 主畫面 App 的手勢條區域畫的是 html 的底色，設成跟抽屜一樣，不會露出一條淡紫色 */
+html.fullmap{background:var(--sheet-solid)}
+.amap{bottom:auto;height:100lvh}
+@supports not (height:100lvh){.amap{height:100%;bottom:0}}
