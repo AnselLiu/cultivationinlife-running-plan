@@ -2504,6 +2504,8 @@ async function renderOnce() {
   if (stopScan) { stopScan(); stopScan = null; }
   const raw = location.hash.replace(/^#/, '') || '/';
   const hash = raw.split('?')[0];
+  // 練跑地圖是滿版地圖：整頁不捲動
+  document.body.classList.toggle('fullmap', hash === '/map');
   // 子頁面（管理後台、名冊、活動統計…）也亮起它所屬的分頁
   const tab = tabOf(hash);
   for (const a of document.querySelectorAll('.tabs a')) a.toggleAttribute('aria-current', a.dataset.tab === tab);

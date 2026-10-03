@@ -788,7 +788,7 @@ async function api(req, env, path, method) {
   if (path === '/api/spots' && method === 'GET') {
     const g = need(); if (g) return g;
     const editor = canEditSpots();
-    const rows = (await env.DB.prepare(`SELECT s.id, s.name, s.kind, s.lat, s.lng, s.city, s.status, s.created_by,
+    const rows = (await env.DB.prepare(`SELECT s.id, s.name, s.kind, s.lat, s.lng, s.city, s.status, s.created_by, json_extract(s.info, '$.hours') AS hours,
         (SELECT COUNT(*) FROM spot_reports r WHERE r.spot_id = s.id AND r.created_at >= datetime('now', '-24 hours')) AS reports,
         (SELECT r.data FROM spot_reports r WHERE r.spot_id = s.id AND r.created_at >= datetime('now', '-24 hours') ORDER BY r.created_at DESC LIMIT 1) AS latest
       FROM spots s WHERE s.status = 'approved' OR (s.status = 'pending' AND (s.created_by = ? OR ? = 1)) ORDER BY s.name LIMIT 500`).bind(member.id, editor ? 1 : 0).all()).results;

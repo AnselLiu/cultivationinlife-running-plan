@@ -947,18 +947,14 @@ details.group[open] > summary{margin-bottom:2px}
 .serieschips a.on{background:#fff;color:#1C4698;font-weight:700}
 
 /* ---------- 練跑地圖 ---------- */
-.mapbase{margin:-4px 0 0}
-.mapwrap{padding:0;overflow:hidden;position:relative;gap:0}
-#map{height:min(58vh,520px);min-height:320px;border-radius:inherit;background:var(--glass-hi);z-index:0}
 #map.picking{cursor:crosshair}
 .leaflet-container{font:inherit}
 .leaflet-control-attribution{font-size:10px;background:rgba(255,255,255,.7)!important;backdrop-filter:blur(8px)}
-.mapfab{position:absolute;top:12px;right:12px;z-index:500;display:grid;gap:8px}
 .fab{width:44px;height:44px;border-radius:14px;border:0;display:grid;place-items:center;cursor:pointer;color:var(--accent);
   background:var(--glass-hi);-webkit-backdrop-filter:var(--blur);backdrop-filter:var(--blur);box-shadow:var(--shadow-s),inset 0 1px 0 var(--rim);transition:transform .15s var(--tap)}
 .fab:active{transform:scale(.92)}
 .fab svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
-.drawbar{position:absolute;left:12px;right:68px;bottom:12px;z-index:500;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;padding:10px 12px;border-radius:16px;
+.drawbar{position:absolute;left:12px;right:72px;top:calc(var(--toph,64px) + 10px);z-index:600;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;padding:10px 12px;border-radius:16px;
   background:var(--glass-hi);-webkit-backdrop-filter:var(--blur);backdrop-filter:var(--blur);box-shadow:var(--shadow-l),inset 0 1px 0 var(--rim)}
 .drawbar b{font-size:20px;margin-right:8px}
 /* 練跑地圖的針：水滴形針頭＋類型線條圖示，顏色依類型；待審核是半透明虛線；有現場回報時右上角亮燈 */
@@ -1062,12 +1058,6 @@ body.guest .top .brand{opacity:0;pointer-events:none}
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .leaflet-control-attribution{background:rgba(11,27,51,.7)!important;color:var(--ink-2)}}
 
 /* ---------- 地圖：iPad 與大螢幕左右排；手繪模式 ---------- */
-.mapgrid{display:grid;gap:14px}
-@media (min-width:820px){
-  .mapgrid{grid-template-columns:minmax(0,1.55fr) minmax(320px,1fr);align-items:start}
-  .mapgrid #map{height:calc(100dvh - 230px);min-height:480px}
-  .mapgrid #panel{max-height:calc(100dvh - 230px);overflow:auto;display:grid;gap:14px;align-content:start;scrollbar-width:thin}
-  .mapgrid .fab{width:48px;height:48px}
 }
 #map.freehand{cursor:crosshair;touch-action:none}
 #drawFree[aria-pressed="true"]{background:var(--accent);color:var(--on-accent)}
@@ -1202,3 +1192,83 @@ input[type="date"]::-webkit-date-and-time-value,input[type="time"]::-webkit-date
 /* 選位置或畫路線時，地圖上的圖釘與路線不要搶走點擊 */
 #map.picking .leaflet-marker-pane,#map.picking .leaflet-overlay-pane{pointer-events:none}
 #map.picking .leaflet-marker-pane *,#map.picking .leaflet-overlay-pane *{pointer-events:none!important}
+
+/* ---------- 練跑地圖（Apple 地圖式）：滿版地圖、浮動工具、底部抽屜（iPad／桌機改左側面板） ---------- */
+body.fullmap{overflow:hidden;overscroll-behavior:none}
+body.fullmap #view{animation:none}
+.amap{position:fixed;inset:0;z-index:1;--toph:64px;--below:90px}
+.amap #map{position:absolute;inset:0;height:auto;min-height:0;border-radius:0;background:var(--bg);z-index:0}
+.amap .leaflet-top.leaflet-left{top:calc(var(--toph) + 2px)}
+.amap .leaflet-control-attribution{font-size:9.5px;background:color-mix(in srgb,var(--glass-hi) 80%,transparent);border-radius:6px;margin:4px 6px!important}
+.mapctl{position:absolute;right:12px;top:calc(var(--toph) + 10px);z-index:600;display:grid;gap:10px}
+.ctlgroup{display:grid;border-radius:14px;overflow:hidden;background:var(--glass-hi);-webkit-backdrop-filter:var(--blur);backdrop-filter:var(--blur);
+  box-shadow:0 4px 16px rgba(11,27,51,.18),inset 0 0 0 .5px var(--stroke)}
+.ctlgroup .fab{width:46px;height:44px;border-radius:0;background:none;box-shadow:none;color:var(--accent-ink,var(--accent))}
+.ctlgroup .fab + .fab{border-top:.5px solid var(--stroke)}
+.ctlgroup .fab[aria-expanded="true"]{background:color-mix(in srgb,var(--ink) 8%,transparent)}
+.basemenu{position:absolute;right:66px;top:calc(var(--toph) + 10px);z-index:610;display:grid;min-width:150px;border-radius:14px;overflow:hidden;
+  background:var(--glass-hi);-webkit-backdrop-filter:var(--blur);backdrop-filter:var(--blur);box-shadow:0 10px 30px rgba(11,27,51,.25),inset 0 0 0 .5px var(--stroke)}
+.basemenu button{display:flex;align-items:center;gap:10px;padding:12px 14px;border:0;background:none;font:inherit;font-size:15px;color:var(--ink);text-align:left;cursor:pointer}
+.basemenu button + button{border-top:.5px solid var(--stroke)}
+.basemenu button::before{content:"";width:16px;height:16px;flex:none;background:center/16px no-repeat}
+.basemenu button[aria-checked="true"]::before{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%232F6BDE' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 12.5l4.2 4.2L19 7'/%3E%3C/svg%3E")}
+/* 抽屜：高度由 JS 設定（peek／half／full），用 transform 移動，60fps */
+.msheet{position:absolute;left:0;right:0;bottom:0;z-index:700;display:flex;flex-direction:column;border-radius:22px 22px 0 0;
+  background:var(--glass-hi);-webkit-backdrop-filter:var(--blur);backdrop-filter:var(--blur);box-shadow:0 -6px 30px rgba(11,27,51,.2),inset 0 .5px 0 var(--rim);
+  touch-action:none;will-change:transform}
+.msheet.anim{transition:transform .42s cubic-bezier(.2,.9,.25,1.05)}
+.msheet[data-detent="full"]{touch-action:pan-y}
+.grab{flex:none;display:grid;place-items:center;height:32px;width:100%;border:0;background:none;cursor:grab;padding:0}
+.grab i{width:38px;height:5px;border-radius:3px;background:color-mix(in srgb,var(--ink) 25%,transparent)}
+.msheet-scroll{flex:1;min-height:0;overflow:hidden;padding:0 14px calc(var(--below) + 18px);overscroll-behavior:contain}
+.msheet[data-detent="full"] .msheet-scroll{overflow-y:auto;-webkit-overflow-scrolling:touch}
+.msheet #panel{display:grid;gap:12px}
+.msheet .card{background:color-mix(in srgb,var(--glass-hi) 70%,var(--bg))}
+.sheethead{display:grid;gap:10px;padding:2px 0 4px}
+.sheethead .spotsearch input{background:color-mix(in srgb,var(--ink) 7%,transparent);border:0;height:44px}
+.xbtn{display:grid;place-items:center;width:32px;height:32px;flex:none;border:0;border-radius:50%;background:color-mix(in srgb,var(--ink) 9%,transparent);color:var(--ink-2);cursor:pointer}
+.xbtn svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2.4;stroke-linecap:round}
+.mpin.sel{transform:translateY(-4px) scale(1.25);filter:drop-shadow(0 6px 10px rgba(11,27,51,.45))}
+/* iPad 直向以上：左側面板，不用拖 */
+@media (min-width:820px){
+  .msheet{left:12px;right:auto;bottom:calc(var(--below) + 2px);top:calc(var(--toph) + 10px);width:380px;border-radius:22px;touch-action:auto;transform:none!important;height:auto!important}
+  .msheet .grab{display:none}
+  .msheet-scroll{overflow-y:auto!important;padding:14px 14px 18px}
+  .drawbar{left:404px}
+}
+@media (min-width:1024px){
+  .amap{left:var(--side)}
+  .msheet{bottom:12px}
+}
+@media (prefers-reduced-motion:reduce){.msheet.anim{transition:none}.mpin.sel{transform:none}}
+/* 地圖頁：上方列一直是毛玻璃（不然字壓在地圖上看不清楚），標題直接顯示「練跑地圖」 */
+body.fullmap .top{position:fixed;left:0;right:0;background:var(--glass-hi)!important;-webkit-backdrop-filter:var(--blur);backdrop-filter:var(--blur);box-shadow:0 .5px 0 var(--stroke)!important;z-index:800}
+body.fullmap .top .brand span{opacity:0}
+body.fullmap .top .ctitle{opacity:1;transform:translate(-50%,0)}
+body.fullmap .top .countdown{opacity:0;pointer-events:none}
+@media (min-width:1024px){body.fullmap .top{left:var(--side)}}
+/* 抽屜收合時只露出第一塊（清單的搜尋列，或地點卡的標題），其他淡出，不會從分頁列底下透出來 */
+.msheet #panel > :not(:first-child){transition:opacity .2s}
+.msheet[data-detent="peek"] #panel > :not(:first-child){opacity:0;pointer-events:none}
+@media (min-width:820px){.msheet[data-detent="peek"] #panel > :not(:first-child){opacity:1;pointer-events:auto}}
+.msheet[data-detent="peek"] .spotcard > :not(:first-child){opacity:0;pointer-events:none}
+@media (min-width:820px){.msheet[data-detent="peek"] .spotcard > :not(:first-child){opacity:1;pointer-events:auto}}
+/* 畫路線工具列：兩列（距離＋取消／完成；手繪、復原、繞回起點），手機上也不會折成三列 */
+.dbar{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"len main" "tools tools";gap:6px 8px;padding:8px 10px}
+.dbar .dlen{grid-area:len;display:flex;align-items:baseline;gap:8px;min-width:0}
+.dbar .dlen b{font-size:18px;margin:0;white-space:nowrap}
+.dbar .dlen .tiny{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dbar .dmain{grid-area:main;display:flex;gap:6px}
+.dbar .dtools{grid-area:tools;display:flex;gap:6px}
+.dbar .btn.sm{padding:6px 12px;min-height:32px}
+.dbar #drawFree[aria-pressed="true"]{background:var(--accent);color:var(--on-accent)}
+/* 開放狀態：開放中綠字、未開放紅字；未開放的針與清單列反灰 */
+.ostat{font-weight:650}
+.ostat.on{color:var(--ok-ink)}
+.ostat.off{color:var(--race)}
+.ohours{margin:0;display:grid;gap:2px}
+.mpin.closed .mpin-shape path{fill:#9AA3AF}
+.mpin.closed{opacity:.75}
+.spotrow.closed .ktile{filter:grayscale(1);opacity:.55}
+.spotrow.closed b{color:var(--ink-2)}
+#spotOpen[aria-pressed="true"]{background:var(--accent);color:var(--on-accent)}

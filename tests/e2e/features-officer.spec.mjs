@@ -97,7 +97,7 @@ test('分團：幹部發公告、行事曆新增賽事提醒、地圖直接新�
   await page.goto('/#/map');
   await page.locator('#addBtn').click();
   const box = await page.locator('#map').boundingBox();
-  await page.mouse.click(box.x + box.width * 0.22, box.y + box.height * 0.78);   // 避開地圖中間已有的地點圖釘
+  await page.mouse.click(box.x + box.width * 0.25, box.y + box.height * 0.5);   // 地圖上半部（下方是抽屜）；選位置時圖釘不會搶走點擊
   await expect(page.locator('#sf')).toBeVisible();
   await page.locator('#sf [name=name]').fill(`E2E 田徑場 ${tag}`);
   await page.locator('#sf').getByRole('button', { name: '新增' }).click();

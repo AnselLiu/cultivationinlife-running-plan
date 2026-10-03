@@ -2393,6 +2393,15 @@ export default {
 "這台裝置沒有可以用的相機，請手動輸入代碼": "No camera available on this device. Enter the code manually.",
 "全台常用的田徑場、河濱、公園與步道，可以搜尋、依類型和縣市篩選。": "Popular tracks, riversides, parks and trails across Taiwan — search and filter by type and city.",
 "看現場回報與天氣，也能畫路線、存 GPX、開揪跑。": "See live reports and weather, draw routes, save GPX, and start a group run.",
-"可以邊跑邊看今天的課表。": "See today’s session while you run."
+"可以邊跑邊看今天的課表。": "See today’s session while you run.",
+"現在開放": "Open now",
+"開放中": "Open",
+"目前未開放": "Closed now",
+"開放": "opens",
+"展開清單": "Expand list",
+"收合清單": "Collapse list",
+"地點與路線": "Spots and routes",
+"地圖工具": "Map tools",
+"關閉，回地點清單": "Close, back to the list"
 };
 export const inner = {"團練": "group run", "課表": "training plan", "拍照": "photo", "跑步": "running", "我的": "my", "揪跑": "social run", "分團": "sub-club", "主團": "home club", "報名": "sign up", "幹部": "officers", "團員": "members", "跑友": "runners", "活動": "event", "協會": "Association", "行事曆": "calendar", "地點": "spot", "路線": "route", "天氣": "weather", "通知": "notifications", "賽事": "race", "組別": "group", "訓練紀錄": "training log"};
