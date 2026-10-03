@@ -1,7 +1,7 @@
 // 耕跑團 PWA — report.js：從 app.js 拆出來、用到才載入的畫面（第一次開 App 不用下載）
 import * as P from './plan.js';
 import * as S from './studio.js';
-import { $, allow, api, avatar, barChart, bindComments, dayLabel, dstr, esc, FEEL, fixText, group, largeTitle, LOG_STATUS_NAME, me, row, teamAllow, teams, view, ymd } from './app.js';
+import { $, allow, api, avatar, barChart, bindComments, dayLabel, dstr, emptyState, esc, FEEL, fixText, group, largeTitle, LOG_STATUS_NAME, me, row, teamAllow, teams, view, ymd } from './app.js';
 
 // ---------- 訓練報表：週里程、完成率、強度趨勢、個人最佳 ----------
 // 圖表一律用 SVG 自己畫（不載外部套件），寬度跟著容器縮放
@@ -102,7 +102,7 @@ async function logsTeamView(week, team) {
   view.innerHTML = `
     ${largeTitle('團員訓練', `W${week}・${s.getMonth() + 1}/${s.getDate()}–${e.getMonth() + 1}/${e.getDate()}`)}
     <section class="card filters">
-      <div class="row spread"><div class="row" style="gap:6px"><button class="btn ghost sm" id="wprev" ${week === 1 ? 'disabled' : ''}>‹</button><b>W${week}</b><button class="btn ghost sm" id="wnext" ${week === 21 ? 'disabled' : ''}>›</button></div>
+      <div class="row spread"><div class="row" style="gap:6px"><button class="btn ghost sm navbtn" id="wprev" ${week === 1 ? 'disabled' : ''} aria-label="上一週">‹</button><b>W${week}</b><button class="btn ghost sm navbtn" id="wnext" ${week === 21 ? 'disabled' : ''} aria-label="下一週">›</button></div>
         <select id="tsel" style="width:auto">${allow('plan') ? '<option value="">全部（有分享的人）</option>' : ''}${(allow('plan') ? teams() : lead).map((t) => `<option value="${esc(t.id)}" ${team === t.id ? 'selected' : ''}>${esc(t.name)}</option>`).join('')}</select></div>
       <p class="tiny" style="margin:0">只列出自己打開「分享給教練」的團員，看不到備註。完成率以每週 ${planned} 堂課計算。</p>
     </section>
@@ -110,7 +110,7 @@ async function logsTeamView(week, team) {
       const p = Math.min(100, Math.round(((m.done || 0) + (m.partial || 0) * 0.5) / planned * 100));
       return `<a class="r tlog" href="#/logs/m/${esc(m.id)}">${avatar(m)}<span><b><span translate="no">${esc(m.nickname || m.name)}</span></b> <span class="tiny">${m.dist === 'hm' ? '半馬' : '全馬'} ${esc(m.grp)}</span>
         <span class="bar"><i style="width:${p}%"></i></span></span>
-        <span class="num tiny" style="text-align:right"><b>${p}%</b><br>${m.km || 0} km${m.rpe ? `・RPE ${m.rpe}` : ''}</span></a>`; }).join('') || '<p class="muted" style="margin:0">這週還沒有分享的紀錄。</p>'}</div></section>`;
+        <span class="num tiny" style="text-align:right"><b>${p}%</b><br>${m.km || 0} km${m.rpe ? `・RPE ${m.rpe}` : ''}</span></a>`; }).join('') || emptyState('runner', '這週還沒有分享的紀錄')}</div></section>`;
   $('#wprev').onclick = () => logsTeamView(week - 1, team);
   $('#wnext').onclick = () => logsTeamView(week + 1, team);
   $('#tsel').onchange = (ev) => logsTeamView(week, ev.target.value);

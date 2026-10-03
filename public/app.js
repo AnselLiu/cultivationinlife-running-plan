@@ -96,7 +96,7 @@ const api = async (path, opt = {}, retried = false) => {
     try { await passkey('stepup'); } catch (e) { throw new Error(e.message === '已取消' ? '已取消驗證' : data.error); }
     return api(path, opt, true);
   }
-  if (!res.ok) throw new Error(data.error || `錯誤 ${res.status}`);
+  if (!res.ok) throw Object.assign(new Error(data.error || `錯誤 ${res.status}`), { status: res.status });
   return data;
 };
 // 即時搜尋：<form data-live> 打字停 0.3 秒、或改了下拉選單，就自動查（不用再按「搜尋」）。
@@ -329,10 +329,10 @@ const mapsUrl = (q) => (/iPhone|iPad|Macintosh/.test(navigator.userAgent) ? `htt
 let zip3P = null;
 const zip3 = () => (zip3P ||= fetch('/data/zip3.json').then((r) => r.json()).catch(() => { zip3P = null; return {}; }));
 function addrField(name, label = '地址', hint = '') {
-  return `<fieldset class="addrfield" data-addr="${name}"><legend>${label}${hint ? `<span class="tiny">${hint}</span>` : ''}</legend>
+  return `<fieldset class="addrfield" data-addr="${name}"><legend><span>${label}</span>${hint ? `<span class="tiny">${hint}</span>` : ''}</legend>
     <div class="addrsel"><select data-a="city" aria-label="縣市"><option value="">縣市</option></select>
       <select data-a="dist" aria-label="鄉鎮市區" disabled><option value="">鄉鎮市區</option></select></div>
-    <div class="addrstreet"><output class="zip num" data-a="zip" aria-label="郵遞區號"></output><input data-a="street" maxlength="100" autocomplete="off" placeholder="路名、段、巷、弄、號、樓" aria-label="路名與門牌"></div>
+    <div class="addrstreet"><output class="zip num" data-a="zip" aria-label="郵遞區號" data-ph="${esc(I18N.t('郵遞區號'))}"></output><input data-a="street" maxlength="100" autocomplete="off" placeholder="路名、段、巷、弄、號、樓" aria-label="路名與門牌"></div>
     <input type="hidden" name="${name}"><span class="addrcheck" role="status" hidden></span></fieldset>`;
 }
 async function bindAddrField(form, name, value = '', zip6 = '') {
@@ -458,6 +458,7 @@ const IC = {
   check: ic('<path d="M5 12.5l4.2 4.2L19 7"/>'),
   half: ic('<circle cx="12" cy="12" r="7.6"/><path d="M12 4.4a7.6 7.6 0 0 1 0 15.2Z" fill="currentColor" stroke="none"/>'),
   minus: ic('<path d="M6.5 12h11"/>'),
+  chevL: ic('<path d="M14.5 5.5 8 12l6.5 6.5"/>'), chevR: ic('<path d="M9.5 5.5 16 12l-6.5 6.5"/>'),
   plus: ic('<path d="M12 6.5v11M6.5 12h11"/>'),
   gift: ic('<rect x="3.6" y="8.4" width="16.8" height="4.2" rx="1.2"/><path d="M5.2 12.6v6.4a1.4 1.4 0 0 0 1.4 1.4h10.8a1.4 1.4 0 0 0 1.4-1.4v-6.4M12 8.4v12M12 8.4S10.6 3.8 8.2 4.5c-2 .6-1.1 3.9 3.8 3.9ZM12 8.4s1.4-4.6 3.8-3.9c2 .6 1.1 3.9-3.8 3.9Z"/>'),
   gear: ic('<circle cx="12" cy="12" r="3"/><path d="M12 3.5v2.2M12 18.3v2.2M3.5 12h2.2M18.3 12h2.2M6 6l1.6 1.6M16.4 16.4 18 18M6 18l1.6-1.6M16.4 7.6 18 6"/>'),
@@ -535,16 +536,18 @@ function loginView() {
   const shared = location.hash.match(/^#\/e\/([\w-]+)/)?.[1];
   const sharedTok = new URLSearchParams(location.hash.split('?')[1] || '').get('t');
   const feat = [[IC.megaphone, '團練報名', '公告、接龍、候補自動遞補'], [IC.calendar, '分組課表', '照組別換算配速'], [IC.runner, 'GPS 跑步', '自動暫停、分段、GPX'], [ic('<path d="M4 8.2a2 2 0 0 1 2-2h1.9l1.5-2h5.2l1.5 2H18a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2Z"/><circle cx="12" cy="12.6" r="3.6"/>'), '拍照分享', '成績與路線放進照片']];
+  const compact = !!(shared || err);
+  const lead = `<div id="sharedEv"></div>
+    ${err ? `<div class="notice err" role="alert">${esc(err)}</div>` : ''}`;
   view.innerHTML = `
-    <section class="welcome">
+    <section class="welcome${compact ? ' compact' : ''}">
       <img class="wmark" src="/icons/icon-192.png" alt="" width="96" height="96">
       <h1 class="wtitle">${esc(org().short || '耕跑團')}</h1>
       <p class="wsub" translate="no">CULTIVATION IN LIFE RUN</p>
       <p class="wlead">一起練，跑得更遠</p>
-      <ul class="wfeat">${feat.map(([i, t, d]) => `<li><span class="wic">${i}</span><b>${t}</b><span class="tiny">${d}</span></li>`).join('')}</ul>
+      ${compact ? '' : `<ul class="wfeat">${feat.map(([i, t, d]) => `<li><span class="wic">${i}</span><b>${t}</b><span class="tiny">${d}</span></li>`).join('')}</ul>`}
     </section>
-    <div id="sharedEv"></div>
-    ${err ? `<div class="notice">${esc(err)}</div>` : ''}
+    ${lead}
     <section class="card authcard">
       ${cfg.googleLogin ? `<a class="btn google block" href="${googleHref()}">${GOOGLE_G}<span>${inAppBrowser() === 'line' ? '用瀏覽器開啟並以 Google 登入' : '使用 Google 帳號登入'}</span></a>
       ${inAppBrowser() === 'line' ? '<p class="tiny center" style="margin:0">Google 不允許在 LINE 裡登入，按上面的按鈕會改用 Safari 或 Chrome 打開這個網站。</p>' : ''}
@@ -556,7 +559,7 @@ function loginView() {
         <form id="joinForm" style="margin-top:12px">
           <label>邀請碼<input name="code" required autocomplete="one-time-code" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="LINE 群公告的代碼"></label>
           <label>姓名<input name="name" required maxlength="20" autocomplete="name" placeholder="報名時顯示的名字"></label>
-          <div class="grid2">
+          <div class="grid2 g-dist">
             <label>項目<select name="dist"><option value="fm">全馬</option><option value="hm">半馬</option></select></label>
             <label>組別<select name="grp"></select></label>
           </div>
@@ -592,7 +595,7 @@ function loginView() {
   const f = $('#joinForm');
   if (!f) return;
   const sync = () => {
-    f.grp.innerHTML = Object.entries(P.groups(f.dist.value)).map(([g, v]) => `<option value="${g}">${g} 組・${v[0]}</option>`).join('');
+    f.grp.innerHTML = Object.entries(P.groups(f.dist.value)).map(([g, v]) => `<option value="${g}">${g} 組 ${v[0]}</option>`).join('');
     f.grp.value = f.dist.value === 'hm' ? 'C' : 'D';
   };
   f.dist.onchange = sync; sync();
@@ -799,7 +802,7 @@ async function listView() {
       ${anyTeamAllow('event') ? `<a class="btn ghost sm iconbtn" href="#/new${pick && pick !== 'assoc' ? `?team=${esc(pick)}` : ''}">${IC.plus}新增活動</a>` : ''}
     </div>
     <div class="evgrid">${events.slice(1).map(eventCard).join('') || `<div class="card">${emptyState('calendar', '目前沒有其他排定的活動')}</div>`}</div>
-    <div class="row center" style="gap:18px;justify-content:center"><a class="tiny" href="#/calendar" style="padding:4px">${IC.calendar} 行事曆</a><a class="tiny" href="#/past" style="padding:4px">看過去的團練 ›</a></div>
+    <div class="row center" style="gap:18px;justify-content:center"><a class="tiny footlink" href="#/calendar">${IC.calendar} 行事曆</a><a class="tiny footlink" href="#/past">看過去的團練 ›</a></div>
     </div></div>`;
   for (const b of document.querySelectorAll('[data-tf]')) b.onclick = () => { teamFilter.set(b.dataset.tf); listView(); };
   homeWeather(all);
@@ -908,7 +911,9 @@ function eventCard(e) {
       <span class="body">
         <span class="pills"><span class="pill ${e.kind}">${KIND_NAME[e.kind] || '活動'}</span>${teamTag(teamOf(e.team_id))}${e.visibility === 'invite' ? `<span class="pill lock">${IC.lock}邀請制</span>` : ''}</span>
         <span class="t"><span translate="no">${esc(e.title)}</span></span>
-        <span class="tiny">${e.gather_time ? `${e.gather_time}　` : ''}<span translate="no">${esc(e.place || '')}</span>${(() => { const ps = [...(e.options || []), ...(e.kind === 'buy' ? e.items || [] : [])].map((o) => o.price).filter(Boolean); return ps.length ? `　${money(Math.min(...ps))} 起` : e.fee ? `　${money(e.fee)}` : ''; })()}${!e.mine && e.signup_start && signupState(e, nowTp()) === 'soon' ? `　${tpShort(e.signup_start)} 開放` : ''}</span>
+        <span class="tiny meta">${[e.gather_time, e.place && `<span translate="no">${esc(e.place)}</span>`,
+          (() => { const ps = [...(e.options || []), ...(e.kind === 'buy' ? e.items || [] : [])].map((o) => o.price).filter(Boolean); return ps.length ? `${money(Math.min(...ps))} 起` : e.fee ? money(e.fee) : ''; })(),
+          !e.mine && e.signup_start && signupState(e, nowTp()) === 'soon' && `${tpShort(e.signup_start)} 開放`].filter(Boolean).map((x) => `<span>${x}</span>`).join('')}</span>
         ${e.capacity ? `<span class="bar"><i style="width:${pct}%"></i></span>` : ''}
       </span>
       <span class="evright">${e.mine === 'in' ? `<span class="mine">${IC.check}已報名</span>` : e.mine === 'wait' ? '<span class="mine wait">候補中</span>'
@@ -924,9 +929,9 @@ async function pastView(month) {
   const shift = (n) => { const [y, m] = month.split('-').map(Number); const d = new Date(y, m - 1 + n, 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; };
   const isNow = month >= new Date().toISOString().slice(0, 7);
   view.innerHTML = `${largeTitle('過去的團練')}
-    <div class="monthbar"><button class="btn ghost sm" data-m="${shift(-1)}" aria-label="上個月">‹</button>
+    <div class="monthbar"><button class="btn ghost sm navbtn" data-m="${shift(-1)}" aria-label="上個月">${IC.chevL}</button>
       <input type="month" id="pm" aria-label="選擇月份" value="${month}" max="${new Date().toISOString().slice(0, 7)}">
-      <button class="btn ghost sm" data-m="${shift(1)}" aria-label="下個月" ${isNow ? 'disabled' : ''}>›</button></div>
+      <button class="btn ghost sm navbtn" data-m="${shift(1)}" aria-label="下個月" ${isNow ? 'disabled' : ''}>${IC.chevR}</button></div>
     <div class="evgrid">${events.map(eventCard).join('') || `<div class="card">${emptyState('calendar', '這個月沒有紀錄')}</div>`}</div>`;
   for (const b of document.querySelectorAll('[data-m]')) b.onclick = () => pastView(b.dataset.m);
   $('#pm').onchange = (e) => e.target.value && pastView(e.target.value);
@@ -1039,8 +1044,8 @@ async function eventView(id) {
         ${ev.cancelled ? `<a class="btn sm" href="#/edit/${ev.id}?reopen=1">恢復這場活動</a>` : ''}
         <a class="btn ghost sm" href="#/edit/${ev.id}">編輯</a>
         <a class="btn ghost sm" href="#/new?from=${ev.id}">複製成新活動</a>
-        ${ev.group_reg ? `<button class="btn sm" data-regcsv="${ev.id}">下載團體報名資料</button>` : ''}
-        ${ev.arrived ? '<button class="btn sm" id="pickScanEv" type="button">掃描領取</button>' : ''}
+        ${ev.group_reg ? `<button class="btn ghost sm" data-regcsv="${ev.id}">下載團體報名資料</button>` : ''}
+        ${ev.arrived ? '<button class="btn ghost sm" id="pickScanEv" type="button">掃描領取</button>' : ''}
         <button class="btn danger sm" id="del">刪除</button>
       </div>
       ${ev.cancelled ? '' : `<details id="noticeWrap"><summary class="tiny" style="cursor:pointer">發布通知或異動（改時間、改地點、取消）</summary>
@@ -2416,7 +2421,7 @@ async function logView() {
         <p class="tiny pace" data-run id="paceOut"></p>
         <div class="grid2" data-run>
           <label>平均心率（選填）<input name="hr" inputmode="numeric" value="${v.hr ?? ''}" placeholder="152"></label>
-          <label>RPE 自覺強度 <b class="num" id="rpeOut">${v.rpe || 5}</b><input type="range" name="rpe" min="1" max="10" value="${v.rpe || 5}"></label>
+          <label><span class="lrow"><span>RPE 自覺強度</span><b class="num" id="rpeOut">${v.rpe || 5}</b></span><input type="range" name="rpe" min="1" max="10" value="${v.rpe || 5}"></label>
         </div>
         <fieldset class="qset"><legend>身體感覺</legend><div class="chips feel">${[1, 2, 3, 4, 5].map((n) => `<label class="chip"><input type="radio" name="feel" value="${n}" ${Number(v.feel) === n ? 'checked' : ''}><span>${FEEL[n]}</span></label>`).join('')}</div></fieldset>
         <label>備註（只有你看得到）<input name="note" maxlength="300" value="${esc(v.note || '')}" placeholder="腳踝有點緊、風很大…"></label>
@@ -2485,11 +2490,19 @@ async function flushLogQueue() {
 const logsTeamView = lazy('./report.js', 'logsTeamView');
 const memberLogsView = lazy('./report.js', 'memberLogsView');
 const reportView = lazy('./report.js', 'reportView');
+// 圖表的刻度字：SVG 用固定寬度的座標，手機上字會跟著縮到 8px。依實際寬度換算（--k），刻度字永遠約 12px
+const chartRO = 'ResizeObserver' in window ? new ResizeObserver((es) => {
+  for (const e of es) { const w = e.contentRect.width, vb = e.target.viewBox?.baseVal?.width; if (w && vb) e.target.style.setProperty('--k', (vb / w).toFixed(3)); }
+}) : null;
+if (chartRO) new MutationObserver((ms) => { for (const m of ms) for (const n of m.addedNodes) if (n.nodeType === 1) for (const c of n.matches('svg.chart') ? [n] : n.querySelectorAll('svg.chart')) chartRO.observe(c); })
+  .observe(document.body, { childList: true, subtree: true });
 function barChart(items, { unit = '', h = 150, color = 'var(--accent)', fmt = (v) => v, max: fixedMax } = {}) {
   if (!items.length) return '<p class="muted" style="margin:0">這段期間沒有紀錄</p>';
-  // 柱子最寬 72（項目少時不會撐滿整張圖）
-  const W = 600, pad = 24, bw = Math.min((W - pad) / items.length, 72), max = fixedMax || Math.max(1, ...items.map((x) => x.v));
+  // 柱子最寬 72（項目少時不會撐滿整張圖）；刻度用整數步距，格線的位置跟標籤一致
+  const step = Math.max(1, Math.ceil(Math.max(1, ...items.map((x) => x.v)) / 2));
+  const W = 600, pad = 34, bw = Math.min((W - pad) / items.length, 72), max = fixedMax || step * 2;
   return `<svg class="chart" viewBox="0 0 ${W} ${h + 34}" role="img" aria-label="${esc(items.map((x) => `${x.l} ${fmt(x.v)}${unit}`).join('，'))}">
+    <line x1="${pad}" x2="${W}" y1="${h}" y2="${h}" class="grid"/>
     ${[0.5, 1].map((k) => `<line x1="${pad}" x2="${W}" y1="${h - h * k * 0.9}" y2="${h - h * k * 0.9}" class="grid"/><text x="0" y="${h - h * k * 0.9 + 4}" class="axis">${fmt(Math.round(max * k))}</text>`).join('')}
     ${items.map((x, i) => { const bh = Math.max(x.v ? 3 : 0, (x.v / max) * h * 0.9), xx = pad + i * bw + bw * 0.18;
       return `<rect x="${xx}" y="${h - bh}" width="${bw * 0.64}" height="${bh}" rx="${Math.min(6, bw * 0.2)}" style="fill:${x.c || color}"><title>${esc(x.l)}：${fmt(x.v)}${unit}</title></rect>
@@ -2554,7 +2567,7 @@ async function runView() {
       <section class="card"><div class="row spread"><h3>${r.date === t ? '今天' : dstr(r.date)}累計</h3><span class="tiny">包含這一次</span></div>
         <div class="lstats"><span><b class="num">${(dayKm + r.distance / 1000).toFixed(1)}</b> km</span><span><b class="num">${hms(daySec + r.seconds)}</b></span><span><b class="num">${logs.filter((l) => l.status !== 'skip').length + 1}</b> 次</span></div></section>
       <section class="card actions">
-        <a class="btn block iconbtn" style="justify-content:center" href="#/log?${new URLSearchParams({ date: r.date, km: (r.distance / 1000).toFixed(2), sec: String(r.seconds), src: 'gps' })}">${IC.check}存到訓練紀錄</a>
+        <a class="btn block iconbtn" href="#/log?${new URLSearchParams({ date: r.date, km: (r.distance / 1000).toFixed(2), sec: String(r.seconds), src: 'gps' })}">${IC.check}存到訓練紀錄</a>
         ${feat('studio') ? '<button class="btn ghost block" id="toStudio">拍照分享到 IG</button>' : ''}
         ${r.route.length > 1 ? '<button class="btn ghost block" id="dlGpx">下載 GPX 檔</button>' : ''}
         <button class="btn danger block" id="runDiscard">刪除這次記錄</button>
@@ -2697,12 +2710,15 @@ const ME_SECTIONS = {
   profile: '個人資料', races: '我的賽事與倒數', reg: '賽事報名資料', teams: '主團與分團', notify: '通知與裝置',
   security: '帳號與安全', privacy: '隱私', assoc: '協會', card: '會籍卡',
 };
-const row = (href, icon, title, sub = '', badge = '') => `<a class="setrow" href="${href}"><span class="sic">${icon}</span><span class="st"><b>${title}</b>${sub ? `<span class="tiny">${sub}</span>` : ''}</span>${badge}<span class="chev" aria-hidden="true"></span></a>`;
+// 設定列的色磚：跟 iPhone 設定一樣每一項一個顏色（深色模式也不會是一整排亮黃方塊）
+const ROW_TILE = { '#/report': 'green', '#/challenge': 'orange', '#/me/races': 'red', '#/me/reg': 'indigo', '#/tickets': 'purple', '#/me/teams': 'teal',
+  '#/me/notify': 'red', '#/me/security': 'gray', '#/me/privacy': 'blue', '#/me/assoc': 'indigo', '#/me/card': 'teal', '#/admin': 'gray', '#/roster': 'blue', '#/plan/new': 'green' };
+const row = (href, icon, title, sub = '', badge = '') => `<a class="setrow" href="${href}"><span class="sic"${ROW_TILE[href] ? ` style="--sc:var(--tile-${ROW_TILE[href]})"` : ''}>${icon}</span><span class="st"><b>${title}</b>${sub ? `<span class="tiny">${sub}</span>` : ''}</span>${badge}<span class="chev" aria-hidden="true"></span></a>`;
 const btnRow = (id, icon, title, sub = '') => `<button class="setrow" id="${id}"><span class="sic">${icon}</span><span class="st"><b>${title}</b>${sub ? `<span class="tiny">${sub}</span>` : ''}</span><span class="chev" aria-hidden="true"></span></button>`;
 const group = (title, rows) => (rows.filter(Boolean).length ? `<section class="setgroup">${title ? `<h2 class="sgt">${title}</h2>` : ''}<div class="card setcard">${rows.filter(Boolean).join('')}</div></section>` : '');
 const subTitle = (title, sub = '') => largeTitle(title, sub);
 const MI = {
-  person: IC.runner, report: ic('<path d="M4 20V10M10 20V4M16 20v-8M22 20H2"/>'), flag: ic('<path d="M5.5 21V4M5.5 4.5h11l-2 3.7 2 3.8h-11"/>'),
+  person: IC.runner, trophy: ic('<path d="M7 4h10v4a5 5 0 0 1-10 0Z"/><path d="M7 6H4.5a2.5 2.5 0 0 0 2.6 3M17 6h2.5a2.5 2.5 0 0 1-2.6 3M12 13v4M8.5 20h7M10 17h4"/>'), report: ic('<path d="M4 20V10M10 20V4M16 20v-8M22 20H2"/>'), flag: ic('<path d="M5.5 21V4M5.5 4.5h11l-2 3.7 2 3.8h-11"/>'),
   idcard: ic('<rect x="3" y="5" width="18" height="14" rx="3"/><circle cx="9" cy="11" r="2.2"/><path d="M5.8 16c.6-1.6 1.8-2.4 3.2-2.4s2.6.8 3.2 2.4M14.5 10h4M14.5 13.5h3"/>'),
   ticket: ic('<path d="M3 8a2 2 0 0 0 2-2h14a2 2 0 0 0 2 2v2a2 2 0 0 0 0 4v2a2 2 0 0 0-2 2H5a2 2 0 0 0-2-2v-2a2 2 0 0 0 0-4Z"/><path d="M14 6v12" stroke-dasharray="2 2.5"/>'),
   team: ic('<circle cx="8" cy="9" r="3"/><circle cx="16.5" cy="9.5" r="2.5"/><path d="M2.8 19c.5-3 2.6-4.6 5.2-4.6s4.7 1.6 5.2 4.6M14 14.6c2.6-.4 5 .9 5.7 4.4"/>'),
@@ -2738,14 +2754,14 @@ async function meHome(welcome) {
     </a>
     ${group('我的跑步', [
       row('#/report', MI.report, '訓練報表', '週里程、完成率、個人最佳'),
-      row('#/challenge', MI.flag, '每月里程挑戰', '徽章、分團對抗、排行榜'),
+      row('#/challenge', MI.trophy, '每月里程挑戰', '徽章、分團對抗、排行榜'),
       row('#/me/races', MI.flag, '我的賽事與倒數', '右上角倒數哪一場'),
       row('#/me/reg', MI.idcard, '賽事報名資料', '幹部代為團體報名時使用', '<span id="regBadge"></span>'),
       row('#/tickets', MI.ticket, '入場券、團購領取與中獎紀錄'),
     ])}
     ${group('分團', [row('#/me/teams', MI.team, '主團與分團', main ? `主團：<span translate="no">${esc(main.name)}</span>` : '主團由管理員設定')])}
     ${group('設定', [
-      row('#/me/notify', MI.bell, '通知與裝置', '推播、加到主畫面、行事曆、分頁列、語言 Language'),
+      row('#/me/notify', MI.bell, '通知與裝置', '推播、主畫面、行事曆、語言'),
       row('#/me/security', MI.shield, '帳號與安全', `${me.google ? 'Google 已綁定' : '綁定 Google'}、通行金鑰、登出`),
       row('#/me/privacy', MI.eye, '隱私', '分享給教練、排行榜、下載或刪除資料'),
     ])}
@@ -2770,7 +2786,7 @@ function meProfile() {
       <form id="mf">
         <div class="grid2"><label>姓名<input name="name" value="${esc(me.name)}" maxlength="20"></label>
           <label>暱稱<input name="nickname" value="${esc(me.nickname || '')}" maxlength="20" placeholder="團裡怎麼叫你"></label></div>
-        <div class="grid2"><label>項目<select name="dist"><option value="fm" ${me.dist === 'fm' ? 'selected' : ''}>全馬</option><option value="hm" ${me.dist === 'hm' ? 'selected' : ''}>半馬</option></select></label>
+        <div class="grid2 g-dist"><label>項目<select name="dist"><option value="fm" ${me.dist === 'fm' ? 'selected' : ''}>全馬</option><option value="hm" ${me.dist === 'hm' ? 'selected' : ''}>半馬</option></select></label>
           <label>組別<select name="grp"></select></label></div>
         <div class="field"><span class="flabel">所屬跑團</span><span class="fvalue"><span translate="no">${esc(teamOf(me.main_team)?.name || '等待管理員設定')}</span></span><span class="tiny">跟著主團，由管理員設定</span></div>
         <div class="grid2"><label>餐點偏好<select name="meal_pref"><option value="" ${!me.meal_pref ? 'selected' : ''}>未指定</option>
@@ -2782,7 +2798,7 @@ function meProfile() {
     </section>`;
   const f = $('#mf');
   const sync = () => {
-    f.grp.innerHTML = Object.entries(P.groups(f.dist.value)).map(([g, v]) => `<option value="${g}">${g} 組・${v[0]}</option>`).join('');
+    f.grp.innerHTML = Object.entries(P.groups(f.dist.value)).map(([g, v]) => `<option value="${g}">${g} 組 ${v[0]}</option>`).join('');
     f.grp.value = Object.keys(P.groups(f.dist.value)).includes(me.grp) ? me.grp : (f.dist.value === 'hm' ? 'C' : 'D');
   };
   f.dist.onchange = sync; sync();
@@ -2828,7 +2844,7 @@ async function meRaces() {
 async function meReg() {
   const d = await api('/me/race-profile');
   const p = d.profile || {}, F = d.fields;
-  const lt = (k, label) => `<span class="lt">${label || F[k].label}${F[k].req ? '<span class="req">必填</span>' : ''}</span>`;
+  const lt = (k, label) => `<span class="lbl">${label || F[k].label}${F[k].req ? '<span class="req">必填</span>' : ''}</span>`;
   const input = (k, type = 'text', extra = '', label = '') => `<label>${lt(k, label)}<input name="${k}" type="${type}" maxlength="${F[k].max}" value="${esc(p[k] || '')}" ${extra}></label>`;
   const select = (k, opts) => `<label>${lt(k)}<select name="${k}"><option value="">請選擇</option>${opts.map((g) => `<option ${p[k] === g ? 'selected' : ''}>${g}</option>`).join('')}</select></label>`;
   view.innerHTML = `${subTitle('賽事報名資料', '填一次，之後幹部代為團體報名都用這份')}
@@ -2840,8 +2856,8 @@ async function meReg() {
     <form id="regForm" class="card regform">
       <div class="grid2">${input('name_zh')}${input('name_en', 'text', 'autocapitalize="characters" placeholder="WANG DA-MING"')}</div>
       <p class="tiny" style="margin:0">身分證字號與護照號碼至少填一個；外籍跑友填居留證號或護照號碼。</p>
-      <label><span class="lt">${F.id_no.label}</span><span class="idwrap"><input name="id_no" maxlength="${F.id_no.max}" value="${esc(p.id_no || '')}" autocomplete="off" autocapitalize="characters" spellcheck="false" type="password" placeholder="A123456789"><button type="button" class="btn ghost sm" id="idShow" aria-label="顯示身分證字號">顯示</button></span></label>
-      <label><span class="lt">${F.passport_no.label}</span><input name="passport_no" maxlength="${F.passport_no.max}" value="${esc(p.passport_no || '')}" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="臺灣護照 9 碼數字"></label>
+      <label><span class="lbl">${F.id_no.label}</span><span class="idwrap"><input name="id_no" maxlength="${F.id_no.max}" value="${esc(p.id_no || '')}" autocomplete="off" autocapitalize="characters" spellcheck="false" type="password" placeholder="A123456789"><button type="button" class="btn ghost sm" id="idShow" aria-label="顯示身分證字號">顯示</button></span></label>
+      <label><span class="lbl">${F.passport_no.label}</span><input name="passport_no" maxlength="${F.passport_no.max}" value="${esc(p.passport_no || '')}" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="臺灣護照 9 碼數字"></label>
       <div class="grid2">${input('birthday', 'date')}${select('gender', ['男', '女', '其他'])}</div>
       <div class="grid2">${input('phone', 'tel', 'inputmode="tel" autocomplete="tel"')}${select('shirt', ['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL'])}</div>
       ${input('email', 'email', 'autocomplete="email"')}
@@ -3123,6 +3139,7 @@ function parentOf(h) {
   if (h.startsWith('/me/')) return ['#/me', '我的'];
   if (h.startsWith('/e/') && p.length > 3) return [`#/e/${p[2]}`, '活動'];
   if (h.startsWith('/edit/')) return [`#/e/${p[2]}`, '活動'];
+  if (h.startsWith('/logs/m/')) return ['#/logs/team', '團員訓練'];
   if (['/challenge', '/report', '/log', '/plan/new', '/logs/team'].includes(h) || h.startsWith('/plan/')) return ['#/plan', '課表'];
   if (h.startsWith('/t/')) return ['#/teams', '分團'];
   if (['/teams', '/tickets', '/admin', '/roster'].includes(h) || h.startsWith('/m/')) return ['#/me', '我的'];
@@ -3167,6 +3184,8 @@ async function renderOnce() {
   // 練跑地圖是滿版地圖：整頁不捲動
   document.body.classList.toggle('fullmap', hash === '/map');
   document.documentElement.classList.toggle('fullmap', hash === '/map');
+  // 寬螢幕依頁面決定內容欄寬度（style.css 的 body[data-page]）
+  document.body.dataset.page = hash.split('/')[1] || 'home';
   // 子頁面（管理後台、名冊、活動統計…）也亮起它所屬的分頁
   const tab = tabOf(hash);
   for (const a of document.querySelectorAll('.tabs a')) a.toggleAttribute('aria-current', a.dataset.tab === tab);
@@ -3277,11 +3296,15 @@ async function route(hash) {
     if (ev) return await eventView(ev[1]);
     const pl = hash.match(/^\/plan(?:\/(\d+))?$/);
     if (pl) return await planView(pl[1] ? Number(pl[1]) : 0);
-    view.innerHTML = `<div class="card">${emptyState('runner', '找不到這個頁面')}</div>`;
+    for (const a of document.querySelectorAll('.tabs a')) a.removeAttribute('aria-current');
+    view.innerHTML = `${largeTitle('找不到頁面')}<div class="card">${emptyState('runner', '這個連結可能已經失效')}<a class="btn block" href="#/">回到團練</a></div>`;
   } catch (e) {
-    view.innerHTML = `<div class="card">${emptyState('runner', esc(e.message))}<div class="row" style="justify-content:center;gap:8px"><button class="btn sm" id="retryBtn">重試</button><a class="btn ghost sm" href="#/">回首頁</a></div></div>`;
+    // 找不到或沒有權限：重試也沒用，主要動作是回首頁
+    const final = e.status === 404 || e.status === 403;
+    view.innerHTML = `<div class="card">${emptyState('runner', esc(e.message))}<div class="row" style="justify-content:center;gap:8px">${final ? '<a class="btn sm" href="#/">回首頁</a>'
+      : '<button class="btn sm" id="retryBtn">重試</button><a class="btn ghost sm" href="#/">回首頁</a>'}</div></div>`;
     // 版本混在一起的錯誤：重試要重新載入整個 App，只重畫這一頁還是會用到舊程式
-    $('#retryBtn').onclick = () => (VERSION_SKEW.test(e.message || '') ? location.reload() : render());
+    if ($('#retryBtn')) $('#retryBtn').onclick = () => (VERSION_SKEW.test(e.message || '') ? location.reload() : render());
     if (VERSION_SKEW.test(e.message || '')) reloadForUpdate();
   }
 }

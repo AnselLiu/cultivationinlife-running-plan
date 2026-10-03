@@ -1,7 +1,7 @@
 // 耕跑團 PWA — admin.js：從 app.js 拆出來、用到才載入的畫面（第一次開 App 不用下載）
 import * as Party from './party.js';
 import { defaultWindow, SIGNUP_DEFAULTS, tpText } from './signup-window.js';
-import { $, latest, nowTp, scanSheet, ago, allow, api, applyFeatures, avatar, barChart, bars, bindStepup, cfg, esc, group, IC, largeTitle, me, mfaBanner, nrow, org, pad2, paintCountdown, passkey, refreshMe, render, ROLE_NAME, row, studio, TAB_DEFAULT, TEAM_PERMS, teamAllow, teamIcon, teamOf, teams, toast, view } from './app.js';
+import { $, latest, nowTp, openSheet, scanSheet, ago, allow, api, applyFeatures, avatar, barChart, bars, bindStepup, cfg, esc, group, IC, largeTitle, me, mfaBanner, nrow, org, pad2, paintCountdown, passkey, refreshMe, render, ROLE_NAME, row, studio, TAB_DEFAULT, TEAM_PERMS, teamAllow, teamIcon, teamOf, teams, toast, view } from './app.js';
 
 // ---------- 管理介面（RBAC、會籍、座位圖）----------
 let adminSeq = 0;
@@ -10,7 +10,7 @@ async function adminView(tab) {
   tab ||= new URLSearchParams(location.hash.split('?')[1] || '').get('tab') || 'overview';
   if (me.mfaPending) { view.innerHTML = `${largeTitle('管理後台')}${mfaBanner()}`; bindStepup(); return; }
   if (!allow('members') && !allow('roles') && !allow('settings')) { view.innerHTML = '<div class="card"><p class="muted">沒有管理權限。</p></div>'; return; }
-  const tabs = [['overview', '總覽'], ['members', '會員'], ['roles', '權限'], ['teams', '分團'], ['events', '活動'], ...(allow('settings') ? [['settings', '系統設定']] : []), ...(allow('audit') ? [['audit', '稽核']] : [])];
+  const tabs = [['overview', '總覽'], ['members', '會員'], ['roles', '權限'], ['teams', '分團'], ['events', '活動'], ...(allow('settings') ? [['settings', '設定']] : []), ...(allow('audit') ? [['audit', '稽核']] : [])];
   // 只拿統計數字，名單要下條件才查
   const my = ++adminSeq;
   const meta = await api('/members?role=officers');
@@ -55,13 +55,14 @@ async function overviewPanel() {
   const o = await api('/admin/overview');
   const months = []; for (let i = 11; i >= 0; i--) { const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - i); months.push(`${d.getFullYear()}-${pad2(d.getMonth() + 1)}`); }
   const g = Object.fromEntries(o.growth.map((x) => [x.m, x.n]));
-  const k = (label, v, sub = '') => `<div class="card kpi"><span class="tiny">${label}</span><b class="num">${v ?? '—'}</b>${sub ? `<span class="tiny">${sub}</span>` : ''}</div>`;
+    // 沒有副標也留一行空白，同一列的數字才會對齊
+  const k = (label, v, sub = '') => `<div class="card kpi"><span class="tiny">${label}</span><b class="num">${v ?? '—'}</b><span class="tiny">${sub || '&nbsp;'}</span></div>`;
   return `<section class="card" id="pendingTop" hidden></section>
     <section class="kpis">
       ${k('跑友', o.members, `本月新加入 ${o.newThisMonth}`)}${k('30 天內活躍', o.active30, o.members ? `${Math.round(o.active30 / o.members * 100)}%` : '')}
-      ${k('協會會員', o.association, `待審核 ${o.applied}・30 天內到期 ${o.expiring}`)}${k('團練出席率', o.attendance == null ? '—' : `${o.attendance}%`, '最近 30 天')}
+      ${k('協會會員', o.association, `待審 ${o.applied}・將到期 ${o.expiring}`)}${k('團練出席率', o.attendance == null ? '—' : `${o.attendance}%`, '最近 30 天')}
       ${k('近 30 天活動', o.events30, `接下來 30 天 ${o.upcoming} 場`)}${k('近 30 天報名', o.signups30)}
-      ${k('7 天訓練紀錄', o.logs7)}${k('開啟推播', o.pushSubs, '人')}
+      ${k('7 天訓練紀錄', o.logs7)}${k('開啟推播', o.pushSubs == null ? null : `${o.pushSubs}<small> 人</small>`)}
     </section>
     ${allow('settings') || allow('audit') ? '<section class="card" id="healthBox"><h3>開啟速度與錯誤</h3><p class="tiny" style="margin:0">載入中…</p></section>' : ''}
     <section class="card"><h3>每月新加入</h3>${barChart(months.map((m) => ({ l: `${Number(m.slice(5))}月`, v: g[m] || 0 })), { unit: ' 人', h: 120 })}</section>
@@ -214,9 +215,9 @@ function bindMembers() {
 async function membershipDialog(id) {
   const m = memberCache.get(id), memberTypes = ['一般會員', '永久會員', '贊助會員'];
   if (!m) return;
-  $('#msd')?.remove();
-  view.insertAdjacentHTML('afterbegin', `<section class="card" id="msd">
-    <h3><span translate="no">${esc(m.name)}</span> 的會籍</h3>
+  // 用底部 sheet（焦點鎖在裡面、Esc 關閉），不要插在頁面最上面被頂部列蓋住
+  const opener = document.activeElement;
+  const s = openSheet('編輯會籍', `<h3 id="msdT"><span translate="no">${esc(m.name)}</span> 的會籍</h3>
     <form id="msf">
       <div class="grid2">
         <label>狀態<select name="membership">${Object.entries(MEMBERSHIP_NAME).map(([k, v]) => `<option value="${k}" ${m.membership === k ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
@@ -230,18 +231,16 @@ async function membershipDialog(id) {
         <label>會費繳至<input type="date" name="paid_until" value="${esc(m.paid_until || '')}"></label>
         <label>備註<input name="membership_note" value="${esc(m.membership_note || '')}" maxlength="60"></label>
       </div>
-      <div class="row"><button class="btn sm">儲存</button><button type="button" class="btn ghost sm" id="msc">取消</button></div>
-    </form></section>`);
-  $('#msd').scrollIntoView({ behavior: 'smooth', block: 'start' });
-  $('#msc').onclick = () => $('#msd').remove();
-  $('#msf').onsubmit = async (e) => {
+      <div class="sheetacts"><button type="button" class="btn ghost" data-close>取消</button><button class="btn">儲存</button></div>
+    </form>`, opener, 'msdT');
+  s.host.querySelector('#msf').onsubmit = async (e) => {
     e.preventDefault();
     const f = e.target;
     try {
       await api(`/members/${id}/membership`, { method: 'POST', body: {
         membership: f.membership.value, member_type: f.member_type.value, member_no: f.member_no.value,
         joined_on: f.joined_on.value, paid_until: f.paid_until.value, membership_note: f.membership_note.value } });
-      toast('已更新會籍'); adminView('members');
+      s.close(); toast('已更新會籍'); adminView('members');
     } catch (err) { toast(err.message); }
   };
 }
@@ -255,7 +254,7 @@ function rolesPanel(data) {
       <div class="permtable">
         <div class="hd"><span>身分</span>${Object.values(PERM_NAME).map((p) => `<span>${p}</span>`).join('')}</div>
         ${order.map((r) => `<div class="rw"><span>${data.roles[r]}</span>${Object.keys(PERM_NAME).map((p) =>
-          `<span>${data.perms[r].includes(p) ? '●' : '·'}</span>`).join('')}</div>`).join('')}
+          `<span>${data.perms[r].includes(p) ? `<i class="yes" aria-label="有">${IC.check}</i>` : '<i class="no" aria-label="無"></i>'}</span>`).join('')}</div>`).join('')}
       </div>
       <p class="tiny">監事可以看名冊與會籍，但不能修改。身分由理事長在下方「指派身分」設定。</p>
     </section>
@@ -346,6 +345,10 @@ const AUDIT_NAME = {
   'settings.signup': '修改活動報名預設', 'event.signup_review': '審核報名', 'event.signup_reject': '婉拒或移出報名', 'event.reopen': '恢復活動',
   'signup.expire': '待審核逾期失效', 'event.orders_export': '下載訂購單',
   'google.link': '綁定 Google', 'login.denied': '登入驗證失敗', 'team.post': '發布分團公告', 'team.post_delete': '刪除分團公告', 'privacy.show_rank': '排行榜設定', broadcast: '群發通知', 'retention.cleanup': '資料保存期限清理', 'event.invite_denied': '邀請連結無效', 'privacy.share_logs': '訓練紀錄分享設定', 'settings.shortcut': '修改捷徑連結',
+  'backup.daily': '每日備份', 'backup.manual': '手動備份', 'calendar.add': '加入行事曆', 'calendar.delete': '刪除行事曆項目', 'event.arrived': '通知到貨',
+  'event.notice': '發布活動異動', 'event.reconcile': '對帳', 'holiday.import': '匯入國定假日', 'member.verify': '驗證會籍卡', 'notif.prefs': '修改推播設定',
+  'push.subscribe': '開啟推播', 'push.unsubscribe': '關閉推播', 'push.truncated': '推播分批送出', 'role.handover': '移交理事長', 'route.delete': '刪除路線',
+  'spot.add': '新增地點', 'spot.propose': '提議地點', 'spot.approve': '核准地點', 'spot.update': '修改地點', 'spot.delete': '刪除地點', 'spot.report_delete': '刪除現場回報',
   'settings.cams': '附近即時影像來源開關', 'settings.cams_sync': '同步攝影機清單', 'cam.link.add': '新增直播連結', 'cam.link.delete': '刪除直播連結',
 };
 // 稽核紀錄：一定要選時間區間（預設最近 7 天），再依類型、操作者、對象縮小；一次 50 筆
@@ -374,13 +377,25 @@ function auditPanel() {
     <p class="tiny" style="margin:0">每筆紀錄都有只有系統知道的簽章，每天再串成一條摘要鏈。有人直接改或刪資料庫裡的紀錄，這裡就會顯示異常。</p>
     <div id="auVerifyOut" class="tiny"></div></section>`;
 }
+// 稽核細節：JSON 轉成「開：A、B；關：C」，ISO 時間轉成「10/5 22:25」
+function auditDetail(d) {
+  let t = String(d);
+  if (/^\{.*\}$/.test(t)) {
+    try {
+      const o = JSON.parse(t), on = [], off = [], rest = [];
+      for (const [k, v] of Object.entries(o)) (v === true ? on : v === false ? off : rest).push(v === true || v === false ? k : `${k} ${typeof v === 'object' ? JSON.stringify(v) : v}`);
+      t = [on.length && `開：${on.join('、')}`, off.length && `關：${off.join('、')}`, ...rest].filter(Boolean).join('；');
+    } catch {}
+  }
+  return t.replace(/\b20\d\d-(\d\d)-(\d\d)T(\d\d:\d\d)(?::\d\d(?:\.\d+)?Z?)?/g, (_, m, dd, hm) => `${Number(m)}/${Number(dd)} ${hm}`);
+}
 function bindAudit() {
   const f = $('#auf'), list = $('#auList');
   let next = null, params = null;
   const row = (x) => `<div class="arow">
       <span class="num tiny">${esc(x.at.slice(5, 16))}</span>
-      <span><b>${esc(AUDIT_NAME[x.action] || x.action)}</b>
-        <span class="tiny" style="display:block">${esc(x.actor_name || '未登入')}${x.actor_role ? `（${esc(ROLE_NAME[x.actor_role] || x.actor_role)}）` : ''}${x.detail ? `・${esc(x.detail)}` : ''}</span></span>
+      <span><b>${esc(AUDIT_NAME[x.action] || '其他操作')}</b>
+        <span class="tiny" style="display:block">${esc(x.actor_name || '未登入')}${x.actor_role ? `（${esc(ROLE_NAME[x.actor_role] || x.actor_role)}）` : ''}${x.detail ? `・${esc(auditDetail(x.detail))}` : ''}</span></span>
     </div>`;
   const load = async (more) => {
     const r = await api(`/audit?${new URLSearchParams({ ...params, ...(more ? { before: next } : {}) })}`);
@@ -436,17 +451,17 @@ function adminTeamsPanel() {
       <h3>分團</h3>
       <p class="tiny" style="margin:0">每個分團有自己的團長、幹部與 LINE 群組。團長由理事長在分團頁指派，團長再指派分團幹部。</p>
       <div class="roster">${teams().map((t) => `<a class="r" href="#/t/${esc(t.id)}">${teamIcon(t, 'av')}
-        <span><b><span translate="no">${esc(t.name)}</span></b><span class="tiny" style="display:block">${t.count} 人${t.private ? '・私密' : ''}${t.line_url ? '・已設 LINE 群組' : ''}</span></span><span class="tiny">›</span></a>`).join('')}</div>
+        <span><b><span translate="no">${esc(t.name)}</span></b><span class="tiny" style="display:block">${t.count} 人${t.private ? '・私密' : ''}${t.line_url ? '・已設 LINE 群組' : ''}</span></span><i class="chev" aria-hidden="true"></i></a>`).join('')}</div>
     </section>
     ${allow('settings') ? `<section class="card"><h3>新增分團</h3>
       <form id="newTeam">
         <div class="grid2"><label>名稱<input name="name" maxlength="20" required placeholder="例如 耕跑週末團"></label><label>顏色<input type="color" name="color" value="#1C4698"></label></div>
-        <button class="btn sm">新增</button>
+        <button class="btn">新增</button>
       </form></section>` : ''}
     <section class="card"><h3>分團權限</h3>
       <div class="permtable">
         <div class="hd"><span>分團身分</span><span>建立活動</span><span>報到</span><span>抽獎</span><span>座位圖</span><span>看名冊</span><span>審核入團</span><span>指派幹部</span></div>
-        ${[['lead', '團長'], ['officer', '幹部'], ['member', '團員']].map(([k, v]) => `<div class="rw"><span>${v}</span>${['event', 'checkin', 'lottery', 'layout', 'roster', 'approve', 'appoint'].map((p) => `<span>${TEAM_PERMS[k]?.includes(p) ? '●' : '·'}</span>`).join('')}</div>`).join('')}
+        ${[['lead', '團長'], ['officer', '幹部'], ['member', '團員']].map(([k, v]) => `<div class="rw"><span>${v}</span>${['event', 'checkin', 'lottery', 'layout', 'roster', 'approve', 'appoint'].map((p) => `<span>${TEAM_PERMS[k]?.includes(p) ? `<i class="yes" aria-label="有">${IC.check}</i>` : '<i class="no" aria-label="無"></i>'}</span>`).join('')}</div>`).join('')}
       </div>
       <p class="tiny" style="margin:0">分團權限只作用在自己分團的活動；分團名冊不顯示電話。</p></section>`;
 }
@@ -511,21 +526,21 @@ function settingsPanel() {
         </div>
         <p class="tiny" style="margin:0">活動超過保存年限後，報名、入場券與受邀名單會刪除，中獎紀錄只留獎項不留姓名。過期的登入工作階段、180 天前的通知每天都會清掉。</p>
       </fieldset>
-      <button class="btn sm">儲存協會資訊</button>
+      <button class="btn">儲存協會資訊</button>
     </form>
   </section>
   <section class="card">
-    <div class="row spread"><h3>協會文件</h3><button class="btn ghost sm" id="addDoc">＋ 新增</button></div>
+    <div class="row spread"><h3>協會文件</h3><button class="btn ghost sm" id="addDoc">${IC.plus}新增</button></div>
     <p class="tiny" style="margin:0">章程、組織說明、會費說明等，跑友在「我的 → 協會」看得到。連結要是 https:// 開頭。</p>
     <div id="docRows" class="docedit">${docs.map(docRow).join('')}</div>
-    <button class="btn sm" id="saveDocs">儲存文件清單</button>
+    <button class="btn" id="saveDocs" ${docs.length ? '' : 'hidden'}>儲存文件清單</button>
   </section>
   <h3 class="sgt">功能與畫面</h3>
   <section class="card">
     <h3>功能開關</h3>
     <form id="featForm" class="toggles">
       ${Object.entries(FEATURE_NAME).map(([k, v]) => `<label class="switch"><span>${v}</span><input type="checkbox" name="${k}" ${(FEATURE_OFF.has(k) ? f[k] === true : f[k] !== false) ? 'checked' : ''}><i></i></label>`).join('')}
-      <button class="btn sm">儲存功能開關</button>
+      <button class="btn">儲存功能開關</button>
     </form>
     <p class="tiny" style="margin:0">關掉後，跑友的畫面上就看不到這個功能；已存的資料不會刪除。</p>
   </section>
@@ -533,14 +548,14 @@ function settingsPanel() {
     <form id="signupDefForm" class="toggles">
       <label class="switch"><span>新活動預設需要審核<span class="tiny" style="display:block">報名後由主辦幹部核准；問卷不適用</span></span><input type="checkbox" name="approval" ${sd.approval ? 'checked' : ''}><i></i></label>
       <label class="switch"><span>新活動預設通知報名者<span class="tiny" style="display:block">報名成功、排入候補、確認收款時推播給本人</span></span><input type="checkbox" name="notify" ${sd.notify ? 'checked' : ''}><i></i></label>
-      <div class="grid2">
+      <div class="grid2 selwide">
         <label>報名開始<select name="open_days"><option value="">建立後立即開放</option>${[1, 2, 3, 5, 7, 10, 14, 21, 30].map((n) => `<option value="${n}" ${sd.open_days === n ? 'selected' : ''}>活動前 ${n} 天</option>`).join('')}</select></label>
         <label>開始時間<input type="time" name="open_time" value="${esc(sd.open_time || '20:00')}"></label>
         <label>報名截止<select name="close_days"><option value="">活動開始時（集合時間）</option><option value="0" ${sd.close_days === 0 ? 'selected' : ''}>活動當天</option>${[1, 2, 3, 5, 7, 14].map((n) => `<option value="${n}" ${sd.close_days === n ? 'selected' : ''}>活動前 ${n} 天</option>`).join('')}</select></label>
         <label>截止時間<input type="time" name="close_time" value="${esc(sd.close_time || '22:00')}"></label>
       </div>
       <p class="tiny" id="sdPreview" aria-live="polite" style="margin:0"></p>
-      <button class="btn sm">儲存報名預設</button>
+      <button class="btn">儲存報名預設</button>
     </form>
     <p class="tiny" style="margin:0">只影響之後新增的活動；已建立的活動不會改，幹部建立時也可以逐場調整。</p>
   </section>
@@ -552,7 +567,7 @@ function settingsPanel() {
   <section class="card">
     <h3>分頁列名稱</h3>
     <form id="tabsForm" class="grid3">${Object.entries(TAB_DEFAULT).map(([k, v]) => `<label>${v}<input name="${k}" maxlength="4" placeholder="${v}" value="${esc(cfg.settings?.tabs?.[k] || '')}"></label>`).join('')}
-      <button class="btn sm" style="grid-column:1/-1">儲存名稱</button></form>
+      <button class="btn" style="grid-column:1/-1">儲存名稱</button></form>
     <p class="tiny" style="margin:0">每個最多 4 個字，留空就用預設。每個人也可以在「我的 → 通知與裝置」選擇只顯示圖示。</p>
   </section>
   <section class="card">
@@ -560,9 +575,9 @@ function settingsPanel() {
     <form id="clubRace2" class="grid2">
       <label>協會預設賽事<input name="name" maxlength="30" value="${esc(cfg.race && !cfg.race.mine ? cfg.race.name : '')}"></label>
       <label>日期<input type="date" name="date" value="${esc(cfg.race && !cfg.race.mine ? cfg.race.date : '')}"></label>
-      <button class="btn ghost sm" style="grid-column:1/-1">儲存預設倒數</button>
+      <button class="btn" style="grid-column:1/-1">儲存預設倒數</button>
     </form>
-    <details id="presetBox"><summary class="tiny" style="cursor:pointer">常用賽事清單（團員點右上角倒數就能直接挑）</summary>
+    <details id="presetBox"><summary class="setsum">常用賽事清單<span class="tiny">團員點右上角倒數就能直接挑</span></summary>
       <div id="presetRows" class="docedit" style="margin-top:8px"></div>
       <div class="row" style="gap:8px"><button type="button" class="btn ghost sm" id="presetAdd">${IC.plus}新增一場</button><button type="button" class="btn sm" id="presetSave">儲存清單</button></div>
     </details>
@@ -594,7 +609,7 @@ function settingsPanel() {
     <form id="pvForm">
       <textarea name="body" style="min-height:240px" placeholder="## 一、蒐集目的&#10;…&#10;&#10;- 清單項目">${esc(pv.body || '')}</textarea>
       <p class="tiny" style="margin:0">格式：「## 」開頭是標題、「- 」開頭是清單、空一行分段。</p>
-      <div class="row"><button class="btn sm">儲存並升版</button><a class="btn ghost sm" href="#/privacy">預覽</a></div>
+      <div class="sheetacts"><a class="btn ghost" href="#/privacy">預覽</a><button class="btn">儲存並升版</button></div>
     </form>
   </section>`;
 }
@@ -602,7 +617,7 @@ const docRow = (d = {}) => `<div class="drow">
   <input data-k="title" placeholder="文件名稱" maxlength="40" value="${esc(d.title || '')}">
   <input data-k="url" type="url" placeholder="https://" value="${esc(d.url || '')}">
   <input data-k="note" placeholder="說明（選填）" maxlength="80" value="${esc(d.note || '')}">
-  <button type="button" class="btn danger sm" data-rmdoc aria-label="移除">移除</button></div>`;
+  <button type="button" class="iconx rm" data-rmdoc aria-label="移除">${IC.minus}</button></div>`;
 function bindSettings() {
   const loadBk = async () => {
     const r = await api('/backups').catch(() => null);
@@ -691,9 +706,9 @@ function bindSettings() {
   $('#featForm').onsubmit = (e) => { e.preventDefault(); const f = e.target, body = {};
     for (const k of Object.keys(FEATURE_NAME)) body[k] = f[k].checked;
     save('features', body, '已儲存功能開關'); };
-  const bindRm = () => { for (const b of document.querySelectorAll('[data-rmdoc]')) b.onclick = () => b.closest('.drow').remove(); };
+  const bindRm = () => { for (const b of document.querySelectorAll('[data-rmdoc]')) b.onclick = () => { b.closest('.drow').remove(); $('#saveDocs').hidden = false; }; };
   bindRm();
-  $('#addDoc').onclick = () => { $('#docRows').insertAdjacentHTML('beforeend', docRow()); bindRm(); };
+  $('#addDoc').onclick = () => { $('#docRows').insertAdjacentHTML('beforeend', docRow()); $('#saveDocs').hidden = false; bindRm(); };
   $('#saveDocs').onclick = () => {
     const docs = [...document.querySelectorAll('.drow')].map((r) => Object.fromEntries([...r.querySelectorAll('input')].map((i) => [i.dataset.k, i.value.trim()])))
       .filter((d) => d.title || d.url);
@@ -708,7 +723,7 @@ function bindSettings() {
   // 常用賽事清單
   const presetRow = (p = {}) => `<div class="drow"><input data-k="name" placeholder="比賽名稱" maxlength="40" aria-label="比賽名稱" value="${esc(p.name || '')}">
     <input data-k="date" type="date" aria-label="比賽日期" value="${esc(p.date || '')}"><input data-k="dist" placeholder="全馬／半馬／10K" maxlength="10" aria-label="距離" value="${esc(p.dist || '')}">
-    <button type="button" class="btn danger sm" data-rmpre>移除</button></div>`;
+    <button type="button" class="iconx rm" data-rmpre aria-label="移除">${IC.minus}</button></div>`;
   const bindPre = () => { for (const b of document.querySelectorAll('[data-rmpre]')) b.onclick = () => b.closest('.drow').remove(); };
   $('#presetBox').addEventListener('toggle', async (e) => {
     if (!e.target.open || $('#presetRows').dataset.loaded) return;
@@ -741,20 +756,16 @@ async function rosterView() {
 }
 function roleDialog(id, name, cur) {
   const opts = Object.entries(ROLE_NAME).map(([k, v]) => `<option value="${k}" ${k === cur ? 'selected' : ''}>${v}</option>`).join('');
-  $('#rd')?.remove();
-  view.insertAdjacentHTML('afterbegin', `<section class="card" id="rd">
-    <h3>變更 <span translate="no">${esc(name)}</span> 的身分</h3>
+  const opener = document.activeElement;
+  const s = openSheet('變更身分', `<h3 id="rdT">變更 <span translate="no">${esc(name)}</span> 的身分</h3>
     <form id="rf">
       <label>身分<select name="role">${opts}</select></label>
       <label>職稱（選填）<input name="title" maxlength="12" placeholder="例如 副理事長、活動組長"></label>
-      <div class="row"><button class="btn sm">儲存</button><button type="button" class="btn ghost sm" id="rc">取消</button></div>
-    </form>
-  </section>`);
-  $('#rd').scrollIntoView({ behavior: 'smooth', block: 'start' });
-  $('#rc').onclick = () => $('#rd').remove();
-  $('#rf').onsubmit = async (e) => {
+      <div class="sheetacts"><button type="button" class="btn ghost" data-close>取消</button><button class="btn">儲存</button></div>
+    </form>`, opener, 'rdT');
+  s.host.querySelector('#rf').onsubmit = async (e) => {
     e.preventDefault();
-    try { await api(`/members/${id}/role`, { method: 'POST', body: { role: e.target.role.value, title: e.target.title.value } }); toast(`已更新 ${name} 的身分，對方要重新登入`); adminView('roles'); }
+    try { await api(`/members/${id}/role`, { method: 'POST', body: { role: e.target.role.value, title: e.target.title.value } }); s.close(); toast(`已更新 ${name} 的身分，對方要重新登入`); adminView('roles'); }
     catch (err) { toast(err.message); }
   };
 }

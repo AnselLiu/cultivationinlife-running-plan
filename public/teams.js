@@ -52,7 +52,7 @@ async function teamView(tid, q = '') {
         <div class="iconedit">${teamIcon(t, 'lg')}<div class="row" style="gap:8px">
           <label class="btn ghost sm filebtn">換分團圖示<input type="file" accept="image/png,image/jpeg,image/webp" id="iconIn" hidden></label>
           ${t.icon?.startsWith('/api/') ? '<button type="button" class="btn ghost sm" id="iconRm">改回預設</button>' : ''}</div>
-          <span class="tiny">正方形圖，會自動縮成小圖。生圖指令見 docs/team-icons-prompt.md。</span></div>
+          <span class="tiny">建議用正方形圖片，會自動縮小。</span></div>
         <label>介紹<textarea name="intro" maxlength="300" placeholder="練什麼、什麼時候練、適合誰">${esc(t.intro)}</textarea></label>
         <label>LINE 群組邀請連結<input name="line_url" type="url" value="${esc(t.line_url)}" placeholder="https://line.me/ti/g/…"></label>
         ${allow('settings') ? `<label>排序<input name="sort" type="number" min="0" max="99" value="${t.sort}"></label>
