@@ -1088,3 +1088,30 @@ body.guest .top .brand{opacity:0;pointer-events:none}
 .wxmini.good .pill{background:color-mix(in srgb,#34C759 16%,transparent);color:#1E7E34}
 .wxmini.ok .pill{background:color-mix(in srgb,#FF9F0A 16%,transparent);color:#A15C00}
 .wxmini.poor .pill{background:color-mix(in srgb,var(--race) 14%,transparent);color:var(--race)}
+/* 要重新同意隱私權政策時：底部固定「同意並繼續」，暫時收起分頁列 */
+body.consent .tabs{display:none}
+.consentbar{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(14px + env(safe-area-inset-bottom,0px));z-index:40;width:min(560px,calc(100vw - 28px));
+  display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 10px 10px 18px;border-radius:999px;
+  background:var(--glass-hi);-webkit-backdrop-filter:var(--blur);backdrop-filter:var(--blur);box-shadow:var(--shadow-l),inset 0 1px 0 var(--rim)}
+body.consent main{padding-bottom:110px}
+/* 返回鍵（iOS 導覽列的「‹ 上一層」） */
+.backbtn{display:inline-flex;align-items:center;gap:2px;border:0;background:none;color:var(--accent);font:inherit;font-size:17px;font-weight:500;padding:8px 10px 8px 2px;margin-left:-6px;cursor:pointer;border-radius:12px;min-height:44px}
+.backbtn svg{width:24px;height:24px;fill:none;stroke:currentColor;stroke-width:2.4;stroke-linecap:round;stroke-linejoin:round}
+.backbtn:active{opacity:.55}
+.backbtn[hidden]{display:none}
+body.detail .top .brand{display:none}
+/* 送出中：按鈕停用並顯示轉圈，避免連點送出兩次 */
+.btn.busy{position:relative;color:transparent!important;pointer-events:none}
+.btn.busy::after{content:"";position:absolute;inset:0;margin:auto;width:18px;height:18px;border-radius:50%;border:2.4px solid currentColor;border-color:var(--on-accent) var(--on-accent) transparent transparent;animation:spin .7s linear infinite}
+.btn.ghost.busy::after,.btn.danger.busy::after{border-color:var(--accent) var(--accent) transparent transparent}
+@keyframes spin{to{transform:rotate(360deg)}}
+.choices{display:grid;gap:10px;margin-top:6px}
+.formactions{margin-top:4px}
+.chiplink{display:inline-flex;align-items:center;gap:4px;padding:8px 12px;border-radius:999px;font-size:14px;font-weight:600;color:var(--accent);white-space:nowrap;flex:none}
+.chiplink svg.ic{width:16px;height:16px}
+.chiprow{display:flex;align-items:center;gap:6px;min-width:0}
+.chiprow .chipbar{flex:1;min-width:0}
+.shareapp{gap:14px}
+.shareqr{display:grid;justify-items:center;gap:6px}
+.shareqr .qrbox{width:220px;padding:10px;border-radius:18px;background:#fff;box-shadow:var(--shadow-s)}
+.grid1{display:grid;gap:10px}.grid1 .btn{justify-content:center}

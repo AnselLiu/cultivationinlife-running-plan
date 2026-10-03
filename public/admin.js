@@ -21,7 +21,8 @@ async function adminView(tab) {
       : tab === 'audit' ? auditPanel()
       : tab === 'settings' ? settingsPanel()
       : await eventsPanel()}</div>`;
-  for (const b of document.querySelectorAll('[data-tab]')) b.onclick = () => adminView(b.dataset.tab);
+  // 分頁寫進網址：重新整理或返回時停在同一頁
+  for (const b of document.querySelectorAll('[data-tab]')) b.onclick = () => { history.replaceState(null, '', `#/admin?tab=${b.dataset.tab}`); adminView(b.dataset.tab); };
   if (tab === 'overview') bindOverview();
   if (tab === 'members') bindMembers();
   if (tab === 'roles') { for (const b of document.querySelectorAll('[data-role]')) b.onclick = () => roleDialog(b.dataset.role, b.dataset.name, b.dataset.cur); bindHandover(); }
@@ -218,7 +219,7 @@ function rolesPanel(data) {
         ${order.map((r) => `<div class="rw"><span>${data.roles[r]}</span>${Object.keys(PERM_NAME).map((p) =>
           `<span>${data.perms[r].includes(p) ? '●' : '·'}</span>`).join('')}</div>`).join('')}
       </div>
-      <p class="tiny">監事可以看名冊與會籍，但不能修改。身分由理事長在名冊指派。</p>
+      <p class="tiny">監事可以看名冊與會籍，但不能修改。身分由理事長在下方「指派身分」設定。</p>
     </section>
     ${order.filter((r) => byRole[r]?.length).map((r) => `<section class="card">
       <div class="row spread"><h3>${data.roles[r]}</h3><span class="tiny">${byRole[r].length} 人</span></div>
@@ -226,6 +227,9 @@ function rolesPanel(data) {
         <span><b><span translate="no">${esc(m.name)}</span></b>${m.title ? ` <span class="tiny"><span translate="no">${esc(m.title)}</span></span>` : ''}</span>
         ${allow('roles') ? `<button class="btn ghost sm" data-role="${m.id}" data-name="${esc(m.name)}" data-cur="${m.role}">變更</button>` : ''}</div>`).join('')}</div>
     </section>`).join('')}
+    ${allow('roles') ? `<section class="card"><h3>指派身分</h3>
+      <form id="roleSearch" class="row" style="gap:8px"><input name="q" maxlength="20" placeholder="輸入跑友姓名或暱稱" aria-label="搜尋要指派身分的跑友" style="flex:1;min-width:160px" required><button class="btn ghost sm">搜尋</button></form>
+      <div id="roleList" class="roster"></div></section>` : ''}
     ${me.role === 'chair' ? `<section class="card" id="handover">
       <h3>移交理事長</h3>
       <p class="tiny" style="margin:0">新任理事長加入後，在這裡一步移交：對方成為理事長，你同時改成下面選的身分。雙方都要重新登入，並寫入稽核紀錄。</p>
@@ -234,6 +238,14 @@ function rolesPanel(data) {
     </section>` : ''}`;
 }
 function bindHandover() {
+  const rs = $('#roleSearch');
+  if (rs) rs.onsubmit = async (e) => {
+    e.preventDefault();
+    const { members } = await api(`/members?q=${encodeURIComponent(rs.q.value.trim())}`).catch((err) => { toast(err.message); return { members: [] }; });
+    $('#roleList').innerHTML = members.slice(0, 12).map((m) => `<div class="r">${avatar(m)}<span><b><span translate="no">${esc(m.name)}</span></b><span class="tiny" style="display:block">${esc(ROLE_NAME[m.role] || '團員')}</span></span>
+      <button class="btn ghost sm" data-role="${esc(m.id)}" data-name="${esc(m.name)}" data-cur="${esc(m.role)}">變更</button></div>`).join('') || '<p class="tiny" style="margin:0">找不到符合的跑友。</p>';
+    for (const b of document.querySelectorAll('#roleList [data-role]')) b.onclick = () => roleDialog(b.dataset.role, b.dataset.name, b.dataset.cur);
+  };
   const f = $('#hoSearch'); if (!f) return;
   f.onsubmit = async (e) => {
     e.preventDefault();
@@ -634,7 +646,7 @@ function roleDialog(id, name, cur) {
   $('#rc').onclick = () => $('#rd').remove();
   $('#rf').onsubmit = async (e) => {
     e.preventDefault();
-    try { await api(`/members/${id}/role`, { method: 'POST', body: { role: e.target.role.value, title: e.target.title.value } }); toast('已更新'); render(); }
+    try { await api(`/members/${id}/role`, { method: 'POST', body: { role: e.target.role.value, title: e.target.title.value } }); toast(`已更新 ${name} 的身分，對方要重新登入`); adminView('roles'); }
     catch (err) { toast(err.message); }
   };
 }

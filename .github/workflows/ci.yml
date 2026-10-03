@@ -1,5 +1,5 @@
 # 每次 push／PR：跑完整測試（權限、邀請制、問卷、訓練紀錄、排程、通行金鑰…）
-# 測試通過後跑 Lighthouse 品質檢查（tests/lighthouse.mjs）
+# 測試通過後跑 Lighthouse 品質檢查（tests/lighthouse.mjs）與端到端流程測試（tests/e2e/，Playwright）
 # push 到 main 而且測試與品質檢查都通過：套用資料庫遷移並部署正式站
 # push 到 staging 分支：部署測試環境 cil-run-staging
 # 需要在 GitHub → Settings → Secrets and variables → Actions 設定：
@@ -51,8 +51,31 @@ jobs:
           name: lighthouse-reports
           path: .wrangler/lighthouse/
 
+  e2e:
+    # 端到端：用真的瀏覽器（iPhone 尺寸）走過團員與幹部的主要流程，並用 axe 檢查 13 個頁面的無障礙
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: 端到端測試
+        run: npm run test:e2e
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: e2e-report
+          path: |
+            test-results/
+            .wrangler/e2e-report/
+
   deploy:
-    needs: [test, quality]
+    needs: [test, quality, e2e]
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 10

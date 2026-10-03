@@ -39,7 +39,7 @@ async function calendarView() {
         <h2>${y} 年 ${m} 月</h2>
         <button class="btn ghost sm" data-m="${shift(1)}" aria-label="下個月">›</button>
       </div>
-      <div class="calgrid" role="grid">${WD.map((w, i) => `<span class="wd ${i === 0 || i === 6 ? 'off' : ''}">${w}</span>`).join('')}${cells.join('')}</div>
+      <div class="calgrid" role="group" aria-label="${y} 年 ${m} 月">${WD.map((w, i) => `<span class="wd ${i === 0 || i === 6 ? 'off' : ''}">${w}</span>`).join('')}${cells.join('')}</div>
       <div class="legend tiny"><span><i class="dot"></i>活動</span><span><i class="dot mine"></i>已報名</span><span><i class="dot item"></i>賽事提醒</span><span><i class="dot race"></i>我的賽事</span></div>
       ${needHol ? `<p class="tiny" style="margin:0">${allow('settings') ? `還沒匯入 ${y} 年的國定假日，<a href="#/admin?tab=settings">到系統設定匯入</a>。` : `${y} 年的國定假日還沒匯入。`}</p>` : ''}
     </section>

@@ -39,7 +39,7 @@ async function challengeView() {
     <section class="card"><div class="row spread"><h3>排行榜</h3>${d.showRank ? '' : '<a class="tiny" href="#/me/privacy">我也要上榜 ›</a>'}</div>
       ${d.top.length ? `<ol class="toplist">${d.top.map((x) => `<li class="${x.me ? 'me' : ''}"><span translate="no">${esc(x.name)}</span><span class="tiny">${x.runs} 次</span><b class="num">${x.km}</b></li>`).join('')}</ol>`
         : '<p class="muted" style="margin:0">這個月還沒有人上榜。排行榜只列在「我的 → 隱私」同意上榜的人。</p>'}</section>
-    <a class="btn block iconbtn" href="#/log?extra=1">${IC.plus}記錄一次訓練</a>`;
+    <a class="btn block iconbtn" href="#/log">${IC.plus}記錄一次訓練</a>`;
 }
 
 export { challengeView };

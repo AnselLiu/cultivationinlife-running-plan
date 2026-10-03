@@ -1318,9 +1318,14 @@ async function api(req, env, path, method) {
     }
     await audit(env, req, member, 'event.create', 'event', id, `${e.title}${e.team_id ? `（${e.team_id}）` : ''}${e.visibility === 'invite' ? '，邀請制' : ''}${from ? `，複製自 ${from}` : ''}${series ? `，定期 ${dates.length} 場` : ''}`);
     // 邀請制不廣播；之後邀請誰就通知誰
-    if (b.notify !== false && e.visibility !== 'invite') await notify(env, e.team_id ? await teamMemberIds(e.team_id, member.id) : await allMemberIds(env, member.id), 'event',
-      { title: `${e.kind === 'survey' ? '新問卷' : series ? '定期揪跑' : '新活動'}：${e.title}`, body: series ? `${dates[0]} 起共 ${dates.length} 場${e.gather_time ? `，${e.gather_time} 集合` : ''}　${e.place || ''}` : `${e.date}${e.gather_time ? ` ${e.gather_time}` : ''}　${e.place || ''}`, url: `/#/e/${id}` });
-    return json({ id, count: dates.length, series });
+    let notified = 0;
+    if (b.notify !== false && e.visibility !== 'invite') {
+      const to = e.team_id ? await teamMemberIds(e.team_id, member.id) : await allMemberIds(env, member.id);
+      notified = to.length;
+      await notify(env, to, 'event',
+        { title: `${e.kind === 'survey' ? '新問卷' : series ? '定期揪跑' : '新活動'}：${e.title}`, body: series ? `${dates[0]} 起共 ${dates.length} 場${e.gather_time ? `，${e.gather_time} 集合` : ''}　${e.place || ''}` : `${e.date}${e.gather_time ? ` ${e.gather_time}` : ''}　${e.place || ''}`, url: `/#/e/${id}` });
+    }
+    return json({ id, count: dates.length, series, notified, invite: e.visibility === 'invite' });
   }
 
   const m1 = path.match(/^\/api\/events\/([\w-]{1,32})$/);
@@ -2070,6 +2075,13 @@ async function api(req, env, path, method) {
        FROM draws d JOIN prizes p ON p.id = d.prize_id JOIN events e ON e.id = d.event_id
        WHERE d.member_id = ? ORDER BY d.created_at DESC LIMIT 30`).bind(member.id).all()).results;
     return json({ prizes: rows });
+  }
+  // 我的團購領取：已到貨、還沒領的
+  if (path === '/api/my/pickups' && method === 'GET') {
+    const g = need(); if (g) return g;
+    const rows = (await env.DB.prepare(`SELECT s.pick_code AS code, s.items, e.id AS event_id, e.title, e.pickup_note AS note FROM signups s JOIN events e ON e.id = s.event_id
+      WHERE s.member_id = ? AND s.status = 'in' AND s.pick_code IS NOT NULL AND s.picked_at IS NULL AND e.arrived_at IS NOT NULL ORDER BY e.arrived_at DESC LIMIT 20`).bind(member.id).all()).results;
+    return json({ pickups: rows.map((r) => ({ ...r, items: parseQ(r.items) })) });
   }
   if (path === '/api/my/tickets' && method === 'GET') {
     const g = need(); if (g) return g;

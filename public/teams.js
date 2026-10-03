@@ -123,7 +123,8 @@ async function loadBoard(t) {
     if (!confirm('刪除這則公告？')) return;
     try { await api(`/teams/${t.id}/posts/${b.dataset.delpost}`, { method: 'DELETE' }); loadBoard(t); } catch (e) { toast(e.message); }
   };
-  $('#newPost')?.addEventListener('click', () => {
+  // 用 onclick（不是 addEventListener）：公告欄每次重新載入不會重複綁，按取消後也能再按
+  if ($('#newPost')) $('#newPost').onclick = () => {
     if ($('#postForm')) return;
     box.insertAdjacentHTML('beforebegin', `<form id="postForm" class="filters">
       <input name="title" maxlength="60" placeholder="標題" required>
@@ -137,7 +138,7 @@ async function loadBoard(t) {
       try { await api(`/teams/${t.id}/posts`, { method: 'POST', body: { title: f.title.value, body: f.body.value, pinned: f.pinned.checked, notify: f.notify.checked } });
         f.remove(); toast('已發布'); loadBoard(t); } catch (err) { toast(err.message); }
     };
-  }, { once: true });
+  };
   void canPost;
 }
 async function loadBoardRank(tid, period) {

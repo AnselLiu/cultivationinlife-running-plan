@@ -26,6 +26,7 @@ async function studioView() {
     studio.stats = { title: (q.get('title') || '今天的跑步').slice(0, 20), date, distance: num('km', 400) * 1000,
       seconds: num('sec', 200000) || num('min', 3000) * 60, elevation: Math.round(num('elev', 9000)), avg_hr: Math.round(num('hr', 230)) || null, route: [] };
     studio.source = 'manual';
+    studio.logged = q.get('logged') === '1';   // 從「已記錄」過來：已經存過訓練紀錄，不再顯示「存到訓練紀錄」
     history.replaceState(null, '', '#/studio');
     setTimeout(() => toast(q.get('src') === 'health' ? '已帶入 Apple 健康的跑步數據' : '已帶入跑步數據'), 300);
   }
@@ -74,7 +75,7 @@ async function studioView() {
         </section>
         <section class="card actions">
           <button class="btn block" id="shareImg">分享圖片</button>
-          <button class="btn ghost block" id="toLog">存到訓練紀錄</button>
+          ${studio.logged ? '' : '<button class="btn ghost block" id="toLog">存到訓練紀錄</button>'}
           <button class="btn ghost block" id="makeReel">產生 Reels 短片（6 秒）</button>
           <p class="tiny center" style="margin:0">分享時選 Instagram，就能發到限時動態、貼文或 Reels。</p>
         </section>
@@ -93,7 +94,7 @@ async function studioView() {
   $('#arBtn').onclick = () => arCamera();
   $('#arFirst').onchange = (e) => { arFirst.set(e.target.checked); toast(e.target.checked ? '下次打開拍照會直接進 AR 相機' : '改回先填成績再拍'); };
   // 把這次的成績帶到訓練紀錄（自動對上那天的課表）
-  $('#toLog').onclick = () => {
+  if ($('#toLog')) $('#toLog').onclick = () => {
     const x = studio.stats, p = new URLSearchParams({ date: x.date, km: (x.distance / 1000).toFixed(2), sec: String(Math.round(x.seconds || 0)), src: studio.source === 'manual' ? 'manual' : studio.source });
     if (x.avg_hr) p.set('hr', String(x.avg_hr));
     location.hash = `#/log?${p}`;

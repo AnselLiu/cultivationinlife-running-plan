@@ -2,6 +2,7 @@
 import { $, ago, downloadAuthed, scanSheet, allow, api, bars, copy, dstr, emptyState, esc, feat, group, IC, KIND_NAME, largeTitle, me, money, PAID_NAME, row, teamAllow, teams, toast, view } from './app.js';
 
 // ---------- 幹部：新增／編輯活動 ----------
+const DRAFT = 'cil-ev-draft';
 async function formView(id) {
   const qp = new URLSearchParams(location.hash.split('?')[1] || '');
   const from = !id && qp.get('from');
@@ -113,10 +114,27 @@ async function formView(id) {
       <label>說明與注意事項<textarea name="note" placeholder="攜帶瑜珈墊、水、彈力帶、毛巾">${esc(d.note || '')}</textarea></label>
       <label class="inline"><input type="checkbox" name="signup_open" ${d.signup_open ? 'checked' : ''}> 開放報名</label>
       ${id ? '' : '<label class="inline"><input type="checkbox" name="notify" checked> 建立後通知（選了分團就只通知那個分團；邀請制只通知受邀的人）</label>'}
-      <button class="btn block">${id ? '儲存' : '建立'}</button>
+      <div class="grid2 formactions"><a class="btn ghost block" href="${id ? `#/e/${esc(id)}` : '#/'}">取消</a><button class="btn block">${id ? '儲存' : '建立'}</button></div>
     </form>
   </section>`;
   const f = $('#ef');
+  // 新增活動時自動暫存一般欄位（例如先去地圖新增地點再回來，不用重填）；建立成功就清掉
+  if (!id && !from) {
+    const keyOf = (el) => el.name + (el.type === 'checkbox' || el.type === 'radio' ? `=${el.value}` : '');
+    try {
+      const d = JSON.parse(sessionStorage.getItem(DRAFT) || 'null');
+      if (d) {
+        for (const el of f.elements) { if (!el.name || !(keyOf(el) in d)) continue; if (el.type === 'checkbox' || el.type === 'radio') el.checked = d[keyOf(el)]; else el.value = d[keyOf(el)]; }
+        f.insertAdjacentHTML('afterbegin', '<p class="notice row spread" style="margin:0" id="draftNote"><span>已帶回剛才填到一半的內容</span><button type="button" class="btn ghost sm" id="draftClear">清除重填</button></p>');
+        $('#draftClear').onclick = () => { try { sessionStorage.removeItem(DRAFT); } catch {} formView(); };
+      }
+    } catch {}
+    f.addEventListener('input', () => {
+      const o = {};
+      for (const el of f.elements) if (el.name && el.type !== 'file') o[keyOf(el)] = el.type === 'checkbox' || el.type === 'radio' ? el.checked : el.value;
+      try { sessionStorage.setItem(DRAFT, JSON.stringify(o)); } catch {}
+    });
+  }
   // 依類型顯示欄位：data-when="party"、"survey"、"!survey"
   const sync = () => {
     for (const el of f.querySelectorAll('[data-when]')) {
@@ -172,9 +190,12 @@ async function formView(id) {
       repeat: f.rep_until && [...f.querySelectorAll('[name=rep_wd]:checked')].length ? { weekdays: [...f.querySelectorAll('[name=rep_wd]:checked')].map((c) => Number(c.value)), until: f.rep_until.value, skip_holidays: f.rep_skip.checked } : undefined,
     };
     try {
-      if (id) { await api(`/events/${id}`, { method: 'PUT', body }); location.hash = `#/e/${id}`; }
-      else { const r = await api('/events', { method: 'POST', body }); location.hash = `#/e/${r.id}`; if (r.count > 1) { toast(`已建立 ${r.count} 場定期揪跑`); return; } }
-      toast('已儲存');
+      if (id) { await api(`/events/${id}`, { method: 'PUT', body }); location.hash = `#/e/${id}`; toast('已儲存'); return; }
+      const r = await api('/events', { method: 'POST', body });
+      try { sessionStorage.removeItem(DRAFT); } catch {}
+      location.hash = `#/e/${r.id}`;
+      // 建好後告訴幹部發生了什麼、下一步做什麼
+      toast(r.invite ? '已建立邀請制活動，下一步：在活動頁邀請人或開邀請連結' : `已建立${r.count > 1 ? ` ${r.count} 場定期揪跑` : ''}${r.notified ? `，已通知 ${r.notified} 人` : ''}`);
     } catch (err) { toast(err.message); }
   };
 }
@@ -240,7 +261,7 @@ async function statsView(id) {
       </div>
       <span class="bar big"><i style="width:${money.expected ? Math.round(money.collected / money.expected * 100) : 0}%"></i></span>
       <div class="lstats">${Object.entries(PAID_NAME).map(([k, v]) => `<span>${v} <b class="num">${money.counts[k] || 0}</b></span>`).join('')}</div>
-      <div class="row" style="gap:8px">${money.reportedN ? '<a class="btn sm" href="#plist" id="showReported">只看待確認的</a>' : ''}
+      <div class="row" style="gap:8px">${money.reportedN ? '<button type="button" class="btn sm" id="showReported">只看待確認的</button>' : ''}
         <label class="btn ghost sm filebtn">匯入銀行明細對帳<input type="file" accept=".csv,text/csv,.txt" id="bankCsv" hidden></label></div>
       <div id="reconOut"></div>
       <p class="tiny" style="margin:0">從網路銀行下載入帳明細（CSV），系統用「金額＋轉帳後五碼」比對團員回報的資料，先預覽再確認標記已繳。檔案只在你的手機裡讀取，只送出金額與數字。</p></section>` : ''}
@@ -330,11 +351,12 @@ async function statsView(id) {
     try { await show(false); } catch (err) { toast(err.message); }
     e.target.value = '';
   });
-  $('#showReported')?.addEventListener('click', () => { for (const r of document.querySelectorAll('.prow')) r.hidden = !r.classList.contains('reported'); });
-  for (const sel of document.querySelectorAll('[data-pay]')) sel.onchange = async () => {
-    try { await api(`/events/${id}/payments`, { method: 'POST', body: { member_ids: [sel.dataset.pay], paid: sel.value } }); sel.className = `paysel ${sel.value}`; toast(`已標記為${PAID_NAME[sel.value]}`); }
-    catch (e) { toast(e.message); }
-  };
+  $('#showReported')?.addEventListener('click', () => { for (const r of document.querySelectorAll('.prow')) r.hidden = !r.classList.contains('reported'); $('#plist').scrollIntoView({ behavior: 'smooth', block: 'start' }); });
+  // 改繳費狀態：失敗就退回原本的選項；成功後重畫（收款金額跟著更新），保留捲動位置
+  for (const sel of document.querySelectorAll('[data-pay]')) { sel.dataset.was = sel.value; sel.onchange = async () => {
+    try { await api(`/events/${id}/payments`, { method: 'POST', body: { member_ids: [sel.dataset.pay], paid: sel.value } }); toast(`已標記為${PAID_NAME[sel.value]}`); const y = scrollY; await statsView(id); scrollTo(0, y); }
+    catch (e) { sel.value = sel.dataset.was; toast(e.message); }
+  }; }
 }
 
 export { formView, statsView };

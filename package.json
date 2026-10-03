@@ -11,9 +11,12 @@
     "test": "node --test --test-concurrency=1 tests/*.test.mjs",
     "test:ci": "node tests/run.mjs",
     "test:lh": "node tests/lighthouse.mjs",
+    "test:e2e": "playwright test",
     "deploy:staging": "wrangler d1 migrations apply cil-run-staging --remote --env staging && wrangler deploy --env staging"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.13.0",
+    "@playwright/test": "^1.63.0",
     "wrangler": "^4.145.0"
   },
   "engines": {
