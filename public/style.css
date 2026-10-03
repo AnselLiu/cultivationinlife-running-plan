@@ -1012,3 +1012,13 @@ body.guest main{padding-bottom:40px}
 .authcard .btn.google{min-height:52px;font-size:17px}
 @media (prefers-reduced-motion:reduce){.wmark{animation:none}}
 body.guest .top .brand{opacity:0;pointer-events:none}
+/* 深色模式：日曆圓點提亮；街道底圖反相成夜間地圖（衛星影像不動） */
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .dot:not(.item):not(.race){background:color-mix(in srgb,var(--tc,var(--accent)) 45%,#fff)}
+  :root:not([data-theme="light"]) .base-emap,:root:not([data-theme="light"]) .base-osm{filter:invert(.9) hue-rotate(180deg) brightness(.95) contrast(.9) saturate(.8)}}
+:root[data-theme="dark"] .dot:not(.item):not(.race){background:color-mix(in srgb,var(--tc,var(--accent)) 45%,#fff)}
+:root[data-theme="dark"] .base-emap,:root[data-theme="dark"] .base-osm{filter:invert(.9) hue-rotate(180deg) brightness(.95) contrast(.9) saturate(.8)}
+.leaflet-bar{border:0!important;border-radius:14px!important;overflow:hidden;box-shadow:var(--shadow-s),inset 0 1px 0 var(--rim)!important}
+.leaflet-bar a{width:40px!important;height:40px!important;line-height:40px!important;background:var(--glass-hi)!important;color:var(--ink)!important;border-bottom:1px solid var(--stroke)!important;-webkit-backdrop-filter:var(--blur);backdrop-filter:var(--blur)}
+.leaflet-bar a:last-child{border-bottom:0!important}
+:root[data-theme="dark"] .leaflet-control-attribution{background:rgba(11,27,51,.7)!important;color:var(--ink-2)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .leaflet-control-attribution{background:rgba(11,27,51,.7)!important;color:var(--ink-2)}}

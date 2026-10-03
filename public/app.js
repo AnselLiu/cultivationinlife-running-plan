@@ -722,7 +722,7 @@ async function eventView(id) {
   $('#signup')?.addEventListener('click', async () => {
     try {
       const r = await api(`/events/${id}/signup`, { method: 'POST', body: { name: me.name, grp: me.grp, dist: me.dist } });
-      toast(r.status === 'wait' ? '人數已滿，已排入候補' : '報名完成，週四見！'); render();
+      toast(r.status === 'wait' ? '人數已滿，已排入候補' : `報名完成，${dstr(ev.date)} 見`); render();
     } catch (e) { toast(e.message); }
   });
   $('#cancel')?.addEventListener('click', async () => {
@@ -2137,7 +2137,9 @@ async function renderOnce() {
   } catch {}
   bell();
   $('#ctitle').textContent = '';
-  const skel = setTimeout(() => { view.innerHTML = skeleton(hash); }, 150);
+  // 150 毫秒內還沒畫出新畫面才顯示骨架（先畫外框再載資料的頁面，例如地圖，不會被蓋掉）
+  const before = view.innerHTML;
+  const skel = setTimeout(() => { if (view.innerHTML === before) view.innerHTML = skeleton(hash); }, 150);
   try { await route(hash); } finally { clearTimeout(skel); }
   // 第一個畫面畫好了：記下開啟到可用的時間，20 秒後（或離開時）送出
   if (vitals.ready == null) { vitals.ready = performance.now(); vitals.page = hash.replace(/\/[\w-]{8,}/g, '/:id').slice(0, 40); setTimeout(sendVitals, 20000); }

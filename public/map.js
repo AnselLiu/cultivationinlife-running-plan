@@ -102,7 +102,7 @@ async function mapView() {
 function setBase(k) {
   const b = BASES[k] || BASES.emap;
   if (layer) map.removeLayer(layer);
-  layer = window.L.tileLayer(b[1], { maxNativeZoom: b[2], maxZoom: 20, attribution: b[3] }).addTo(map);
+  layer = window.L.tileLayer(b[1], { maxNativeZoom: b[2], maxZoom: 20, attribution: b[3], className: `base-${k in BASES ? k : 'emap'}` }).addTo(map);
   pref.set('base', k);
 }
 function locate() {
@@ -152,6 +152,7 @@ function paintDraft() {
 // 地點清單（沒選地點時）
 async function listPanel() {
   const { routes } = await api('/routes').catch(() => ({ routes: [] }));
+  if (!$('#panel')) return;
   const pend = data.spots.filter((s) => s.status === 'pending');
   $('#panel').innerHTML = `
     ${pend.length && data.editor ? `<section class="card"><h3>待審核的地點</h3><div class="roster">${pend.map((s) => `<button class="r spotrow" data-open="${esc(s.id)}"><span class="pin k-${s.kind} pending small"><span>${esc(GLYPH[s.kind] || GLYPH.other)}</span></span><span><b><span translate="no">${esc(s.name)}</span></b></span><span class="tiny">審核 ›</span></button>`).join('')}</div></section>` : ''}
