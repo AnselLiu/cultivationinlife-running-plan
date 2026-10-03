@@ -3,6 +3,8 @@ export const BASE = 'http://localhost:8796';
 const plus = (d) => new Date(Date.now() + 8 * 3600e3 + d * 864e5).toISOString().slice(0, 10);
 export { plus };
 export async function login(page, id) {
+  // 第一次使用的導覽會自動出現並蓋住畫面：測試裡先標成看過（導覽本身另外測）
+  await page.addInitScript(() => { try { localStorage.setItem('cil-guide', '2'); } catch {} });
   await page.goto(`/api/dev/login?id=${id}`);
   await page.waitForURL(/#\//);
 }

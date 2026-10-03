@@ -41,7 +41,10 @@ for (const p of PAGES) {
   const args = ['-y', 'lighthouse@12', base + p.path, '--quiet', '--output=json', `--output-path=${file}`, '--form-factor=mobile',
     '--only-categories=performance,accessibility,best-practices', '--chrome-flags=--headless=new --no-sandbox'];
   if (p.login) args.push(`--extra-headers=${JSON.stringify({ Cookie: cookie })}`);
-  try { execFileSync('npx', args, { stdio: ['ignore', 'ignore', 'inherit'] }); } catch { console.error(`${p.name}：Lighthouse 執行失敗`); failed++; continue; }
+  // Lighthouse 偶爾自己出錯（例如 NO_NAVSTART，訊息會說「請再跑一次」）：重試一次
+  let ok = false;
+  for (let attempt = 0; attempt < 2 && !ok; attempt++) { try { execFileSync('npx', args, { stdio: ['ignore', 'ignore', 'inherit'] }); ok = true; } catch {} }
+  if (!ok) { console.error(`${p.name}：Lighthouse 執行失敗`); failed++; continue; }
   const r = JSON.parse(readFileSync(file, 'utf8'));
   const score = Object.fromEntries(Object.keys(LIMITS).map((k) => [k, r.categories[k]?.score ?? 0]));
   const bad = Object.entries(LIMITS).filter(([k, min]) => score[k] < min);

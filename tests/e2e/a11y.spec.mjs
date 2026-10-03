@@ -19,5 +19,19 @@ for (const p of PAGES) {
     const r = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21aa']).exclude('.leaflet-tile-pane').analyze();
     const bad = r.violations.filter((v) => ['critical', 'serious'].includes(v.impact));
     expect(bad.map((v) => `${v.id}: ${v.help}｜${v.nodes.slice(0, 3).map((n) => n.target.join(' ')).join(' | ')}`)).toEqual([]);
+    // 版面：沒有東西超出手機畫面右邊（可以左右滑的列表除外）
+    const over = await page.evaluate(() => {
+      const vw = innerWidth, out = [];
+      for (const el of document.querySelectorAll('#view *')) {
+        if (el.closest('svg') && el.tagName !== 'svg') continue;
+        let p = el.parentElement, scroller = false;
+        while (p && p.id !== 'view') { const o = getComputedStyle(p).overflowX; if (o === 'auto' || o === 'scroll' || o === 'hidden') { scroller = true; break; } p = p.parentElement; }
+        if (scroller) continue;
+        const r = el.getBoundingClientRect();
+        if (r.width > 0 && r.height > 0 && r.right > vw + 1) out.push(`${el.tagName.toLowerCase()}.${String(el.className).split(' ')[0]} → ${Math.round(r.right)}px`);
+      }
+      return out.slice(0, 5);
+    });
+    expect(over).toEqual([]);
   });
 }

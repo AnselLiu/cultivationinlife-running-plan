@@ -4,7 +4,7 @@
 //   更新：新版本裝好後先等待，畫面提示「有新版本」，使用者按下才切換（不會在填表單時突然重整）
 //   推播：顯示通知並更新主畫面圖示的未讀數字
 //   分享：從其他 App 分享 GPX／TCX 檔過來，暫存後打開拍照分享
-const CACHE = 'cil-v33';
+const CACHE = 'cil-v34';
 const API_CACHE = 'cil-api';
 const SHARE_CACHE = 'cil-share';
 // 地圖圖磚：看過的與「下載離線地圖」存的都在這裡，最多約 3000 張，先存的先清

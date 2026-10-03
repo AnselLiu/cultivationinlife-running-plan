@@ -1115,3 +1115,11 @@ body.detail .top .brand{display:none}
 .shareqr{display:grid;justify-items:center;gap:6px}
 .shareqr .qrbox{width:220px;padding:10px;border-radius:18px;background:#fff;box-shadow:var(--shadow-s)}
 .grid1{display:grid;gap:10px}.grid1 .btn{justify-content:center}
+/* 課表每一列：中間的課表文字可以斷行（長配速字串不撐破畫面），右邊「記錄」按鈕不換行 */
+.day{grid-template-columns:78px minmax(0,1fr) auto}
+.day .t{min-width:0;overflow-wrap:anywhere}
+.day .logbtn{white-space:nowrap}
+@media (max-width:400px){.day{grid-template-columns:62px minmax(0,1fr) auto}}
+/* 很長、沒有空白的字串（配速、網址）在需要時斷行，不撐破手機畫面 */
+#view{overflow-wrap:anywhere}
+.fab:disabled{opacity:.5;cursor:default}

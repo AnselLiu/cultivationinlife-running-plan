@@ -62,9 +62,9 @@ async function mapView() {
     <div class="mapgrid"><section class="mapwrap card">
       <div id="map" role="application" aria-label="練跑地圖"></div>
       <div class="mapfab">
-        <button class="fab" id="locBtn" aria-label="移到我的位置"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3"/><circle cx="12" cy="12" r="7"/></svg></button>
-        <button class="fab" id="drawBtn" aria-label="畫路線"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="18" r="2"/><circle cx="19" cy="6" r="2"/><path d="M6.6 16.6C10 13 8 9.5 12 8.5s4.6-1 5.4-1.2"/></svg></button>
-        <button class="fab" id="addBtn" aria-label="${'新增地點'}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0C18.5 15.4 12 21 12 21Z"/><path d="M12 7.5v5M9.5 10h5"/></svg></button>
+        <button class="fab" id="locBtn" disabled aria-label="移到我的位置"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3"/><circle cx="12" cy="12" r="7"/></svg></button>
+        <button class="fab" id="drawBtn" disabled aria-label="畫路線"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="18" r="2"/><circle cx="19" cy="6" r="2"/><path d="M6.6 16.6C10 13 8 9.5 12 8.5s4.6-1 5.4-1.2"/></svg></button>
+        <button class="fab" id="addBtn" disabled aria-label="${'新增地點'}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0C18.5 15.4 12 21 12 21Z"/><path d="M12 7.5v5M9.5 10h5"/></svg></button>
       </div>
       <div class="drawbar" id="drawBar" hidden>
         <span><b class="num" id="drawLen">0.00 公里</b><span class="tiny" id="drawPts">點地圖加上路線的點</span></span>
@@ -88,6 +88,8 @@ async function mapView() {
   map.on('click', (e) => onMapClick([+e.latlng.lat.toFixed(6), +e.latlng.lng.toFixed(6)]));
   for (const b of document.querySelectorAll('[data-base]')) b.onclick = () => { setBase(b.dataset.base); for (const x of document.querySelectorAll('[data-base]')) x.setAttribute('aria-pressed', String(x === b)); };
   $('#locBtn').onclick = locate;
+  // 地圖準備好才能按（載入 Leaflet 前點了不會有反應，所以先停用）
+  for (const b of document.querySelectorAll('.mapfab .fab')) b.disabled = false;
   $('#drawBtn').onclick = () => startDraw();
   $('#addBtn').onclick = () => startPick((pt) => spotForm(null, pt));
   $('#drawUndo').onclick = () => { draft.length = strokes.length ? strokes.pop() : Math.max(0, draft.length - 1); paintDraft(); };

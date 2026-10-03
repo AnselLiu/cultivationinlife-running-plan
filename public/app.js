@@ -855,6 +855,13 @@ async function eventView(id) {
       catch (err) { toast(err.message); }
     };
   }
+  // 要先填賽事報名資料：記住填到一半的報名（組別、商品、備註），填完會帶回來（按連結或按報名都一樣）
+  const goReg = () => {
+    const f = $('#pform');
+    try { sessionStorage.setItem('cil-after-reg', JSON.stringify({ ev: id, option: f?.querySelector('[name=option]:checked')?.value || null, items: f ? readItems(f) : [], note: f?.note?.value || '' })); } catch {}
+    location.hash = '#/me/reg'; toast('先填好賽事報名資料，填完會帶你回來報名');
+  };
+  $('#goReg')?.addEventListener('click', (e) => { e.preventDefault(); goReg(); });
   $('#pform')?.addEventListener('submit', async (e) => {
     e.preventDefault();
     const f = e.target;
@@ -862,11 +869,7 @@ async function eventView(id) {
       const answers = readQuestionFields(f, qs);
       const miss = qs.find((q) => q.required && (Array.isArray(answers[q.id]) ? !answers[q.id].length : !answers[q.id]));
       if (miss) return toast(`請回答「${miss.label}」`);
-      if (ev.group_reg && ev.regProfile !== 'ok') {
-        // 先記住填到一半的報名（組別、商品、備註），填完賽事報名資料會帶你回來
-        try { sessionStorage.setItem('cil-after-reg', JSON.stringify({ ev: id, option: f.querySelector('[name=option]:checked')?.value || null, items: readItems(f), note: f.note?.value || '' })); } catch {}
-        location.hash = '#/me/reg'; return toast('先填好賽事報名資料，填完會帶你回來報名');
-      }
+      if (ev.group_reg && ev.regProfile !== 'ok') { goReg(); return; }
       const r = await api(`/events/${id}/signup`, { method: 'POST', body: {
         name: me.name, grp: me.grp, dist: me.dist, note: f.note?.value || '', answers,
         option: f.querySelector('[name=option]:checked')?.value || null, reg_consent: !!f.reg_consent?.checked,
@@ -1130,7 +1133,7 @@ function signupForm(ev, mine) {
     ${(ev.options || []).length ? `<fieldset class="qset"><legend>報名組別 <span class="req">必填</span></legend><div class="chips">${ev.options.map((o) => `<label class="chip"><input type="radio" name="option" value="${esc(o.name)}" ${ev.myOption === o.name ? 'checked' : ''} required><span><span translate="no">${esc(o.name)}</span>${o.price ? `<small class="num">　${money(o.price)}</small>` : ''}</span></label>`).join('')}</div></fieldset>` : ''}
     ${ev.group_reg ? (ev.regProfile === 'ok'
       ? `<label class="inline consent"><input type="checkbox" name="reg_consent" ${ev.myRegConsent ? 'checked' : ''} required> 同意把我的賽事報名資料（含身分證字號）提供給主辦幹部，只用於這場的團體報名</label>`
-      : `<p class="notice" style="margin:0">這場由幹部代為團體報名，需要你的報名資料（姓名、身分證字號、生日、緊急聯絡人等）。填一次之後每場都能用。<a href="#/me/reg">去填寫 ›</a></p>`) : ''}
+      : `<p class="notice" style="margin:0">這場由幹部代為團體報名，需要你的報名資料（姓名、身分證字號、生日、緊急聯絡人等）。填一次之後每場都能用。<a href="#/me/reg" id="goReg">去填寫 ›</a></p>`) : ''}
     ${(ev.items || []).length ? `<fieldset class="qset items"><legend>${ev.kind === 'buy' ? '要訂的商品' : '加購（選填）'}</legend>${ev.items.map((it) => itemPicker(it, ev)).join('')}</fieldset>` : ''}
     ${charges(ev) ? '<div class="quote" id="quote" aria-live="polite"></div>' : ''}
     ${questionFields(ev.questions || [], ev.myAnswers || {})}
