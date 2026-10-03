@@ -73,6 +73,8 @@ npm run deploy
 
 ### Google 登入
 
+已設定完成（2026-10-03）：Google Cloud 專案 `cultivation-in-life-run`、OAuth 用戶端「cil-run web」（網頁應用程式，正式站與測試環境兩個重新導向 URI），同意畫面已發布為「實際運作中」，隱私權政策連結 `https://cil-run.anselliu7.workers.dev/privacy`。
+
 1. 到 [Google Cloud Console](https://console.cloud.google.com/) 建立專案 → 「API 和服務」→「OAuth 同意畫面」：使用者類型選「外部」，應用程式名稱「耕跑團」，範圍只要 `openid`、`profile`（非敏感範圍，不需要 Google 審查），最後按「發布應用程式」。
 2. 「憑證」→「建立憑證」→「OAuth 用戶端 ID」→ 類型「網頁應用程式」，已授權的重新導向 URI：
    - `https://cil-run.anselliu7.workers.dev/api/google/callback`

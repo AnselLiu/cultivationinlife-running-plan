@@ -4,6 +4,8 @@ import * as Party from './party.js';
 import { qrSVG, canScan, scan } from './qr.js';
 import * as S from './studio.js';
 
+// 對外公開的乾淨網址（Google 同意畫面等會連到這裡）：/privacy → #/privacy
+if (location.pathname === '/privacy' && !location.hash) history.replaceState(null, '', '/#/privacy');
 const $ = (sel, root = document) => root.querySelector(sel);
 const view = $('#view');
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
