@@ -1473,15 +1473,15 @@ async function checkinView(eventId, code) {
   }
 }
 
-// 掃描台（Android Chrome／桌機 Chrome 可用相機；iPhone 請用相機 App 掃）
+// 掃描台：有相機就用相機掃（iPhone 也可以，第一次會詢問相機權限），也可以手動輸入代碼
 let stopScan = null;
-// 掃碼面板（團購領取、會籍卡驗證共用）：支援的瀏覽器用相機掃，不支援就手動輸入代碼
+// 掃碼面板（團購領取、會籍卡驗證共用）：打開就啟動相機（第一次會詢問相機權限），也可以手動輸入代碼
 //   onCode(code) 回傳要顯示的結果文字；連續掃描時 1.8 秒內不重複處理
 function scanSheet({ title, hint, placeholder = '手動輸入代碼', onCode }) {
   const host = document.createElement('div');
   host.className = 'sheet'; host.setAttribute('role', 'dialog'); host.setAttribute('aria-modal', 'true'); host.setAttribute('aria-label', title);
   host.innerHTML = `<div class="sheet-bg" data-bg></div><div class="sheet-card card"><div class="row spread"><h3>${esc(title)}</h3><button class="btn ghost sm" data-close>完成</button></div>
-    ${canScan() ? '<video playsinline muted class="cam"></video>' : '<p class="notice" style="margin:0">這台裝置不支援相機掃描，請手動輸入代碼。</p>'}
+    ${canScan() ? '<video playsinline muted class="cam" aria-label="相機畫面"></video>' : '<p class="notice" style="margin:0">這台裝置沒有可以用的相機，請手動輸入代碼。</p>'}
     <p class="tiny center scanmsg" aria-live="polite">${esc(hint)}</p>
     <form class="row" style="gap:8px"><input name="code" placeholder="${esc(placeholder)}" style="flex:1" autocomplete="off" aria-label="${esc(placeholder)}"><button class="btn sm">送出</button></form></div>`;
   document.body.append(host);
@@ -1496,15 +1496,19 @@ function scanSheet({ title, hint, placeholder = '手動輸入代碼', onCode }) 
   host.querySelector('[data-close]').onclick = close;
   host.querySelector('[data-bg]').onclick = close;
   host.querySelector('form').onsubmit = (e) => { e.preventDefault(); run(e.target.code.value); e.target.code.value = ''; };
-  if (canScan()) scan(host.querySelector('video'), (v) => run(v)).then((s0) => { stop = s0; }).catch((e) => { msg.textContent = e.message; });
+  if (canScan()) {
+    msg.textContent = '正在打開相機…';
+    scan(host.querySelector('video'), (v) => run(v)).then((s0) => { if (host.isConnected) { stop = s0; msg.textContent = hint; } else s0(); })
+      .catch((e) => { msg.textContent = e.message; host.querySelector('video')?.remove(); });
+  }
   return close;
 }
 async function scanView(eventId) {
   if (!allow('checkin') && !(await api(`/events/${eventId}`).catch(() => ({}))).checkin) { view.innerHTML = '<div class="card"><p class="muted">只有幹部可以掃碼報到。</p></div>'; return; }
   view.innerHTML = `<section class="card">
     <div class="row spread"><h2>掃碼報到</h2><a class="tiny" href="#/e/${esc(eventId)}">完成</a></div>
-    ${canScan() ? '<video id="cam" playsinline muted class="cam"></video><p class="tiny center" id="scanMsg">把入場券的 QR 對準框內</p>'
-      : '<p class="notice">這台裝置不支援相機掃描（iPhone 的 Safari 沒有這個功能）。請用手機內建相機 App 掃 QR，會直接開啟報到頁；或在報到台手動輸入代碼。</p>'}
+    ${canScan() ? '<video id="cam" playsinline muted class="cam" aria-label="相機畫面"></video><p class="tiny center" id="scanMsg" aria-live="polite">正在打開相機…</p>'
+      : '<p class="notice">這台裝置沒有可以用的相機。請在報到台手動輸入代碼，或用手機內建相機 App 掃 QR 開啟報到頁。</p>'}
     <form id="manual" class="row" style="gap:8px">
       <input name="code" placeholder="手動輸入代碼" style="flex:1;text-transform:uppercase" autocomplete="off">
       <button class="btn sm">報到</button>
@@ -1514,7 +1518,7 @@ async function scanView(eventId) {
   if (!canScan()) return;
   try {
     let busy = false;
-    stopScan = await scan($('#cam'), async (value) => {
+    const stopper = await scan($('#cam'), async (value) => {
       if (busy) return;
       const code = (value.match(/\/in\/([A-Z0-9]{4,10})/i)?.[1] || value).trim().toUpperCase();
       busy = true;
@@ -1525,7 +1529,11 @@ async function scanView(eventId) {
       } catch (err) { $('#scanMsg').textContent = err.message; }
       setTimeout(() => { busy = false; }, 1800);
     });
-  } catch (e) { toast(e.message); }
+    // 等相機的時候已經離開這頁：直接關掉相機
+    if (!$('#cam')) { stopper(); return; }
+    stopScan = stopper;
+    $('#scanMsg').textContent = '把入場券的 QR 對準框內';
+  } catch (e) { if ($('#scanMsg')) { $('#scanMsg').textContent = e.message; $('#cam')?.remove(); } }
 }
 async function partyAdmin(ev) {
   const [{ tickets, checkedIn, people }, { prizes, draws }] = await Promise.all([

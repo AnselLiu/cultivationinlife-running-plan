@@ -36,8 +36,10 @@ test('權限：搜尋跑友指派身分，分頁停在權限', async ({ page }) 
   await page.locator('#rf').getByRole('button', { name: '儲存' }).click();
   await expect(page.getByText(/已更新/)).toBeVisible();
   await expect(page.locator('.seg [aria-pressed="true"]')).toHaveText('權限');
+  // 存檔後權限分頁會重畫：等新的搜尋框出來（名單是空的）再打字
+  await expect(page.locator('#panel')).not.toHaveAttribute('aria-busy', 'true');
+  await expect(page.locator('#roleList [data-role]')).toHaveCount(0);
   await page.locator('#roleSearch [name=q]').fill('路人');
-  await page.locator('#roleSearch').getByRole('button').click();
   await page.locator('#roleList [data-role]').first().click();
   await page.locator('#rf [name=role]').selectOption('member');
   await page.locator('#rf').getByRole('button', { name: '儲存' }).click();
