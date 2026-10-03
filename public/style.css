@@ -1224,6 +1224,8 @@ body.fullmap #view{animation:none}
 .msheet .card{background:color-mix(in srgb,var(--glass-hi) 70%,var(--bg))}
 .sheethead{display:grid;gap:10px;padding:2px 0 4px}
 .sheethead .spotsearch input{background:color-mix(in srgb,var(--ink) 7%,transparent);border:0;height:44px}
+/* 類型列橫向捲動到抽屜邊緣，不在內距處硬切（同 iOS 地圖）*/
+.msheet .kindchips{margin:0 -14px;padding:2px 14px;scroll-padding-inline:14px}
 .xbtn{display:grid;place-items:center;width:32px;height:32px;flex:none;border:0;border-radius:50%;background:color-mix(in srgb,var(--ink) 9%,transparent);color:var(--ink-2);cursor:pointer}
 .xbtn svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2.4;stroke-linecap:round}
 .mpin.sel{transform:translateY(-4px) scale(1.25);filter:drop-shadow(0 6px 10px rgba(11,27,51,.45))}

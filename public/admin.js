@@ -681,7 +681,8 @@ function bindSettings() {
     const preview = () => {
       const v = readSd(), now = nowTp(), wd = new Date(`${now.slice(0, 10)}T00:00:00Z`).getUTCDay();
       const sat = new Date(Date.parse(`${now.slice(0, 10)}T00:00:00Z`) + ((6 - wd + 7) % 7 || 7) * 864e5).toISOString().slice(0, 10);
-      const ev = { date: sat, gather_time: '07:00', kind: 'track' }, w = defaultWindow(ev, v, now);
+      // 預覽規則本身：拿範例活動 40 天前當「現在」，不會因為今天已經過了那個時間就顯示成立即開放（例如週六晚上設「活動前 7 天」）
+      const ev = { date: sat, gather_time: '07:00', kind: 'track' }, w = defaultWindow(ev, v, new Date(Date.parse(`${sat}T00:00:00Z`) - 40 * 864e5).toISOString().slice(0, 16));
       sdf.open_time.disabled = v.open_days == null; sdf.close_time.disabled = v.close_days == null;
       $('#sdPreview').textContent = `例：${tpText(`${sat}T07:00`)} 的團練 → ${w.start ? `${tpText(w.start)} 開放` : '建立後立即開放'}、${w.end ? `${tpText(w.end)} 截止` : '集合時截止'}${v.approval ? '，需要審核' : ''}`;
     };

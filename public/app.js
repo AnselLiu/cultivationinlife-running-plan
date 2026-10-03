@@ -3291,9 +3291,12 @@ const theme = {
   get() { try { return localStorage.getItem('cil-theme'); } catch { return null; } },
   set(v) { try { v ? localStorage.setItem('cil-theme', v) : localStorage.removeItem('cil-theme'); } catch {} },
 };
+const THEME_COLOR = { light: '#EEF2F9', dark: '#060F1C' };
 const applyTheme = () => {
   const t = theme.get();
   if (t) document.documentElement.dataset.theme = t; else delete document.documentElement.dataset.theme;
+  // 狀態列顏色：手動選了主題就兩個 meta 都用那個主題的顏色，否則照系統
+  for (const m of document.querySelectorAll('meta[name="theme-color"]')) m.content = THEME_COLOR[t || (/dark/.test(m.media) ? 'dark' : 'light')];
 };
 applyTheme();
 $('#theme').onclick = () => {
