@@ -901,7 +901,8 @@ async function overviewPanel() {
   const months = []; for (let i = 11; i >= 0; i--) { const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - i); months.push(`${d.getFullYear()}-${pad2(d.getMonth() + 1)}`); }
   const g = Object.fromEntries(o.growth.map((x) => [x.m, x.n]));
   const k = (label, v, sub = '') => `<div class="card kpi"><span class="tiny">${label}</span><b class="num">${v ?? '—'}</b>${sub ? `<span class="tiny">${sub}</span>` : ''}</div>`;
-  return `<section class="kpis">
+  return `<section class="card" id="pendingTop" hidden></section>
+    <section class="kpis">
       ${k('跑友', o.members, `本月新加入 ${o.newThisMonth}`)}${k('30 天內活躍', o.active30, o.members ? `${Math.round(o.active30 / o.members * 100)}%` : '')}
       ${k('協會會員', o.association, `待審核 ${o.applied}・30 天內到期 ${o.expiring}`)}${k('團練出席率', o.attendance == null ? '—' : `${o.attendance}%`, '最近 30 天')}
       ${k('近 30 天活動', o.events30, `接下來 30 天 ${o.upcoming} 場`)}${k('近 30 天報名', o.signups30)}
@@ -923,6 +924,7 @@ async function overviewPanel() {
       <p class="tiny" style="margin:0">同時勾分團和身分時，要兩個條件都符合。會寫入稽核紀錄；一小時最多 10 次。</p></section>` : ''}`;
 }
 function bindOverview() {
+  loadPending($('#pendingTop'), { hideEmpty: true });
   const f = $('#bcForm'); if (!f) return;
   const body = () => ({ title: f.title.value, body: f.body.value, url: f.url.value.trim(),
     teams: [...f.querySelectorAll('[name=teams]:checked')].map((x) => x.value), roles: [...f.querySelectorAll('[name=roles]:checked')].map((x) => x.value),
@@ -1161,8 +1163,31 @@ function bindAudit() {
 }
 
 // 分團管理（理事長、行政人員）：新增分團；細節在各分團頁編輯
+// 待審核的入團申請：管理後台的總覽與分團頁共用
+async function loadPending(box, { hideEmpty = false } = {}) {
+  if (!box) return;
+  const { pending, needLead } = await api('/teams/pending').catch(() => ({ pending: [], needLead: [] }));
+  if (!box.isConnected) return;
+  if (hideEmpty && !pending.length && !needLead.length) { box.hidden = true; return; }
+  box.hidden = false;
+  const byTeam = (tid) => teamOf(tid);
+  box.innerHTML = `<div class="row spread"><h3>待審核的入團申請</h3>${pending.length ? `<span class="pill solid">${pending.length}</span>` : ''}</div>
+    ${needLead.map((tid) => `<p class="notice" style="margin:0">${esc(byTeam(tid)?.name || tid)}還沒有團長，申請只能由該團幹部核准。請先到<a href="#/t/${esc(tid)}">分團頁</a>指派團長。</p>`).join('')}
+    ${pending.length ? `<div class="roster">${pending.map((r) => `<div class="r">${avatar(r)}
+      <span><b>${esc(r.name)}</b>${r.nickname ? ` <span class="tiny">${esc(r.nickname)}</span>` : ''}
+        <span class="tiny" style="display:block">申請加入 ${esc(r.team_name)}・${r.dist === 'hm' ? '半馬' : '全馬'} ${esc(r.grp)} 組・${ago(r.created_at)}${r.main_team ? '' : '・還沒有主團，核准後就是主團'}</span></span>
+      <span class="row" style="gap:6px"><button class="btn sm" data-pa="approve" data-t="${esc(r.team_id)}" data-m="${esc(r.id)}">核准</button><button class="btn ghost sm" data-pa="remove" data-t="${esc(r.team_id)}" data-m="${esc(r.id)}">婉拒</button></span></div>`).join('')}</div>`
+      : '<p class="tiny" style="margin:0">目前沒有待審核的申請。</p>'}`;
+  for (const b of box.querySelectorAll('[data-pa]')) b.onclick = async () => {
+    if (b.dataset.pa === 'remove' && !confirm('婉拒這筆申請？')) return;
+    b.disabled = true;
+    try { await api(`/teams/${b.dataset.t}/members`, { method: 'POST', body: { member_id: b.dataset.m, action: b.dataset.pa } }); toast(b.dataset.pa === 'approve' ? '已核准' : '已婉拒'); await refreshMe(); loadPending(box, { hideEmpty }); }
+    catch (err) { b.disabled = false; toast(err.message); }
+  };
+}
 function adminTeamsPanel() {
-  return `<section class="card">
+  return `<section class="card" id="pendingBox"><h3>待審核的入團申請</h3><p class="tiny" style="margin:0">載入中…</p></section>
+    <section class="card">
       <h3>分團</h3>
       <p class="tiny" style="margin:0">每個分團有自己的團長、幹部與 LINE 群組。團長由理事長在分團頁指派，團長再指派分團幹部。</p>
       <div class="roster">${teams().map((t) => `<a class="r" href="#/t/${esc(t.id)}">${teamIcon(t, 'av')}
@@ -1181,6 +1206,7 @@ function adminTeamsPanel() {
       <p class="tiny" style="margin:0">分團權限只作用在自己分團的活動；分團名冊不顯示電話。</p></section>`;
 }
 function bindAdminTeams() {
+  loadPending($('#pendingBox'));
   $('#newTeam')?.addEventListener('submit', async (e) => {
     e.preventDefault();
     const f = e.target;

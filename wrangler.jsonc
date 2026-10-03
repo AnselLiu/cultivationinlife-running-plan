@@ -25,6 +25,8 @@
   "triggers": { "crons": ["0 * * * *"] },
   // 錯誤監控：Cloudflare 後台 Workers → cil-run → Logs 可以看到錯誤與排程結果
   "observability": { "enabled": true, "head_sampling_rate": 1 },
+  // Smart Placement：API 一次請求要查好幾次資料庫，讓 Worker 跑在靠近 D1 的地方，比跑在使用者旁邊快（靜態檔仍由最近的節點回）
+  "placement": { "mode": "smart" },
   // 測試環境：npm run deploy:staging → https://cil-run-staging.anselliu7.workers.dev（獨立資料庫，不影響正式站；不跑排程）
   "env": {
     "staging": {

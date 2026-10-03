@@ -219,7 +219,14 @@ test('分團：申請加入要該團幹部核准、不能自己退出主團；�
   assert.equal((await call('t_staff', '/members/main-team', { method: 'POST', body: { member_ids: ['t_other'], team_id: 'geng' } })).status, 403);
   await call('t_runner', '/teams/geng/join', { method: 'POST' });
   assert.equal((await call('t_chair', '/teams/geng/members', { method: 'POST', body: { member_id: 't_runner', action: 'approve' } })).status, 403);
-  await call('t_chair', '/teams/geng/members', { method: 'POST', body: { member_id: 't_coach', action: 'add', role: 'lead' } }).then((x) => assert.equal(x.status, 403, '協會幹部不能直接加人'));
+  await call('t_staff', '/teams/geng/members', { method: 'POST', body: { member_id: 't_other', action: 'add', role: 'officer' } }).then((x) => assert.equal(x.status, 403, '協會幹部不能直接加人'));
+  // 待審核清單：協會幹部看不到耕建築的申請，耕建築幹部看得到
+  assert.ok(!(await call('t_staff', '/teams/pending')).json.pending.some((r) => r.team_id === 'geng'));
+  assert.ok((await call('t_coach', '/teams/pending')).json.pending.some((r) => r.team_id === 'geng' && r.id === 't_runner'));
+  assert.ok((await call('t_chair', '/teams/pending')).json.pending.every((r) => r.team_id !== 'geng'));
+  // 理事長可以指派任何分團的團長（耕建築沒有幹部時才不會卡住）
+  assert.equal((await call('t_chair', '/teams/geng/members', { method: 'POST', body: { member_id: 't_other', action: 'add', role: 'lead' } })).status, 200);
+  assert.equal((await call('t_other', '/me')).json.teams.find((t) => t.id === 'geng').my_role, 'lead');
   assert.ok((await call('t_staff', '/members?team=none')).json.members.every((m) => !m.main_team));
 });
 

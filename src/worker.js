@@ -41,8 +41,8 @@ const url0 = (req) => new URL(req.url);
 // 隱私權政策版本：預設值；實際版本由後台「系統設定」決定，改版後使用者下次開啟會被要求重新同意
 const PRIVACY_VERSION = '2026-10-03.3';
 const SETTING_KEYS = ['org', 'features', 'docs', 'privacy'];
-async function getSettings(env) {
-  const rows = (await env.DB.prepare(`SELECT key, value FROM settings WHERE key IN ('org','features','docs','privacy','tabs')`).all()).results;
+async function getSettings(env, preloaded) {
+  const rows = preloaded || (await env.DB.prepare(`SELECT key, value FROM settings WHERE key IN ('org','features','docs','privacy','tabs')`).all()).results;
   const out = { org: {}, features: {}, docs: [], privacy: { version: PRIVACY_VERSION, body: '' }, tabs: {} };
   for (const r of rows) { try { out[r.key] = JSON.parse(r.value); } catch {} }
   out.privacy.version ||= PRIVACY_VERSION;
@@ -63,7 +63,8 @@ async function currentMember(req, env) {
   if (!token) return null;
   const th = await sha(token);
   const row = await env.DB.prepare(
-    `SELECT m.*, s.last_seen_at AS s_seen, s.role_at_issue AS s_role, s.created_at AS s_created, s.mfa_at AS s_mfa, s.token_hash AS s_th
+    `SELECT m.*, s.last_seen_at AS s_seen, s.role_at_issue AS s_role, s.created_at AS s_created, s.mfa_at AS s_mfa, s.token_hash AS s_th,
+       (SELECT json_group_array(json_object('team_id', tm.team_id, 'role', tm.role, 'status', tm.status, 'title', tm.title)) FROM team_members tm WHERE tm.member_id = m.id) AS s_teams
      FROM sessions s JOIN members m ON m.id = s.member_id
      WHERE s.token_hash = ? AND s.expires_at > datetime('now')`).bind(th).first();
   if (!row) return null;
@@ -449,7 +450,7 @@ async function cancelSignup(env, ev, member) {
 }
 
 // 倒數目標：看本人的設定（off 不顯示、club 協會預設）；預設是自己的主要賽事 → 最近一場自己的賽事 → 協會預設
-async function countdownTarget(env, member) {
+async function countdownTarget(env, member, rows) {
   if (member?.countdown_mode === 'off') return null;
   if (member && member.countdown_mode !== 'club') {
     const r = await env.DB.prepare(
@@ -457,16 +458,19 @@ async function countdownTarget(env, member) {
        ORDER BY is_primary DESC, date ASC LIMIT 1`).bind(member.id).first();
     if (r) return { ...r, mine: true };
   }
-  const c = await env.DB.prepare("SELECT value FROM settings WHERE key = 'club_race'").first();
+  const c = rows ? rows.find((r) => r.key === 'club_race') : await env.DB.prepare("SELECT value FROM settings WHERE key = 'club_race'").first();
   try { return c ? { ...JSON.parse(c.value), mine: false } : null; } catch { return null; }
 }
 const racePresets = async (env) => { try { return JSON.parse((await env.DB.prepare("SELECT value FROM settings WHERE key = 'race_presets'").first())?.value || '[]'); } catch { return []; } };
 
 // ---- 路由 ----
 async function api(req, env, path, method) {
-  let member = await currentMember(req, env);
+  // 登入狀態（含我在各分團的身分）與系統設定同時查，一次往返就好
+  const [member0, settingRows] = await Promise.all([currentMember(req, env), env.DB.prepare('SELECT key, value FROM settings').all().then((r) => r.results)]);
+  let member = member0;
+  const setting = (k) => settingRows.find((r) => r.key === k)?.value;
   // 幹部兩步驟驗證：理事長開啟後，幹部的工作階段要用通行金鑰驗證過，才有管理權限（之前一律當一般跑友）
-  const security = (await env.DB.prepare("SELECT value FROM settings WHERE key = 'security'").first().then((r) => JSON.parse(r?.value || '{}')).catch(() => ({})));
+  const security = (() => { try { return JSON.parse(setting('security') || '{}'); } catch { return {}; } })();
   if (member && security.require_mfa && norm(member.role) !== 'member' && !member.s_mfa)
     member = { ...member, real_role: member.role, role: 'member', mfa_pending: true };
   const need = () => (member ? null : fail(401, '請先加入'));
@@ -474,8 +478,7 @@ async function api(req, env, path, method) {
   const needAdmin = () => needPerm('event');
   const body = async () => { try { return await req.json(); } catch { return {}; } };
   // 我在各分團的身分（每次請求即時查，團長被撤換後馬上失去權限）
-  const myTeams = member ? Object.fromEntries((await env.DB.prepare('SELECT team_id, role, status, title FROM team_members WHERE member_id = ?')
-    .bind(member.id).all()).results.map((r) => [r.team_id, r])) : {};
+  const myTeams = member ? Object.fromEntries(JSON.parse(member.s_teams || '[]').map((r) => [r.team_id, r])) : {};
   const inTeam = (tid) => myTeams[tid]?.status === 'active';
   // 協會層級的權限涵蓋所有分團；分團幹部只管自己的分團
   const GLOBAL_EQ = { approve: 'members', appoint: 'roles' };
@@ -509,6 +512,19 @@ async function api(req, env, path, method) {
   const teamIds = async () => (await env.DB.prepare('SELECT id FROM teams').all()).results.map((r) => r.id);
   const teamMemberIds = async (tid, exceptId) => (await env.DB.prepare(
     "SELECT member_id FROM team_members WHERE team_id = ? AND status = 'active'").bind(tid).all()).results.map((r) => r.member_id).filter((x) => x !== exceptId);
+  // 活動清單（/api/events 與開啟 App 的 /api/me?boot=1 共用）
+  const listEvents = async (past, range) => {
+    const rows = (await env.DB.prepare(
+      `SELECT ${eventCols}, (SELECT COUNT(*) FROM signups s WHERE s.event_id = events.id AND s.status = 'in') AS signed,
+              (SELECT COUNT(*) FROM signups s WHERE s.event_id = events.id AND s.status = 'wait') AS waiting,
+              (SELECT s.status FROM signups s WHERE s.event_id = events.id AND s.member_id = ?1) AS mine,
+              (SELECT json_group_array(json_object('n', x.name, 'a', x.avatar)) FROM (
+                 SELECT s.name, m.avatar FROM signups s LEFT JOIN members m ON m.id = s.member_id
+                 WHERE s.event_id = events.id AND s.status = 'in' ORDER BY s.created_at LIMIT 4) x) AS peek
+       FROM events WHERE date BETWEEN ?3 AND ?4 ${past ? 'AND date < ?5' : ''} AND ${seeSQL} ORDER BY date ${past ? 'DESC' : 'ASC'}, gather_time LIMIT 100`)
+      .bind(member.id, can(member, 'event') ? 1 : 0, ...range, ...(past ? [today()] : [])).all()).results;
+    return rows.map(({ questions, options, ...r }) => ({ ...r, survey: !!questions, options: parseQ(options), peek: JSON.parse(r.peek || '[]') }));
+  };
   // ---- 分團清單（/api/me 也會用到）----
   const teamOut = async (t, counts, leaders) => {
     const mine = myTeams[t.id];
@@ -518,11 +534,13 @@ async function api(req, env, path, method) {
       my_role: mine?.role || null, my_status: mine?.status || null, my_title: mine?.title || null };
   };
   const listTeams = async () => {
-    const teams = (await env.DB.prepare('SELECT id, name, intro, color, line_url, join_policy, private, self_managed, sort, icon_v FROM teams ORDER BY sort, created_at').all()).results;
-    const counts = Object.fromEntries((await env.DB.prepare("SELECT team_id, COUNT(*) AS n FROM team_members WHERE status = 'active' GROUP BY team_id").all()).results.map((r) => [r.team_id, r.n]));
-    const leaders = (await env.DB.prepare(
-      `SELECT tm.team_id, tm.role, tm.title, m.name, m.nickname, m.avatar FROM team_members tm JOIN members m ON m.id = tm.member_id
-       WHERE tm.role IN ('lead', 'officer') AND tm.status = 'active' ORDER BY tm.role = 'lead' DESC, tm.created_at`).all()).results;
+    const [teams, countRows, leaders] = (await env.DB.batch([
+      env.DB.prepare('SELECT id, name, intro, color, line_url, join_policy, private, self_managed, sort, icon_v FROM teams ORDER BY sort, created_at'),
+      env.DB.prepare("SELECT team_id, COUNT(*) AS n FROM team_members WHERE status = 'active' GROUP BY team_id"),
+      env.DB.prepare(`SELECT tm.team_id, tm.role, tm.title, m.name, m.nickname, m.avatar FROM team_members tm JOIN members m ON m.id = tm.member_id
+       WHERE tm.role IN ('lead', 'officer') AND tm.status = 'active' ORDER BY tm.role = 'lead' DESC, tm.created_at`),
+    ])).map((r) => r.results);
+    const counts = Object.fromEntries(countRows.map((r) => [r.team_id, r.n]));
     return Promise.all(teams.map((t) => teamOut(t, counts, leaders)));
   };
   const readTeam = (b, full) => {
@@ -718,13 +736,21 @@ async function api(req, env, path, method) {
     return json({ event: pub2 });
   }
 
-  if (path === '/api/me' && method === 'GET')
+  // 開啟 App：boot=1 時順便帶回首頁要用的活動與今天的訓練紀錄，少兩輪等待
+  if (path === '/api/me' && method === 'GET') {
+    const st = await getSettings(env, settingRows.filter((r) => ['org', 'features', 'docs', 'privacy', 'tabs'].includes(r.key)));
+    const boot = !!member && url0(req).searchParams.get('boot') === '1';
+    const [race, teamList, events, todayLogs] = await Promise.all([
+      countdownTarget(env, member, settingRows), member ? listTeams() : [],
+      boot ? listEvents(false, [today(), new Date(Date.now() + 180 * 864e5).toISOString().slice(0, 10)]) : null,
+      boot ? env.DB.prepare(`SELECT id, date, week_no, plan_day, kind, plan_text, status, km, seconds, hr, rpe, feel, note, source, 0 AS comments, 0 AS unread
+        FROM training_logs WHERE member_id = ? AND date = ? ORDER BY created_at`).bind(member.id, today()).all().then((r) => r.results) : null,
+    ]);
     return json({ member: member ? pub(member) : null, vapid: env.VAPID_PUBLIC_KEY || null, googleLogin: !!(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET),
-      ...(await (async () => { const st = await getSettings(env);
-        return { settings: st, privacyVersion: st.privacy.version, needConsent: !!member && member.consent_version !== st.privacy.version }; })()),
-      race: await countdownTarget(env, member),
-      teams: member ? await listTeams() : [], calendarOn: !!member?.cal_token_hash, requireMfa: !!security.require_mfa,
-      shortcut: await env.DB.prepare("SELECT value FROM settings WHERE key = 'health_shortcut'").first().then((r) => r?.value || null) });
+      settings: st, privacyVersion: st.privacy.version, needConsent: !!member && member.consent_version !== st.privacy.version,
+      race, teams: teamList, calendarOn: !!member?.cal_token_hash, requireMfa: !!security.require_mfa, shortcut: setting('health_shortcut') || null,
+      ...(boot ? { boot: { events, todayLogs, today: today() } } : {}) });
+  }
 
   // 已登入的人輸入幹部碼或理事長碼升級
   // 初始設定：系統裡還沒有理事長時，才能用 CHAIR_CODE 把自己設為理事長（只能用一次）。
@@ -798,16 +824,7 @@ async function api(req, env, path, method) {
     const u = new URL(req.url), past = u.searchParams.get('past') === '1';
     const month = /^\d{4}-\d{2}$/.test(u.searchParams.get('month') || '') ? u.searchParams.get('month') : today().slice(0, 7);
     const range = past ? [`${month}-01`, `${month}-31`] : [today(), new Date(Date.now() + 180 * 864e5).toISOString().slice(0, 10)];
-    const rows = (await env.DB.prepare(
-      `SELECT ${eventCols}, (SELECT COUNT(*) FROM signups s WHERE s.event_id = events.id AND s.status = 'in') AS signed,
-              (SELECT COUNT(*) FROM signups s WHERE s.event_id = events.id AND s.status = 'wait') AS waiting,
-              (SELECT s.status FROM signups s WHERE s.event_id = events.id AND s.member_id = ?1) AS mine,
-              (SELECT json_group_array(json_object('n', x.name, 'a', x.avatar)) FROM (
-                 SELECT s.name, m.avatar FROM signups s LEFT JOIN members m ON m.id = s.member_id
-                 WHERE s.event_id = events.id AND s.status = 'in' ORDER BY s.created_at LIMIT 4) x) AS peek
-       FROM events WHERE date BETWEEN ?3 AND ?4 ${past ? 'AND date < ?5' : ''} AND ${seeSQL} ORDER BY date ${past ? 'DESC' : 'ASC'}, gather_time LIMIT 100`)
-      .bind(member.id, can(member, 'event') ? 1 : 0, ...range, ...(past ? [today()] : [])).all()).results;
-    return json({ events: rows.map(({ questions, options, ...r }) => ({ ...r, survey: !!questions, options: parseQ(options), peek: JSON.parse(r.peek || '[]') })) });
+    return json({ events: await listEvents(past, range) });
   }
 
   if (path === '/api/events' && method === 'POST') {
@@ -1112,7 +1129,7 @@ async function api(req, env, path, method) {
     const q = (sql) => env.DB.prepare(sql).bind(member.id).all().then((r) => r.results);
     const data = {
       exported_at: new Date().toISOString(),
-      profile: (({ s_seen, s_role, s_created, s_mfa, s_th, line_id, google_sub, cal_token_hash, ...rest }) => ({ ...rest, google_linked: !!google_sub, calendar_feed: !!cal_token_hash }))(member),
+      profile: (({ s_seen, s_role, s_created, s_mfa, s_th, s_teams, line_id, google_sub, cal_token_hash, ...rest }) => ({ ...rest, google_linked: !!google_sub, calendar_feed: !!cal_token_hash }))(member),
       signups: await q('SELECT event_id, name, grp, dist, note, status, answers, option, reg_consent_at, paid, attended_at, created_at FROM signups WHERE member_id = ?'),
       teams: await q('SELECT team_id, role, title, status, created_at FROM team_members WHERE member_id = ?'),
       race_profile: await (async () => { const r = await env.DB.prepare('SELECT enc FROM member_private WHERE member_id = ?').bind(member.id).first(); return r ? openPrivate(env, r.enc).catch(() => null) : null; })(),
@@ -1851,6 +1868,18 @@ async function api(req, env, path, method) {
     await audit(env, req, member, 'team.create', 'team', id, t.name);
     return json({ id });
   }
+  // 待審核的入團申請：列出我有權核准的所有分團（管理後台集中處理）
+  if (path === '/api/teams/pending' && method === 'GET') {
+    const g = need(); if (g) return g;
+    const rows = (await env.DB.prepare(`SELECT tm.team_id, tm.created_at, m.id, m.name, m.nickname, m.avatar, m.dist, m.grp, m.main_team, t.name AS team_name, t.self_managed
+      FROM team_members tm JOIN members m ON m.id = tm.member_id JOIN teams t ON t.id = tm.team_id
+      WHERE tm.status = 'pending' ORDER BY tm.created_at LIMIT 200`).all()).results;
+    const out = [];
+    for (const r of rows) if (r.self_managed ? teamOwn(r.team_id, 'approve') : teamCan(r.team_id, 'approve')) out.push(r);
+    // 沒有幹部的「本團自己管理」分團：提醒理事長先指派團長
+    const orphan = can(member, 'roles') ? [...new Set(rows.filter((r) => r.self_managed && !out.includes(r)).map((r) => r.team_id))] : [];
+    return json({ pending: out, needLead: orphan });
+  }
   const mtm = path.match(/^\/api\/teams\/([\w-]{1,16})(?:\/(join|leave|members))?$/);
   if (mtm) {
     const g = need(); if (g) return g;
@@ -1887,8 +1916,10 @@ async function api(req, env, path, method) {
       if (await limited(env, `teamjoin:${member.id}`, 10, 3600)) return fail(429, '申請太頻繁，請稍後再試');
       await env.DB.prepare("INSERT INTO team_members (team_id, member_id, status) VALUES (?, ?, 'pending')").bind(tid, member.id).run();
       await audit(env, req, member, 'team.join', 'team', tid, `${team.name}（申請）`);
-      const mgr = (await env.DB.prepare("SELECT member_id FROM team_members WHERE team_id = ? AND role IN ('lead','officer') AND status = 'active'").bind(tid).all()).results.map((r) => r.member_id);
-      await notify(env, mgr, 'system', { title: `${team.name}：有人申請加入`, body: `${member.name} 想加入${team.name}，請到分團頁核准`, url: `/#/t/${tid}` });
+      let mgr = (await env.DB.prepare("SELECT member_id FROM team_members WHERE team_id = ? AND role IN ('lead','officer') AND status = 'active'").bind(tid).all()).results.map((r) => r.member_id);
+      // 分團還沒有團長或幹部：改通知協會管理員（一般分團可以直接核准；本團自己管理的分團請理事長先指派團長）
+      if (!mgr.length) mgr = (await env.DB.prepare("SELECT id FROM members WHERE role IN ('chair', 'staff')").all()).results.map((r) => r.id);
+      await notify(env, mgr, 'system', { title: `${team.name}：有人申請加入`, body: `${member.name} 想加入${team.name}，請到管理後台核准`, url: '/#/admin?tab=teams' });
       return json({ status: 'pending' });
     }
     if (sub === 'leave' && method === 'POST') {
@@ -1924,11 +1955,13 @@ async function api(req, env, path, method) {
       if (!target) return fail(404, '找不到這位跑友');
       const role = TEAM_ROLES[b.role] ? b.role : 'member';
       if (action === 'add') {
-        if (await selfManaged(tid) ? !teamOwn(tid, 'approve') : !(can(member, 'members') && !READONLY[norm(member.role)]))
+        // 理事長可以在任何分團指派團長（包含耕建築這類本團自己管理的分團，由公司指定人選後交給理事長設定）
+        const chairLead = role === 'lead' && can(member, 'roles');
+        if (!chairLead && (await selfManaged(tid) ? !teamOwn(tid, 'approve') : !(can(member, 'members') && !READONLY[norm(member.role)])))
           return fail(403, (await selfManaged(tid)) ? `${team.name}的成員只由${team.name}的團長與幹部處理` : '只有協會幹部可以直接把人加進分團');
         if (role === 'lead' && !can(member, 'roles')) return fail(403, '團長只能由理事長指派');
         await env.DB.prepare(`INSERT INTO team_members (team_id, member_id, role, status) VALUES (?, ?, ?, 'active')
-          ON CONFLICT(team_id, member_id) DO UPDATE SET status = 'active'`).bind(tid, mid, role).run();
+          ON CONFLICT(team_id, member_id) DO UPDATE SET status = 'active', role = CASE WHEN excluded.role = 'lead' THEN 'lead' ELSE role END`).bind(tid, mid, role).run();
         // 以團員身分加入＝把這團設成主團（一般團員只屬於一個分團）
         if (role === 'member') await env.DB.batch([
           env.DB.prepare('UPDATE members SET main_team = ?, club = ? WHERE id = ?').bind(tid, team.name, mid),
