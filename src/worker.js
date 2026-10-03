@@ -257,8 +257,9 @@ async function notify(env, memberIds, cat, msg, opt = {}) {
 }
 const securityNotify = (env, memberIds, msg) => notify(env, memberIds, 'security', msg, { [SEC]: true });
 // 一位幹部處理完，其他收件幹部的同一則待辦一起標為已讀
-const settleTodo = (env, ...refs) => refs.length && env.DB.batch(refs.map((ref) => env.DB.prepare(
-  "UPDATE notifications SET read_at = COALESCE(read_at, datetime('now')) WHERE category = 'todo' AND ref = ?").bind(ref)));
+//   一句處理所有 ref（json_each），句數跟筆數無關
+const settleTodo = (env, ...refs) => refs.length && env.DB.prepare(
+  "UPDATE notifications SET read_at = COALESCE(read_at, datetime('now')) WHERE category = 'todo' AND ref IN (SELECT value FROM json_each(?))").bind(JSON.stringify(refs)).run();
 // 活動的管理者（送出當下重新檢查權限，已經失去權限的建立者不會收到）
 const eventManagers = async (env, ev) => (await env.DB.prepare(
   `SELECT id FROM members WHERE id = ?1 AND role IN ('chair','director','staff','coach')
@@ -865,6 +866,17 @@ async function getWeather(env, lat, lng) {
   return { body, hit: false };
 }
 
+// 測試用（NTPC_MOCK=1、DEV_LOGIN=1 的本機）：新北市假日資料的假回應（指定年份 365 天，週末放假），不連外；照樣算 1 個子請求
+function ntpcMock(env, year, page) {
+  env.budget?.take('fetch');
+  const out = [];
+  if (page === 0) for (let t = Date.UTC(year, 0, 1); new Date(t).getUTCFullYear() === year; t += 864e5) {
+    const d = new Date(t), wk = d.getUTCDay(), ds = d.toISOString().slice(0, 10).replace(/-/g, ''), ny = ds.endsWith('0101');
+    out.push({ date: ds, year: String(year), name: ny ? '開國紀念日' : '', isholiday: wk === 0 || wk === 6 || ny ? '是' : '否', holidaycategory: wk === 0 || wk === 6 ? '星期六、星期日' : ny ? '放假之紀念日及節日' : '', description: '' });
+  }
+  return new Response(JSON.stringify(out), { headers: { 'content-type': 'application/json' } });
+}
+
 // ---- 路由 ----
 // 路由：寫成括號包住的函式運算式，V8 在載入模組時就先編譯（冷啟動的第一個 /api 請求從 13–22 ms 降到約 2 ms）
 const api = (async function api(req, env, path, method) {
@@ -1348,9 +1360,10 @@ const api = (async function api(req, env, path, method) {
     const year = Number((await body()).year);
     if (!Number.isInteger(year) || year < 2020 || year > 2100) return fail(400, '年份不正確');
     if (await limited(env, `holiday:${member.id}`, 10, 3600)) return fail(429, '匯入太頻繁，請稍後再試');
-    const rows = [];
-    for (let page = 0; page < 20; page++) {
-      const r = await xfetch(env, `https://data.ntpc.gov.tw/api/datasets/308DCD75-6434-45BC-A95F-584DA4FED251/json?page=${page}&size=1000`, { headers: { accept: 'application/json' }, cf: { cacheTtl: 3600 } });
+    // 頁數上限跟著執行額度（免費方案 10 頁＝1 萬筆，新北市的資料約 4 千筆）
+    const rows = [], pages = planOf(env).holidayPages, mock = env.NTPC_MOCK === '1' && env.DEV_LOGIN === '1' && ['localhost', '127.0.0.1'].includes(url0(req).hostname);
+    for (let page = 0; page < pages; page++) {
+      const r = mock ? ntpcMock(env, year, page) : await xfetch(env, `https://data.ntpc.gov.tw/api/datasets/308DCD75-6434-45BC-A95F-584DA4FED251/json?page=${page}&size=1000`, { headers: { accept: 'application/json' }, cf: { cacheTtl: 3600 } });
       if (!r.ok) return fail(502, `新北市資料開放平台暫時無法連線（${r.status}），請稍後再試`);
       const list = await r.json().catch(() => null);
       if (!Array.isArray(list)) return fail(502, '新北市資料開放平台回傳的格式不正確');
@@ -1359,10 +1372,13 @@ const api = (async function api(req, env, path, method) {
       if (list.length < 1000) break;
     }
     if (!rows.length) return fail(404, `新北市資料開放平台還沒有 ${year} 年的資料，通常前一年 6 月後公告`);
-    await env.DB.prepare('DELETE FROM holidays WHERE year = ?').bind(year).run();
-    for (let i = 0; i < rows.length; i += 80) await env.DB.batch(rows.slice(i, i + 80).map((x) => env.DB.prepare(
-      'INSERT OR REPLACE INTO holidays (date, year, name, is_holiday, category, description) VALUES (?, ?, ?, ?, ?, ?)').bind(
-      `${x.date.slice(0, 4)}-${x.date.slice(4, 6)}-${x.date.slice(6, 8)}`, year, str(x.name, 40) || null, x.isholiday === '是' ? 1 : 0, str(x.holidaycategory, 40) || null, str(x.description, 120) || null)));
+    // 刪除與寫入在同一個 batch（同一個交易）；一整年一句 INSERT … SELECT FROM json_each
+    const hj = JSON.stringify(rows.map((x) => [`${x.date.slice(0, 4)}-${x.date.slice(4, 6)}-${x.date.slice(6, 8)}`, str(x.name, 40) || null, x.isholiday === '是' ? 1 : 0, str(x.holidaycategory, 40) || null, str(x.description, 120) || null]));
+    await env.DB.batch([
+      env.DB.prepare('DELETE FROM holidays WHERE year = ?').bind(year),
+      env.DB.prepare(`INSERT OR REPLACE INTO holidays (date, year, name, is_holiday, category, description)
+        SELECT json_extract(value, '$[0]'), ?1, json_extract(value, '$[1]'), json_extract(value, '$[2]'), json_extract(value, '$[3]'), json_extract(value, '$[4]') FROM json_each(?2)`).bind(year, hj),
+    ]);
     const named = rows.filter((x) => x.name && x.isholiday === '是');
     await audit(env, req, member, 'holiday.import', 'settings', String(year), `${rows.length} 天，節日 ${named.length} 天`);
     return json({ year, total: rows.length, holidays: named.map((x) => ({ date: `${x.date.slice(0, 4)}-${x.date.slice(4, 6)}-${x.date.slice(6, 8)}`, name: x.name })),
@@ -1592,19 +1608,35 @@ const api = (async function api(req, env, path, method) {
     const u = new URL(req.url), to = isDate(u.searchParams.get('to') || '') ? u.searchParams.get('to') : today();
     const from = isDate(u.searchParams.get('from') || '') ? u.searchParams.get('from') : new Date(Date.parse(to) - 29 * 864e5).toISOString().slice(0, 10);
     if (Date.parse(to) - Date.parse(from) > 92 * 864e5) return fail(400, '一次最多檢查 92 天');
-    const rows = (await env.DB.prepare(`SELECT * FROM audit_log WHERE at >= ? AND at < ? ORDER BY at, id LIMIT 20000`).bind(from, `${to} 24`).all()).results;
+    // 逐筆重算 HMAC 很吃 CPU：一次最多 400 筆，超過就回 more.after（游標），前端（apiAll）接著送
+    const [cAt, cId] = str(u.searchParams.get('after'), 60).split('|');
+    const cur = cAt && cId ? [cAt, cAt, cId] : null;
+    const rows = (await env.DB.prepare(`SELECT * FROM audit_log WHERE at >= ? AND at < ? ${cur ? 'AND (at > ? OR (at = ? AND id > ?))' : ''} ORDER BY at, id LIMIT 401`)
+      .bind(from, `${to} 24`, ...(cur || [])).all()).results;
+    const page = rows.slice(0, 400);
     let bad = 0, unsigned = 0; const badIds = [];
-    for (const r of rows) { if (!r.mac) { unsigned += 1; continue; } if ((await hmac(env, auditFields(r))) !== r.mac) { bad += 1; if (badIds.length < 20) badIds.push(r.id); } }
-    const digests = (await env.DB.prepare('SELECT * FROM audit_digests WHERE day BETWEEN ? AND ? ORDER BY day').bind(from, to).all()).results;
-    const brokenDays = [];
-    for (const d of digests) {
-      const prev = (await env.DB.prepare('SELECT digest FROM audit_digests WHERE day < ? ORDER BY day DESC LIMIT 1').bind(d.day).first())?.digest || '';
-      const dayRows = (await env.DB.prepare("SELECT mac FROM audit_log WHERE at >= ? AND at < ? AND mac IS NOT NULL ORDER BY at, id").bind(d.day, `${d.day} 24`).all()).results;
-      const dg = await hmac(env, `${prev}|${dayRows.map((x) => x.mac).join('|')}`);
-      if (dg !== d.digest || dayRows.length !== d.rows) brokenDays.push(d.day);
+    for (const r of page) { if (!r.mac) { unsigned += 1; continue; } if ((await hmac(env, auditFields(r))) !== r.mac) { bad += 1; if (badIds.length < 20) badIds.push(r.id); } }
+    // 每日摘要鏈只在第一段檢查：一句讀出區間內（含前一份，當作鏈的起點）的摘要、一句讀出區間內所有的 mac，在 JS 依日期分組
+    let days, brokenDays = [];
+    if (!cur) {
+      const [dg, mac] = await env.DB.batch([
+        env.DB.prepare('SELECT * FROM audit_digests WHERE day >= COALESCE((SELECT MAX(day) FROM audit_digests WHERE day < ?1), ?1) AND day <= ?2 ORDER BY day').bind(from, to),
+        env.DB.prepare('SELECT substr(at, 1, 10) AS day, mac FROM audit_log WHERE at >= ?1 AND at < ?2 AND mac IS NOT NULL ORDER BY at, id').bind(from, `${to} 24`),
+      ]);
+      const byDay = new Map();
+      for (const r of mac.results) { if (!byDay.has(r.day)) byDay.set(r.day, []); byDay.get(r.day).push(r.mac); }
+      const list = dg.results.filter((d) => d.day >= from);
+      days = list.length;
+      for (const d of list) {
+        const i = dg.results.indexOf(d), prev = i > 0 ? dg.results[i - 1].digest : '';
+        const macs = byDay.get(d.day) || [];
+        if ((await hmac(env, `${prev}|${macs.join('|')}`)) !== d.digest || macs.length !== d.rows) brokenDays.push(d.day);
+      }
     }
-    await audit(env, req, member, 'audit.verify', 'audit', null, `${from}～${to}：${rows.length} 筆，異常 ${bad}，摘要異常 ${brokenDays.length} 天`);
-    return json({ from, to, checked: rows.length, unsigned, modified: bad, modifiedIds: badIds, days: digests.length, brokenDays });
+    const last = page[page.length - 1];
+    await audit(env, req, member, 'audit.verify', 'audit', null, `${from}～${to}${cur ? '（續）' : ''}：${page.length} 筆，異常 ${bad}${cur ? '' : `，摘要異常 ${brokenDays.length} 天`}`);
+    return json({ from, to, checked: page.length, unsigned, modified: bad, modifiedIds: badIds, ...(cur ? {} : { days, brokenDays }),
+      ...(rows.length > 400 ? { more: { after: `${last.at}|${last.id}` } } : {}) });
   }
 
   // 分享連結的預覽：還沒登入的人點進來，先看到是什麼活動（私密分團的活動不顯示）
@@ -1754,10 +1786,13 @@ const api = (async function api(req, env, path, method) {
     // 之後才開放：到了開始時間由排程推播一次（建立時有勾通知、不是定期揪跑）；其他情況直接標成已推播
     const openOwed = b.notify !== false && !!e.signup_start && e.signup_start > tpNow() && !series;
     const ids = dates.map(() => rid(8)), id = ids[0];
-    await env.DB.batch(dates.map((d, i) => env.DB.prepare(`INSERT INTO events (id, kind, title, date, gather_time, end_time, place, lead, note, week_no, plan_text, capacity, signup_open, deadline, created_by, fee, guest_max, meal_options, link_url, link_label, team_id, questions, visibility, options, group_reg, items, pricing, pay_info, min_qty, series_id, spot_id, route_id, address, address_zip, signup_start, require_approval, notify_signup, open_notified_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ${openOwed ? 'NULL' : "datetime('now')"})`)
-      .bind(ids[i], e.kind, e.title, d, e.gather_time, e.end_time, e.place, e.lead, e.note, i ? null : e.week_no, e.plan_text, e.capacity, e.signup_open, sh(e.deadline, d), member.id, e.fee, e.guest_max, e.meal_options, e.link_url, e.link_label, e.team_id, e.questions, e.visibility, e.options, e.group_reg, e.items, e.pricing, e.pay_info, e.min_qty, series, e.spot_id, e.route_id, e.address, e.address_zip || null,
-        shStart(d), e.require_approval, e.notify_signup)));
+    // 每一場不同的欄位（id、日期、週次、截止、開始）放進 JSON，一句 INSERT … SELECT FROM json_each（句數跟場數無關）
+    const dj = JSON.stringify(dates.map((d, i) => [ids[i], d, i ? null : e.week_no ?? null, sh(e.deadline, d) ?? null, shStart(d) ?? null]));
+    await env.DB.prepare(`INSERT INTO events (id, kind, title, date, gather_time, end_time, place, lead, note, week_no, plan_text, capacity, signup_open, deadline, created_by, fee, guest_max, meal_options, link_url, link_label, team_id, questions, visibility, options, group_reg, items, pricing, pay_info, min_qty, series_id, spot_id, route_id, address, address_zip, signup_start, require_approval, notify_signup, open_notified_at)
+      SELECT json_extract(value, '$[0]'), ?2, ?3, json_extract(value, '$[1]'), ?4, ?5, ?6, ?7, ?8, json_extract(value, '$[2]'), ?9, ?10, ?11, json_extract(value, '$[3]'), ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31,
+        json_extract(value, '$[4]'), ?32, ?33, ${openOwed ? 'NULL' : "datetime('now')"} FROM json_each(?1)`)
+      .bind(dj, e.kind, e.title, e.gather_time, e.end_time, e.place, e.lead, e.note, e.plan_text, e.capacity, e.signup_open, member.id, e.fee, e.guest_max, e.meal_options, e.link_url, e.link_label, e.team_id, e.questions, e.visibility, e.options, e.group_reg, e.items, e.pricing, e.pay_info, e.min_qty, series, e.spot_id, e.route_id, e.address, e.address_zip || null,
+        e.require_approval, e.notify_signup).run();
     // 複製活動：沿用原活動的座位圖（獎項每年不同，不複製）
     const from = str(b.copy_from, 32);
     if (from) {
@@ -1887,9 +1922,16 @@ const api = (async function api(req, env, path, method) {
       if (!teamCan(cur.team_id, 'event')) return fail(403, '沒有刪除這個活動的權限');
       // 定期揪跑：?series=after 連同之後的場次一起刪，已報名的人會收到通知
       const after = url0(req).searchParams.get('series') === 'after' && cur.series_id;
-      const gone = after ? (await env.DB.prepare('SELECT id, date FROM events WHERE series_id = ? AND date >= ? AND team_id IS ?').bind(cur.series_id, cur.date, cur.team_id).all()).results : [{ id, date: cur.date }];
-      const who = (await env.DB.prepare(`SELECT DISTINCT member_id FROM signups WHERE status IN ('in','wait','pending') AND event_id IN (${gone.map(() => '?').join(',')})`).bind(...gone.map((g) => g.id)).all()).results.map((r) => r.member_id).filter((x) => x !== member.id);
-      await env.DB.batch(gone.map((g) => env.DB.prepare('DELETE FROM events WHERE id = ?').bind(g.id)));
+      //   通知對象和刪除放在同一個 batch：先查（刪除會連報名一起刪），再一句刪掉所有場次
+      const where = after ? 'series_id = ?1 AND date >= ?2 AND team_id IS ?3' : 'id = ?1';
+      const args = after ? [cur.series_id, cur.date, cur.team_id] : [id];
+      const [w0, g0] = await env.DB.batch([
+        env.DB.prepare(`SELECT DISTINCT member_id FROM signups WHERE status IN ('in','wait','pending') AND event_id IN (SELECT id FROM events WHERE ${where})`).bind(...args),
+        env.DB.prepare(`DELETE FROM events WHERE ${where} RETURNING id, date`).bind(...args),
+      ]);
+      const who = w0.results.map((r) => r.member_id).filter((x) => x !== member.id);
+      const gone = g0.results.sort((a, c) => a.date.localeCompare(c.date));
+      if (!gone.length) gone.push({ id, date: cur.date });
       if (who.length) await notify(env, who, 'change', { kind: 'event', title: `活動取消：${cur.title}`, body: gone.length > 1 ? `${gone[0].date} 起 ${gone.length} 場取消` : `${cur.date} 這場取消`, url: '/#/', ref: `e:${id}`, tag: `notice-${id}` });
       await audit(env, req, member, 'event.delete', 'event', id, `${cur.title}${gone.length > 1 ? `（連同之後 ${gone.length} 場）` : ''}`);
       return json({ ok: true, count: gone.length });
@@ -1948,11 +1990,11 @@ const api = (async function api(req, env, path, method) {
         via = 'team';
       }
       if (!ids.length) return fail(400, '沒有要邀請的人');
-      const exist = new Set((await env.DB.prepare(`SELECT id FROM members WHERE id IN (${ids.map(() => '?').join(',')})`).bind(...ids).all()).results.map((r) => r.id));
-      const before = new Set((await env.DB.prepare('SELECT member_id FROM event_invites WHERE event_id = ?').bind(ev.id).all()).results.map((r) => r.member_id));
-      const fresh = ids.filter((x) => exist.has(x) && !before.has(x));
-      for (let i = 0; i < fresh.length; i += 50) await env.DB.batch(fresh.slice(i, i + 50).map((mid) =>
-        env.DB.prepare('INSERT OR IGNORE INTO event_invites (event_id, member_id, invited_by, via) VALUES (?, ?, ?, ?)').bind(ev.id, mid, member.id, via)));
+      // 名單比對、既有邀請檢查、寫入一句完成（json_each；以前用 IN() 綁到 300 個參數，超過 D1 的 100 個上限）
+      const fresh = (await env.DB.prepare(`INSERT OR IGNORE INTO event_invites (event_id, member_id, invited_by, via)
+        SELECT ?1, m.id, ?2, ?3 FROM json_each(?4) j JOIN members m ON m.id = j.value
+        WHERE NOT EXISTS (SELECT 1 FROM event_invites i WHERE i.event_id = ?1 AND i.member_id = m.id) RETURNING member_id`)
+        .bind(ev.id, member.id, via, JSON.stringify([...new Set(ids)])).all()).results.map((r) => r.member_id);
       if (fresh.length) {
         await audit(env, req, member, 'event.invite', 'event', ev.id, `${fresh.length} 人${tid ? `（分團 ${tid}）` : ''}`);
         if (b.notify !== false) await notify(env, fresh, 'event', { title: `你受邀參加：${ev.title}`, body: `${ev.date}${ev.gather_time ? ` ${ev.gather_time}` : ''}　${ev.place || ''}`, url: `/#/e/${ev.id}`, ref: `e:${ev.id}` });
@@ -2107,9 +2149,19 @@ const api = (async function api(req, env, path, method) {
       const ids = [...new Set((Array.isArray(b.member_ids) ? b.member_ids : []).map((x) => str(x, 32)).filter(Boolean))].slice(0, 200);
       if (!action || !ids.length) return fail(400, '審核資料不正確');
       const note = action === 'reject' ? str(b.note, 120) || null : null;
-      const rows = (await allIn(env, ids, (q) => `SELECT id, member_id, name, status, review, paid, pay_reported_at, amount, created_at FROM signups
-        WHERE event_id = ? AND member_id IN (${q})`, [ev.id])).sort((a, c) => (a.created_at < c.created_at ? -1 : a.created_at > c.created_at ? 1 : a.id < c.id ? -1 : 1));
+      const rows = (await env.DB.prepare(`SELECT id, member_id, name, status, review, paid, pay_reported_at, amount, created_at FROM signups
+        WHERE event_id = ? AND member_id IN (SELECT value FROM json_each(?))`).bind(ev.id, JSON.stringify(ids)).all()).results
+        .sort((a, c) => (a.created_at < c.created_at ? -1 : a.created_at > c.created_at ? 1 : a.id < c.id ? -1 : 1));
       const out = { in: [], wait: [], rejected: [], reopened: [], skipped: [], notes: [], refund: [] };
+      // 分段處理（免費方案一次執行 50 個子請求）：每處理一人之前確認額度，不夠就停，沒處理到的人依報名先後放進 more.member_ids，
+      //   前端（apiAll）再送一次；每一輪都重新檢查權限與限流、寫稽核。
+      //   LOOP＝這個人在迴圈裡用的、AFTER＝迴圈之後每人還要用的（遞補、正取或候補順位、通知）、TAIL＝收尾（稽核、待辦、名額統計）
+      const [LOOP, AFTER] = { approve: [4, 10], reject: [8, 6], reopen: [4, 0] }[action], TAIL = 14, rest = [];
+      let taken = 0;
+      const turn = (r) => {
+        if (rest.length || !env.budget.room(LOOP + (taken + 1) * AFTER + TAIL)) { rest.push(r.member_id); return false; }
+        taken++; return true;
+      };
       const skip = (r, reason) => out.skipped.push({ member_id: r.member_id, name: r.name || '', reason });
       for (const mid of ids) if (!rows.some((r) => r.member_id === mid)) skip({ member_id: mid }, '找不到這筆報名');
       const base = { kind: 'signup', ref: `e:${ev.id}`, tag: `signup-${ev.id}`, url: `/#/e/${ev.id}` };
@@ -2119,6 +2171,7 @@ const api = (async function api(req, env, path, method) {
         const approved = [];
         for (const r of rows) {
           if (r.status !== 'pending') { skip(r, (r.status === 'in' || r.status === 'wait') && r.review === 'approved' ? '這筆已被處理' : '目前狀態不能這樣處理'); continue; }
+          if (!turn(r)) continue;
           const why = await reviewBlock(env, ev, r.member_id);
           if (why) { skip(r, why); continue; }
           const c = await env.DB.prepare(`UPDATE signups SET status = 'wait', review = 'approved', reviewed_by = ?, reviewed_at = datetime('now'), review_note = NULL, edited_after_review = 0
@@ -2145,6 +2198,7 @@ const api = (async function api(req, env, path, method) {
           return json({ error: '這些人已經在名單上，要確認移出', needRevoke: true, count: listed.length, paid: listed.filter((r) => r.paid === 'paid').length }, 409);
         let freed = false;
         for (const r of live) {
+          if (!turn(r)) continue;
           const c = await env.DB.prepare(`UPDATE signups SET status = 'cancel', review = 'rejected', reviewed_by = ?, reviewed_at = datetime('now'), review_note = ?, reg_consent_at = NULL,
               paid_note = CASE WHEN paid = 'paid' THEN '婉拒，待退費' ELSE paid_note END
             WHERE id = ? AND status = ?`).bind(member.id, note, r.id, r.status).run();
@@ -2167,6 +2221,7 @@ const api = (async function api(req, env, path, method) {
         for (const r of rows) {
           if (!(r.status === 'cancel' && r.review === 'rejected')) { skip(r, r.status === 'pending' ? '這筆已被處理' : '目前狀態不能這樣處理'); continue; }
           if (!ev.require_approval) { skip(r, '這場沒有開啟審核，請改用代為報名'); continue; }
+          if (!turn(r)) continue;
           // 重新審核：保留原本的 created_at（排隊順序不變）
           const c = await env.DB.prepare(`UPDATE signups SET status = 'pending', review = NULL, review_note = NULL, reviewed_by = ?, reviewed_at = datetime('now')
             WHERE id = ? AND status = 'cancel' AND review = 'rejected'`).bind(member.id, r.id).run();
@@ -2181,33 +2236,42 @@ const api = (async function api(req, env, path, method) {
         `核准 ${out.in.length + out.wait.length}（正取 ${out.in.length}、候補 ${out.wait.length}）、婉拒 ${nRej}、移出 ${revoked}、重新審核 ${out.reopened.length}、略過 ${out.skipped.length}`);
       await settleReviews(env, ev.id);
       const signed = await countIn(env, ev.id);
-      return json({ ...out, seatsLeft: ev.capacity ? Math.max(0, ev.capacity - signed) : null, pending: await pendingCount(env, ev.id) });
+      if (rest.length) env.budget.stop('review:more');
+      return json({ ...out, seatsLeft: ev.capacity ? Math.max(0, ev.capacity - signed) : null, pending: await pendingCount(env, ev.id), ...(rest.length ? { more: { member_ids: rest } } : {}) });
     }
     if (op === 'payments') {
       const PAID = ['unpaid', 'paid', 'waived', 'refunded'];
       const ids = Array.isArray(b.member_ids) ? b.member_ids.map((x) => str(x, 32)).filter(Boolean).slice(0, 500) : [];
       if (!ids.length || !PAID.includes(b.paid)) return fail(400, '繳費資料不正確');
       // 先記下原本的繳費狀態：只有真的改成已收款或已退費的人才通知
-      const before = await allIn(env, ids, (q) => `SELECT member_id, paid, amount FROM signups WHERE event_id = ? AND status != 'pending' AND member_id IN (${q})`, [ev.id]);
-      // 標記已退費時，把取消／婉拒留下的「待退費」備註清掉
-      await env.DB.batch(ids.map((mid) => env.DB.prepare(`UPDATE signups SET paid = ?1,
+      const pj = JSON.stringify([...new Set(ids)]);
+      const before = (await env.DB.prepare(`SELECT member_id, paid, amount FROM signups WHERE event_id = ? AND status != 'pending' AND member_id IN (SELECT value FROM json_each(?))`).bind(ev.id, pj).all()).results;
+      // 標記已退費時，把取消／婉拒留下的「待退費」備註清掉；所有人一句
+      await env.DB.prepare(`UPDATE signups SET paid = ?1,
         paid_note = COALESCE(?2, CASE WHEN ?1 = 'refunded' AND paid_note LIKE '%待退費' THEN NULL ELSE paid_note END),
-        paid_at = CASE WHEN ?1 = 'paid' THEN datetime('now') ELSE paid_at END WHERE event_id = ?3 AND member_id = ?4 AND status != 'pending'`)
-        .bind(b.paid, str(b.note, 60) || null, ev.id, mid)));
+        paid_at = CASE WHEN ?1 = 'paid' THEN datetime('now') ELSE paid_at END WHERE event_id = ?3 AND status != 'pending' AND member_id IN (SELECT value FROM json_each(?4))`)
+        .bind(b.paid, str(b.note, 60) || null, ev.id, pj).run();
       await audit(env, req, member, 'event.payment', 'event', ev.id, `${ids.length} 人 → ${b.paid}`);
       if (b.paid !== 'unpaid') await settleTodo(env, ...ids.map((mid) => `pay:${ev.id}:${mid}`));
       if (ev.notify_signup && (b.paid === 'paid' || b.paid === 'refunded'))
-        for (const r of before.filter((x) => x.paid !== b.paid && x.member_id !== member.id))
+        for (const r of before.filter((x) => x.paid !== b.paid && x.member_id !== member.id)) {
+          if (!env.budget.room(notifyCost(1))) { env.budget.stop('payments:notify'); break; }   // 額度不夠：收款狀態已更新，通知只送到這裡
           await notify(env, [r.member_id], 'signup', { kind: 'signup', ref: `e:${ev.id}`, tag: `signup-${ev.id}`, url: `/#/e/${ev.id}`,
             title: `${b.paid === 'paid' ? '已確認收款' : '已退費'}：${ev.title}`, body: `NT$${r.amount || 0}` });
+        }
       return json({ ok: true });
     }
     // 團購到貨：通知訂購的人來領，每個人一個領取 QR
     if (op === 'arrived') {
       const note = str(b.note, 120);
       const rows = (await env.DB.prepare("SELECT id, member_id, pick_code FROM signups WHERE event_id = ? AND status = 'in' AND items IS NOT NULL").bind(ev.id).all()).results;
-      for (const r of rows) if (!r.pick_code) await env.DB.prepare('UPDATE signups SET pick_code = ? WHERE id = ?').bind(ticketCode(), r.id).run();
-      await env.DB.prepare("UPDATE events SET arrived_at = COALESCE(arrived_at, datetime('now')), pickup_note = ? WHERE id = ?").bind(note || null, ev.id).run();
+      // 領取碼在 JS 產生、一句寫完（UPDATE … FROM json_each），和到貨標記同一個 batch
+      const codes = rows.filter((r) => !r.pick_code).map((r) => [r.id, ticketCode()]);
+      await env.DB.batch([
+        ...(codes.length ? [env.DB.prepare(`UPDATE signups SET pick_code = json_extract(j.value, '$[1]') FROM json_each(?1) j
+          WHERE signups.id = json_extract(j.value, '$[0]') AND signups.pick_code IS NULL`).bind(JSON.stringify(codes))] : []),
+        env.DB.prepare("UPDATE events SET arrived_at = COALESCE(arrived_at, datetime('now')), pickup_note = ? WHERE id = ?").bind(note || null, ev.id),
+      ]);
       const ids = rows.map((r) => r.member_id).filter(Boolean);
       if (ids.length) await notify(env, ids, 'signup', { kind: 'event', title: `到貨了：${ev.title}`, body: `${note || '請到活動頁看領取方式'}。領取時出示 App 裡的領取 QR。`, url: `/#/e/${ev.id}`, ref: `e:${ev.id}`, tag: `arrived-${ev.id}` });
       await audit(env, req, member, 'event.arrived', 'event', ev.id, `${ids.length} 人`);
@@ -2270,7 +2334,8 @@ const api = (async function api(req, env, path, method) {
         used.add(i); matched.push({ member_id: s0.member_id, name: s0.name, amount: s0.amount, date: rows[i].date });
       }
       if (matched.length && b.apply === true) {
-        await env.DB.batch(matched.map((m) => env.DB.prepare("UPDATE signups SET paid = 'paid', paid_at = datetime('now'), paid_note = ? WHERE event_id = ? AND member_id = ?").bind(`對帳 ${m.date || today()}`, ev.id, m.member_id)));
+        await env.DB.prepare(`UPDATE signups SET paid = 'paid', paid_at = datetime('now'), paid_note = json_extract(j.value, '$[1]') FROM json_each(?2) j
+          WHERE signups.event_id = ?1 AND signups.member_id = json_extract(j.value, '$[0]')`).bind(ev.id, JSON.stringify(matched.map((m) => [m.member_id, `對帳 ${m.date || today()}`]))).run();
         await audit(env, req, member, 'event.reconcile', 'event', ev.id, `對上 ${matched.length} 筆`);
         await settleTodo(env, ...matched.map((m) => `pay:${ev.id}:${m.member_id}`));
       }
@@ -2305,23 +2370,33 @@ const api = (async function api(req, env, path, method) {
       const names = [...new Set((Array.isArray(b.names) ? b.names : String(b.names || '').split(/[\n,，、\t]+/)).map((x) => str(x, 40)).filter(Boolean))].slice(0, 300);
       const action = b.action === 'invite' ? 'invite' : 'signup';
       if (!names.length) return fail(400, '請貼上姓名');
-      const matched = [], ambiguous = [], unmatched = [], failed = [];
+      const matched = [], ambiguous = [], unmatched = [], failed = [], rest = [];
+      // 名字比對一句（json_each JOIN members）
+      const hits = (await env.DB.prepare('SELECT j.value AS q_name, m.* FROM json_each(?) j JOIN members m ON m.name = j.value OR m.nickname = j.value').bind(JSON.stringify(names)).all()).results;
+      const byName = new Map(), seen = new Set();
+      for (const { q_name, ...m } of hits) { if (!byName.has(q_name)) byName.set(q_name, []); byName.get(q_name).push(m); }
       for (const n of names) {
-        const rows = (await env.DB.prepare('SELECT * FROM members WHERE name = ? OR nickname = ? LIMIT 3').bind(n, n).all()).results;
-        if (rows.length === 1) matched.push(rows[0]); else (rows.length ? ambiguous : unmatched).push(n);
+        const rows = byName.get(n) || [];
+        if (rows.length === 1) { if (!seen.has(rows[0].id)) { seen.add(rows[0].id); matched.push({ ...rows[0], q_name: n }); } } else (rows.length ? ambiguous : unmatched).push(n);
       }
       let added = 0, nIn = 0, nWait = 0;
       if (action === 'invite') {
-        // 只通知這次真的新增邀請的人（原本就受邀的不再通知一次）
-        const fresh = [];
-        for (const m of matched) if ((await env.DB.prepare("INSERT OR IGNORE INTO event_invites (event_id, member_id, invited_by, via) VALUES (?, ?, ?, 'manual')").bind(ev.id, m.id, member.id).run()).meta.changes === 1) fresh.push(m.id);
+        // 只通知這次真的新增邀請的人（原本就受邀的不再通知一次）；一句寫完
+        const fresh = matched.length ? (await env.DB.prepare(`INSERT OR IGNORE INTO event_invites (event_id, member_id, invited_by, via)
+          SELECT ?1, value, ?2, 'manual' FROM json_each(?3) RETURNING member_id`).bind(ev.id, member.id, JSON.stringify(matched.map((m) => m.id))).all()).results.map((r) => r.member_id) : [];
         added = fresh.length;
         if (fresh.length) await notify(env, fresh, 'event', { title: `你受邀參加：${ev.title}`, body: `${ev.date}${ev.gather_time ? ` ${ev.gather_time}` : ''}　${ev.place || ''}`, url: `/#/e/${ev.id}`, ref: `e:${ev.id}` });
       } else {
         // 只通知這次報名成功的人；原本就已報名（含候補）的不再通知，候補的人用候補文案
-        const had = new Set((await allIn(env, matched.map((m) => m.id), (q) => `SELECT member_id FROM signups WHERE event_id = ? AND status IN ('in','wait') AND member_id IN (${q})`, [ev.id])).map((r) => r.member_id));
+        const had = new Set((await env.DB.prepare(`SELECT member_id FROM signups WHERE event_id = ? AND status IN ('in','wait') AND member_id IN (SELECT value FROM json_each(?))`)
+          .bind(ev.id, JSON.stringify(matched.map((m) => m.id))).all()).results.map((r) => r.member_id));
         const okIn = [], okWait = [];
+        // 分段處理：代為報名要逐人走 doSignup（一人約 5–9 句），每人之前確認額度（用目前為止單人最高用量估），
+        //   不夠就停，沒處理到的人放進 more.names，前端（apiAll）再送一次
+        let per = 10;
         for (const m of matched) {
+          if (rest.length || !env.budget.room(per + notifyCost(okIn.length + okWait.length + 1) + 4)) { rest.push(m.q_name); continue; }
+          const s0 = env.budget.sub;
           if (ev.visibility === 'invite') await env.DB.prepare("INSERT OR IGNORE INTO event_invites (event_id, member_id, invited_by, via) VALUES (?, ?, ?, 'manual')").bind(ev.id, m.id, member.id).run();
           const r = await doSignup(env, ev, m, { note: '幹部代為報名' }, { by: member, req });
           if (!r.ok) { failed.push(`${m.name}（${(await r.json()).error}）`); continue; }
@@ -2329,13 +2404,15 @@ const api = (async function api(req, env, path, method) {
           const st = (await r.json()).status;
           if (!had.has(m.id)) (st === 'wait' ? okWait : okIn).push(m.id);
           if (st === 'in') nIn++; else if (st === 'wait') nWait++;
+          per = Math.max(per, env.budget.sub - s0 + 1);
         }
         if (okIn.length) await notify(env, okIn, 'signup', { title: `已幫你報名：${ev.title}`, body: '如果不能參加，請到活動頁取消', url: `/#/e/${ev.id}`, ref: `e:${ev.id}` });
         if (okWait.length) await notify(env, okWait, 'signup', { title: `已幫你排入候補：${ev.title}`, body: '有人取消時會依序遞補，遞補成功會再通知你', url: `/#/e/${ev.id}`, ref: `e:${ev.id}` });
       }
       const outside = action === 'signup' && signupState(ev, tpNow()) !== 'open' ? '（期間外代報）' : '';
       await audit(env, req, member, 'event.bulk', 'event', ev.id, `${action === 'invite' ? '邀請' : '代為報名'} ${added} 人${action === 'signup' ? `（正取 ${nIn}、候補 ${nWait}）` : ''}，找不到 ${unmatched.length}、同名 ${ambiguous.length}${outside}`);
-      return json({ added, matched: matched.map((m) => m.name), ambiguous, unmatched, failed });
+      if (rest.length) env.budget.stop('bulk:more');
+      return json({ added, matched: matched.filter((m) => !rest.includes(m.q_name)).map((m) => m.name), ambiguous, unmatched, failed, ...(rest.length ? { more: { names: rest } } : {}) });
     }
   }
 
@@ -2422,7 +2499,8 @@ const api = (async function api(req, env, path, method) {
       env.DB.prepare('UPDATE calendar_items SET created_by = NULL WHERE created_by = ?').bind(member.id),
       env.DB.prepare('DELETE FROM members WHERE id = ?').bind(member.id),
     ]);
-    for (const eid of freed) await promote(env, await evById(eid));
+    // 遞補：額度夠的場次現在處理，剩下的由每小時的 promoteSweep 在下個整點遞補
+    for (const eid of freed) { if (!env.budget.room(14)) { env.budget.stop('delete:promote'); break; } await promote(env, await evById(eid)); }
     await audit(env, req, member, 'privacy.delete', 'member', member.id, '本人刪除帳號');
     return json({ ok: true }, 200, { 'set-cookie': `${COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0` });
   }
@@ -2960,15 +3038,13 @@ const api = (async function api(req, env, path, method) {
     const b = await body();
     const list = Array.isArray(b.seats) ? b.seats.slice(0, 400) : [];
     if (!list.length) return fail(400, '沒有要排的資料');
-    let n = 0;
-    for (const row of list) {
-      const code = str(row.code, 8).toUpperCase(), tableNo = Number(row.table_no) || null;
-      if (!code) continue;
-      const r = await env.DB.prepare('UPDATE tickets SET table_no = ?, note = COALESCE(?, note) WHERE event_id = ? AND code = ?')
-        .bind(tableNo, str(row.note, 60) || null, msa[1], code).run();
-      n += r.meta.changes;
-    }
-    return json({ updated: n });
+    // 一句 UPDATE … FROM json_each；同一個代碼出現多次時以最後一筆為準（和以前逐筆更新一樣）
+    const seats = new Map();
+    for (const row of list) { const code = str(row.code, 8).toUpperCase(); if (code) { seats.delete(code); seats.set(code, [code, Number(row.table_no) || null, str(row.note, 60) || null]); } }
+    if (!seats.size) return json({ updated: 0 });
+    const r = await env.DB.prepare(`UPDATE tickets SET table_no = json_extract(j.value, '$[1]'), note = COALESCE(json_extract(j.value, '$[2]'), tickets.note)
+      FROM json_each(?2) j WHERE tickets.event_id = ?1 AND tickets.code = json_extract(j.value, '$[0]')`).bind(msa[1], JSON.stringify([...seats.values()])).run();
+    return json({ updated: r.meta.changes });
   }
 
   const mt = path.match(/^\/api\/events\/([\w-]{1,32})\/tickets$/);
@@ -3027,9 +3103,10 @@ const api = (async function api(req, env, path, method) {
         }).filter((r) => r && r.name);
         if (!rows.length) return fail(400, '沒有可匯入的獎項');
         let sort = (await env.DB.prepare('SELECT COALESCE(MAX(sort), 0) AS m FROM prizes WHERE event_id = ?').bind(eid).first()).m;
-        await env.DB.batch(rows.slice(0, 200).map((r) => env.DB.prepare(
-          'INSERT INTO prizes (id, event_id, name, qty, sponsor, sort, stage, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-          .bind(rid(8), eid, str(r.name, 60), Math.max(1, Math.min(Number(r.qty) || 1, 400)), str(r.sponsor, 40), ++sort, str(r.stage, 12), str(r.note, 80))));
+        const list = rows.slice(0, 200).map((r) => [rid(8), str(r.name, 60), Math.max(1, Math.min(Number(r.qty) || 1, 400)), str(r.sponsor, 40), ++sort, str(r.stage, 12), str(r.note, 80)]);
+        await env.DB.prepare(`INSERT INTO prizes (id, event_id, name, qty, sponsor, sort, stage, note)
+          SELECT json_extract(value, '$[0]'), ?1, json_extract(value, '$[1]'), json_extract(value, '$[2]'), json_extract(value, '$[3]'), json_extract(value, '$[4]'), json_extract(value, '$[5]'), json_extract(value, '$[6]')
+          FROM json_each(?2)`).bind(eid, JSON.stringify(list)).run();
         return json({ added: Math.min(rows.length, 200) });
       }
       const name = str(b.name, 60);
@@ -3065,8 +3142,9 @@ const api = (async function api(req, env, path, method) {
       const k = crypto.getRandomValues(new Uint32Array(1))[0] % pool.length;
       winners.push(pool.splice(k, 1)[0]);
     }
-    await env.DB.batch(winners.map((w) => env.DB.prepare('INSERT INTO draws (id, event_id, prize_id, member_id, name) VALUES (?, ?, ?, ?, ?)')
-      .bind(rid(8), eid, prizeId, w.member_id, w.name)));
+    await env.DB.prepare(`INSERT INTO draws (id, event_id, prize_id, member_id, name)
+      SELECT json_extract(value, '$[0]'), ?1, ?2, json_extract(value, '$[1]'), json_extract(value, '$[2]') FROM json_each(?3)`)
+      .bind(eid, prizeId, JSON.stringify(winners.map((w) => [rid(8), w.member_id, w.name]))).run();
     await audit(env, req, member, 'lottery.draw', 'prize', prizeId, `${winners.length} 位`);
     await notify(env, winners.map((w) => w.member_id), 'signup', { kind: 'lottery', title: `恭喜中獎：${prize.name}`, body: '請到台前領獎', url: `/#/e/${eid}`, ref: `e:${eid}` });
     return json({ winners: winners.map((w) => ({ name: w.name, nickname: w.nickname || '', table_no: w.table_no || null })), prize: prize.name, stage: prize.stage || '' });
@@ -3541,20 +3619,19 @@ const api = (async function api(req, env, path, method) {
     if (tid && !(await teamIds()).includes(tid)) return fail(400, '找不到這個分團');
     if (tid && (await selfManaged(tid)) && !teamOwn(tid, 'approve')) return fail(403, '這個分團的成員只由該團的團長與幹部處理');
     // 目前主團是「只由本團幹部管理」的人，也不能由協會幹部改走
-    const locked = (await allIn(env, ids, (q) => `SELECT m.id, m.main_team FROM members m JOIN teams t ON t.id = m.main_team
-      WHERE t.self_managed = 1 AND m.id IN (${q})`)).filter((r) => !teamOwn(r.main_team, 'approve'));
+    const mj = JSON.stringify([...new Set(ids)]);
+    const locked = (await env.DB.prepare(`SELECT m.id, m.main_team FROM members m JOIN teams t ON t.id = m.main_team
+      WHERE t.self_managed = 1 AND m.id IN (SELECT value FROM json_each(?))`).bind(mj).all()).results.filter((r) => !teamOwn(r.main_team, 'approve'));
     if (locked.length) return fail(403, `有 ${locked.length} 位的主團只能由該團幹部調整`);
     // 只通知主團真的有變的人
-    const changed = tid ? (await allIn(env, ids, (q) => `SELECT id FROM members WHERE main_team IS NOT ? AND id IN (${q})`, [tid])).map((r) => r.id) : [];
-    const stmts = [];
-    for (const mid of ids) {
-      stmts.push(env.DB.prepare('UPDATE members SET main_team = ?, club = (SELECT name FROM teams WHERE id = ?) WHERE id = ?').bind(tid, tid, mid));
-      // 一般團員只屬於主團；擔任團長或幹部的分團保留
-      stmts.push(env.DB.prepare("DELETE FROM team_members WHERE member_id = ? AND role = 'member' AND (? IS NULL OR team_id != ?)").bind(mid, tid, tid));
-      if (tid) stmts.push(env.DB.prepare(`INSERT INTO team_members (team_id, member_id, role, status) VALUES (?, ?, 'member', 'active')
-        ON CONFLICT(team_id, member_id) DO UPDATE SET status = 'active'`).bind(tid, mid));
-    }
-    for (let i = 0; i < stmts.length; i += 90) await env.DB.batch(stmts.slice(i, i + 90));
+    const changed = tid ? (await env.DB.prepare('SELECT id FROM members WHERE main_team IS NOT ?1 AND id IN (SELECT value FROM json_each(?2))').bind(tid, mj).all()).results.map((r) => r.id) : [];
+    // 所有人 2–3 句（json_each），句數跟人數無關；一般團員只屬於主團，擔任團長或幹部的分團保留
+    await env.DB.batch([
+      env.DB.prepare('UPDATE members SET main_team = ?1, club = (SELECT name FROM teams WHERE id = ?1) WHERE id IN (SELECT value FROM json_each(?2))').bind(tid, mj),
+      env.DB.prepare("DELETE FROM team_members WHERE member_id IN (SELECT value FROM json_each(?2)) AND role = 'member' AND (?1 IS NULL OR team_id != ?1)").bind(tid, mj),
+      ...(tid ? [env.DB.prepare(`INSERT INTO team_members (team_id, member_id, role, status) SELECT ?1, m.id, 'member', 'active' FROM json_each(?2) j JOIN members m ON m.id = j.value WHERE true
+        ON CONFLICT(team_id, member_id) DO UPDATE SET status = 'active'`).bind(tid, mj)] : []),
+    ]);
     const tname = tid ? (await env.DB.prepare('SELECT name FROM teams WHERE id = ?').bind(tid).first())?.name : '未設定';
     await audit(env, req, member, 'team.main', 'members', ids.length === 1 ? ids[0] : null, `${ids.length} 人 → ${tname}`);
     if (changed.length) await notify(env, changed, 'membership', { kind: 'system', title: `你的主團：${tname}`, body: '分團的活動與公告會通知你', url: `/#/t/${tid}`, ref: `t:${tid}` });
@@ -4048,6 +4125,20 @@ async function signupReviews(env, now) {
   return { done: true, result: n };
 }
 
+// 候補遞補補做：刪除帳號時額度不夠、沒能當場遞補的場次（有名額空著而且有人候補），每小時每場最多跑 1 輪 promote()
+const SWEEP_SQL = `FROM events WHERE status = 'open' AND date >= ?1 AND capacity > 0
+  AND EXISTS (SELECT 1 FROM signups w WHERE w.event_id = events.id AND w.status = 'wait')
+  AND (SELECT COUNT(*) FROM signups s WHERE s.event_id = events.id AND s.status = 'in') < capacity`;
+async function promoteSweep(env, now) {
+  const evs = (await env.DB.prepare(`SELECT ${eventCols} ${SWEEP_SQL} ORDER BY date LIMIT 20`).bind(tpDate(now)).all()).results;
+  let n = 0;
+  for (const ev of evs) {
+    if (!fits(env, 14, 'promoteSweep')) return { done: false, result: n };
+    n += (await promote(env, ev)).length;
+  }
+  return { done: true, result: n };
+}
+
 // 附近即時影像：每天同步一次鏡頭清單（台北 04:00 起水利署與水利處、05:00 起公路局；錯過整點就在下一個整點補跑）
 //   功能開關（features.cams）關閉時完全不跑；只同步開啟的來源；失敗或筆數驟減時不寫入、不停用，隔天再試
 //   每次排程最多同步一個來源（公路局 XML 約 1.7 MB，解析很吃 CPU，不跟別的來源擠在同一次執行）
@@ -4094,7 +4185,8 @@ const CRON_PROBE = `SELECT
   EXISTS (SELECT 1 FROM events WHERE open_notified_at IS NULL AND signup_start IS NOT NULL AND signup_start <= ?5 AND status = 'open' AND date >= ?1) AS so,
   EXISTS (SELECT 1 FROM signups WHERE status = 'pending') AS sr,
   EXISTS (SELECT 1 FROM signups s JOIN events e ON e.id = s.event_id WHERE s.status = 'pending' AND (e.date <= ?1 OR e.status = 'cancelled')) AS sr_exp,
-  EXISTS (SELECT 1 FROM audit_digests WHERE day = ?7) AS ad`;
+  EXISTS (SELECT 1 FROM audit_digests WHERE day = ?7) AS ad,
+  EXISTS (SELECT 1 ${SWEEP_SQL}) AS ps`;
 async function cronProbe(env, now) {
   const t = taipei(now), nowMin = t.getUTCHours() * 60 + t.getUTCMinutes(), today0 = tpDate(now);
   const r = await env.DB.prepare(CRON_PROBE).bind(today0, hhmm(Math.min(nowMin + 120, 1439)), tpDate(new Date(now.getTime() + 864e5)),
@@ -4120,6 +4212,7 @@ const JOBS = {
   followups:     { prio: 22, cost: 12, min: 4, idle: 0, due: (t, s) => !!s.fu, run: runFollowups },
   weather:       { prio: 23, cost: 20, min: 6, idle: 0, due: (t, s) => t.h >= 20 && !!s.ev_wx, run: weatherAlerts },
   signupReviews: { prio: 24, cost: 12, min: 4, idle: 0, due: (t, s) => !!s.sr_exp || (t.h >= 20 && !!s.sr && open(s, 'signup_review_digest', t.date)), run: signupReviews },
+  promoteSweep:  { prio: 25, cost: 14, min: 14, idle: 0, due: (t, s) => !!s.ps, run: promoteSweep },
   renewals:      { prio: 30, cost: 10, min: 4, idle: 0, due: (t, s) => !!s.rn, run: remindRenewals },
   retention:     { prio: 40, cost: 16, idle: null, due: (t, s) => t.h >= 3 && open(s, 'retention', t.date), run: retention },
   auditDigest:   { prio: 41, cost: 6, idle: null, due: (t, s, env) => t.h >= 9 && !!env.AUDIT_KEY && !s.ad, run: auditDigest },
@@ -4246,6 +4339,29 @@ async function devRoute(req, env, ctx, url, path) {
     const cnt = await env.DB.batch(names.map((n) => env.DB.prepare(`SELECT COUNT(*) AS n FROM "${n}" ${BACKUP_FILTER[n] || ''}`)));
     return json({ key: o.key, format: data.format, version: data.version, at: data.at,
       counts: Object.fromEntries(names.map((n) => [n, data.tables[n].length])), now: Object.fromEntries(names.map((n, i) => [n, cnt[i].results[0].n])) });
+  }
+  // 大量資料（執行額度測試用）：?members=300&subs=400 建假會員（id 以 b_ 開頭）與假訂閱；
+  //   ?event=<id>&pending=60 讓前 60 位假會員在這場待審核（報名時間依序相差 1 秒）；?clear=1 全部清掉
+  if (path === '/api/dev/seed-bulk') {
+    if (q.get('clear') === '1') {
+      await env.DB.batch([
+        env.DB.prepare("DELETE FROM push_subs WHERE endpoint LIKE 'https://fcm.googleapis.com/fcm/send/b\\_%' ESCAPE '\\'"),
+        env.DB.prepare("DELETE FROM members WHERE id LIKE 'b\\_%' ESCAPE '\\'"),
+      ]);
+      return json({ ok: true });
+    }
+    const nm = Math.min(Number(q.get('members')) || 0, 1000), ns = Math.min(Number(q.get('subs')) || 0, 2000), np = Math.min(Number(q.get('pending')) || 0, 1000);
+    const seq = (n) => JSON.stringify(Array.from({ length: n }, (_, i) => i));
+    const stmts = [];
+    if (nm) stmts.push(env.DB.prepare(`INSERT OR IGNORE INTO members (id, name, nickname, dist, grp, role, membership, consent_at, consent_version)
+      SELECT printf('b_%04d', value), printf('大量測試%04d', value), NULL, 'fm', 'D', 'member', 'none', datetime('now'), '2026-10-03.1' FROM json_each(?)`).bind(seq(nm)));
+    if (ns && nm) stmts.push(env.DB.prepare(`INSERT OR IGNORE INTO push_subs (endpoint, member_id, p256dh, auth)
+      SELECT printf('https://fcm.googleapis.com/fcm/send/b_%05d', value), printf('b_%04d', value % ?2), 'BPmock', 'mock' FROM json_each(?1)`).bind(seq(ns), nm));
+    if (np && q.get('event')) stmts.push(env.DB.prepare(`INSERT OR IGNORE INTO signups (id, event_id, member_id, name, grp, dist, status, created_at)
+      SELECT printf('bs%04d%s', value, substr(?1, 1, 8)), ?1, printf('b_%04d', value), printf('大量測試%04d', value), 'D', 'fm', 'pending', datetime('now', printf('-%d seconds', ?2 - value))
+      FROM json_each(?3)`).bind(str(q.get('event'), 32), np, seq(np)));
+    if (stmts.length) await env.DB.batch(stmts);
+    return json({ ok: true, members: nm, subs: ns, pending: np });
   }
   // 測試用：附近即時影像的假來源狀態（只有 CAM_MOCK=1）
   if (path === '/api/dev/cams-mock' && env.CAM_MOCK === '1') return json(Cams.mockControl(q));

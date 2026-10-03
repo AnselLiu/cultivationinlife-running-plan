@@ -2876,6 +2876,9 @@ export default {
 "寫入資料庫失敗：": "Database write failed: ",
 "附近即時影像沒有開啟": "Nearby live cameras is turned off",
 "官方直播連結的來源已關閉，請先在系統設定開啟": "The official live stream link source is off. Turn it on in system settings first.",
-"上次同步沒有完成（可能超過執行時間上限）": "The last sync didn’t finish (it may have exceeded the execution time limit)"
+"上次同步沒有完成（可能超過執行時間上限）": "The last sync didn’t finish (it may have exceeded the execution time limit)",
+"人沒處理完，請再按一次": "people not processed yet. Tap again to continue",
+"，還有": ", still",
+"還有": "Still"
 };
 export const inner = {"團練": "group run", "課表": "training plan", "拍照": "photo", "跑步": "running", "我的": "my", "揪跑": "social run", "分團": "sub-club", "主團": "home club", "報名": "sign up", "幹部": "officers", "團員": "members", "跑友": "runners", "活動": "event", "協會": "Association", "行事曆": "calendar", "地點": "spot", "路線": "route", "天氣": "weather", "通知": "notifications", "賽事": "race", "組別": "group", "訓練紀錄": "training log"};

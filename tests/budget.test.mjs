@@ -146,3 +146,98 @@ test('執行額度：一般請求帶 x-budget，而且在 50 以內', async () =
   assert.ok(Number(/sub=(\d+)/.exec(h)[1]) <= 50);
   assert.deepEqual(await violations(), []);
 });
+
+// ---- 大量輸入的路由（每個請求 50 個子請求以內；逐人處理的流程分段，回 more 再送一次）----
+const subOf = (r) => Number(/sub=(\d+)/.exec(r.headers.get('x-budget') || '')?.[1]);
+const ok50 = (r, msg) => { assert.equal(r.status, 200, `${msg}：${r.text}`); assert.ok(subOf(r) <= 50, `${msg}：用了 ${subOf(r)} 個子請求`); return r.json; };
+const evBody = (body) => ({ kind: 'track', title: '額度測試', gather_time: '07:00', notify: false, date: plus(20), ...body });
+// 照前端 apiAll 的做法：看到 more 就合併進 body 再送，結果加總；回傳每一輪的回應
+async function rounds(who, path, body, max = 200) {
+  const out = [];
+  for (let i = 0, b = body; i < max; i++) {
+    const r = await call(who, path, { method: 'POST', body: b });
+    out.push(ok50(r, `${path} 第 ${i + 1} 輪`));
+    if (!r.json.more) return out;
+    b = { ...b, ...r.json.more };
+  }
+  throw new Error(`${path} 超過 ${max} 輪還沒做完`);
+}
+const bnames = (from, n) => Array.from({ length: n }, (_, i) => `大量測試${String(from + i).padStart(4, '0')}`);
+const bids = (from, n) => Array.from({ length: n }, (_, i) => `b_${String(from + i).padStart(4, '0')}`);
+
+test('大量輸入：300 位會員、400 個訂閱的測試資料', async () => {
+  await violations();
+  assert.equal((await call(null, '/dev/seed-bulk?members=300&subs=400')).json.members, 300);
+});
+
+test('大量輸入：系列活動 60 場、刪除之後的場次、獎品 200 列、邀請 150 與 300 人', async () => {
+  const s = ok50(await call('t_chair', '/events', { method: 'POST', body: evBody({ title: '每天揪跑', date: plus(30), repeat: { weekdays: [0, 1, 2, 3, 4, 5, 6], until: plus(120) } }) }), '系列活動');
+  assert.equal(s.count, 60);
+  const list = ok50(await call('t_chair', `/events/${s.id}`), '讀活動');
+  assert.equal(list.date, plus(30));
+  const del = ok50(await call('t_chair', `/events/${s.id}?series=after`, { method: 'DELETE' }), '刪除之後的場次');
+  assert.equal(del.count, 60);
+  assert.equal((await call('t_chair', `/events/${s.id}`)).status, 404);
+
+  const pid = ok50(await call('t_chair', '/events', { method: 'POST', body: evBody({ kind: 'party', title: '額度尾牙' }) }), '建立餐敘').id;
+  const prizes = Array.from({ length: 200 }, (_, i) => ({ stage: i < 100 ? '上半場' : '下半場', name: `獎品 ${i + 1}`, qty: 1 + (i % 3), sponsor: '測試贊助' }));
+  assert.equal(ok50(await call('t_chair', `/events/${pid}/prizes`, { method: 'POST', body: { list: prizes } }), '獎品匯入').added, 200);
+  const pr = (await call('t_chair', `/events/${pid}/prizes`)).json.prizes;
+  assert.equal(pr.length, 200);
+  assert.deepEqual(pr.slice(0, 3).map((p) => p.name), ['獎品 1', '獎品 2', '獎品 3'], '順序不變');
+
+  const iid = ok50(await call('t_chair', '/events', { method: 'POST', body: evBody({ title: '額度邀請', visibility: 'invite' }) }), '建立邀請制').id;
+  assert.equal(ok50(await call('t_chair', `/events/${iid}/invites`, { method: 'POST', body: { member_ids: bids(0, 150), notify: false } }), '邀請 150 人').added, 150);
+  // 300 個 id（以前 IN() 綁 300 個參數，超過 D1 的 100 個上限）：前 150 個已經邀過
+  assert.equal(ok50(await call('t_chair', `/events/${iid}/invites`, { method: 'POST', body: { member_ids: [...bids(0, 300), 'nobody'], notify: false } }), '邀請 300 人').added, 150);
+  assert.equal((await call('t_chair', `/events/${iid}/invites`)).json.invites.length, 300);
+  assert.deepEqual(await violations(), []);
+});
+
+test('大量輸入：貼上 300 個名字代為報名，分段處理的結果和一次處理相同', async () => {
+  const id = ok50(await call('t_chair', '/events', { method: 'POST', body: evBody({ title: '額度代報', capacity: 100, require_approval: false }) }), '建立活動').id;
+  const names = bnames(0, 300);
+  const rs = await rounds('t_chair', `/events/${id}/bulk`, { action: 'signup', names: names.join('\n') });
+  assert.ok(rs.length > 1, '一輪做不完，要分段');
+  assert.equal(rs.reduce((n, r) => n + r.added, 0), 300);
+  assert.deepEqual(rs[0].unmatched, []);
+  const ev = (await call('t_chair', `/events/${id}`)).json;
+  const st = Object.fromEntries(ev.signups.map((x) => [x.member_id, x.status]));
+  // 依貼上的順序：前 100 位正取、其餘候補（和一次處理一樣）
+  assert.deepEqual(bids(0, 100).map((m) => st[m]), Array(100).fill('in'));
+  assert.deepEqual(bids(100, 200).map((m) => st[m]), Array(200).fill('wait'));
+  assert.deepEqual(await violations(), []);
+});
+
+test('大量輸入：審核 60 人，分段處理，依報名先後排進正取', async () => {
+  const id = ok50(await call('t_chair', '/events', { method: 'POST', body: evBody({ title: '額度審核', capacity: 30, require_approval: true }) }), '建立活動').id;
+  await call(null, `/dev/seed-bulk?event=${id}&pending=60`);
+  const rs = await rounds('t_chair', `/events/${id}/review`, { action: 'approve', member_ids: bids(0, 60) });
+  assert.ok(rs.length > 1, '一輪做不完，要分段');
+  assert.equal(rs.reduce((n, r) => n + r.in.length + r.wait.length, 0), 60);
+  assert.equal(rs.at(-1).pending, 0);
+  const ev = (await call('t_chair', `/events/${id}`)).json;
+  const st = Object.fromEntries(ev.signups.map((x) => [x.member_id, x.status]));
+  // 報名時間依序相差 1 秒：先報名的 30 位正取、後面 30 位候補
+  assert.deepEqual(bids(0, 30).map((m) => st[m]), Array(30).fill('in'));
+  assert.deepEqual(bids(30, 30).map((m) => st[m]), Array(30).fill('wait'));
+  assert.deepEqual(ev.signups.filter((x) => x.status === 'wait').map((x) => x.member_id), bids(30, 30), '候補順序依報名先後');
+  // 繳費標記 60 人一句
+  ok50(await call('t_chair', `/events/${id}/payments`, { method: 'POST', body: { member_ids: bids(0, 60), paid: 'waived' } }), '繳費標記');
+  assert.deepEqual(await violations(), []);
+});
+
+test('大量輸入：國定假日匯入（假資料 365 天）在 16 個子請求以內；主團設定 300 人', async () => {
+  const r = await call('t_chair', '/holidays/import', { method: 'POST', body: { year: 2031 } });
+  assert.equal(r.status, 200, r.text);
+  assert.equal(r.json.total, 365);
+  assert.ok(subOf(r) <= 16, `假日匯入用了 ${subOf(r)} 個子請求`);
+  const cal = (await call('t_chair', '/calendar?from=2031-01-01&to=2031-01-31')).json;
+  assert.ok(cal);
+  ok50(await call('t_chair', '/members/main-team', { method: 'POST', body: { member_ids: bids(0, 300), team_id: null } }), '主團設定');
+  assert.deepEqual(await violations(), []);
+});
+
+test('大量輸入：清掉測試資料', async () => {
+  assert.equal((await call(null, '/dev/seed-bulk?clear=1')).json.ok, true);
+});
