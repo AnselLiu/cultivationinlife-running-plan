@@ -306,3 +306,35 @@ test('LINE 分享文字含報名期間', async ({ page, request }) => {
   await page.locator('#shareLine').click();
   expect(decodeURIComponent(await page.evaluate(() => window.__shared))).toContain('報名期間');
 });
+
+test('附近即時影像：捲到才載縮圖、點開大圖有顯名、省流量時不自動載入（CAM_MOCK 不連外）', async ({ page, request }) => {
+  // 功能開關預設關閉：先打開
+  await apiAs(request, 't_chair', '/settings/features', { method: 'POST', body: { cams: true } });
+  await apiAs(request, 't_chair', '/cams/sync', { method: 'POST', body: { source: 'wra' } });
+  await enter(page);
+  const frames = [];
+  page.on('request', (r) => { if (r.url().includes('/frame')) frames.push(r.url()); });
+  await page.goto('/#/map?spot=seed07');
+  await expect(page.locator('.spotcard')).toContainText('大佳');
+  await page.locator('#camCard').scrollIntoViewIfNeeded();
+  await expect.poll(() => page.locator('#camBox .camimg img').count()).toBeGreaterThan(0);
+  expect(await page.locator('#camBox .camtile').count()).toBeLessThanOrEqual(3);
+  await expect(page.locator('#camCard')).toContainText('經濟部水利署');
+  await page.locator('#camBox [data-cam="wra:M1"]').click();
+  await expect(page.locator('.camsheet #camvImg')).toBeVisible();
+  await expect(page.locator('.camsheet')).toContainText('影像來源：經濟部水利署');
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.camsheet')).toHaveCount(0);
+  // 省流量：縮圖不自動載入，點了才載
+  await page.addInitScript(() => Object.defineProperty(navigator, 'connection', { value: { saveData: true }, configurable: true }));
+  await page.reload();
+  await page.locator('#camCard').scrollIntoViewIfNeeded();
+  const before = frames.length;
+  await expect(page.locator('#camBox')).toContainText('點一下才載入');
+  await page.waitForTimeout(500);
+  expect(frames.length).toBe(before);
+  // 「我的 → 通知與裝置」的省流量開關（存在這支手機）
+  await page.evaluate(() => localStorage.setItem('cil-cam-lazy', '1'));
+  await page.goto('/#/me/notify');
+  await expect(page.locator('#camLazy')).toBeChecked();
+});
