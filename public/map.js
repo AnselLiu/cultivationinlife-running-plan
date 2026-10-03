@@ -12,8 +12,23 @@ import * as W from './weather.js';
 import { lang } from './i18n.js';
 
 const KIND = { track: '田徑場', river: '河濱', park: '公園', trail: '山徑', road: '道路', other: '其他' };
-// 地圖圖釘上的字：中文取類型第一個字，英文用縮寫
-const GLYPH = lang === 'en' ? { track: 'T', river: 'R', park: 'P', trail: 'M', road: 'S', other: '·' } : Object.fromEntries(Object.entries(KIND).map(([k, v]) => [k, v.slice(0, 1)]));
+// 地圖針：水滴形的針頭，裡面是類型的線條圖示（跟系統圖示同一個風格，不用文字）
+const GLYPH = {
+  track: '<rect x="3.5" y="6.5" width="17" height="11" rx="5.5"/><rect x="7.5" y="10" width="9" height="4" rx="2"/>',
+  river: '<path d="M3 8.5c1.5-1.3 3-1.3 4.5 0s3 1.3 4.5 0 3-1.3 4.5 0 3 1.3 4.5 0M3 13c1.5-1.3 3-1.3 4.5 0s3 1.3 4.5 0 3-1.3 4.5 0 3 1.3 4.5 0M3 17.5c1.5-1.3 3-1.3 4.5 0s3 1.3 4.5 0 3-1.3 4.5 0 3 1.3 4.5 0"/>',
+  park: '<path d="M12 20.5v-4.5"/><path d="M12 3.5a5 5 0 0 0-4.6 7A4 4 0 0 0 9 18h6a4 4 0 0 0 1.6-7.5A5 5 0 0 0 12 3.5Z"/>',
+  trail: '<path d="M2.5 19.5 9 9l3.6 5.6L15 11l6.5 8.5Z"/><path d="M9 9l1.4 2.3"/>',
+  road: '<path d="M8.5 20.5 10.6 3.5M15.5 20.5 13.4 3.5M12 6.2v1.6M12 10.7v1.8M12 15.6v2.2"/>',
+  other: '<circle cx="14.5" cy="4.8" r="1.7"/><path d="M7 21l2.8-5.4 2.6-1.7-1.1-4.5 3.9-1.5 1.9 3.4 3.6 1.1M10.9 14.4 7.9 11.3 5.2 12.6"/>',
+};
+const glyph = (k) => `<svg viewBox="0 0 24 24" aria-hidden="true">${GLYPH[k] || GLYPH.other}</svg>`;
+// 地圖上的針（36×46）：kind 決定顏色與圖示；pending 是虛線（待審核）；reports 有現場回報時右上角亮燈
+const pinHtml = (s, warn) => `<div class="mpin k-${s.kind}${s.status !== 'approved' ? ' pending' : ''}">
+  <svg class="mpin-shape" viewBox="0 0 36 46" aria-hidden="true"><path d="M18 44.5C18 44.5 3.5 30 3.5 18a14.5 14.5 0 0 1 29 0c0 12-14.5 26.5-14.5 26.5Z"/></svg>
+  <span class="mpin-glyph">${glyph(s.kind)}</span>${s.reports ? `<i class="${warn ? 'warn' : ''}"></i>` : ''}</div>`;
+// 清單、卡片用的圓角方塊圖示（同一套圖示）
+const kindTile = (k, extra = '') => `<span class="ktile k-${k} ${extra}" aria-hidden="true">${glyph(k)}</span>`;
+const CITIES = ['臺北市', '新北市', '基隆市', '桃園市', '新竹市', '新竹縣', '苗栗縣', '臺中市', '彰化縣', '南投縣', '雲林縣', '嘉義市', '嘉義縣', '臺南市', '高雄市', '屏東縣', '宜蘭縣', '花蓮縣', '臺東縣', '澎湖縣', '金門縣', '連江縣'];
 const INFO = { lap: '一圈', surface: '路面', light: '夜間照明', water: '飲水', toilet: '廁所', parking: '停車', hours: '開放時間' };
 const REP = { crowd: ['人潮', ['少', '普通', '多']], surface: ['路況', ['乾燥', '濕滑', '積水', '施工', '封閉']], light: ['照明', ['充足', '偏暗', '沒有']], weather: ['天氣', ['晴', '陰', '小雨', '大雨', '悶熱', '強風']] };
 const BASES = {
@@ -52,6 +67,9 @@ export function downloadGpx(name, pts) {
   setTimeout(() => URL.revokeObjectURL(a.href), 2000);
 }
 
+// 清單與地圖共用的篩選：關鍵字、類型、縣市、離我最近（類型與縣市記在這台裝置）
+const filt = { q: '', kind: pref.get('kind', ''), city: pref.get('city', ''), near: false };
+let myPos = null;
 let map = null, layer = null, spotsLayer = null, routeLayer = null, drawLayer = null, me = null, data = { spots: [], editor: false }, mode = 'browse', draft = [], pickCb = null;
 
 async function mapView() {
@@ -85,6 +103,7 @@ async function mapView() {
   setBase(pref.get('base', 'emap'));
   spotsLayer = L.layerGroup().addTo(map); routeLayer = L.layerGroup().addTo(map); drawLayer = L.layerGroup().addTo(map);
   map.on('moveend', () => { const c = map.getCenter(); pref.set('view', JSON.stringify([+c.lat.toFixed(4), +c.lng.toFixed(4), map.getZoom()])); });
+  map.on('zoomend', paintPins);
   map.on('click', (e) => onMapClick([+e.latlng.lat.toFixed(6), +e.latlng.lng.toFixed(6)]));
   for (const b of document.querySelectorAll('[data-base]')) b.onclick = () => { setBase(b.dataset.base); for (const x of document.querySelectorAll('[data-base]')) x.setAttribute('aria-pressed', String(x === b)); };
   $('#locBtn').onclick = locate;
@@ -127,13 +146,40 @@ function locate() {
 
 async function loadSpots() {
   data = await api('/spots');
+  paintPins();
+}
+// 依目前的搜尋與篩選畫針；縮小時距離太近的針合成一顆（顯示數量，點了放大到那一區）
+function shown() {
+  const q = filt.q.trim().toLowerCase();
+  return data.spots.filter((s) => (s.status === 'approved' || data.editor || s.mine)
+    && (!filt.kind || s.kind === filt.kind) && (!filt.city || s.city === filt.city)
+    && (!q || `${s.name} ${KIND[s.kind]} ${s.city || ''}`.toLowerCase().includes(q)));
+}
+function paintPins() {
+  if (!map || !spotsLayer) return;
   spotsLayer.clearLayers();
-  for (const s of data.spots) {
-    const warn = s.latest && (['積水', '施工', '封閉'].includes(s.latest.surface) || s.latest.crowd === '多');
-    const icon = window.L.divIcon({ className: '', iconSize: [0, 0], html: `<div class="pin k-${s.kind} ${s.status !== 'approved' ? 'pending' : ''}"><span>${esc(GLYPH[s.kind] || GLYPH.other)}</span>${s.reports ? `<i class="${warn ? 'warn' : ''}"></i>` : ''}</div>` });
-    window.L.marker([s.lat, s.lng], { icon, title: s.name, keyboard: true, alt: s.name }).addTo(spotsLayer)
-      .bindTooltip(esc(s.name), { direction: 'right', offset: [14, 0], className: 'pintip' })
-      .on('click', () => openSpot(s.id));
+  const list = shown(), z = map.getZoom(), groups = [];
+  // 15 級以上（街道）不合併；其他用 52px 的格子把針分組
+  for (const s of list) {
+    const pt = map.project([s.lat, s.lng], z);
+    const g = z >= 15 ? null : groups.find((x) => Math.abs(x.pt.x - pt.x) < 52 && Math.abs(x.pt.y - pt.y) < 52);
+    if (g) g.items.push(s); else groups.push({ pt, items: [s] });
+  }
+  for (const g of groups) {
+    if (g.items.length === 1) {
+      const s = g.items[0], warn = s.latest && (['積水', '施工', '封閉'].includes(s.latest.surface) || s.latest.crowd === '多');
+      const icon = window.L.divIcon({ className: 'mpin-host', iconSize: [36, 46], iconAnchor: [18, 45], html: pinHtml(s, warn) });
+      window.L.marker([s.lat, s.lng], { icon, title: s.name, keyboard: true, alt: `${s.name}・${KIND[s.kind]}`, riseOnHover: true }).addTo(spotsLayer)
+        .bindTooltip(esc(s.name), { direction: 'top', offset: [0, -44], className: 'pintip' })
+        .on('click', () => openSpot(s.id));
+      continue;
+    }
+    const lat = g.items.reduce((n, s) => n + s.lat, 0) / g.items.length, lng = g.items.reduce((n, s) => n + s.lng, 0) / g.items.length;
+    const kinds = [...new Set(g.items.map((s) => s.kind))].slice(0, 3);
+    const icon = window.L.divIcon({ className: 'mpin-host', iconSize: [44, 44], iconAnchor: [22, 22],
+      html: `<div class="mclus"><b class="num">${g.items.length}</b><span>${kinds.map((k) => `<i class="k-${k}"></i>`).join('')}</span></div>` });
+    window.L.marker([lat, lng], { icon, keyboard: true, title: `${g.items.length} 個地點`, alt: `${g.items.length} 個地點，點一下放大` }).addTo(spotsLayer)
+      .on('click', () => map.fitBounds(window.L.latLngBounds(g.items.map((s) => [s.lat, s.lng])).pad(0.3), { maxZoom: 16 }));
   }
 }
 
@@ -209,19 +255,69 @@ async function listPanel() {
   if (!$('#panel')) return;
   const pend = data.spots.filter((s) => s.status === 'pending');
   $('#panel').innerHTML = `
-    ${pend.length && data.editor ? `<section class="card"><h3>待審核的地點</h3><div class="roster">${pend.map((s) => `<button class="r spotrow" data-open="${esc(s.id)}"><span class="pin k-${s.kind} pending small"><span>${esc(GLYPH[s.kind] || GLYPH.other)}</span></span><span><b><span translate="no">${esc(s.name)}</span></b></span><span class="tiny">審核 ›</span></button>`).join('')}</div></section>` : ''}
-    <section class="card"><div class="row spread"><h3>練跑地點</h3><span class="tiny">${data.spots.filter((s) => s.status === 'approved').length} 個</span></div>
-      ${data.spots.length ? `<div class="roster">${data.spots.filter((s) => s.status === 'approved').map((s) => `<button class="r spotrow" data-open="${esc(s.id)}"><span class="pin k-${s.kind} small"><span>${esc(GLYPH[s.kind] || GLYPH.other)}</span></span>
-        <span><b><span translate="no">${esc(s.name)}</span></b><span class="tiny" style="display:block">${KIND[s.kind]}${s.reports ? `・24 小時內 ${s.reports} 則回報${s.latest ? `：${esc(Object.entries(s.latest).filter(([k, v]) => v && k !== 'note').map(([, v]) => v).join('、'))}` : ''}` : ''}</span></span><span class="tiny">›</span></button>`).join('')}</div>`
-        : `<p class="muted" style="margin:0">還沒有地點。${data.editor ? '按地圖右上的地標按鈕，在地圖上點位置新增。' : '按地圖右上的地標按鈕，提議一個常跑的地方，幹部審核後就會出現。'}</p>`}
+    ${pend.length && data.editor ? `<section class="card"><h3>待審核的地點</h3><div class="roster">${pend.map((s) => `<button class="r spotrow" data-open="${esc(s.id)}">${kindTile(s.kind, 'pending')}<span><b><span translate="no">${esc(s.name)}</span></b></span><span class="tiny">審核 ›</span></button>`).join('')}</div></section>` : ''}
+    <section class="card spotlist">
+      <div class="row spread"><h3>練跑地點</h3><span class="tiny" id="spotCount"></span></div>
+      <div class="spotsearch" role="search"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m15.5 15.5 5 5"/></svg>
+        <input id="spotQ" type="search" placeholder="搜尋地點，例如 河濱、田徑場、大安" aria-label="搜尋練跑地點" autocomplete="off" enterkeyhint="search" value="${esc(filt.q)}"></div>
+      <div class="chips kindchips" role="group" aria-label="類型" id="kindChips"></div>
+      <div class="row spotopts"><select id="spotCity" aria-label="縣市"><option value="">全部縣市</option></select>
+        <button type="button" class="btn ghost sm iconbtn" id="spotNear" aria-pressed="${filt.near}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 4 3.5 10.6l7 2.9 2.9 7Z"/></svg>離我最近</button></div>
+      <div class="roster" id="spotList"></div>
     </section>
     <section class="card"><div class="row spread"><h3>路線</h3><button class="btn ghost sm iconbtn" id="newRoute">${IC.plus}畫一條</button></div>
       ${routes.length ? `<div class="roster">${routes.map((r) => `<button class="r spotrow" data-route="${esc(r.id)}"><span class="av num" style="font-size:11px">${(r.distance / 1000).toFixed(1)}</span><span><b><span translate="no">${esc(r.name)}</span></b><span class="tiny" style="display:block"><span translate="no">${esc(r.author || '')}</span>${r.shared ? '' : '・只有我看得到'}</span></span><span class="tiny">›</span></button>`).join('')}</div>`
         : '<p class="muted" style="margin:0">還沒有路線。畫一條常跑的路線，分享給大家或拿來開揪跑。</p>'}
     </section>`;
-  for (const b of document.querySelectorAll('[data-open]')) b.onclick = () => openSpot(b.dataset.open, true);
   for (const b of document.querySelectorAll('[data-route]')) b.onclick = () => showRoute(b.dataset.route, true);
   $('#newRoute').onclick = () => startDraw();
+  bindSpotFilters();
+}
+// 搜尋與篩選：打字就篩（只在這台裝置上篩，不用連線）；地圖上的針跟著一起篩
+function bindSpotFilters() {
+  const approved = data.spots.filter((s) => s.status === 'approved');
+  const cities = [...new Set(approved.map((s) => s.city).filter(Boolean))];
+  cities.sort((a, b) => CITIES.indexOf(a) - CITIES.indexOf(b));
+  const sel = $('#spotCity');
+  sel.insertAdjacentHTML('beforeend', cities.map((c) => `<option ${filt.city === c ? 'selected' : ''}>${c}</option>`).join(''));
+  if (filt.city && !cities.includes(filt.city)) filt.city = '';
+  const paint = () => {
+    const base = approved.filter((s) => (!filt.city || s.city === filt.city));
+    const q = filt.q.trim().toLowerCase();
+    const hit = (s) => !q || `${s.name} ${KIND[s.kind]} ${s.city || ''}`.toLowerCase().includes(q);
+    // 類型膠囊上的數字：目前縣市與關鍵字下，每種類型有幾個
+    const n = (k) => base.filter((s) => (!k || s.kind === k) && hit(s)).length;
+    $('#kindChips').innerHTML = [['', '全部'], ...Object.entries(KIND).filter(([k]) => approved.some((s) => s.kind === k))]
+      .map(([k, v]) => `<button type="button" class="chip kchip${k ? ` k-${k}` : ''}" aria-pressed="${filt.kind === k}" data-kind="${k}">${k ? glyph(k) : ''}<span>${v}</span><b class="num">${n(k)}</b></button>`).join('');
+    for (const b of $('#kindChips').querySelectorAll('[data-kind]')) b.onclick = () => { filt.kind = b.dataset.kind; pref.set('kind', filt.kind); paint(); paintPins(); };
+    let list = base.filter((s) => (!filt.kind || s.kind === filt.kind) && hit(s));
+    if (filt.near && myPos) list = list.map((s) => ({ ...s, d: hav(myPos, [s.lat, s.lng]) })).sort((a, b) => a.d - b.d);
+    $('#spotCount').textContent = list.length === approved.length ? `${approved.length} 個` : `${list.length} / ${approved.length} 個`;
+    $('#spotList').innerHTML = list.slice(0, 200).map((s) => `<button class="r spotrow" data-open="${esc(s.id)}">${kindTile(s.kind)}
+        <span><b><span translate="no">${esc(s.name)}</span></b><span class="tiny" style="display:block">${KIND[s.kind]}${s.city ? `・${esc(s.city)}` : ''}${s.d != null ? `・${s.d < 1000 ? `${Math.round(s.d)} 公尺` : `${(s.d / 1000).toFixed(1)} 公里`}` : ''}${s.reports ? `・24 小時內 ${s.reports} 則回報${s.latest ? `：${esc(Object.entries(s.latest).filter(([k, v]) => v && k !== 'note').map(([, v]) => v).join('、'))}` : ''}` : ''}</span></span><span class="tiny">›</span></button>`).join('')
+      || `<p class="muted" style="margin:0">${approved.length ? '沒有符合的地點，換個關鍵字或類型看看。' : data.editor ? '還沒有地點。按地圖右上的地標按鈕，在地圖上點位置新增。' : '還沒有地點。按地圖右上的地標按鈕，提議一個常跑的地方，幹部審核後就會出現。'}</p>`;
+    for (const b of document.querySelectorAll('#spotList [data-open], #panel .card:first-child [data-open]')) b.onclick = () => openSpot(b.dataset.open, true);
+  };
+  let t;
+  $('#spotQ').oninput = (e) => { if (e.isComposing) return; clearTimeout(t); t = setTimeout(() => { filt.q = $('#spotQ').value; paint(); paintPins(); }, 120); };
+  $('#spotQ').addEventListener('compositionend', () => { filt.q = $('#spotQ').value; paint(); paintPins(); });
+  sel.onchange = () => {
+    filt.city = sel.value; pref.set('city', filt.city); paint(); paintPins();
+    // 選了縣市就把地圖移過去
+    const pts = approved.filter((s) => !filt.city || s.city === filt.city).map((s) => [s.lat, s.lng]);
+    if (filt.city && pts.length) map.fitBounds(window.L.latLngBounds(pts).pad(0.15), { maxZoom: 14 });
+  };
+  $('#spotNear').onclick = () => {
+    if (filt.near) { filt.near = false; $('#spotNear').setAttribute('aria-pressed', 'false'); return paint(); }
+    if (!navigator.geolocation) return toast('這台裝置沒有定位功能');
+    $('#spotNear').classList.add('busy');
+    navigator.geolocation.getCurrentPosition((p) => {
+      $('#spotNear')?.classList.remove('busy');
+      myPos = [p.coords.latitude, p.coords.longitude]; filt.near = true; $('#spotNear')?.setAttribute('aria-pressed', 'true'); paint();
+    }, (e) => { $('#spotNear')?.classList.remove('busy'); toast(e.code === 1 ? '請允許定位權限，才能找離你最近的地點' : '暫時定位不到'); }, { enableHighAccuracy: false, timeout: 10000, maximumAge: 300000 });
+  };
+  for (const b of document.querySelectorAll('#panel [data-open]')) b.onclick = () => openSpot(b.dataset.open, true);
+  paint();
 }
 
 // 地點卡片：說明、天氣、現場回報、路線、接下來在這裡的活動
@@ -236,7 +332,7 @@ async function openSpot(id, fly) {
   else if (fly) map.flyTo([s.lat, s.lng], Math.max(map.getZoom(), 15), { duration: 0.6 });
   const nav = `https://www.google.com/maps/dir/?api=1&destination=${s.lat},${s.lng}&travelmode=walking`;
   $('#panel').innerHTML = `<section class="card spotcard">
-      <div class="row spread"><div><span class="pill">${KIND[s.kind]}</span>${s.status === 'pending' ? ' <span class="pill wait">審核中</span>' : ''}<h2 style="margin:6px 0 0"><span translate="no">${esc(s.name)}</span></h2></div>
+      <div class="row spread"><div class="row" style="gap:12px;align-items:center">${kindTile(s.kind)}<div><span class="tiny">${KIND[s.kind]}${s.city ? `・${esc(s.city)}` : ''}</span>${s.status === 'pending' ? ' <span class="pill wait">審核中</span>' : ''}<h2 style="margin:2px 0 0"><span translate="no">${esc(s.name)}</span></h2></div></div>
         <button class="btn ghost sm" id="backList" aria-label="回地點清單">全部</button></div>
       ${s.intro ? `<p class="muted" style="margin:0;white-space:pre-wrap"><span translate="no">${esc(s.intro)}</span></p>` : ''}
       ${Object.keys(s.info || {}).length ? `<div class="infochips">${Object.entries(INFO).filter(([k]) => s.info[k]).map(([k, v]) => `<span><span class="tiny">${v}</span><b>${esc(s.info[k])}</b></span>`).join('')}</div>` : ''}
@@ -312,6 +408,7 @@ function spotForm(s, pt) {
     ${!s && !data.editor ? '<p class="tiny" style="margin:0">幹部審核通過後，大家就看得到。</p>' : ''}
     <div class="grid2"><label>名稱<input name="name" maxlength="40" required value="${esc(v.name || '')}" placeholder="例如 臺北田徑場"></label>
       <label>類型<select name="kind">${Object.entries(KIND).map(([k, t]) => `<option value="${k}" ${v.kind === k ? 'selected' : ''}>${t}</option>`).join('')}</select></label></div>
+    <label>縣市<select name="city"><option value="">（請選擇）</option>${CITIES.map((c) => `<option ${v.city === c || (!v.city && filt.city === c) ? 'selected' : ''}>${c}</option>`).join('')}</select></label>
     <div class="row spread"><span class="tiny">位置 <span class="num" id="ptText">${pt[0].toFixed(5)}, ${pt[1].toFixed(5)}</span></span><button type="button" class="btn ghost sm" id="repick">重新選位置</button></div>
     <label>說明<textarea name="intro" maxlength="600" placeholder="怎麼去、適合什麼課表、要注意什麼">${esc(v.intro || '')}</textarea></label>
     <div class="grid2">${Object.entries(INFO).map(([k, t]) => `<label>${t}<input name="i_${k}" maxlength="60" value="${esc(v.info?.[k] || '')}" placeholder="${{ lap: '400 公尺', surface: 'PU 跑道', light: '有，到 22:00', water: '有飲水機', toilet: '有', parking: '路邊停車', hours: '05:00–22:00' }[k]}"></label>`).join('')}</div>
@@ -326,7 +423,7 @@ function spotForm(s, pt) {
   $('#sf').onsubmit = async (e) => {
     e.preventDefault();
     const f = e.target;
-    const body = { name: f.name.value, kind: f.kind.value, lat: cur[0], lng: cur[1], intro: f.intro.value, info: Object.fromEntries(Object.keys(INFO).map((k) => [k, f[`i_${k}`].value.trim()])) };
+    const body = { name: f.name.value, kind: f.kind.value, city: f.city.value, lat: cur[0], lng: cur[1], intro: f.intro.value, info: Object.fromEntries(Object.keys(INFO).map((k) => [k, f[`i_${k}`].value.trim()])) };
     try {
       const r = s ? await api(`/spots/${s.id}`, { method: 'PUT', body }) : await api('/spots', { method: 'POST', body });
       drawLayer.clearLayers(); await loadSpots();

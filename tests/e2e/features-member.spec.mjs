@@ -175,3 +175,28 @@ test('通知全部已讀、入場券與領取、每月挑戰、使用說明導�
   }
   await expect(page.locator('#guide')).toBeHidden();
 });
+
+test('練跑地圖：搜尋、類型、縣市篩選，地圖上的針跟著篩', async ({ page }) => {
+  await page.addInitScript(() => { try { localStorage.removeItem('cil-map-kind'); localStorage.removeItem('cil-map-city'); localStorage.setItem('cil-map-view', '[25.03,121.53,16]'); } catch {} });
+  await enter(page);
+  await page.goto('/#/map');
+  await expect(page.locator('#spotList .spotrow').first()).toBeVisible();
+  const total = await page.locator('#spotList .spotrow').count();
+  expect(total).toBeGreaterThanOrEqual(36);
+  // 打字就篩（不用按搜尋）
+  await page.locator('#spotQ').fill('河濱');
+  await expect.poll(() => page.locator('#spotList .spotrow').count()).toBeLessThan(total);
+  for (const t of await page.locator('#spotList .spotrow b').allInnerTexts()) expect(t + '河濱').toBeTruthy();
+  await page.locator('#spotQ').fill('');
+  // 類型：只剩田徑場，清單每一列都是田徑場
+  await page.locator('#kindChips [data-kind="track"]').click();
+  await expect(page.locator('#kindChips [data-kind="track"]')).toHaveAttribute('aria-pressed', 'true');
+  for (const t of await page.locator('#spotList .spotrow b + .tiny').allInnerTexts()) expect(t).toContain('田徑場');
+  // 地圖上的針也只剩田徑場（16 級以上不合併）
+  await expect(page.locator('.mpin:not(.k-track)')).toHaveCount(0);
+  // 縣市
+  await page.locator('#kindChips [data-kind=""]').click();
+  await page.locator('#spotCity').selectOption('高雄市');
+  for (const t of await page.locator('#spotList .spotrow b + .tiny').allInnerTexts()) expect(t).toContain('高雄市');
+  await page.locator('#spotCity').selectOption('');
+});

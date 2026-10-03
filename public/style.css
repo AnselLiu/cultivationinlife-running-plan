@@ -507,10 +507,10 @@ form.signup{display:grid;gap:12px}
 /* 勾選式的膠囊（label 包 input＋span）：外框只畫在 span 上，label 本身不要再一層 */
 label.chip{padding:0;background:none;box-shadow:none;border-radius:999px}
 .chip input{position:absolute;opacity:0;width:1px;height:1px}
-.chip > span{padding:9px 15px;border-radius:999px;border:1px solid var(--stroke);background:var(--glass-hi);transition:background .15s,color .15s,transform .15s var(--tap)}
+label.chip > span{padding:9px 15px;border-radius:999px;border:1px solid var(--stroke);background:var(--glass-hi);transition:background .15s,color .15s,transform .15s var(--tap)}
 .chip input:checked + span{background:var(--accent);color:var(--on-accent);border-color:transparent}
 .chip input:focus-visible + span{outline:2.5px solid color-mix(in srgb,var(--accent) 65%,transparent);outline-offset:2px}
-.chip:active > span{transform:scale(.95)}
+label.chip:active > span{transform:scale(.95)}
 fieldset.group{border:1px solid var(--stroke);border-radius:var(--r-l);padding:14px;margin:0;display:grid;gap:12px;min-width:0}
 fieldset.group legend{font-size:13px;font-weight:700;color:var(--ink-2);padding:0 6px}
 .qedit{display:grid;gap:10px}
@@ -575,7 +575,7 @@ fieldset.group legend{font-size:13px;font-weight:700;color:var(--ink-2);padding:
 .plancard.quality{--st:var(--q)}.plancard.easy{--st:var(--easy)}.plancard.strength{--st:var(--str)}.plancard.race{--st:var(--race)}
 .logform{display:grid;gap:14px}
 .logform input[type=range]{padding:0;height:32px;accent-color:var(--accent);background:transparent;border:0}
-.chips.status .chip > span{padding:10px 16px;font-weight:650}
+.chips.status label.chip > span{padding:10px 16px;font-weight:650}
 .r.tlog{grid-template-columns:32px 1fr 92px}
 .r.tlog .bar{height:6px;border-radius:3px;margin-top:6px}
 @media (max-width:400px){.day{grid-template-columns:62px 1fr auto}}
@@ -592,8 +592,8 @@ svg.ic{width:1.15em;height:1.15em;flex:none;fill:none;stroke:currentColor;stroke
 .docic{display:grid;place-items:center;width:32px;height:32px;border-radius:9px;background:var(--accent-soft);color:var(--accent)}
 .docic svg.ic{width:18px;height:18px}
 .day .logbtn svg.ic{width:19px;height:19px;stroke-width:2.4}
-.chips.status .chip > span{display:inline-flex;align-items:center;gap:6px}
-.chips.feel .chip > span{font-size:15px;padding:9px 14px}
+.chips.status label.chip > span{display:inline-flex;align-items:center;gap:6px}
+.chips.feel label.chip > span{font-size:15px;padding:9px 14px}
 h3 svg.ic{width:18px;height:18px}
 .winners svg.ic{width:12px;height:12px;stroke-width:2.6;margin-left:3px}
 .av svg.ic{width:14px;height:14px;stroke-width:2.6}
@@ -961,14 +961,52 @@ details.group[open] > summary{margin-bottom:2px}
 .drawbar{position:absolute;left:12px;right:68px;bottom:12px;z-index:500;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;padding:10px 12px;border-radius:16px;
   background:var(--glass-hi);-webkit-backdrop-filter:var(--blur);backdrop-filter:var(--blur);box-shadow:var(--shadow-l),inset 0 1px 0 var(--rim)}
 .drawbar b{font-size:20px;margin-right:8px}
-.pin{position:absolute;transform:translate(-50%,-100%);width:30px;height:30px;border-radius:50% 50% 50% 4px;rotate:-45deg;display:grid;place-items:center;
-  background:var(--kc,#1C4698);border:2.5px solid #fff;box-shadow:0 4px 12px rgba(11,27,51,.35)}
-.pin > span{rotate:45deg;color:#fff;font-size:12px;font-weight:800}
-.pin > i{position:absolute;top:-4px;right:-4px;width:11px;height:11px;border-radius:50%;background:#34C759;border:2px solid #fff;rotate:45deg}
-.pin > i.warn{background:#FF9F0A}
-.pin.pending{opacity:.6;border-style:dashed}
-.pin.small{position:relative;transform:none;width:28px;height:28px;flex:none}
-.k-track{--kc:#1C4698}.k-river{--kc:#0A84FF}.k-park{--kc:#34A853}.k-trail{--kc:#8E5B2F}.k-road{--kc:#5E5CE6}.k-other{--kc:#636366}
+/* 練跑地圖的針：水滴形針頭＋類型線條圖示，顏色依類型；待審核是半透明虛線；有現場回報時右上角亮燈 */
+.k-track{--kc:#1C4698;--kc2:#3A68C9}.k-river{--kc:#0A7BD8;--kc2:#38A3FF}.k-park{--kc:#258A45;--kc2:#43B565}
+.k-trail{--kc:#8A5A2B;--kc2:#B27A43}.k-road{--kc:#5145C8;--kc2:#7B70EE}.k-other{--kc:#5B5F66;--kc2:#80858D}
+:root[data-theme="dark"] .k-track{--kc:#3E6FD8;--kc2:#6E95EA}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .k-track{--kc:#3E6FD8;--kc2:#6E95EA}}
+.mpin-host{background:none;border:0}
+.mpin{position:relative;width:36px;height:46px;filter:drop-shadow(0 3px 6px rgba(11,27,51,.35));transition:transform .18s var(--tap)}
+.mpin-shape{position:absolute;inset:0;width:36px;height:46px;overflow:visible}
+.mpin-shape path{fill:var(--kc);stroke:#fff;stroke-width:2.2;paint-order:stroke}
+.mpin::after{content:"";position:absolute;left:6px;top:4px;width:24px;height:12px;border-radius:12px 12px 6px 6px;background:linear-gradient(rgba(255,255,255,.32),rgba(255,255,255,0));pointer-events:none}
+.mpin-glyph{position:absolute;left:8px;top:8px;width:20px;height:20px;display:grid;place-items:center}
+.mpin-glyph svg{width:20px;height:20px;fill:none;stroke:#fff;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+.mpin > i{position:absolute;top:0;right:0;width:11px;height:11px;border-radius:50%;background:#34C759;border:2px solid #fff}
+.mpin > i.warn{background:#FF9F0A}
+.mpin.pending{opacity:.62}
+.mpin.pending .mpin-shape path{stroke-dasharray:3 2.4}
+.leaflet-marker-icon:hover .mpin,.leaflet-marker-icon:focus-visible .mpin{transform:translateY(-3px) scale(1.06)}
+/* 縮小時合併的針：玻璃圓片＋數量＋裡面有哪些類型的小色點 */
+.mclus{width:44px;height:44px;border-radius:50%;display:grid;place-content:center;justify-items:center;gap:2px;background:var(--glass-hi);
+  -webkit-backdrop-filter:var(--blur);backdrop-filter:var(--blur);box-shadow:0 4px 14px rgba(11,27,51,.28),inset 0 0 0 1.5px rgba(255,255,255,.7);color:var(--ink)}
+.mclus b{font-size:15px;line-height:1}
+.mclus span{display:flex;gap:2px}
+.mclus i{width:6px;height:6px;border-radius:50%;background:var(--kc)}
+/* 清單與卡片：同一套圖示的圓角方塊 */
+.ktile{display:grid;place-items:center;flex:none;width:34px;height:34px;border-radius:10px;background:linear-gradient(160deg,var(--kc2),var(--kc));box-shadow:inset 0 1px 0 rgba(255,255,255,.25)}
+.ktile svg{width:20px;height:20px;fill:none;stroke:#fff;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+.ktile.pending{opacity:.6}
+/* 地點搜尋與篩選 */
+.spotsearch{position:relative}
+.spotsearch svg{position:absolute;left:12px;top:50%;width:18px;height:18px;translate:0 -50%;fill:none;stroke:var(--ink-3);stroke-width:2;stroke-linecap:round;pointer-events:none}
+.spotsearch input{padding-left:38px;border-radius:999px}
+.kindchips{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;margin:0 -2px;padding:2px}
+.kindchips::-webkit-scrollbar{display:none}
+.kchip{display:inline-flex;align-items:center;gap:6px;flex:none;padding:7px 12px 7px 10px;font-size:14px;color:var(--ink)}
+.kchip svg{width:16px;height:16px;fill:none;stroke:var(--kc);stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.kchip b{font-size:12px;font-weight:600;color:var(--ink-3)}
+.kchip[aria-pressed="true"]{background:var(--kc,var(--accent));color:#fff}
+.kchip[aria-pressed="true"] svg{stroke:#fff}
+.kchip[aria-pressed="true"] b{color:rgba(255,255,255,.85)}
+.kchip:not([class*="k-"])[aria-pressed="true"]{background:var(--accent);color:var(--on-accent)}
+.kchip:not([class*="k-"])[aria-pressed="true"] b{color:inherit;opacity:.8}
+.spotopts{gap:8px}
+.spotopts select{flex:1;min-width:0}
+.spotopts .btn{flex:none}
+.spotopts .btn svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linejoin:round}
+.spotopts .btn[aria-pressed="true"]{background:var(--accent);color:var(--on-accent)}
 .pintip{font-weight:600;font-size:12px;border-radius:8px;padding:2px 8px;border:0;box-shadow:var(--shadow-s)}
 .spotrow{width:100%;background:none;border:0;font:inherit;color:inherit;text-align:left;cursor:pointer}
 .infochips{display:flex;flex-wrap:wrap;gap:8px}

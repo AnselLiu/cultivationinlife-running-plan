@@ -773,6 +773,7 @@ async function api(req, env, path, method) {
   }
   // ---- 練跑地圖 ----
   const SPOT_KINDS = ['track', 'river', 'park', 'trail', 'road', 'other'];
+  const SPOT_CITIES = ['臺北市', '新北市', '基隆市', '桃園市', '新竹市', '新竹縣', '苗栗縣', '臺中市', '彰化縣', '南投縣', '雲林縣', '嘉義市', '嘉義縣', '臺南市', '高雄市', '屏東縣', '宜蘭縣', '花蓮縣', '臺東縣', '澎湖縣', '金門縣', '連江縣'];
   // 地點審核與管理：協會層級有建立活動權限的幹部（分團幹部可以提議，不能改別人的）
   const canEditSpots = () => !!member && !READONLY[norm(member.role)] && can(member, 'event');
   const readSpot = (b) => {
@@ -780,12 +781,14 @@ async function api(req, env, path, method) {
     const info = {}; for (const k of ['surface', 'lap', 'light', 'water', 'toilet', 'parking', 'hours']) { const v = str(b.info?.[k], 60); if (v) info[k] = v; }
     const sp = { name: str(b.name, 40), kind: SPOT_KINDS.includes(b.kind) ? b.kind : 'other', lat: Math.round(lat * 1e6) / 1e6, lng: Math.round(lng * 1e6) / 1e6, intro: str(b.intro, 600), info: Object.keys(info).length ? JSON.stringify(info) : null };
     if (!sp.name || !Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) return null;
+    const city = str(b.city, 4).replace(/^台/, '臺');
+    sp.city = SPOT_CITIES.includes(city) ? city : null;
     return sp;
   };
   if (path === '/api/spots' && method === 'GET') {
     const g = need(); if (g) return g;
     const editor = canEditSpots();
-    const rows = (await env.DB.prepare(`SELECT s.id, s.name, s.kind, s.lat, s.lng, s.status, s.created_by,
+    const rows = (await env.DB.prepare(`SELECT s.id, s.name, s.kind, s.lat, s.lng, s.city, s.status, s.created_by,
         (SELECT COUNT(*) FROM spot_reports r WHERE r.spot_id = s.id AND r.created_at >= datetime('now', '-24 hours')) AS reports,
         (SELECT r.data FROM spot_reports r WHERE r.spot_id = s.id AND r.created_at >= datetime('now', '-24 hours') ORDER BY r.created_at DESC LIMIT 1) AS latest
       FROM spots s WHERE s.status = 'approved' OR (s.status = 'pending' AND (s.created_by = ? OR ? = 1)) ORDER BY s.name LIMIT 500`).bind(member.id, editor ? 1 : 0).all()).results;
@@ -797,8 +800,8 @@ async function api(req, env, path, method) {
     const sp = readSpot(await body());
     if (!sp) return fail(400, '請填地點名稱並在地圖上選位置');
     const editor = canEditSpots(), id = rid(8);
-    await env.DB.prepare('INSERT INTO spots (id, name, kind, lat, lng, intro, info, status, created_by, reviewed_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-      .bind(id, sp.name, sp.kind, sp.lat, sp.lng, sp.intro || null, sp.info, editor ? 'approved' : 'pending', member.id, editor ? member.id : null).run();
+    await env.DB.prepare('INSERT INTO spots (id, name, kind, lat, lng, city, intro, info, status, created_by, reviewed_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .bind(id, sp.name, sp.kind, sp.lat, sp.lng, sp.city, sp.intro || null, sp.info, editor ? 'approved' : 'pending', member.id, editor ? member.id : null).run();
     await audit(env, req, member, editor ? 'spot.add' : 'spot.propose', 'spot', id, sp.name);
     if (!editor) {
       const mgr = (await env.DB.prepare("SELECT id FROM members WHERE role IN ('chair', 'staff', 'coach')").all()).results.map((r) => r.id);
@@ -826,7 +829,7 @@ async function api(req, env, path, method) {
       if (!editor && !(sp.created_by === member.id && sp.status === 'pending')) return fail(403, '只有幹部可以修改地點');
       const v = readSpot(await body());
       if (!v) return fail(400, '地點資料不完整');
-      await env.DB.prepare("UPDATE spots SET name = ?, kind = ?, lat = ?, lng = ?, intro = ?, info = ?, updated_at = datetime('now') WHERE id = ?").bind(v.name, v.kind, v.lat, v.lng, v.intro || null, v.info, sp.id).run();
+      await env.DB.prepare("UPDATE spots SET name = ?, kind = ?, lat = ?, lng = ?, city = COALESCE(?, city), intro = ?, info = ?, updated_at = datetime('now') WHERE id = ?").bind(v.name, v.kind, v.lat, v.lng, v.city, v.intro || null, v.info, sp.id).run();
       await audit(env, req, member, 'spot.update', 'spot', sp.id, v.name);
       return json({ ok: true });
     }
