@@ -256,3 +256,20 @@ test('代為團體報名：要先填好賽事報名資料並同意；組別價�
   assert.ok(!(await call('t_chair', `/events/${id}/registrations.csv`)).text.includes('A123456789'));
   assert.equal((await call('t_runner', '/me/race-profile')).json.profile, null);
 });
+
+test('移交理事長：要輸入對方姓名確認；一步完成，雙方舊的工作階段作廢', async () => {
+  assert.equal((await call('t_staff', '/members/t_runner/handover', { method: 'POST', body: { my_role: 'member', confirm: '測試跑友' } })).status, 403, '只有理事長能移交');
+  const name = (await call('t_runner', '/me')).json.member.name;
+  assert.equal((await call('t_chair', '/members/t_runner/handover', { method: 'POST', body: { my_role: 'director', confirm: '錯的名字' } })).status, 400);
+  assert.equal((await call('t_chair', '/members/t_runner/handover', { method: 'POST', body: { my_role: 'chair', confirm: name } })).status, 400, '自己要改成別的身分');
+  const r = await call('t_chair', '/members/t_runner/handover', { method: 'POST', body: { my_role: 'director', confirm: name } });
+  assert.equal(r.status, 200);
+  assert.equal(r.json.member.role, 'director');
+  assert.equal((await call('t_runner', '/me')).json.member, null, '對方要重新登入');
+  delete cookies.t_runner; delete cookies.t_chair;
+  assert.equal((await call('t_runner', '/me')).json.member.role, 'chair');
+  // 還原：移交回去，讓其他測試不受影響
+  const back = await call('t_runner', '/members/t_chair/handover', { method: 'POST', body: { my_role: 'member', confirm: (await call('t_chair', '/me')).json.member.name } });
+  assert.equal(back.status, 200);
+  delete cookies.t_runner; delete cookies.t_chair;
+});

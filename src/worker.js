@@ -587,13 +587,45 @@ async function api(req, env, path, method) {
       'content-disposition': 'inline; filename="cil-run.ics"' } });
   }
 
-  // 前端錯誤回報：只寫進 Workers Logs，不存資料庫；有次數限制
+  // 前端錯誤回報：同一天同一個錯誤只留一筆並累加次數；不存身分；有次數限制
   if (path === '/api/client-error' && method === 'POST') {
     if (await limited(env, `cerr:${await ipHash(req, env)}`, 20, 600)) return json({ ok: true });
-    const b = await body();
-    console.error('client-error', JSON.stringify({ message: str(b.message, 300), source: str(b.source, 120), line: Number(b.line) || 0,
-      page: str(b.page, 60), device: deviceLabel(req.headers.get('user-agent') || ''), member: member ? 'yes' : 'no' }));
+    const b = await body(), e = { message: str(b.message, 300), source: str(b.source, 120), line: Math.max(0, Math.min(Number(b.line) || 0, 1e6)), page: str(b.page, 60) };
+    if (!e.message) return json({ ok: true });
+    const device = deviceLabel(req.headers.get('user-agent') || '');
+    console.error('client-error', JSON.stringify({ ...e, device, member: member ? 'yes' : 'no' }));
+    await env.DB.prepare(`INSERT INTO client_errors (day, message, source, line, page, device) VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(day, message, source, line) DO UPDATE SET n = n + 1, last_at = datetime('now'), page = excluded.page, device = excluded.device`)
+      .bind(today(), e.message, e.source, e.line, e.page, device).run();
     return json({ ok: true });
+  }
+  // 開啟速度：每次開啟最多送一次（幾個數字），不存身分
+  if (path === '/api/vitals' && method === 'POST') {
+    if (await limited(env, `vit:${await ipHash(req, env)}`, 30, 600)) return json({ ok: true });
+    const b = await body(), device = deviceLabel(req.headers.get('user-agent') || ''), page = str(b.page, 40);
+    const LIM = { ready: 60000, fcp: 60000, lcp: 60000, inp: 20000, ttfb: 60000, cls: 10 };
+    const rows = Object.entries(LIM).map(([k, max]) => [k, Number(b[k])]).filter(([k, v]) => Number.isFinite(v) && v >= 0 && v <= LIM[k]);
+    if (rows.length) await env.DB.batch(rows.map(([k, v]) => env.DB.prepare('INSERT INTO client_metrics (day, metric, value, page, device, standalone, warm) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .bind(today(), k, Math.round(v * (k === 'cls' ? 1000 : 1)) / (k === 'cls' ? 1000 : 1), page, device, b.standalone ? 1 : 0, b.warm ? 1 : 0)));
+    return json({ ok: true });
+  }
+  // 速度與錯誤（管理後台總覽）：最近 N 天的 p75 與最常見的錯誤
+  if (path === '/api/admin/health' && method === 'GET') {
+    const g = need(); if (g) return g;
+    if (!can(member, 'settings') && !can(member, 'audit')) return fail(403, '只有理事長、行政人員與監事可以看');
+    const days = [7, 30, 90].includes(Number(url0(req).searchParams.get('days'))) ? Number(url0(req).searchParams.get('days')) : 7;
+    const from = new Date(Date.now() + 8 * 3600e3 - (days - 1) * 864e5).toISOString().slice(0, 10);
+    const vals = (await env.DB.prepare('SELECT metric, value, warm, standalone FROM client_metrics WHERE day >= ? ORDER BY metric, value').bind(from).all()).results;
+    const pct = (arr, p) => (arr.length ? arr[Math.min(arr.length - 1, Math.floor(arr.length * p))] : null);
+    const metrics = {};
+    for (const k of ['ready', 'fcp', 'lcp', 'inp', 'cls', 'ttfb']) {
+      const all = vals.filter((v) => v.metric === k).map((v) => v.value);
+      const warm = vals.filter((v) => v.metric === k && v.warm).map((v) => v.value);
+      metrics[k] = { n: all.length, p50: pct(all, 0.5), p75: pct(all, 0.75), warmP75: pct(warm, 0.75) };
+    }
+    const errors = (await env.DB.prepare(`SELECT message, source, line, page, device, SUM(n) AS n, MAX(last_at) AS last_at FROM client_errors WHERE day >= ?
+      GROUP BY message, source, line ORDER BY n DESC LIMIT 20`).bind(from).all()).results;
+    return json({ days, metrics, errors });
   }
   // 分團小圖：網址帶版本號，可以長期快取
   const mic = path.match(/^\/api\/teams\/([\w-]{1,16})\/icon$/);
@@ -2087,6 +2119,28 @@ async function api(req, env, path, method) {
     return json({ member: pub({ ...member, membership: 'applied' }) });
   }
 
+  // 移交理事長：對方成為理事長、自己同時改成指定的身分，一步完成（不會出現沒有理事長或兩位理事長的空窗）
+  const mho = path.match(/^\/api\/members\/([\w-]{1,32})\/handover$/);
+  if (mho && method === 'POST') {
+    const g = need(); if (g) return g;
+    if (norm(member.role) !== 'chair') return fail(403, '只有理事長可以移交');
+    const b = await body(), myRole = ROLES[b.my_role] && b.my_role !== 'chair' ? b.my_role : null;
+    if (!myRole) return fail(400, '請選擇你移交後的身分');
+    if (mho[1] === member.id) return fail(400, '請選擇另一位跑友');
+    const target = await env.DB.prepare('SELECT id, name FROM members WHERE id = ?').bind(mho[1]).first();
+    if (!target) return fail(404, '找不到這位跑友');
+    if (b.confirm !== target.name) return fail(400, '請輸入對方的姓名確認');
+    await env.DB.batch([
+      env.DB.prepare("UPDATE members SET role = 'chair', title = NULL WHERE id = ?").bind(target.id),
+      env.DB.prepare('UPDATE members SET role = ?, title = ? WHERE id = ?').bind(myRole, str(b.my_title, 20) || null, member.id),
+    ]);
+    await revokeSessions(env, target.id);
+    await revokeSessions(env, member.id);
+    await audit(env, req, member, 'role.handover', 'member', target.id, `理事長移交給 ${target.name}；原理事長改為${ROLES[myRole]}`);
+    await notify(env, [target.id], 'system', { title: '你已成為理事長', body: `${member.name} 把理事長移交給你，請重新登入後到管理後台確認幹部名單`, url: '/#/admin' });
+    const next = { ...member, role: myRole };
+    return json({ ok: true, member: pub(next) }, 200, { 'set-cookie': await startSession(env, next, req) });
+  }
   const mr = path.match(/^\/api\/members\/([\w-]{1,32})\/role$/);
   if (mr && method === 'POST') {
     const g = need(); if (g) return g;
@@ -2202,6 +2256,8 @@ async function retention(env, now) {
   await run('sessions', "DELETE FROM sessions WHERE expires_at < datetime('now')");
   await run('rate_limits', "DELETE FROM rate_limits WHERE window_end < datetime('now')");
   await run('notifications', "DELETE FROM notifications WHERE created_at < datetime('now', '-180 days')");
+  await run('client_metrics', "DELETE FROM client_metrics WHERE day < date('now', '-90 days')");
+  await run('client_errors', "DELETE FROM client_errors WHERE day < date('now', '-90 days')");
   const auditYears = Math.max(1, Math.min(Number(org.audit_years) || 3, 10));
   await run('audit', `DELETE FROM audit_log WHERE at < datetime('now', '-${auditYears} years')`);
   const evYears = Math.max(0, Math.min(Number(org.event_data_years) || 0, 20));

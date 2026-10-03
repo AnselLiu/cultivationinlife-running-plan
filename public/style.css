@@ -107,7 +107,7 @@ body::after{content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;opa
 .top.titled .ctitle{transform:translate(-50%,0)}
 .top.titled .ctitle{opacity:1}
 .topright{display:flex;align-items:center;gap:8px;justify-self:end}
-.countdown{text-align:right;font-size:11px;color:var(--ink-3);line-height:1.2;white-space:nowrap}
+.countdown{text-align:right;font-size:12px;color:var(--ink-3);line-height:1.2;white-space:nowrap}
 .countdown b{display:block;font-size:22px;font-weight:700;color:var(--accent);line-height:1}
 .themebtn{width:36px;height:36px;border-radius:50%;display:grid;place-items:center;cursor:pointer;color:var(--ink);
   border:0;background:var(--glass-2);-webkit-backdrop-filter:var(--blur);backdrop-filter:var(--blur);
@@ -180,9 +180,9 @@ button.pill{cursor:pointer}
 /* 活動卡 */
 .ev{display:grid;grid-template-columns:auto 1fr auto;gap:14px;align-items:center}
 .cal{width:56px;border-radius:15px;overflow:hidden;text-align:center;background:var(--glass-hi);box-shadow:var(--shadow-s),inset 0 1px 0 var(--rim)}
-.cal u{display:block;font-size:10.5px;letter-spacing:.04em;padding:3px 0;background:var(--accent);color:var(--on-accent);text-decoration:none;font-weight:700}
+.cal u{display:block;font-size:12px;letter-spacing:.04em;padding:3px 0;background:var(--accent);color:var(--on-accent);text-decoration:none;font-weight:700}
 .cal b{display:block;font-size:25px;font-weight:700;padding:4px 0 0;line-height:1}
-.cal span{display:block;font-size:11px;color:var(--ink-3);padding:2px 0 5px}
+.cal span{display:block;font-size:12px;color:var(--ink-3);padding:2px 0 5px}
 .ev .body{min-width:0;display:grid;gap:2px}
 .ev .body .t{font-size:17px;font-weight:650;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .bar{height:4px;border-radius:2px;background:var(--stroke);overflow:hidden;margin-top:6px}
@@ -212,7 +212,7 @@ button.pill{cursor:pointer}
 .day{position:relative;display:grid;grid-template-columns:78px 1fr;gap:12px;padding:12px 15px;border-radius:var(--r-l);
   background:var(--glass);-webkit-backdrop-filter:var(--blur);backdrop-filter:var(--blur);box-shadow:var(--shadow-s),inset 0 1px 0 var(--rim)}
 .day .dl{display:grid;gap:5px;font-size:13px;font-weight:650;align-content:start}
-.day .k{justify-self:start;font-size:11px;font-weight:700;border-radius:6px;padding:2px 8px;display:flex;align-items:center;gap:5px}
+.day .k{justify-self:start;font-size:12px;font-weight:700;border-radius:6px;padding:2px 8px;display:flex;align-items:center;gap:5px}
 .day .k::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
 .day .t{font-size:15px;line-height:1.45}
 .day.easy .k{color:var(--easy);background:color-mix(in srgb,var(--easy) 13%,transparent)}
@@ -260,7 +260,12 @@ pre.out{white-space:pre-wrap;word-break:break-word;background:var(--glass-hi);bo
 .empty svg{width:44px;height:44px;fill:none;stroke:var(--ink-3);stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
 .skel{display:grid;gap:14px}
 .skel i{display:block;border-radius:var(--r-xl);background:var(--glass);height:88px;position:relative;overflow:hidden}
-.skel i:first-child{height:150px}
+.skel b{display:block;height:34px;width:42%;border-radius:12px;background:var(--glass);margin:6px 0 4px;position:relative;overflow:hidden}
+.skel b::after{content:"";position:absolute;inset:0;background:linear-gradient(90deg,transparent,rgba(255,255,255,.35),transparent);transform:translateX(-100%);animation:shimmer 1.3s infinite}
+.skel u{display:block;height:13px;width:22%;border-radius:6px;background:var(--glass);margin:8px 6px -4px;text-decoration:none}
+@media (prefers-reduced-motion:reduce){.skel i::after,.skel b::after{animation:none}}
+/* 背景更新時重畫：不重播進場動畫 */
+.quiet *,.quiet *::before,.quiet *::after{animation:none!important;transition:none!important}
 .skel i::after{content:"";position:absolute;inset:0;background:linear-gradient(90deg,transparent,rgba(255,255,255,.35),transparent);
   transform:translateX(-100%);animation:shimmer 1.3s infinite}
 @keyframes shimmer{to{transform:translateX(100%)}}
@@ -713,7 +718,7 @@ h3 svg.ic{width:18px;height:18px}
 .askcard b{font-size:18px}
 
 /* 右上角倒數：可以點，打開選比賽 */
-button.countdown{appearance:none;border:0;background:transparent;cursor:pointer;font:inherit;font-size:11px;color:var(--ink-3);padding:4px 6px;border-radius:10px}
+button.countdown{appearance:none;border:0;background:transparent;cursor:pointer;font:inherit;font-size:12px;color:var(--ink-3);padding:4px 6px;border-radius:10px}
 button.countdown:hover{background:color-mix(in srgb,var(--ink) 6%,transparent)}
 button.countdown small{font-size:12px;font-weight:600;color:var(--accent)}
 .sheet{position:fixed;inset:0;z-index:70;display:grid;align-items:end;justify-items:center}
@@ -866,3 +871,8 @@ html.guiding .runbar,html.guiding .updbar{display:none}
 label.chip{background:none;padding:0;box-shadow:none;border-radius:999px}
 .chip span small{font-size:13px;opacity:.75;font-weight:500}
 .lsumact .btn{justify-content:center}
+/* 管理後台：開啟速度 */
+.vitals{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px}
+.vital{display:grid;gap:2px;padding:12px 14px;border-radius:var(--r-m);background:var(--glass-hi);border-left:4px solid var(--stroke)}
+.vital b{font-size:22px}
+.vital.good{border-left-color:#34C759}.vital.ok{border-left-color:#FF9F0A}.vital.poor{border-left-color:var(--race)}

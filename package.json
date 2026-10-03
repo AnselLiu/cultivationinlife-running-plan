@@ -10,6 +10,7 @@
     "db:migrate:remote": "wrangler d1 migrations apply cil-run --remote",
     "test": "node --test --test-concurrency=1 tests/*.test.mjs",
     "test:ci": "node tests/run.mjs",
+    "test:lh": "node tests/lighthouse.mjs",
     "deploy:staging": "wrangler d1 migrations apply cil-run-staging --remote --env staging && wrangler deploy --env staging"
   },
   "devDependencies": {
