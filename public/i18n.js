@@ -60,6 +60,11 @@ const PATTERNS = [
   [/^開放中・到 (\d\d:\d\d)$/, 'Open · until $1'], [/^目前未開放・(\d\d:\d\d) 開放$/, 'Closed now · opens $1'],
   [/^目前未開放・明天 (\d\d:\d\d) 開放$/, 'Closed now · opens tomorrow $1'], [/^目前未開放・週([日一二三四五六]) (\d\d:\d\d) 開放$/, (_, w, t) => `Closed now · opens ${WD[w]} ${t}`],
   [/^還有 (\d+) 筆待審核$/, '$1 pending requests'], [/^還有 (\d+) 筆待審核：/, '$1 pending: '],
+  // 挑戰、分團人數、首頁待審核、活動報名人數：整句先換，不要被拆成「再 21.2 km」「1 members」「2 rows」
+  [/^再 ([\d.]+) 公里達到 (\d+) 公里$/, '$1 km to reach $2 km'],
+  [/^(\d+) 人・(\d+) 人有練$/, (_, a, b) => `${a} ${a === '1' ? 'member' : 'members'} · ${b} active`],
+  [/・(\d+) 筆(?=・剩|$)/g, ' · $1 pending'],
+  [/^(報名|已回覆) (\d+)( \/ \d+)? 人$/, (_, k, n, cap) => `${n}${cap || ''} ${k === '報名' ? 'signed up' : (cap || n !== '1' ? 'responses' : 'response')}`],
   [/^已選 (\d+) 人$/, '$1 selected'], [/^活動前 (\d+) 天$/, '$1 days before the event'], [/^選取 (.+)$/, 'Select $1'],
   // 報名期間：台北時間 10/5（日）20:00 → Sun 10/5 20:00（要在一般日期句型之前，避免時間黏在日期後面）
   [/(\d{1,2})\/(\d{1,2})（([日一二三四五六])）(\d\d:\d\d)/g, (_, m, d, w, hm) => `${WD[w]} ${m}/${d} ${hm}`],
@@ -84,14 +89,16 @@ const PATTERNS = [
   [/^週([日一二三四五六])$/, (_, w) => WD[w]],
   [/週([日一二三四五六])/g, (_, w) => WD[w]],
   [/^天到(.+)$/, (_, r) => `days to ${r}`],
+  // 「還有 N 人沒處理完」整段先換：片段「還有」單獨是 KPI 的 To go，拆開會變成「To go 3 people」
+  [/還有 (\d+) 人沒處理完，請再按一次/g, '$1 people not processed yet. Tap again to continue'],
   ['FRAG'],
   [/還有 (\d+) 天/g, '$1 days to go'],
   [/(\d+) 分鐘前/g, '$1 min ago'], [/(\d+) 小時前/g, '$1 h ago'], [/(\d+) 天前/g, '$1 d ago'],
   [/NT\$([\d,]+) 起/g, 'from NT$$$1'],
   [/([\d.]+) 公里/g, '$1 km'], [/([\d.]+) 公尺/g, '$1 m'], [/([\d.]+) 毫秒/g, '$1 ms'], [/([\d.]+) 秒/g, '$1 s'],
-  [/(\d+) 人/g, '$1 people'], [/(\d+) 位/g, '$1'], [/(\d+) 堂/g, '$1 sessions'], [/(\d+) 次/g, '$1×'], [/(\d+) 筆/g, '$1'],
+  [/(^|[^\d.,])1 人/g, (_, p) => `${p}1 person`], [/(\d+) 人/g, '$1 people'], [/(\d+) 位/g, '$1'], [/(\d+) 堂/g, '$1 sessions'], [/(\d+) 次/g, '$1×'], [/(\d+) 筆/g, '$1'],
   [/(\d+) 件/g, '$1 pcs'], [/(\d+) 處/g, (_, n) => `${n} ${n === '1' ? 'place' : 'places'}`], [/(\d+) 場/g, '$1 events'], [/(\d+) 週/g, '$1 wk'], [/(\d+) 天/g, '$1 days'], [/(\d+) 則/g, '$1'], [/(\d+) 個/g, '$1'],
-  [/(?:^|\s)([A-Z]) 組/g, ' group $1'], [/推估：(\d{4}) W(\d+)/g, 'Estimated from $1 W$2'],
+  [/(?:^|\s)([A-Z]) 組/g, ' Group\u00a0$1'], [/推估：(\d{4}) W(\d+)/g, 'Estimated from $1 W$2'],
   [/([A-Za-z])\s*或\s*([A-Za-z])/g, '$1 or $2'],
   [/第 (\d+) 桌/g, 'Table $1'], [/(\d+) 時/g, '$1:00'], [/(\d+) 年/g, '$1 yr'], [/(\d+) 組/g, 'group $1'],
 ];
@@ -99,7 +106,7 @@ let dict = null, frag = null, inner = {};
 const tr = (s) => {
   if (!CJK.test(s)) return s;
   const lead = s.match(/^\s*/)[0], tail = s.match(/\s*$/)[0], core = s.trim();
-  if (dict[core] != null) return lead + dict[core] + tail;
+  if (dict[core] != null) return lead + dict[core] + (!tail && /[。，：；・]$/.test(core) && /[.,:;·]$/.test(dict[core]) ? ' ' : '') + tail;
   let out = core;
   // 先換已知片段（含數字的片段如「・30 天內到期」要先比對），再套數字與日期句型
   // 日期、星期、月份句型先換（避免被片段拆開），再換已知片段（含數字的片段如「・30 天內到期」），最後換數量單位
@@ -111,7 +118,11 @@ const tr = (s) => {
     .replace(/，/g, ', ').replace(/。/g, '. ').replace(/：/g, ': ').replace(/；/g, '; ').replace(/（/g, ' (').replace(/）/g, ') ').replace(/、/g, ', ')
     .replace(/[「『]/g, ' “').replace(/[」』]/g, '” ').replace(/・/g, ' · ').replace(/？/g, '? ').replace(/！/g, '! ')
     .replace(/\s{2,}/g, ' ').replace(/ ([,.;:!?)”])/g, '$1').replace(/([(“]) /g, '$1');
-  return lead + out.trim() + tail;
+  // 長句子換完還剩一堆中文：整句保留中文，不要輸出中英夾雜、看不懂的句子（例如隱私權政策）
+  if (core.length >= 10 && (out.match(/[㐀-鿿]/g) || []).length >= 3) return s;
+  // 句尾是轉換過的標點（・，：）而後面接著連結或不翻譯的名稱：保留一個空格，不會黏在一起
+  const body = out.trim();
+  return lead + (!lead && /^·/.test(body) ? ' ' : '') + body + (!tail && /[,.;:·]$/.test(body) ? ' ' : '') + tail;
 };
 const SKIP = 'script,style,textarea,code,[translate="no"],[contenteditable]';
 const ATTRS = ['placeholder', 'aria-label', 'title', 'alt'];

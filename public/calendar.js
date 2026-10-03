@@ -35,9 +35,9 @@ async function calendarView() {
   view.innerHTML = `${largeTitle('行事曆', '團練、揪跑、賽事提醒與國定假日')}
     <section class="card calcard">
       <div class="row spread calhead">
-        <button class="btn ghost sm" data-m="${shift(-1)}" aria-label="上個月">‹</button>
+        <button class="btn ghost sm navbtn" data-m="${shift(-1)}" aria-label="上個月">${IC.chevL}</button>
         <h2>${y} 年 ${m} 月</h2>
-        <button class="btn ghost sm" data-m="${shift(1)}" aria-label="下個月">›</button>
+        <button class="btn ghost sm navbtn" data-m="${shift(1)}" aria-label="下個月">${IC.chevR}</button>
       </div>
       <div class="calgrid" role="group" aria-label="${y} 年 ${m} 月">${WD.map((w, i) => `<span class="wd ${i === 0 || i === 6 ? 'off' : ''}">${w}</span>`).join('')}${cells.join('')}</div>
       <div class="legend tiny"><span><i class="dot"></i>活動</span><span><i class="dot mine"></i>已報名</span><span><i class="dot item"></i>賽事提醒</span><span><i class="dot race"></i>我的賽事</span></div>

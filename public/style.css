@@ -15,7 +15,12 @@
   --stroke:rgba(11,27,51,.08);
   --accent:#1C4698; --on-accent:#fff; --accent-soft:rgba(28,70,152,.10);
   --easy:#456B0F; --q:#B64400; --long:#1C4698; --rest:#55637A; --str:#6D45B0; --race:#C41E3A; --ok:#34C759; --mid:#FF9F0A; --ok-ink:#1E7E34;
-  --warn:#6B5B00; --warn-bg:rgba(253,243,109,.5);
+  --warn:#7A5000; --warn-bg:rgba(255,204,0,.2);
+  /* 容器用的中性填色（引用區塊、留言、置頂公告）：不跟著強調色，深色模式才不會變成橄欖色 */
+  --fill:color-mix(in srgb,var(--ink) 5%,transparent);
+  /* 下拉選單的細線箭頭（深色模式另外一組顏色） */
+  --chev:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%235A6578' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M7 10l5 5 5-5'/%3E%3C/svg%3E");
+  --checkimg:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23fff' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 12.5l4 4 8-9'/%3E%3C/svg%3E");
   /* 通知分類色磚：白色圖形對比都在 4.6:1 以上，深色模式沿用同一組值 */
   --tile-red:#DE2B44; --tile-orange:#BB5716; --tile-teal:#1A808E; --tile-blue:#346EDF; --tile-green:#278241;
   --tile-indigo:#6764E8; --tile-purple:#855DD0; --tile-gray:#68768D;
@@ -33,9 +38,11 @@
   --glass:rgba(20,38,64,.46); --glass-2:rgba(24,44,72,.62); --glass-hi:rgba(34,58,92,.85);
   --rim:rgba(255,255,255,.22); --rim-2:rgba(255,255,255,.04);
   --stroke:rgba(255,255,255,.08);
-  --accent:#FDF36D; --on-accent:#0B1B33; --accent-soft:rgba(253,243,109,.14);
+  --accent:#FDF36D; --on-accent:#0B1B33; --accent-soft:rgba(255,255,255,.09);
   --easy:#C9E36A; --q:#FFB347; --long:#8FB2F5; --rest:#A3B1C8; --str:#C9A8FF; --race:#FF7A85; --ok:#30D158; --mid:#FF9F0A; --ok-ink:#30D158;
-  --warn:#FDF36D; --warn-bg:rgba(253,243,109,.14); --ndot:#4D8DFF;
+  --warn:#FFB340; --warn-bg:rgba(255,159,10,.16); --ndot:#4D8DFF;
+  --chev:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%238F9EB6' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M7 10l5 5 5-5'/%3E%3C/svg%3E");
+  --checkimg:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%230B1B33' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 12.5l4 4 8-9'/%3E%3C/svg%3E");
   --shadow-s:0 1px 2px rgba(0,0,0,.4); --shadow-l:0 18px 44px -20px rgba(0,0,0,.85);
 }}
 :root[data-theme="dark"]{
@@ -44,14 +51,17 @@
   --glass:rgba(20,38,64,.46); --glass-2:rgba(24,44,72,.62); --glass-hi:rgba(34,58,92,.85);
   --rim:rgba(255,255,255,.22); --rim-2:rgba(255,255,255,.04);
   --stroke:rgba(255,255,255,.08);
-  --accent:#FDF36D; --on-accent:#0B1B33; --accent-soft:rgba(253,243,109,.14);
+  --accent:#FDF36D; --on-accent:#0B1B33; --accent-soft:rgba(255,255,255,.09);
   --easy:#C9E36A; --q:#FFB347; --long:#8FB2F5; --rest:#A3B1C8; --str:#C9A8FF; --race:#FF7A85; --ok:#30D158; --mid:#FF9F0A; --ok-ink:#30D158;
-  --warn:#FDF36D; --warn-bg:rgba(253,243,109,.14); --ndot:#4D8DFF;
+  --warn:#FFB340; --warn-bg:rgba(255,159,10,.16); --ndot:#4D8DFF;
+  --chev:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%238F9EB6' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M7 10l5 5 5-5'/%3E%3C/svg%3E");
+  --checkimg:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%230B1B33' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 12.5l4 4 8-9'/%3E%3C/svg%3E");
   --shadow-s:0 1px 2px rgba(0,0,0,.4); --shadow-l:0 18px 44px -20px rgba(0,0,0,.85);
 }
 
 *{box-sizing:border-box}
-html{background:var(--bg)}
+/* html 用漸層的尾色：回彈捲動、內容比畫面短時都不會露出另一個顏色 */
+html{background:var(--bg-2);scroll-padding-top:calc(72px + env(safe-area-inset-top,0px))}
 /* hidden 一律藏起來：用 :root 提高權重，蓋過元件的 display:grid!important（不然會變成空白色塊） */
 :root [hidden]{display:none!important}
 /* 關掉「點兩下放大」（PWA 常被誤觸），雙指縮放保留給需要放大字的人；按鈕也不會再有 300ms 延遲 */
@@ -60,13 +70,18 @@ html,body{margin:0;min-height:100%}
 body{
   color:var(--ink);
   font:17px/1.47 -apple-system,BlinkMacSystemFont,"SF Pro Text","PingFang TC","Noto Sans TC","Helvetica Neue","Microsoft JhengHei",system-ui,sans-serif;
-  letter-spacing:-.01em;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;
-  background:linear-gradient(180deg,var(--bg),var(--bg-2));
+  letter-spacing:0;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;
+  /* 漸層畫在 body 上，body 至少要跟畫面一樣高，不然內容結束的地方會出現一條色帶 */
+  background:linear-gradient(180deg,var(--bg),var(--bg-2));min-height:100vh;min-height:100dvh;
   padding-bottom:calc(104px + env(safe-area-inset-bottom,0px));
   overflow-x:hidden;
 }
 .num{font-family:ui-rounded,"SF Pro Rounded",-apple-system,"PingFang TC",system-ui,sans-serif;font-variant-numeric:tabular-nums;letter-spacing:0}
-h1,h2,h3{margin:0;letter-spacing:-.022em}
+/* 中文不用負字距；英文模式（html lang=en）才把標題收緊一點 */
+h1,h2,h3{margin:0;letter-spacing:0;text-wrap-style:balance}
+:root:lang(en) body{letter-spacing:-.01em}
+:root:lang(en) :is(h1,h2,h3){letter-spacing:-.022em}
+p,.tiny,.muted,.notice{text-wrap-style:pretty}   /* 用 longhand，不會蓋掉 white-space:nowrap */
 h1{font-size:34px;line-height:1.2;font-weight:700}
 h2{font-size:22px;line-height:1.27;font-weight:700}
 h3{font-size:17px;line-height:1.3;font-weight:600}
@@ -124,12 +139,21 @@ body::after{content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;opa
 .bell b{position:absolute;top:-3px;right:-3px;min-width:17px;height:17px;border-radius:9px;background:var(--tile-red);color:#fff;
   font-size:11px;font-weight:700;display:grid;place-items:center;padding:0 4px;border:0;box-shadow:0 0 0 2px var(--glass-hi)}
 .bell b[hidden]{display:none}
-.bell::after{content:"";position:absolute;inset:-4px;border-radius:50%}   /* 看起來 36px，可以點的範圍 44×44 */
+/* 右上角的通知、深淺色按鈕外觀 36，點擊範圍往外放到 44pt */
+.themebtn::after{content:"";position:absolute;inset:-4px;border-radius:50%}
 
-.wrap{max-width:760px;margin:0 auto;padding:0 max(16px,env(safe-area-inset-left,0px)) 24px;display:flex;flex-direction:column;gap:14px}
+/* 內容欄：--wrapw 是欄寬，頂部列用同一個值算左右留白，品牌、倒數跟內容左右對齊 */
+:root{--wrapw:760px;--gut:16px}
+.wrap{max-width:var(--wrapw);margin:0 auto;padding:0 max(var(--gut),env(safe-area-inset-left,0px)) 24px;display:flex;flex-direction:column;gap:14px}
+.top{padding-inline:max(var(--gut),env(safe-area-inset-left,0px),calc((100% - var(--wrapw))/2 + var(--gut)))}
 
 /* iOS 大標題 */
-.lt{padding:6px 4px 2px;display:flex;align-items:flex-end;justify-content:space-between;gap:12px}
+/* 大標題列：標題靠左、動作靠右對齊底部；副標題在左欄裡自己換行（basis 0），
+   只有標題最長的一個字加上動作都放不下時（長英文），動作才換到下一行靠右 */
+.lt{padding:6px 4px 2px;display:flex;align-items:flex-end;justify-content:space-between;gap:8px 12px;flex-wrap:wrap}
+.lt > div{min-width:min-content;flex:1 1 0}
+.lt h1{overflow-wrap:normal}
+.lt > .btn,.lt > .ltact{flex:none;margin-left:auto}
 .lt p{margin:2px 0 0;color:var(--ink-2);font-size:15px}
 .section-h{display:flex;align-items:baseline;justify-content:space-between;gap:10px;padding:8px 4px 0}
 .section-h h2{font-size:20px}
@@ -162,18 +186,27 @@ a.card:active{transform:scale(.985)}
 
 /* 按鈕：膠囊形、按下有回彈 */
 .btn{appearance:none;border:0;border-radius:999px;padding:12px 20px;font-weight:600;font-size:16px;cursor:pointer;line-height:1.2;
+  /* 按鈕一律是置中的 flex：<a class="btn"> 撐滿格子時字也在正中間，圖示跟文字對齊 */
+  display:inline-flex;align-items:center;justify-content:center;gap:6px;text-align:center;position:relative;
   background:var(--accent);color:var(--on-accent);box-shadow:var(--shadow-s),inset 0 1px 0 rgba(255,255,255,.25);
   transition:transform .2s var(--tap),filter .2s var(--tap)}
 .btn:active{transform:scale(.95)}
 @media (hover:hover){.btn:hover{filter:brightness(1.06)}}
 .btn:disabled{opacity:.45;cursor:default;transform:none}
-.btn.block{width:100%;display:block;text-align:center}
+.btn.block{width:100%;display:flex}
 .btn.ghost{background:var(--glass-2);color:var(--ink);-webkit-backdrop-filter:var(--blur);backdrop-filter:var(--blur);
   box-shadow:var(--shadow-s),inset 0 1px 0 var(--rim)}
 .btn.danger{background:var(--glass-hi);color:var(--race);box-shadow:var(--shadow-s),inset 0 0 0 1px var(--stroke)}
 .btn.line{background:#06C755;color:#fff;display:flex;align-items:center;justify-content:center;gap:9px}
 .btn.line svg{width:19px;height:19px;fill:currentColor;flex:none}
 .btn.sm{padding:8px 14px;font-size:14px}
+/* 小按鈕外觀不變，點擊範圍往外放大到 44pt（::after 留給送出中的轉圈） */
+.btn.sm::before{content:"";position:absolute;inset:-6px -2px}
+/* 卡片裡單獨一顆小按鈕：依內容寬度靠左，不要被 grid 撐成一條長膠囊 */
+.card > .btn.sm,.card > a.btn.sm{justify-self:start}
+/* 欄位旁邊的按鈕跟輸入框一樣高 */
+/* 地圖的篩選列（.spotopts）是一排膠囊，不套這條 */
+form.row .btn,.row:not(.spotopts) > input ~ .btn,.row:not(.spotopts) > select ~ .btn,.idwrap .btn{min-height:46px;padding-inline:18px}
 
 .pill{display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:650;border-radius:999px;padding:3px 10px;
   background:var(--accent-soft);color:var(--accent);white-space:nowrap;border:0}
@@ -195,7 +228,7 @@ button.pill{cursor:pointer}
 .ev .body{min-width:0;display:grid;gap:2px}
 .ev .body .t{font-size:17px;font-weight:650;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .bar{height:4px;border-radius:2px;background:var(--stroke);overflow:hidden;margin-top:6px}
-.bar i{display:block;height:100%;border-radius:2px;background:linear-gradient(90deg,var(--lime),var(--blue))}
+.bar i{display:block;height:100%;border-radius:2px;background:linear-gradient(90deg,var(--lime),var(--long))}
 
 /* 頭像堆疊 */
 .stack{display:flex;align-items:center}
@@ -208,13 +241,14 @@ button.pill{cursor:pointer}
 .weekstrip{display:grid;gap:12px}
 .weekstrip .hd{display:flex;align-items:baseline;gap:8px}
 .weekstrip .hd b{font-size:22px;font-weight:700}
-.dots{display:flex;gap:4px}
-.dots i{flex:1;height:6px;border-radius:3px;background:var(--stroke)}
-.dots i.done{background:var(--accent);opacity:.55}
-.dots i.now{background:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
-.keys{display:grid;gap:8px}
-.keys div{display:grid;grid-template-columns:48px 1fr;gap:10px;font-size:15px;align-items:baseline}
-.keys span.d{color:var(--ink-3);font-size:13px;font-weight:650}
+.weekstrip .dots{display:flex;gap:4px}
+.weekstrip .dots i{flex:1;height:6px;border-radius:3px;background:var(--stroke)}
+.weekstrip .dots i.done{background:var(--accent);opacity:.55}
+.weekstrip .dots i.now{background:var(--accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 22%,transparent)}
+.keys{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:8px 12px;align-items:baseline}
+.keys div{display:contents;font-size:15px}
+.keys div.muted{display:block;grid-column:1/-1}
+.keys span.d{color:var(--ink-3);font-size:13px;font-weight:650;white-space:nowrap}
 
 /* 課表的一天 */
 .days{display:grid;gap:8px}
@@ -235,14 +269,37 @@ button.pill{cursor:pointer}
 
 /* 表單 */
 form{display:grid;gap:12px}
-label{display:grid;gap:5px;font-size:13px;color:var(--ink-2);font-weight:500}
+label{display:grid;gap:5px;font-size:13px;color:var(--ink-2);font-weight:500;align-content:start}
 label.inline{display:flex;align-items:center;gap:9px;font-size:15px;color:var(--ink)}
-label.inline input{width:auto}
+label.inline input:not([type=checkbox],[type=radio]){width:auto}
 input,select,textarea{background:var(--glass-hi);border:1px solid var(--stroke);border-radius:var(--r-m);padding:11px 13px;width:100%;font-size:16px;
   transition:border-color .2s,box-shadow .2s}
 input:focus,select:focus,textarea:focus{outline:0;border-color:color-mix(in srgb,var(--accent) 55%,transparent);box-shadow:0 0 0 4px var(--accent-soft)}
 textarea{min-height:96px;resize:vertical;line-height:1.5}
-.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px;align-items:start}
+/* 下拉選單：拿掉 WebKit 原生外觀（不然 Safari 只有 23px 高、沒有底色），換成細線箭頭 */
+select{-webkit-appearance:none;appearance:none;min-height:46px;padding-right:36px;text-overflow:ellipsis;
+  background-image:var(--chev);background-repeat:no-repeat;background-position:right 12px center;background-size:16px}
+/* 膠囊小選單：比較矮，箭頭靠近一點 */
+.paysel,.mainsel,.bulkbar select,.lottery select{min-height:34px;padding-right:28px;background-position:right 8px center;background-size:14px}
+/* 顏色欄：通用的 padding 會把色塊壓成一條線，改成一塊圓角色票 */
+input[type=color]{-webkit-appearance:none;appearance:none;width:64px;height:46px;padding:5px;cursor:pointer}
+input[type=color]::-webkit-color-swatch-wrapper{padding:0}
+input[type=color]::-webkit-color-swatch{border:0;border-radius:10px}
+input[type=color]::-moz-color-swatch{border:0;border-radius:10px}
+/* 勾選框與單選：大一點、跟著強調色 */
+input[type=checkbox],input[type=radio]{accent-color:var(--accent);width:22px;height:22px;margin:0;padding:0;flex:none}
+/* 勾選框：自己畫（深色模式下瀏覽器預設是一塊實心灰方塊）——細框、透明底，勾選後填強調色＋線條勾；
+   開關、膠囊、出席圓圈裡的 checkbox 是隱藏的，它們的規則排在後面、權重相同，照樣隱藏 */
+input[type=checkbox]{-webkit-appearance:none;appearance:none;border-radius:7px;border:1.5px solid color-mix(in srgb,var(--ink) 30%,transparent);background:transparent;cursor:pointer;
+  transition:background-color .15s,border-color .15s}
+input[type=checkbox]:checked{background:var(--checkimg) center/16px no-repeat,var(--accent);border-color:transparent}
+input[type=checkbox]:focus-visible{outline:2.5px solid color-mix(in srgb,var(--accent) 65%,transparent);outline-offset:2px}
+input[type=checkbox]:disabled{opacity:.4;cursor:default}
+label.inline{min-height:44px}
+/* 數字欄不要 macOS 的上下小箭頭 */
+input[type=number]::-webkit-inner-spin-button,input[type=number]::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
+input[type=number]{-moz-appearance:textfield}
 .chips{display:flex;flex-wrap:wrap;gap:8px}
 .chip{border:0;background:var(--glass-2);border-radius:999px;padding:8px 14px;cursor:pointer;font-size:15px;box-shadow:var(--shadow-s),inset 0 1px 0 var(--rim)}
 .chip[aria-pressed="true"]{background:var(--accent);color:var(--on-accent);font-weight:650}
@@ -287,11 +344,11 @@ pre.out{white-space:pre-wrap;word-break:break-word;background:var(--glass-hi);bo
   background:color-mix(in srgb,var(--glass-hi) 80%,transparent);-webkit-backdrop-filter:saturate(190%) blur(32px);backdrop-filter:saturate(190%) blur(32px)}
 .tabs .navbrand,.tabs .navmore{display:none}
 .tabsel{position:absolute;left:var(--pad);top:var(--pad);bottom:var(--pad);width:calc((100% - 2 * var(--pad)) / var(--n));border-radius:999px;pointer-events:none;
-  background:color-mix(in srgb,var(--accent) 14%,transparent);box-shadow:inset 0 1px 0 var(--rim);
+  background:var(--accent-soft);box-shadow:inset 0 1px 0 var(--rim);
   transform:translateX(calc(var(--i,0) * 100%));transition:transform .42s cubic-bezier(.3,1.25,.5,1),opacity .2s,top .38s var(--tap),bottom .38s var(--tap),left .38s var(--tap)}
 .tabs.nosel .tabsel{opacity:0}
 .tabs > a[data-tab]{position:relative;z-index:1;flex:1 1 0;min-width:0;min-height:44px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;
-  font-size:10.5px;font-weight:600;line-height:13px;color:var(--ink-2);border-radius:999px;transition:color .2s,gap .38s var(--tap);
+  font-size:11px;font-weight:600;line-height:13px;color:var(--ink-2);border-radius:999px;transition:color .2s,gap .38s var(--tap);
   -webkit-touch-callout:none;-webkit-user-select:none;user-select:none}
 .tabs > a[data-tab] .ic{line-height:0;transition:transform .3s var(--tap)}
 .tabs > a[data-tab] .ic svg{width:24px;height:24px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
@@ -358,7 +415,7 @@ body.guest::before,body.consent::before,body.fullmap::before{display:none}
   .tabs > a[data-tab]:active .ic{transform:none}
   .tdot{top:9px;left:28px}
   /* 選取：每一列自己的底色（macOS 側邊欄），不用滑動膠囊 */
-  .tabs a[aria-current]{color:var(--accent);background:color-mix(in srgb,var(--accent) 13%,transparent)}
+  .tabs a[aria-current]{color:var(--accent);background:var(--accent-soft)}
   .tabs .navmore{display:block;flex:none}
   .navgrp{display:grid;gap:1px;margin-top:16px}
   .ngt{font-size:12px;font-weight:600;color:var(--ink-3);letter-spacing:.06em;padding:0 12px 5px}
@@ -367,12 +424,17 @@ body.guest::before,body.consent::before,body.fullmap::before{display:none}
   .navmore a[aria-current]{font-weight:600}
   @media (pointer:coarse){.navmore a{min-height:44px}}   /* iPad 橫向用手指點側邊欄 */
   .tabs a:not([aria-current]):hover{background:color-mix(in srgb,var(--ink) 5%,transparent)}
-  .top,.wrap{margin-left:var(--side)}
+  /* 側邊欄佔左邊 --side，內容在剩下的空間置中（不是貼著側邊欄） */
+  :root{--wrapw:1060px;--gut:32px}
+  body{padding-left:var(--side)}
   .top .brand{visibility:hidden}
-  .wrap{max-width:1060px;padding:0 32px 32px}
-  .dash{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;align-items:start}
-  .dash > *{min-width:0}
-  .evgrid{display:grid;grid-template-columns:1fr;gap:12px}
+  .wrap{padding:0 var(--gut) 32px}
+  /* 表單、設定、活動這類單欄頁面：限制在好讀的寬度 */
+  body:is([data-page=me],[data-page=log],[data-page=run],[data-page=e],[data-page=new],[data-page=edit],[data-page=notifications],[data-page=privacy],[data-page=tickets],[data-page=past],[data-page=logs],[data-page=teams]){--wrapw:800px}
+  /* 訪客（登入頁）與重新同意隱私權政策時沒有側邊欄 */
+  body.guest,body.consent{--side:0px}
+  body.guest{--wrapw:620px}
+  .dash{grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;align-items:start}
 }
 /* 系統偏好：減少透明度用不透明底、增加對比加邊框、減少動態效果不滑動也不縮放 */
 @media (prefers-reduced-transparency:reduce){.tabs,.runbar{background:var(--sheet-solid);-webkit-backdrop-filter:none;backdrop-filter:none}}
@@ -385,9 +447,13 @@ body.guest::before,body.consent::before,body.fullmap::before{display:none}
   .tabs > a[data-tab]:active .ic{transform:none}
   .tabs > a[data-live] .tdot{animation:none}
 }
+.dash{display:grid;gap:14px}
+.dash > *{min-width:0}
+.evgrid{display:grid;gap:12px}
 
 .toast{position:fixed;left:50%;bottom:calc(98px + env(safe-area-inset-bottom,0px));z-index:40;transform:translateX(-50%);
-  padding:11px 18px;border-radius:999px;font-size:15px;font-weight:600;color:var(--on-accent);background:var(--accent);box-shadow:var(--shadow-l);
+  width:max-content;max-width:calc(100vw - 32px);text-align:center;
+  padding:11px 18px;border-radius:22px;font-size:15px;font-weight:600;color:var(--on-accent);background:var(--accent);box-shadow:var(--shadow-l);
   animation:rise .35s var(--tap)}
 @keyframes rise{from{opacity:0;transform:translate(-50%,12px) scale(.96)}to{opacity:1;transform:translate(-50%,0)}}
 #view{animation:fade .32s var(--tap)}
@@ -442,7 +508,7 @@ button.seatrow:active{background:var(--accent-soft)}
   background:radial-gradient(90% 70% at 50% 0%,#24559F 0%,#0B1B33 60%,#060F1C 100%)}
 .lottery .lhead{display:flex;flex-wrap:wrap;gap:10px;align-items:center;padding:calc(12px + env(safe-area-inset-top,0px)) 16px 12px;
   background:rgba(0,0,0,.25);-webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px)}
-.lottery select{width:auto;min-width:220px;flex:1;background:rgba(255,255,255,.1);border-color:rgba(255,255,255,.25);color:#fff}
+.lottery select{width:auto;min-width:220px;flex:1;background-color:rgba(255,255,255,.1);border-color:rgba(255,255,255,.25);color:#fff}
 .lottery select option{color:#0B1B33}
 .lottery .inline{color:rgba(255,255,255,.85)}
 .lottery .lbody{flex:1;display:grid;grid-template-columns:1fr 300px;min-height:0}
@@ -471,16 +537,22 @@ button.seatrow:active{background:var(--accent-soft)}
 .card.ok{border-color:color-mix(in srgb,var(--easy) 50%,transparent)}
 
 /* 權限對照表 */
-.permtable{overflow-x:auto;font-size:13px}
-.permtable .hd,.permtable .rw{display:grid;grid-template-columns:76px repeat(8,minmax(44px,1fr));gap:2px;align-items:center}
-.permtable .hd{color:var(--ink-3);font-size:11px;padding-bottom:4px;position:sticky;top:0}
-.permtable .rw{padding:5px 0;border-top:1px solid var(--stroke)}
-.permtable .rw span:first-child{font-weight:650}
-.permtable .rw span:not(:first-child){text-align:center;color:var(--accent);font-weight:700}
+.permtable{overflow-x:auto;font-size:13px;scrollbar-width:none;-webkit-mask-image:linear-gradient(90deg,#000 calc(100% - 18px),transparent);mask-image:linear-gradient(90deg,#000 calc(100% - 18px),transparent)}
+.permtable::-webkit-scrollbar{display:none}
+.permtable .hd,.permtable .rw{display:grid;grid-template-columns:72px repeat(8,minmax(52px,1fr));gap:4px;align-items:center;min-width:max-content}
+.permtable .hd{color:var(--ink-3);font-size:12px;line-height:1.2;padding-bottom:6px;align-items:end}
+.permtable .hd span:not(:first-child){text-align:center;word-break:keep-all;overflow-wrap:normal}
+.permtable .rw{padding:7px 0;border-top:1px solid var(--stroke)}
+.permtable .rw > span:first-child{font-weight:650}
+.permtable .rw span:not(:first-child){display:grid;place-items:center}
+.permtable i.yes{display:grid;place-items:center;color:var(--accent);line-height:0}
+.permtable i.yes svg.ic{width:16px;height:16px;stroke-width:2.6}
+.permtable i.no{display:block;width:10px;height:2px;border-radius:1px;background:color-mix(in srgb,var(--ink) 18%,transparent)}
 
 /* 稽核紀錄 */
-.audit{display:grid;max-height:60vh;overflow:auto}
+.audit{display:grid}
 .arow{display:grid;grid-template-columns:88px 1fr;gap:10px;padding:8px 0;border-bottom:1px solid var(--stroke);font-size:14px}
+.arow:last-child,.arow:has(+ .more),.camsrc:last-child{border-bottom:0}
 details.card summary{list-style:none}
 details.card summary::-webkit-details-marker{display:none}
 
@@ -545,11 +617,13 @@ details.card summary::-webkit-details-marker{display:none}
 
 /* ---------- 分團 ---------- */
 .pill.team{background:color-mix(in srgb,var(--tc) 15%,transparent);color:color-mix(in srgb,var(--tc) 80%,var(--ink))}
+:root[data-theme="dark"] .pill.team{background:color-mix(in srgb,var(--tc) 30%,transparent);color:color-mix(in srgb,var(--tc) 35%,var(--ink))}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .pill.team{background:color-mix(in srgb,var(--tc) 30%,transparent);color:color-mix(in srgb,var(--tc) 35%,var(--ink))}}
 .pill.survey{background:color-mix(in srgb,#0A84FF 14%,transparent);color:#0A6BD6}
 .chipbar{display:flex;gap:8px;overflow-x:auto;padding:2px 2px 6px;margin:0 -2px;scrollbar-width:none;-webkit-mask-image:linear-gradient(90deg,#000 92%,transparent)}
 .chipbar::-webkit-scrollbar{display:none}
 .chipbar button{display:inline-flex;align-items:center;gap:7px;flex:none;border:1px solid var(--stroke);background:var(--glass-2);-webkit-backdrop-filter:var(--blur);backdrop-filter:var(--blur);
-  color:var(--ink-2);border-radius:999px;padding:8px 15px;font:600 14px/1.2 inherit;cursor:pointer;transition:background .2s,color .2s,transform .2s var(--tap)}
+  color:var(--ink-2);border-radius:999px;padding:8px 15px;font-family:inherit;font-weight:600;font-size:14px;line-height:1.2;cursor:pointer;transition:background .2s,color .2s,transform .2s var(--tap)}
 .chipbar button i{width:8px;height:8px;border-radius:50%;background:var(--tc)}
 .chipbar button[aria-selected="true"]{background:var(--ink);color:var(--bg);border-color:transparent}
 .chipbar button:active{transform:scale(.95)}
@@ -595,8 +669,13 @@ fieldset.group legend{font-size:13px;font-weight:700;color:var(--ink-2);padding:
 .qrow{display:grid;gap:8px;padding:12px;border-radius:var(--r-m);background:color-mix(in srgb,var(--ink) 4%,transparent)}
 
 /* 統計 */
-.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
-.kpi{gap:2px;padding:14px 16px}
+/* KPI 方塊：固定欄數，最後一列不會剩一格孤零零的 */
+.kpis{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+@media (min-width:600px){.kpis{grid-template-columns:repeat(4,minmax(0,1fr))}}
+.kpis > .kpi:nth-child(n+5):last-child:nth-child(odd){grid-column:1/-1}
+.kpis:has(> .kpi:nth-child(3):last-child){grid-template-columns:repeat(3,minmax(0,1fr))}
+@media (min-width:600px){.kpis > .kpi:nth-child(n+5):last-child:nth-child(odd){grid-column:auto}.kpis:has(> .kpi:nth-child(5):last-child){grid-template-columns:repeat(5,minmax(0,1fr))}.kpis:has(> .kpi:nth-child(6):last-child){grid-template-columns:repeat(3,minmax(0,1fr))}}
+.kpi{gap:2px;padding:14px 16px;align-content:start}
 .kpi b{font-size:30px;font-weight:700;letter-spacing:-.02em;line-height:1.1}
 .statgrid{display:grid;gap:12px}
 @media (min-width:860px){.statgrid{grid-template-columns:1fr 1fr;align-items:start}}
@@ -604,7 +683,7 @@ fieldset.group legend{font-size:13px;font-weight:700;color:var(--ink-2);padding:
 .bar-row{display:grid;grid-template-columns:minmax(64px,30%) 1fr auto;gap:10px;align-items:center;font-size:14px}
 .bar-row .k{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .bar-row .track{height:10px;border-radius:5px;background:var(--stroke);overflow:hidden}
-.bar-row .track i{display:block;height:100%;border-radius:5px;background:linear-gradient(90deg,var(--lime),var(--blue));transform-origin:left;animation:grow .7s var(--tap) both}
+.bar-row .track i{display:block;height:100%;border-radius:5px;background:linear-gradient(90deg,var(--lime),var(--long));transform-origin:left;animation:grow .7s var(--tap) both}
 .bar-row .n{min-width:52px;text-align:right;font-weight:650}
 @keyframes grow{from{transform:scaleX(0)}}
 .bar.big{height:10px;border-radius:5px}.bar.big i{border-radius:5px}
@@ -664,7 +743,7 @@ fieldset.group legend{font-size:13px;font-weight:700;color:var(--ink-2);padding:
 svg.ic{width:1.15em;height:1.15em;flex:none;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;vertical-align:-.2em}
 .pill svg.ic{width:13px;height:13px;stroke-width:2.2}
 .themebtn svg.ic{width:19px;height:19px}
-.btn.iconbtn{display:inline-flex;align-items:center;gap:6px}
+.btn.iconbtn{gap:6px}
 .docic{display:grid;place-items:center;width:32px;height:32px;border-radius:9px;background:var(--accent-soft);color:var(--accent)}
 .docic svg.ic{width:18px;height:18px}
 .day .logbtn svg.ic{width:19px;height:19px;stroke-width:2.4}
@@ -694,8 +773,8 @@ h3 svg.ic{width:18px;height:18px}
 .attend input:focus-visible + i{outline:2.5px solid color-mix(in srgb,var(--accent) 65%,transparent);outline-offset:2px}
 .attend svg.ic{width:16px;height:16px;stroke-width:2.6}
 .paysel{width:auto;padding:6px 10px;font-size:14px;border-radius:999px}
-.paysel.paid{background:color-mix(in srgb,#34C759 16%,var(--glass-hi));border-color:transparent}
-.paysel.unpaid{background:var(--warn-bg);border-color:transparent}
+.paysel.paid{background-color:color-mix(in srgb,#34C759 16%,var(--glass-hi));border-color:transparent}
+.paysel.unpaid{background-color:var(--warn-bg);border-color:transparent}
 .attendok{justify-items:center;text-align:center}
 .attendok .big svg.ic{width:64px;height:64px;color:#34C759;stroke-width:1.6}
 
@@ -716,7 +795,7 @@ h3 svg.ic{width:18px;height:18px}
 .mtable div span:not(:first-child){text-align:right}
 .mlog{display:grid;gap:4px;padding:12px 0;border-bottom:1px solid var(--stroke);font-size:15px}
 .cmts{display:grid;gap:8px;margin:8px 0}
-.cmt{display:grid;gap:2px;padding:10px 12px;border-radius:var(--r-m);background:var(--accent-soft)}
+.cmt{display:grid;gap:2px;padding:10px 12px;border-radius:var(--r-m);background:var(--fill)}
 .cmt b{font-size:13px}
 @media (max-width:480px){.kpi b{font-size:26px}}
 .kpi b{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -724,7 +803,7 @@ h3 svg.ic{width:18px;height:18px}
 /* 分團公告欄、排行榜 */
 .board{display:grid;gap:10px}
 .post{display:grid;gap:6px;padding:12px 14px;border-radius:var(--r-m);background:color-mix(in srgb,var(--ink) 4%,transparent)}
-.post.pinned{background:var(--accent-soft)}
+.post.pinned{background:color-mix(in srgb,var(--ink) 7%,transparent)}
 .r.rank{grid-template-columns:24px 32px 1fr auto}
 .r.rank .no{font-weight:800;color:var(--ink-3);text-align:center}
 .r.rank:nth-child(-n+3) .no{color:var(--accent)}
@@ -737,7 +816,7 @@ h3 svg.ic{width:18px;height:18px}
 
 /* 首頁「今天」卡片 */
 .todaycard{gap:10px;border:1px solid color-mix(in srgb,var(--accent) 22%,transparent)}
-.todaycard h2{font-size:24px;line-height:1.3;letter-spacing:-.01em}
+.todaycard h2{font-size:24px;line-height:1.3}
 .todaycard h2.quality{color:var(--q)}.todaycard h2.long{color:var(--long)}.todaycard h2.easy{color:var(--easy)}.todaycard h2.strength{color:var(--str)}.todaycard h2.race{color:var(--race)}
 .todayev{display:grid;grid-template-columns:24px 1fr auto;gap:10px;align-items:center;padding:10px 12px;border-radius:var(--r-m);background:var(--accent-soft);color:var(--ink)}
 .todayev svg.ic{color:var(--accent);width:22px;height:22px}
@@ -760,10 +839,10 @@ h3 svg.ic{width:18px;height:18px}
 
 /* 跑步記錄 */
 .runstart{justify-items:center;gap:16px;padding:28px 18px}
-.runbtn{appearance:none;border:0;border-radius:50%;width:132px;height:132px;display:grid;place-items:center;font:800 22px/1 inherit;letter-spacing:.06em;cursor:pointer;
+.runbtn{appearance:none;border:0;border-radius:50%;width:132px;height:132px;display:grid;place-items:center;font-family:inherit;font-weight:800;font-size:22px;line-height:1;letter-spacing:.06em;cursor:pointer;
   color:#fff;box-shadow:var(--shadow-l),inset 0 1px 0 rgba(255,255,255,.3);transition:transform .15s var(--tap)}
 .runbtn:active{transform:scale(.94)}
-.runbtn.go{background:radial-gradient(circle at 35% 30%,#4BD37A,#1E9E4F)}
+.runbtn.go{background:radial-gradient(circle at 35% 30%,#2A9C52,#136B34)}
 .runbtn.pause{background:radial-gradient(circle at 35% 30%,#FFB547,#E08A00);color:#2A1A00}
 .runbtn.stop{background:radial-gradient(circle at 35% 30%,#FF6B6B,#D33)}
 .runbtn.lap{background:var(--glass-hi);color:var(--ink);border:1px solid var(--stroke);box-shadow:var(--shadow-s)}
@@ -812,7 +891,11 @@ button.countdown small{font-size:12px;font-weight:600;color:var(--accent)}
 .sheet{position:fixed;inset:0;z-index:70;display:grid;align-items:end;justify-items:center}
 .sheet-bg{position:absolute;inset:0;background:rgba(5,12,24,.35);-webkit-backdrop-filter:blur(2px);backdrop-filter:blur(2px)}
 .sheet-card{position:relative;width:min(560px,100%);max-height:86vh;overflow:auto;border-radius:var(--r-xl) var(--r-xl) 0 0;padding-bottom:calc(18px + env(safe-area-inset-bottom,0px));animation:cardin .3s var(--tap)}
-@media (min-width:700px){.sheet{align-items:center}.sheet-card{border-radius:var(--r-xl)}}
+/* sheet 用厚一點、幾乎不透明的材質（後面的清單不會透上來），手機上方加拉桿 */
+.sheet-card{background:color-mix(in srgb,var(--sheet-solid) 94%,transparent);padding-top:26px}
+.sheet-card::after{content:"";position:absolute;top:8px;left:50%;width:36px;height:5px;margin-left:-18px;border-radius:3px;background:color-mix(in srgb,var(--ink) 25%,transparent);pointer-events:none}
+.sheetacts{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:4px}
+@media (min-width:700px){.sheet{align-items:center}.sheet-card{border-radius:var(--r-xl);padding-top:20px}.sheet-card::after{display:none}}
 .cdlist{display:grid;gap:8px}
 .cdopt{appearance:none;display:flex;align-items:center;justify-content:space-between;gap:10px;text-align:left;padding:12px 14px;border-radius:var(--r-m);border:1.5px solid var(--stroke);background:var(--glass-hi);color:var(--ink);font:inherit;cursor:pointer}
 .cdopt span:first-child{display:grid;gap:2px}
@@ -830,7 +913,7 @@ button.countdown small{font-size:12px;font-weight:600;color:var(--accent)}
 .pick svg.ic{width:14px;height:14px;stroke-width:2.8}
 .mact{display:grid;gap:6px;justify-items:end}
 .mainsel{width:auto;max-width:120px;padding:6px 10px;font-size:13px;border-radius:999px}
-.bulkbar{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(env(safe-area-inset-bottom,0px) + 92px);z-index:56;display:flex;align-items:center;gap:10px;
+.bulkbar{position:fixed;left:calc(50% + var(--side)/2);transform:translateX(-50%);max-width:calc(100vw - var(--side) - 32px);bottom:calc(env(safe-area-inset-bottom,0px) + 96px);z-index:56;display:flex;align-items:center;gap:10px;
   padding:8px 8px 8px 16px;border-radius:999px;background:var(--glass-hi);-webkit-backdrop-filter:var(--blur);backdrop-filter:var(--blur);box-shadow:var(--shadow-l);white-space:nowrap}
 .bulkbar select{width:auto;padding:6px 10px;font-size:14px;border-radius:999px}
 @media (min-width:1024px){.bulkbar{bottom:24px}}
@@ -908,7 +991,7 @@ details.card > summary::after{margin-left:auto}
 .g-ic:empty{display:none}
 .g-ic svg.ic{width:19px;height:19px}
 .g-count{font-size:12px;font-weight:600;color:var(--ink-3);letter-spacing:.06em}
-.g-skip{margin-left:auto;border:0;background:none;color:var(--ink-2);font:600 14px/1 inherit;padding:0 12px;min-height:34px;border-radius:999px;cursor:pointer}
+.g-skip{margin-left:auto;border:0;background:none;color:var(--ink-2);font-family:inherit;font-weight:600;font-size:14px;line-height:1;padding:0 12px;min-height:44px;border-radius:999px;cursor:pointer}
 .g-skip:hover{background:color-mix(in srgb,var(--ink) 6%,transparent)}
 .g-hero:empty{display:none}
 .g-hero{display:flex;justify-content:center;margin:4px 0 16px}
@@ -943,7 +1026,7 @@ html.guiding .runbar,html.guiding .updbar{display:none}
 @media (hover:hover){.setrow:hover{background:color-mix(in srgb,var(--accent) 5%,transparent)}}
 .setcard .setrow:first-child{border-radius:var(--r-xl) var(--r-xl) 0 0}.setcard .setrow:last-child{border-radius:0 0 var(--r-xl) var(--r-xl)}
 .setcard .setrow:only-child{border-radius:var(--r-xl)}
-.sic{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;background:var(--accent);color:var(--on-accent);box-shadow:inset 0 1px 0 rgba(255,255,255,.25)}
+.sic{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;background:var(--sc,var(--tile-blue));color:#fff;box-shadow:inset 0 1px 0 rgba(255,255,255,.25)}
 .sic svg.ic{width:20px;height:20px}
 .st{display:grid;gap:1px;min-width:0}.st b{font-weight:600;font-size:16px}.st .tiny{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .chev{width:8px;height:8px;border-right:2px solid var(--ink-3);border-top:2px solid var(--ink-3);transform:rotate(45deg);opacity:.6;margin-right:4px}
@@ -954,13 +1037,13 @@ html.guiding .runbar,html.guiding .updbar{display:none}
 .mecard .mi b{font-size:20px;font-weight:700}
 .backlink{display:inline-block;font-size:16px;font-weight:600;margin:4px 0 -6px;padding:6px 0}
 .idwrap{display:flex;gap:8px;align-items:center}.idwrap input{flex:1}
-.notice-card{background:color-mix(in srgb,var(--accent) 8%,var(--glass))}
+.notice-card{background:linear-gradient(var(--accent-soft),var(--accent-soft)),var(--glass)}
 .notice-card b{display:flex;gap:8px;align-items:center}
 .regform{gap:14px}
-.lt{display:flex;align-items:center;justify-content:flex-start;gap:6px;flex-wrap:wrap}
+/* 表單欄位標題（文字＋必填）：不要跟大標題 .lt 共用 class */
+.lbl{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
 label.chip{background:none;padding:0;box-shadow:none;border-radius:999px}
 .chip span small{font-size:13px;opacity:.75;font-weight:500}
-.lsumact .btn{justify-content:center}
 /* 管理後台：開啟速度 */
 .vitals{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px}
 .vital{display:grid;gap:2px;padding:12px 14px;border-radius:var(--r-m);background:var(--glass-hi)}
@@ -972,6 +1055,9 @@ details.group{border:1px solid var(--stroke);border-radius:var(--r-l);padding:12
 details.group > summary{font-size:15px;font-weight:650;color:var(--ink)}
 details.group[open] > summary{margin-bottom:2px}
 .itemrow{display:grid;gap:8px;padding:12px;border-radius:var(--r-m);background:var(--glass-hi);border:1px solid var(--stroke)}
+/* 商品列：名稱整行＋右邊移除；單價｜尺寸、庫存｜每人上限 */
+.itemrow{grid-template-columns:repeat(2,minmax(0,1fr))}
+.itemhead{grid-column:1/-1;display:grid;grid-template-columns:minmax(0,1fr) 44px;gap:8px;align-items:center}
 .itemrow .btn{justify-self:start}
 .items{gap:10px}
 .itempick{display:grid;gap:8px;padding:12px 14px;border-radius:var(--r-m);background:var(--glass-hi);border:1px solid var(--stroke)}
@@ -981,20 +1067,21 @@ details.group[open] > summary{margin-bottom:2px}
 .stepper button{width:34px;height:34px;border-radius:50%;border:0;background:var(--glass-hi);color:var(--accent);font-size:20px;font-weight:600;line-height:1;cursor:pointer;box-shadow:var(--shadow-s);transition:transform .15s var(--tap)}
 .stepper button:active{transform:scale(.9)}
 .stepper output{text-align:center;font-weight:700;font-size:16px}
-.quote{display:grid;gap:4px;padding:12px 14px;border-radius:var(--r-m);background:var(--accent-soft)}
+.quote{display:grid;gap:4px;padding:12px 14px;border-radius:var(--r-m);background:var(--fill)}
 .quote:empty{display:none}
-.ql{display:flex;justify-content:space-between;gap:12px;font-size:15px}
+.ql{display:flex;justify-content:space-between;align-items:baseline;gap:12px;font-size:15px}
 .ql.off{color:#1E8E3E}
 .ql.total{border-top:1px solid var(--stroke);margin-top:4px;padding-top:6px;font-weight:700}
 .ql.total b{font-size:20px}
 .paycard .amount{font-size:26px;letter-spacing:-.01em}
-.paycard.paid{background:color-mix(in srgb,#34C759 10%,var(--glass))}
-.paycard.reported{background:color-mix(in srgb,#FF9F0A 10%,var(--glass))}
+.paycard.paid h3,.paycard.reported h3{display:inline-flex;align-items:center;gap:8px}
+.paycard.paid h3::before,.paycard.reported h3::before{content:"";width:9px;height:9px;border-radius:50%;flex:none;background:var(--ok)}
+.paycard.reported h3::before{background:var(--mid)}
 .acct{display:grid;grid-template-columns:1fr auto;gap:4px 10px;align-items:center;padding:12px 14px;border-radius:var(--r-m);background:var(--glass-hi);border:1px solid var(--stroke)}
 .acct .tiny{grid-column:1/-1}
 .acct pre{margin:0;font:inherit;font-weight:600;white-space:pre-wrap;user-select:all}
 .moneygrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px}
-.moneygrid > div{display:grid;gap:2px;padding:12px 14px;border-radius:var(--r-m);background:var(--glass-hi)}
+.moneygrid > div{display:grid;gap:2px;padding:12px 14px;border-radius:var(--r-m);background:var(--glass-hi);align-content:start}
 .moneygrid > div b{font-size:20px}
 .moneygrid .ok{--st:var(--ok)}.moneygrid .wait{--st:var(--mid)}.moneygrid .due{--st:var(--race)}
 .itemtable{display:grid;gap:2px}
@@ -1003,7 +1090,6 @@ details.group[open] > summary{margin-bottom:2px}
 .itr .sizes{display:flex;flex-wrap:wrap;gap:6px;grid-column:1}
 .itr > b.num{grid-row:1/3;grid-column:2;font-size:22px}
 .payrep{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:4px;font-size:13px;color:#B25E00}
-.prow.reported{background:color-mix(in srgb,#FF9F0A 8%,transparent);border-radius:12px}
 .pill.buy{background:color-mix(in srgb,#AF52DE 14%,transparent);color:#8E3BB8}
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .ql.off{color:#5BD07A}:root:not([data-theme="light"]) .payrep{color:#FFB547}}
 :root[data-theme="dark"] .ql.off{color:#5BD07A}:root[data-theme="dark"] .payrep{color:#FFB547}
@@ -1021,8 +1107,10 @@ details.group[open] > summary{margin-bottom:2px}
 .cd b{font-size:16px;font-weight:600;width:30px;height:30px;display:grid;place-items:center;border-radius:50%}
 .cd small{font-size:10px;line-height:1.1;color:var(--race);max-width:100%;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
 .cd.off b{color:var(--race)}
-.cd.today b{background:var(--accent);color:var(--on-accent)}
-.cd.sel{background:var(--accent-soft)}
+/* iOS 行事曆：選到的日子只有數字一個實心圓（今天用強調色、其他天用墨色），格子本身不加底色；今天沒被選時數字用強調色 */
+.cd.today b{color:var(--accent);font-weight:700}
+.cd.today.sel b{background:var(--accent);color:var(--on-accent)}
+.cd.sel:not(.today) b{background:var(--ink);color:var(--bg)}
 @media (hover:hover){.cd:not(.pad):hover{background:color-mix(in srgb,var(--accent) 7%,transparent)}}
 .dots{display:flex;gap:3px;justify-content:center;flex-wrap:wrap;min-height:6px}
 .dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--tc,var(--accent));opacity:.8}
@@ -1166,8 +1254,11 @@ body.guest .top .brand{opacity:0;pointer-events:none}
 .wxmini{display:grid!important;grid-template-columns:auto 1fr auto;gap:12px;align-items:center}
 .wxmini .wxt{font-size:30px;font-weight:700;letter-spacing:-.02em}
 /* 狀態用標題前的小圓點表示（iOS 的做法），不在圓角卡片上畫彩色邊條 */
-.vital.good,.vital.ok,.vital.poor,.moneygrid .ok,.moneygrid .wait,.moneygrid .due,.plancard{position:relative;padding-left:28px}
-.vital.good::before,.vital.ok::before,.vital.poor::before,.moneygrid .ok::before,.moneygrid .wait::before,.moneygrid .due::before,.plancard::before{content:"";position:absolute;left:13px;top:19px;width:8px;height:8px;border-radius:50%;background:var(--st)}
+.plancard{position:relative;padding-left:28px}
+.plancard::before{content:"";position:absolute;left:13px;top:19px;width:8px;height:8px;border-radius:50%;background:var(--st)}
+/* 收款方格：圓點放在標籤文字前面，每格內距一樣，數字左緣對齊 */
+.moneygrid > div > .tiny:first-child{display:flex;align-items:center;gap:6px}
+.moneygrid > :is(.ok,.wait,.due) > .tiny:first-child::before{content:"";width:8px;height:8px;border-radius:50%;flex:none;background:var(--st)}
 .plancard::before{left:12px;top:24px}
 
 /* ---------- 會籍卡 ---------- */
@@ -1186,9 +1277,10 @@ body.guest .top .brand{opacity:0;pointer-events:none}
 /* ---------- 每月里程挑戰 ---------- */
 .monthnav{margin-top:-6px}
 .chme{display:grid!important;grid-template-columns:auto 1fr;gap:18px;align-items:center}
-.chring{--p:0;width:120px;height:120px;border-radius:50%;display:grid;place-items:center;align-content:center;
-  background:conic-gradient(var(--accent) calc(var(--p)*1%),var(--accent-soft) 0);position:relative}
-.chring::before{content:"";position:absolute;inset:10px;border-radius:50%;background:var(--glass-hi)}
+.chring{--p:0;width:120px;height:120px;border-radius:50%;display:grid;place-items:center;align-content:center;position:relative}
+.chring::before{content:"";position:absolute;inset:0;border-radius:50%;
+  background:conic-gradient(var(--accent) calc(var(--p)*1%),color-mix(in srgb,var(--ink) 10%,transparent) 0);
+  -webkit-mask:radial-gradient(circle,transparent 0 49px,#000 50px);mask:radial-gradient(circle,transparent 0 49px,#000 50px)}
 .chring b,.chring small{position:relative}.chring b{font-size:30px;line-height:1}.chring small{font-size:12px;color:var(--ink-3)}
 .chstats{display:grid;gap:6px}.chstats b{font-size:18px}
 .weeks{display:flex;gap:6px}.weeks i{width:22px;height:8px;border-radius:4px;background:var(--stroke)}.weeks i.on{background:#34C759}
@@ -1249,6 +1341,8 @@ body.detail .top .brand{display:none}
 input[type="date"],input[type="time"],input[type="datetime-local"],input[type="month"]{-webkit-appearance:none;appearance:none;min-width:0;max-width:100%;display:block;min-height:46px;text-align:left}
 input[type="date"]::-webkit-date-and-time-value,input[type="time"]::-webkit-date-and-time-value,input[type="datetime-local"]::-webkit-date-and-time-value,input[type="month"]::-webkit-date-and-time-value{text-align:left;margin:0}
 .grid2>*,.grid3>*,.grid2 label,.grid3 label{min-width:0}
+/* 報名開始／截止：手機上兩欄放不下完整日期時間（iOS 會顯示「2026年10月4日 下午1:00」），改成上下排 */
+@media (max-width:480px){.grid2.dt{grid-template-columns:minmax(0,1fr)}}
 /* 可以左右滑的分段按鈕：兩端留空，第一個與最後一個不會被切到；滑動時對齊按鈕 */
 .seg{scroll-padding-inline:6px;scroll-snap-type:x proximity}
 /* 分頁太多、要左右滑的時候，兩側淡出提示還有內容 */
@@ -1411,6 +1505,9 @@ body.fullmap .top .countdown{opacity:0;pointer-events:none}
 
 /* 地圖頁：iPhone 主畫面 App 的手勢條區域畫的是 html 的底色，設成跟抽屜一樣，不會露出一條淡紫色 */
 html.fullmap{background:var(--sheet-solid)}
+/* 地圖頁的 body 幾乎沒有內容（都是 fixed）：不畫漸層，免得在側邊欄後面畫出一條 72px 的色帶 */
+body.fullmap{background:none}
+@media (min-width:1024px){html.fullmap{background:linear-gradient(180deg,var(--bg),var(--bg-2)) var(--bg-2)}}
 .amap{bottom:auto;height:100lvh}
 @supports not (height:100lvh){.amap{height:100%;bottom:0}}
 /* ---------- 通知中心 ---------- */
@@ -1422,7 +1519,7 @@ html.fullmap{background:var(--sheet-solid)}
   box-shadow:inset 0 1px 0 rgba(255,255,255,.28),inset 0 -1px 0 rgba(0,0,0,.10)}
 .ntile svg.ic{width:20px;height:20px;stroke-width:1.9}
 .n-todo .ntile,.ntile.n-todo{box-shadow:inset 0 0 0 1px rgba(11,27,51,.14),inset 0 1px 0 rgba(255,255,255,.28)}
-.ltact{display:flex;gap:8px;align-items:center}
+.ltact{display:flex;gap:8px;align-items:center;flex:none}
 .nwrap-page{display:grid;gap:14px;width:100%;min-width:0}
 .nfeed{display:grid;gap:14px}.nfeed.swap{animation:nfade .22s var(--tap)}
 @keyframes nfade{from{opacity:0;transform:translateY(6px)}}
@@ -1495,7 +1592,6 @@ html.fullmap{background:var(--sheet-solid)}
 .nskel b{display:block;height:11px;border-radius:6px;background:color-mix(in srgb,var(--ink) 8%,transparent)}
 .nskel b:first-child{width:60%}.nskel b:last-child{width:40%}
 .toast .toastbtn{margin:-8px -10px -8px 4px;border:0;background:none;color:inherit;font:inherit;font-weight:700;text-decoration:underline;cursor:pointer;padding:8px 10px;min-height:30px}   /* 點擊範圍放大，看起來一樣大 */
-@media (min-width:1024px){.nwrap-page,.lt:has(+ .nwrap-page){max-width:720px}}
 #bcOut.err{color:var(--race)}
 /* ---- 課表教練整合（P3）：階段色、週次列、快速打勾、可省略、用語、詳細內容、賽前階段 ---- */
 :root{--ph-prep:#7C8799;--ph-base:#3D8B3D;--ph-build:#1C4698;--ph-peak:#C26100;--ph-sharp:#C41E3A;--ph-raceweek:#8E3BB8;--ph-rec:#55637A}
@@ -1688,15 +1784,14 @@ textarea.shtext{width:100%;font:inherit;font-size:13px;line-height:1.5;margin-to
 .chip .num{opacity:.75;font-weight:500}
 .r.prow.rv{grid-template-columns:44px 36px minmax(0,1fr) auto}
 /* 勾選框外面包一層 44×44 的點擊範圍，避免點到旁邊的出席 */
-.prow .selhit{display:grid;place-items:center;width:44px;height:44px;margin:-6px 0;cursor:pointer}
+.prow .selhit{display:grid;place-items:center;align-content:center;width:44px;height:44px;margin:-6px 0;cursor:pointer}
 .prow .sel{width:22px;height:22px;margin:0;accent-color:var(--accent)}
-.prow[data-st="pending"]{box-shadow:inset 3px 0 0 var(--warn);border-radius:12px}
 .prow .rvbtns{margin-top:6px;flex-wrap:wrap}
-.bulkbar{position:sticky;bottom:calc(env(safe-area-inset-bottom,0px) + 72px);z-index:5;display:flex;flex-wrap:wrap;align-items:center;gap:8px;
+/* 活動統計的整批審核列：黏在名單卡片底部（後台會員名單的浮動 .bulkbar 是另一個元件） */
+.rvbar{position:sticky;bottom:calc(env(safe-area-inset-bottom,0px) + 84px);z-index:5;display:flex;flex-wrap:wrap;align-items:center;gap:8px;
   padding:10px 12px;border-radius:var(--r-l);background:var(--glass-hi);-webkit-backdrop-filter:var(--blur);backdrop-filter:var(--blur);box-shadow:var(--shadow-l)}
-.bulkbar[hidden]{display:none}
-.bulkbar #selN{font-weight:650;margin-right:auto}
-@media (min-width:1024px){.bulkbar{bottom:16px}}
+.rvbar #selN{font-weight:650;margin-right:auto}
+@media (min-width:1024px){.rvbar{bottom:16px}}
 
 /* ---------- 跑者休息站（練跑地圖的圖層）：灰色小圓點＋白色線條圖示，跟彩色水滴形的練跑地點分得開 ---------- */
 .amap,.restcard,.restnear,.restsheet{--rp:#8E8E93;--rpc:#6C6C70}
@@ -1786,3 +1881,217 @@ html[lang="en"] .rsep::before{content:"·";margin:0 .35em}
 .restsrc .ic{width:14px;height:14px}
 .restsrcrow{gap:8px;margin:0 0 8px}
 .restsrcrow code{font-size:12px;word-break:break-all;color:var(--ink-2)}
+
+/* ---------- 版面掃描修正：管理後台 ---------- */
+/* 管理後台的卡片之間要有間距（地圖的 #panel 另有自己的規則） */
+.adminseg + #panel{display:flex;flex-direction:column;gap:14px}
+.adminseg button{padding-inline:9px}
+/* 卡片裡的段落不要瀏覽器預設的上下邊距，間距交給卡片的 gap */
+.card > p,.card > form > p{margin:0}
+/* 名單連結列用一般文字色（iOS 分組清單），右邊線條箭頭 */
+a.r{color:var(--ink)}
+a.r .chev{justify-self:end}
+/* 會員列：勾選框的點擊範圍 44pt；主團選單與會籍按鈕在寬一點的畫面並排 */
+.r.mrow{grid-template-columns:44px minmax(0,1fr) auto}
+.pick{min-width:44px;min-height:44px;margin:-6px 0 -6px -10px}
+@media (min-width:600px){.mact{grid-auto-flow:column;align-items:center}}
+/* 可展開的設定列：跟設定頁一樣的列高與字級 */
+details > summary.setsum{min-height:44px;font-size:15px;color:var(--ink);font-weight:600;flex-wrap:wrap;column-gap:8px}
+details > summary.setsum .tiny{font-weight:400}
+/* 文件列：移除用減號圓形圖示按鈕，不是一顆大膠囊 */
+.drow .iconx.rm{justify-self:end;align-self:center;width:44px;height:44px;color:var(--race);background:color-mix(in srgb,var(--race) 10%,transparent)}
+/* 報名預設：選單拿寬欄、時間拿窄欄 */
+.grid2.selwide{grid-template-columns:minmax(0,1fr) 128px}
+/* 開啟速度：狀態圓點畫在標籤前面，不再整塊縮排 */
+.vital > .tiny:first-child{display:flex;align-items:center;gap:6px}
+.vital > .tiny:first-child::before{content:"";width:8px;height:8px;border-radius:50%;flex:none;background:var(--st,color-mix(in srgb,var(--ink) 18%,transparent))}
+.vitals > .vital:last-child:nth-child(odd){grid-column:1/-1}
+@media (min-width:700px){.vitals{grid-template-columns:repeat(5,minmax(0,1fr))}.vitals > .vital:last-child:nth-child(odd){grid-column:auto}}
+
+/* ---------- 版面掃描修正：活動表單與統計 ---------- */
+/* 活動表單：包在 data-when 區塊裡的欄位也保持 12px 間距 */
+#ef > div[data-when]{display:grid;gap:12px}
+/* details 的內容不吃 grid gap（瀏覽器把內容放在 ::details-content）：用 margin 補上一樣的間距 */
+details.group > :not(summary) + :not(summary){margin-top:12px}
+details.group[open] > summary{margin-bottom:12px}
+/* 收合時就是一列 iOS 展開列：高度由 44pt 的標題列決定（grid 會替隱藏的內容多留一段 gap），箭頭靠右 */
+details.group{display:block;padding-block:0}
+details.group[open]{padding-bottom:14px}
+details.group[open] > summary{margin-bottom:4px}
+details.group > summary::after{margin-left:auto}
+/* 群組標題：fieldset 的 legend 跟可展開群組的 summary 用同一種字 */
+fieldset.group legend{font-size:15px;font-weight:650;color:var(--ink);padding:0 6px}
+/* 群組裡的「新增」小按鈕依內容寬度靠左 */
+:is(fieldset,details).group > .btn.sm{justify-self:start;align-self:start}
+details.group > .btn.sm{display:flex;width:fit-content}
+/* 組別與價格：名稱、價格、移除排成一列 */
+.optrow{display:grid;grid-template-columns:minmax(0,1fr) 96px auto;gap:8px;align-items:center}
+.optrow .iconx.rm,.itemrow .iconx.rm{width:44px;height:44px;color:var(--race);background:color-mix(in srgb,var(--race) 10%,transparent)}
+/* 說明文字裡的連結不要在中間斷行（「›」不會單獨掉到下一行） */
+.tiny a{white-space:nowrap}
+#signupBox > a.tiny{justify-self:start;display:inline-flex;align-items:center;min-height:44px;margin-block:-8px}
+/* 地址欄標題：標題不被擠成兩行，提示文字放不下就換到下一行 */
+.addrfield legend{flex-wrap:wrap;row-gap:2px}
+.addrfield legend > :first-child{flex:none;white-space:nowrap}
+.addrstreet .zip:empty::before{content:attr(data-ph)}
+/* 統計頁名單：出席圓圈的框線看得到，停用時淡一點 */
+.attend i{border-color:color-mix(in srgb,var(--ink) 30%,transparent)}
+.attend input:disabled + i{opacity:.4}
+.prow label.picked{font-size:13px;min-height:32px;color:var(--ink-2);gap:8px}
+/* 手機上名單四欄太擠：繳費選單移到姓名下面，姓名欄就有足夠寬度 */
+@media (max-width:480px){
+  .r.prow.rv{grid-template-columns:44px 36px minmax(0,1fr)}
+  .r.prow.rv > :last-child{grid-column:3;justify-self:start}
+  .r.prow.rv > span:last-child:empty{display:none}
+}
+/* 數量加減按鈕：外觀 34px，點擊範圍放大 */
+.stepper button{position:relative}
+.stepper button::before{content:"";position:absolute;inset:-5px}
+/* 寬螢幕：入場券、路線預覽不要被拉成一整欄寬 */
+.ticket{width:100%;max-width:440px;justify-self:center;margin-inline:auto}
+.routesvg{max-height:300px}
+.routesvg :is(polyline,path){vector-effect:non-scaling-stroke}
+.routesvg polyline{stroke-width:4px}
+/* 入場券與必填標籤的小字至少 12px */
+.ticket .trow u{font-size:12px}
+.req{font-size:12px}
+/* 統計頁大標題旁的「回活動」：靠右、對齊大標題底部 */
+.lt > .btn.sm{align-self:flex-end;margin-bottom:4px}
+
+/* ---------- 版面掃描修正：首頁、跑步、紀錄、挑戰、報表 ---------- */
+/* 活動卡：標題最多兩行，第一行排滿（balance 會把中文詞從中間切成兩半）；資訊列一段一段排，段落之間不斷字 */
+.ev .body .t{white-space:normal;text-wrap-style:pretty;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;line-height:1.3}
+.ev .meta{display:flex;flex-wrap:wrap;column-gap:10px;row-gap:0}
+.ev .meta > span{white-space:nowrap}
+/* 首頁下方的文字連結、卡片右上的「完整課表 ›」：點擊範圍 44pt，版面不變高 */
+a.footlink{display:inline-flex;align-items:center;gap:4px;min-height:44px;padding:0 8px}
+.row.spread > a.tiny,.section-h > a.tiny{display:inline-flex;align-items:center;min-height:44px;margin-block:-12px}
+/* 寬螢幕：「＋ 分團」緊跟在分團膠囊後面，不是被推到最右邊 */
+@media (min-width:700px){.chiprow .chipbar{flex:0 1 auto}}
+/* 月份、週次的左右切換：44pt 圓形圖示按鈕 */
+.btn.navbtn{width:44px;height:44px;padding:0;flex:none;font-size:20px;line-height:1}
+.btn.navbtn svg.ic{width:20px;height:20px;stroke-width:2.2}
+.btn.navbtn::before{content:none}
+/* 紀錄表單：配速空白時不佔位；RPE 的數字放在標題右邊；身體感覺五等分 */
+.logform .pace{margin:0}
+.logform .pace:empty{display:none}
+.lrow{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+.lrow b{font-size:15px;color:var(--ink)}
+.chips.feel{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px}
+.chips.feel label.chip > span{display:block;width:100%;text-align:center;padding:9px 2px;white-space:nowrap}
+/* 英文的感覺詞比較長（Exhausted、A bit tired）：改回依字寬排、放不下就換行，不在格子裡被切掉 */
+:root:lang(en) .chips.feel{display:flex;flex-wrap:wrap}
+:root:lang(en) .chips.feel label.chip > span{width:auto;padding:9px 14px}
+/* 挑戰：分團對抗用一張表（Apple 健身式）：名次｜名稱與人數｜平均，長條跑在名稱下面整列對齊 */
+.tr{grid-template-columns:22px minmax(0,1fr) auto;grid-template-areas:"rk nm v" "rk bar bar";gap:6px 10px;align-items:center}
+.tr .rk{grid-area:rk;align-self:start;line-height:1.5}
+.tr .nm{grid-area:nm;min-width:0}
+.tr .nm .tiny{display:block;white-space:nowrap}
+.tr .bar{grid-area:bar;margin:0}
+.tr > b{grid-area:v;min-width:3em;text-align:right;font-variant-numeric:tabular-nums}
+/* 圖表刻度：依實際寬度換算（--k 由 app.js 設定），手機上也是 12px */
+.chart .axis{font-size:calc(12px * var(--k,1.25))}
+/* 報表：個人最佳依卡片寬度排 2 欄或 4 欄（不會出現 3＋1）；日期與配速各自不斷開，放不下時在中間換行；表格最後一列不畫分隔線 */
+.card:has(> .prs){container-type:inline-size}
+.prs{grid-template-columns:repeat(2,minmax(0,1fr))}
+@container (min-width:440px){.prs{grid-template-columns:repeat(4,minmax(0,1fr))}}
+.mtable div:last-child{border-bottom:0}
+/* 行事曆圖例：換行時平均分配 */
+.legend{gap:6px 14px}
+/* 品牌小字 10px（分頁列字 11px 在分頁列的規則裡） */
+.brand small{font-size:10px}
+/* switch 清單最後一列不要在卡片底邊多一條線 */
+.switch:last-child,.switch:has(+ .btn),.switch:has(+ p){border-bottom:0}
+
+/* ---------- 版面掃描修正：練跑地圖 ---------- */
+/* 抽屜裡的區塊：iOS 的分組區塊（扁平、沒有陰影與邊緣高光），圓角比外框小，不再是盒中盒 */
+.msheet{border-radius:30px 30px 0 0}
+.msheet .card{border-radius:18px;box-shadow:none;-webkit-backdrop-filter:none;backdrop-filter:none;background:color-mix(in srgb,var(--ink) 4%,transparent)}
+.msheet .card::before,.msheet .card::after{display:none}
+.msheet .wxnow,.msheet .infochips > span,.msheet .rep,.msheet .wxhours > div{background:color-mix(in srgb,var(--ink) 5%,transparent);border-color:transparent}
+.infochips:empty,#repForm:empty{display:none}
+/* 地點資訊：等寬格子，長的值自己佔一整列 */
+.infochips{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr))}
+.infochips > span{min-width:0}
+/* 篩選列：縣市選單做成跟旁邊一樣的膠囊；三顆排成一列不換行，放不下時縣市選單縮窄（選單寬度預設是最長的縣市名） */
+.spotopts{flex-wrap:nowrap}
+.spotopts select{-webkit-appearance:none;appearance:none;flex:0 1 auto;max-width:100%;width:auto;min-width:0;min-height:34px;height:34px;padding:0 30px 0 14px;border:0;border-radius:999px;font-size:14px;font-weight:600;
+  background:var(--glass-2) var(--chev) right 10px center/14px no-repeat;box-shadow:var(--shadow-s),inset 0 1px 0 var(--rim)}
+/* 清單列：名稱第一行排滿、避免最後一行只剩一個字；資訊段落不在中間斷開 */
+.spotrow b{text-wrap-style:pretty}
+.nw{white-space:nowrap}
+.spotrow.r{grid-template-columns:34px minmax(0,1fr) auto}
+.spotrow .av.num{width:34px;height:34px;border-radius:10px}
+.kchip.empty:not([aria-pressed="true"]){opacity:.45}
+/* 抽屜全開時，地圖的版權列整個被蓋住：藏起來，不會只露出半行字 */
+.amap[data-detent="full"] .leaflet-control-attribution{visibility:hidden}
+.amap .leaflet-control-attribution{font-size:11px;color:var(--ink-2)}
+.amap .leaflet-control-attribution a{color:var(--ink-2)}
+/* 底圖選單的勾勾跟著主題的強調色 */
+.basemenu button[aria-checked="true"]::before{background:var(--accent);
+  -webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 12.5l4.2 4.2L19 7'/%3E%3C/svg%3E") center/16px no-repeat;
+  mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 12.5l4.2 4.2L19 7'/%3E%3C/svg%3E") center/16px no-repeat}
+/* 路線數據：數字與單位對齊基線（共用元件） */
+.lstats{align-items:baseline}
+/* 拉桿與關閉鈕：點擊範圍 */
+.grab{height:40px}
+.xbtn{position:relative}
+.xbtn::after{content:"";position:absolute;inset:-6px}
+/* 手機：分頁列下方的內容淡出（iOS 的 scroll edge）用抽屜本身的 --fade 遮罩（跟著 --hid 移動）；
+   全開時同一個遮罩再加上頂端 12px 的淡出，不會在字中間硬切 */
+@media (max-width:819.98px){
+  .msheet[data-detent="full"] .msheet-scroll{--fade:linear-gradient(to top,transparent calc(var(--hid) + var(--below) - 10px),#000 calc(var(--hid) + var(--below) + 18px),#000 calc(100% - 12px),transparent)}
+}
+/* iPad 以上的左側面板：高度跟著內容（路線卡、地點卡不會是一大塊空玻璃），清單長了才捲動 */
+@media (min-width:820px){
+  .msheet{bottom:auto;max-height:calc(100% - var(--toph) - 12px - var(--below));border-radius:28px}
+  .msheet-scroll{flex:0 1 auto}
+  .kindchips{flex-wrap:wrap}
+  .msheet .kindchips{margin-inline:0;padding-inline:2px}
+}
+@media (min-width:1024px){
+  .msheet{max-height:calc(100% - var(--toph) - 22px)}
+}
+/* 沒有毛玻璃（或使用者開了「減少透明度」）時，浮在地圖上的面板改成不透明，字才看得清楚 */
+@media (prefers-reduced-transparency:reduce){.msheet,.tabs,body.fullmap .top,.ctlgroup,.basemenu,.sheet-card,.rchip,.resthint{background:var(--sheet-solid)!important}}
+@supports not ((backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px))){.msheet,.tabs,body.fullmap .top,.ctlgroup,.basemenu,.rchip,.resthint{background:var(--sheet-solid)!important}}
+
+/* ---------- 版面掃描修正：我的、登入、分團 ---------- */
+/* 項目窄、組別寬（組別名稱不會被切掉） */
+.grid2.g-dist{grid-template-columns:minmax(0,.8fr) minmax(0,1.2fr)}
+/* 登入頁：從分享連結或錯誤回來時只留品牌，不放介紹磚 */
+.welcome.compact{padding-bottom:0}
+.notice.err{background:color-mix(in srgb,var(--race) 12%,transparent);color:var(--race)}
+.wfeat li{align-content:start}
+/* 分團卡：人數對齊名稱，不是對齊圖示 */
+.teamcard > .row.spread:last-child{padding-left:50px}
+/* 寬螢幕的長文：一行不要超過約 40 個字 */
+.prose{max-width:720px}
+@media (min-width:1024px){.card.prose{margin-inline:auto;width:100%}}
+/* 通知篩選膠囊：只有真的放不下、可以滑的時候才在右邊淡出 */
+@media (min-width:700px){.chipbar{-webkit-mask-image:none;mask-image:none}}
+/* 展開列（summary）：點擊範圍 44pt */
+details > summary{min-height:44px}
+/* 活動管理卡的展開項：像設定列（一般字級、整列可點、右邊箭頭），不是像註解的小灰字 */
+.card > details:not(.group):not([data-cm]) > summary.tiny{font-size:15px;color:var(--ink);font-weight:500;border-top:1px solid var(--stroke);padding-top:2px}
+.card > details:not(.group):not([data-cm]) > summary.tiny::after{margin-left:auto}
+/* 導覽：開場的主要按鈕滿版，上一步／下一步點擊範圍 44pt */
+.g-tip.center #gNext{min-height:50px;width:100%;font-size:16px}
+.g-nav .btn.sm{min-height:36px}
+/* 欄位文字放不下時用刪節號（英文長 placeholder） */
+input{text-overflow:ellipsis}
+.g-tip.center .g-nav{width:100%}
+/* 地圖頁的上方列是滿版浮動列：控制按鈕貼右邊，不跟內容欄對齊 */
+body.fullmap .top{padding-inline:max(16px,env(safe-area-inset-left,0px))}
+.chip .num{margin-inline-start:4px}
+/* 名單列：勾選框、出席圓圈對齊第一行（姓名），不是整列置中 */
+.r.prow{align-items:start}
+.r.prow > .selhit{margin-top:-11px}
+.r.prow > .attend{margin-top:-3px}
+.r.prow > select{margin-top:-6px}
+/* 日期、時間欄位跟一般輸入框同高（WebKit 的日期欄位內部多了上下留白） */
+input:is([type="date"],[type="time"],[type="datetime-local"],[type="month"]){height:48px;padding-block:0;line-height:46px}
+/* 地圖頁不畫背景極光（其他頁的極光都被漸層蓋住，這裡露出來會在側邊欄後面變成一團光暈） */
+body.fullmap .aurora,body.fullmap::after{display:none}
+.brand > span{min-width:0}
+.brand small{overflow:hidden;text-overflow:ellipsis}

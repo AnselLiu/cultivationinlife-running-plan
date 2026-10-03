@@ -21,9 +21,9 @@ async function challengeView() {
   const next = [50, 100, 200, 300].find((x) => x > d.me.km);
   const maxTeam = Math.max(1, ...d.teams.map((t) => t.avg));
   view.innerHTML = `${largeTitle('里程挑戰', `${d.month.slice(0, 4)} 年 ${m} 月`)}
-    <div class="row spread monthnav"><a class="btn ghost sm" href="#/challenge?m=${shift(d.month, -1)}" aria-label="上個月">‹</a>
+    <div class="row spread monthnav"><a class="btn ghost sm navbtn" href="#/challenge?m=${shift(d.month, -1)}" aria-label="上個月">${IC.chevL}</a>
       <span class="tiny">${d.month === now ? '這個月' : `${m} 月`}</span>
-      ${d.month < now ? `<a class="btn ghost sm" href="#/challenge?m=${shift(d.month, 1)}" aria-label="下個月">›</a>` : '<span class="btn ghost sm" aria-hidden="true" style="visibility:hidden">›</span>'}</div>
+      ${d.month < now ? `<a class="btn ghost sm navbtn" href="#/challenge?m=${shift(d.month, 1)}" aria-label="下個月">${IC.chevR}</a>` : '<span class="btn ghost sm navbtn" aria-hidden="true" style="visibility:hidden"></span>'}</div>
     <section class="card chme">
       <div class="chring" style="--p:${Math.min(100, Math.round((d.me.km / (next || 300)) * 100))}"><b class="num">${d.me.km}</b><small>公里</small></div>
       <div class="chstats"><span><b class="num">${d.me.runs}</b> 次訓練</span>${d.me.rank ? `<span>排行第 <b class="num">${d.me.rank}</b></span>` : ''}
@@ -33,7 +33,7 @@ async function challengeView() {
     <section class="card"><h3>徽章</h3><div class="badges">${d.badges.map((b) => { const got = d.me.badges.includes(b.id);
       return `<div class="badge ${got ? 'got' : ''}"><span class="bi">${ICON[b.id] || ICON.km50}</span><b>${esc(b.name)}</b><span class="tiny">${esc(b.desc)}</span></div>`; }).join('')}</div></section>
     <section class="card"><div class="row spread"><h3>分團對抗</h3><span class="tiny">每人平均里程</span></div>
-      <div class="teamrace">${d.teams.sort((a, b) => b.avg - a.avg).map((t, i) => `<div class="tr"><span class="num rk">${i + 1}</span><span class="nm"><span translate="no">${esc(t.name)}</span><span class="tiny"> ${t.members} 人・${t.active} 人有練</span></span>
+      <div class="teamrace">${d.teams.sort((a, b) => b.avg - a.avg).map((t, i) => `<div class="tr"><span class="num rk">${i + 1}</span><span class="nm"><span translate="no">${esc(t.name)}</span><span class="tiny">${t.members} 人・${t.active} 人有練</span></span>
         <span class="bar"><i style="width:${Math.round((t.avg / maxTeam) * 100)}%;background:${esc(t.color || 'var(--accent)')}"></i></span><b class="num">${t.avg}</b></div>`).join('') || '<p class="muted" style="margin:0">還沒有分團資料。</p>'}</div>
       <p class="tiny" style="margin:0">用全部團員的紀錄算平均，不顯示個人。月底自動結算，1 號早上推播結果。</p></section>
     <section class="card"><div class="row spread"><h3>排行榜</h3>${d.showRank ? '' : '<a class="tiny" href="#/me/privacy">我也要上榜 ›</a>'}</div>

@@ -68,7 +68,7 @@ test('管理後台：切換每個分頁不會整頁跳動；離開後點下方�
   await enter(page, 't_chair');
   await page.goto('/#/admin');
   await expect(page.locator('.adminseg')).toBeVisible();
-  for (const name of ['會員', '權限', '分團', '活動', '系統設定', '稽核', '總覽']) {
+  for (const name of ['會員', '權限', '分團', '活動', '設定', '稽核', '總覽']) {
     const title = await page.locator('#view h1').elementHandle();
     await page.locator('.adminseg').getByRole('button', { name }).click();
     await expect(page.locator('.adminseg [aria-pressed="true"]')).toHaveText(name);
