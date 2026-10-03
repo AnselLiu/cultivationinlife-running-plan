@@ -2613,8 +2613,8 @@ async function planView(n) {
           ${personal ? `<p class="tiny" style="margin:2px 0 0">跟著 <span translate="no">${esc(c.name)}</span>・比賽日 ${dstr(c.anchor)}</p>` : ''}
         </div>
         <div class="row" style="gap:6px">
-          <button class="btn ghost sm" id="prev" ${week === 1 ? 'disabled' : ''} aria-label="上一週">‹</button>
-          <button class="btn ghost sm" id="next" ${week === 21 ? 'disabled' : ''} aria-label="下一週">›</button>
+          <button class="btn ghost sm navbtn" id="prev" ${week === 1 ? 'disabled' : ''} aria-label="上一週">${IC.chevL}</button>
+          <button class="btn ghost sm navbtn" id="next" ${week === 21 ? 'disabled' : ''} aria-label="下一週">${IC.chevR}</button>
         </div>
       </div>
       ${notices.map((x) => `<p class="notice" style="margin:0">${x}</p>`).join('')}

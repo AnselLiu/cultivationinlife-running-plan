@@ -1369,6 +1369,7 @@ export default {
 "有飲水機": "Water fountains",
 "有點累": "A bit tired",
 "有，到 22:00": "Yes, until 22:00",
+"有，入口旁": "Yes, by the gate",
 "朋友打開後用 Google 帳號登入就能加入成為跑友；要成為協會會員另外申請。": "Friends join as runners by signing in with Google; Association membership is a separate application.",
 "期間": "Period",
 "期間：": "Period: ",

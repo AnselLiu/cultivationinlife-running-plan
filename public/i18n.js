@@ -127,6 +127,8 @@ const tr = (s) => {
 };
 const SKIP = 'script,style,textarea,code,[translate="no"],[contenteditable]';
 const ATTRS = ['placeholder', 'aria-label', 'title', 'alt'];
+// 屬性（placeholder 等）只跳過不翻譯的區塊；textarea 的內容是使用者輸入不翻，但它的 placeholder 是介面文字要翻
+const ATTR_SKIP = 'script,style,code,[translate="no"],[contenteditable]';
 function walk(root) {
   if (!root) return;
   if (root.nodeType === 3) { if (!root.parentElement?.closest(SKIP)) { const t = tr(root.nodeValue); if (t !== root.nodeValue) root.nodeValue = t; } return; }
@@ -135,7 +137,7 @@ function walk(root) {
   const nodes = []; while (it.nextNode()) nodes.push(it.currentNode);
   for (const n of nodes) { const t = tr(n.nodeValue); if (t !== n.nodeValue) n.nodeValue = t; }
   for (const el of [root, ...root.querySelectorAll(ATTRS.map((a) => `[${a}]`).join(','))]) {
-    if (el.closest(SKIP)) continue;
+    if (el.closest(ATTR_SKIP)) continue;
     for (const a of ATTRS) { const v = el.getAttribute?.(a); if (v && CJK.test(v)) el.setAttribute(a, tr(v)); }
     if (el.tagName === 'INPUT' && /^(button|submit)$/.test(el.type) && CJK.test(el.value)) el.value = tr(el.value);
   }

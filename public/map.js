@@ -210,16 +210,26 @@ function measure() {
   // 半開盡量露出搜尋列、篩選和前兩列清單（iPhone SE 也一樣），但不蓋到右邊的地圖按鈕
   sheetH = { peek: below + 142, half: Math.min(full, Math.max(Math.round(H * 0.52), Math.min(below + 142 + 190, Math.round(H - ctl - 8)))), full };
 }
+// 抽屜蓋到右上的地圖按鈕（全開、或拖到按鈕的高度）時把按鈕與休息站 chip 收起來（Apple 地圖全開時也會藏地圖控制），
+//   不然毛玻璃底下透出按鈕的影子、看起來疊在拉桿與搜尋列上；y＝抽屜往下移的距離（translateY）
+function coverCtl(y) {
+  const amap = $('#amap'), ctl = $('.mapctl'); if (!amap || !ctl) return;
+  const off = !wide() && amap.clientHeight - sheetH.full + y < ctl.getBoundingClientRect().bottom - amap.getBoundingClientRect().top + 6;
+  amap.classList.toggle('ctl-off', off);
+  const menu = $('#baseMenu');
+  if (off && menu && !menu.hidden) { menu.hidden = true; $('#baseBtn')?.setAttribute('aria-expanded', 'false'); }
+}
 function setDetent(d, opt = {}) {
   const sh = $('#msheet'); if (!sh) return;
   detent = d; sh.dataset.detent = d; $('#amap').dataset.detent = d;
   const g = $('#grab'); g?.setAttribute('aria-expanded', String(d !== 'peek')); g?.setAttribute('aria-label', d === 'full' ? '收合清單' : '展開清單');
-  if (wide()) { sh.style.transform = ''; sh.style.height = ''; return; }
+  if (wide()) { sh.style.transform = ''; sh.style.height = ''; $('#amap').classList.remove('ctl-off'); return; }
   measure();
   sh.style.height = `${sheetH.full}px`;
   sh.classList.toggle('anim', !opt.instant);
   sh.style.transform = `translateY(${sheetH.full - sheetH[d]}px)`;
   sh.style.setProperty('--hid', `${sheetH.full - sheetH[d]}px`);   // 抽屜在畫面外的高度：內容在分頁列上方淡出（style.css）
+  coverCtl(sheetH.full - sheetH[d]);
   if (d !== 'full') $('#msheetScroll').scrollTop = 0;
   if (map && map.getContainer() === $('#map')) RS.viewChanged();   // 抽屜收起來露出的地圖：休息站補抓那幾格（畫面重建時舊的地圖不算）
 }
@@ -246,6 +256,7 @@ function bindSheet() {
     const y = Math.min(sheetH.full - sheetH.peek + 40, Math.max(-20, base + dy));
     sh.style.transform = `translateY(${y}px)`;
     sh.style.setProperty('--hid', `${Math.max(0, y)}px`);
+    coverCtl(y);
     last.push([performance.now(), e.clientY]); if (last.length > 5) last.shift();
     e.preventDefault();
   });
@@ -838,7 +849,7 @@ function spotForm(s, pt) {
     <label>縣市<select name="city"><option value="">（請選擇）</option>${CITIES.map((c) => `<option ${v.city === c || (!v.city && filt.city === c) ? 'selected' : ''}>${c}</option>`).join('')}</select></label>
     <div class="row spread"><span class="tiny">位置 <span class="num" id="ptText">${pt[0].toFixed(5)}, ${pt[1].toFixed(5)}</span></span><button type="button" class="btn ghost sm" id="repick">重新選位置</button></div>
     <label>說明<textarea name="intro" maxlength="600" placeholder="怎麼去、適合什麼課表、要注意什麼">${esc(v.intro || '')}</textarea></label>
-    <div class="grid2">${Object.entries(INFO).map(([k, t]) => `<label>${t}<input name="i_${k}" maxlength="60" value="${esc(v.info?.[k] || '')}" placeholder="${{ lap: '400 公尺', surface: 'PU 跑道', light: '有，到 22:00', water: '有飲水機', toilet: '有', parking: '路邊停車', hours: '05:00–22:00' }[k]}"></label>`).join('')}</div>
+    <div class="grid2">${Object.entries(INFO).map(([k, t]) => `<label>${t}<input name="i_${k}" maxlength="60" value="${esc(v.info?.[k] || '')}" placeholder="${{ lap: '400 公尺', surface: 'PU 跑道', light: '有，到 22:00', water: '有飲水機', toilet: '有，入口旁', parking: '路邊停車', hours: '05:00–22:00' }[k]}"></label>`).join('')}</div>
     <div class="row"><button class="btn sm">${s ? '儲存' : data.editor ? '新增' : '送出提議'}</button><button type="button" class="btn ghost sm" id="sfc">取消</button>
       ${s ? '<button type="button" class="btn danger sm" id="sfd">刪除</button>' : ''}</div></form>`;
   let cur = pt;

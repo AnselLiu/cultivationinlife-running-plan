@@ -21,7 +21,7 @@
 :root{
   color-scheme:light dark;
   --bg:#F4F6FA; --card:#FFFFFF; --card-2:#F8F9FC;
-  --label:#0B1B33; --label-2:#5B6678; --label-3:#A7B0BF;
+  --label:#0B1B33; --label-2:#5B6678; --label-3:#A7B0BF; --label-ter:#687285;
   --sep:#E3E7EF; --sep-opaque:#D3D9E4;
   --fill:#E6EAF2; --fill-2:#F2F4F8; --seg-sel:#FFFFFF;
   --accent:#1C4698; --accent-fill:#1C4698; --on-accent:#FFFFFF; --accent-soft:#E8EEFA;
@@ -41,7 +41,7 @@
 }
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
   --bg:#06121F; --card:#0D2038; --card-2:#0A1A2E;
-  --label:#F2F5FA; --label-2:#A5B3C8; --label-3:#5F7190;
+  --label:#F2F5FA; --label-2:#A5B3C8; --label-3:#5F7190; --label-ter:#8293AE;
   --sep:#1D3352; --sep-opaque:#27406A;
   --fill:#17304F; --fill-2:#112842; --seg-sel:#2B4B78;
   --accent:#FDF36D; --accent-fill:#FDF36D; --on-accent:#0B1B33; --accent-soft:rgba(253,243,109,.13);
@@ -60,7 +60,7 @@
 }}
 :root[data-theme="dark"]{
   --bg:#06121F; --card:#0D2038; --card-2:#0A1A2E;
-  --label:#F2F5FA; --label-2:#A5B3C8; --label-3:#5F7190;
+  --label:#F2F5FA; --label-2:#A5B3C8; --label-3:#5F7190; --label-ter:#8293AE;
   --sep:#1D3352; --sep-opaque:#27406A;
   --fill:#17304F; --fill-2:#112842; --seg-sel:#2B4B78;
   --accent:#FDF36D; --accent-fill:#FDF36D; --on-accent:#0B1B33; --accent-soft:rgba(253,243,109,.13);
@@ -399,7 +399,7 @@ footer{font-size:12px;color:var(--label-2);display:grid;gap:6px;padding:0 16px;l
 .wh .tags{margin:0;grid-column:2;grid-row:2}
 .wh .nav{grid-column:3;grid-row:1/span 2}
 .wh .meta{min-width:0}
-.swipe-hint{display:none;font-size:12px;color:var(--label-3);text-align:center;padding:4px 0 8px}
+.swipe-hint{display:none;font-size:12px;color:var(--label-ter);text-align:center;padding:4px 0 8px}
 @media (hover:none) and (pointer:coarse){.swipe-hint{display:block}}
 @media (max-width:520px){.wh{grid-template-columns:auto 1fr}.wh .nav{grid-column:1/-1;grid-row:auto;justify-content:space-between}.wh .nav button{flex:1}}
 .week.slide-l{animation:slideL .22s ease}.week.slide-r{animation:slideR .22s ease}
@@ -650,7 +650,7 @@ dl.gl dt.on{color:var(--label)}
 dl.gl dt[data-term]::after{content:"";display:inline-block;width:6px;height:6px;border-radius:50%;margin-left:6px;vertical-align:2px;background:transparent}
 dl.gl dt.on::after{background:var(--brand-yellow);box-shadow:0 0 0 2px var(--accent)}
 .gl-use{display:flex;flex-wrap:wrap;gap:4px;align-items:center;margin-top:4px;font-size:12px;color:var(--label-2)}
-.gl-use .muted{color:var(--label-3)}
+.gl-use .muted{color:var(--label-ter)}
 .gl-day{border:0;border-radius:999px;background:var(--accent-soft);color:var(--accent);font-size:12px;font-weight:700;padding:1px 8px;cursor:pointer}
 .flash{animation:flash 1.2s ease}
 @keyframes flash{0%,40%{background:var(--brand-yellow)}100%{background:transparent}}
@@ -735,7 +735,7 @@ html.tabbed .tabbar{display:block;position:fixed;left:0;right:0;bottom:0;z-index
 .tabbar .tb-in{max-width:560px;margin:0 auto;height:var(--tabbar-h);display:grid;grid-template-columns:repeat(5,1fr);
   padding-left:env(safe-area-inset-left,0px);padding-right:env(safe-area-inset-right,0px)}
 .tabbar button{border:0;background:none;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;
-  color:var(--label-3);font-size:10px;font-weight:500;letter-spacing:.01em;cursor:pointer;padding:4px 0 0;position:relative;touch-action:manipulation}
+  color:var(--label-ter);font-size:10px;font-weight:500;letter-spacing:.01em;cursor:pointer;padding:4px 0 0;position:relative;touch-action:manipulation}
 .tabbar button svg{width:26px;height:26px;transition:transform .18s cubic-bezier(.3,1.4,.5,1)}
 .tabbar button .fi{opacity:0;transition:opacity .15s}
 .tabbar button[aria-selected="true"]{color:var(--accent)}
@@ -850,7 +850,8 @@ html.tabbed .wrap>.tab-on.tab-enter{animation:tabIn .22s ease-out}
 .heat i[data-l="3"]{background:var(--ok)}
 .heat i.cur{box-shadow:0 0 0 1.5px var(--accent)}
 .heat i.fut{opacity:.45}
-.heatlbl{display:flex;justify-content:space-between;font-size:11px;color:var(--label-3);font-weight:600}
+/* 熱度圖下的週次標示：比統計小字（--label-2、600）再淡一階，但文字對比仍過 4.5:1（--label-3 只給裝飾與停用） */
+.heatlbl{display:flex;justify-content:space-between;font-size:11px;color:var(--label-ter);font-weight:500}
 
 /* 我的倒數 */
 .cdl{list-style:none;margin:0;padding:0;border-radius:12px;overflow:hidden;background:var(--fill-2)}
@@ -864,7 +865,7 @@ html.tabbed .wrap>.tab-on.tab-enter{animation:tabIn .22s ease-out}
 .cdl .dd{text-align:right;line-height:1.05}
 .cdl .dd b{font-size:24px;font-weight:700;color:var(--accent)}
 .cdl .dd small{display:block;font-size:11px;color:var(--label-2);font-weight:600}
-.cdl li.past .dd b{color:var(--label-3)}
+.cdl li.past .dd b{color:var(--label-ter)}
 .addbtn{border:0;background:var(--fill-2);color:var(--accent);font-size:15px;font-weight:600;border-radius:12px;padding:11px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px}
 .sheet .frm{display:grid;gap:10px}
 .sheet .frm label{display:grid;gap:4px;font-size:13px;color:var(--label-2);font-weight:500}
