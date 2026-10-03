@@ -1118,3 +1118,184 @@ test('附近即時影像：功能開關預設關閉、同步與完整性檢查�
   assert.equal((await frame('t_runner', 'wra:M1')).status, 404);
   await mock('reset=1');
 });
+
+test('跑者休息站：功能開關預設關閉、權限、同步轉換與完整性檢查、分頁續跑、幹部修正不被覆蓋、格子與附近 API、不收管理人資料、稽核、刪帳號（REST_MOCK 不連外）', async () => {
+  const mock = (q = '') => fetch(`${BASE}/api/dev/rest-mock?${q}`).then((r) => r.json());
+  const hits = async () => Object.values((await mock()).hits).reduce((n, v) => n + v, 0);
+  const cron = async (at) => (await call(null, `/dev/cron?at=${at}`)).json.rest;
+  const sync = (source, who = 't_chair') => call(who, '/rest/sync', { method: 'POST', body: { source } });
+  const srcs = async () => Object.fromEntries((await call('t_chair', '/rest/sources')).json.sources.map((s) => [s.source, s]));
+  const stops = async (key, who = 't_runner') => (await call(who, `/rest/cell/${key}`)).json.stops;
+  const ids = async (key) => (await stops(key)).map((s) => s[0]);
+  const find = async (key, name) => (await stops(key)).find((s) => s[7] === name)?.[0];
+  const detail = (id, who = 't_runner') => call(who, `/rest/${encodeURIComponent(id)}`);
+  const toggle = (source, enabled) => call('t_chair', '/rest/sources', { method: 'POST', body: { source, enabled } });
+  await mock('reset=1');
+  // 要登入
+  for (const p of ['/rest/meta', '/rest/cell/1253_6077', '/spots/seed07/rest', '/rest/twd:D1', '/rest/sources']) assert.equal((await call(null, p)).status, 401, p);
+  // 功能開關預設關閉：跑友端都 404、排程不同步也不連線
+  assert.equal((await call('t_chair', '/rest/sources')).json.feature, false);
+  for (const p of ['/rest/meta', '/rest/cell/1253_6077', '/spots/seed07/rest', '/rest/twd:D1']) assert.equal((await call('t_runner', p)).status, 404, p);
+  const h0 = await hits();
+  assert.equal(await cron('2027-07-04T17:30:00Z'), null, '功能關閉時排程不同步');
+  assert.equal(await hits(), h0, '也不連線');
+  // 權限：來源設定只有理事長、行政人員能改，監事只能看；一般跑友不能新增或同步
+  assert.equal((await call('t_runner', '/rest/sources')).status, 403);
+  assert.equal((await sync('twd', 't_runner')).status, 403);
+  assert.equal((await call('t_runner', '/rest', { method: 'POST', body: { name: 'x', type: 'water', subtype: 'shop', lat: 25.07, lng: 121.54 } })).status, 403);
+  const sv = await call('t_super', '/rest/sources');
+  assert.equal(sv.status, 200); assert.equal(sv.json.editable, false);
+  assert.equal((await call('t_super', '/rest/sources', { method: 'POST', body: { source: 'twd', enabled: false } })).status, 403);
+  assert.equal((await toggle('__proto__', true)).status, 400, '來源代碼查不到原型上的東西');
+  assert.equal((await sync('cur')).status, 400, '整理清單不能同步');
+  assert.deepEqual(Object.entries(await srcs()).filter(([, s]) => !s.enabled).map(([k]) => k), [], '第一批來源預設都開啟');
+  // 手動同步（功能開關關著也可以先測）：重複代碼合併、國外座標丟掉；沒變就不寫
+  const w = await sync('twd');
+  assert.equal(w.status, 200, w.text); assert.equal(w.json.count, 5);
+  assert.equal((await srcs()).twd.last_error, null, '同步成功後清掉「同步中」');
+  assert.equal((await sync('twd')).json.same, true, '內容雜湊沒變：不解析也不寫');
+  // 開啟功能（只送其他開關、不帶 rest 的舊版畫面不會把它關掉）
+  assert.equal((await call('t_chair', '/settings/features', { method: 'POST', body: { rest: true } })).status, 200);
+  assert.equal((await call('t_chair', '/settings/features', { method: 'POST', body: { cams: false } })).status, 200);
+  assert.equal((await call('t_chair', '/rest/sources')).json.feature, true);
+  for (const k of ['tpt', 'tprv', 'ntrv', 'tpbk', 'cpct', 'sav']) { const r = await sync(k); assert.equal(r.status, 200, `${k} ${r.text}`); }
+  const meta = await call('t_runner', '/rest/meta');
+  assert.equal(meta.status, 200);
+  assert.ok(meta.json.sources.some((s) => s.source === 'twd' && /臺北自來水事業處，依政府資料開放授權條款第1版提供/.test(s.attribution) && s.data_date === '2026-08-14'));
+  // 座標轉換：TWD97（WGS84 空白）與度分秒
+  const kid = await find('1253_6076', '大佳河濱公園');
+  const k1 = (await detail(kid)).json.stop;
+  assert.ok(Math.abs(k1.lat - 25.074578) < 1e-4 && Math.abs(k1.lng - 121.535869) < 1e-4, `TWD97 換算 ${k1.lat},${k1.lng}`);
+  const nt = (await detail((await ids('1258_6071'))[0])).json.stop;
+  assert.ok(Math.abs(nt.lat - 25.171244) < 1e-5 && Math.abs(nt.lng - 121.437361) < 1e-5, `度分秒 ${nt.lat},${nt.lng}`);
+  assert.equal(nt.attribution, '資料來源：新北市政府水利局，依政府資料開放授權條款第1版提供');
+  assert.equal((await detail('twd:FAR1')).status, 404, '國外座標不收');
+  assert.equal((await ids('1253_6077')).filter((x) => x === 'twd:D1').length, 1, '重複代碼只有一筆');
+  // 格子 API：不含暫停、精簡陣列、快取標頭、代碼格式
+  const c1 = await call('t_runner', '/rest/cell/1253_6077');
+  assert.equal(c1.status, 200);
+  assert.equal(c1.headers.get('cache-control'), 'private, max-age=86400');
+  assert.ok(!c1.json.stops.some((s) => s[0] === 'twd:D3'), '暫停的直飲臺不出現');
+  assert.deepEqual(c1.json.stops.find((s) => s[0] === 'twd:D1').slice(1), ['water', 'fountain', 513, 'public', 25.0738, 121.5403, '大佳河濱公園 9號水門', '24 小時']);
+  assert.equal((await detail('twd:D3')).json.stop.status, 'paused');
+  for (const bad of ['12_34', 'abc', '1253_6077x', '1253-6077', '9_9', '12345_6077']) assert.equal((await call('t_runner', `/rest/cell/${bad}`)).status, 400, bad);
+  // 完整性檢查：筆數掉到 70% 以下不寫入、不停用
+  await mock('shrink=1');
+  const sh = await sync('twd');
+  assert.equal(sh.status, 502); assert.match(sh.json.error, /筆數從 5 掉到 1，這次不更新/);
+  assert.ok((await ids('1251_6076')).includes('twd:D2'), '擋下時不停用任何一筆');
+  // 排程：台北 01:00 起，每次排程只跑一個到期的來源；少一筆（80%）照常更新並停用消失的列
+  await mock('shrink=0&drop=1');
+  const r1 = await cron('2027-07-04T17:30:00Z');
+  assert.deepEqual(r1, { twd: 4 });
+  assert.ok(!(await ids('1255_6080')).includes('twd:D4'), '清單不再出現的直飲臺停用');
+  assert.equal((await detail('twd:D4')).status, 404);
+  assert.equal((await detail('twd:D4', 't_chair')).json.edit.enabled, false, '幹部看得到停用的列');
+  const r2 = await cron('2027-07-04T17:40:00Z');
+  assert.equal(Object.keys(r2).length, 1, '一次只跑一個來源'); assert.equal(Object.keys(r2)[0], 'tpt');
+  assert.equal(await cron('2027-07-04T19:30:00Z'), null, '03:00 不跑（備份時段）');
+  // 幹部修正與隱藏：同步後不被覆蓋
+  const park = await find('1253_6076', '新生公園'), daan = await find('1251_6076', '大安森林公園');
+  assert.ok(park && daan);
+  assert.equal((await call('t_runner', `/rest/${park}`, { method: 'PUT', body: { fix: { name: 'x' } } })).status, 403, '跑友不能改');
+  assert.equal((await call('t_chair', `/rest/${park}`, { method: 'PUT', body: { fix: { lat: 40, lng: 121 } } })).status, 400);
+  assert.equal((await call('t_chair', `/rest/${park}`, { method: 'PUT', body: { fix: { name: '新生公園（近民族東路）', hours: '每日 05:00–23:00' }, note: '在公園東側' } })).status, 200);
+  assert.equal((await call('t_chair', `/rest/${daan}`, { method: 'PUT', body: { hidden: true } })).status, 200);
+  assert.ok(!(await ids('1251_6076')).includes(daan), '隱藏的不出現在格子');
+  await mock('change=1');
+  const ch = await sync('tpt');
+  assert.equal(ch.status, 200); assert.ok(ch.json.changed >= 1, '來源有變的列照常更新');
+  const pk = (await detail(park)).json.stop;
+  assert.equal(pk.name, '新生公園（近民族東路）'); assert.equal(pk.hours, '每日 05:00–23:00'); assert.equal(pk.note, '在公園東側');
+  assert.ok(pk.svc & 32, '來源的新資料（無障礙）有寫進去');
+  assert.ok(!(await ids('1251_6076')).includes(daan), '同步後仍然隱藏');
+  assert.equal((await detail(daan)).status, 404);
+  assert.equal((await detail(daan, 't_chair')).json.edit.hidden, true);
+  // 地點附近：每類最多 2 處，依「距離 × 權重」排序；同一處（60 公尺內同名）合併
+  const nr = await call('t_runner', '/spots/seed07/rest');
+  assert.equal(nr.status, 200);
+  const { groups } = nr.json;
+  assert.ok(Object.values(groups).every((g) => g.length <= 2 && g.every((x) => x.dist <= 1000)));
+  assert.deepEqual(groups.toilet.map((x) => x.name), ['大佳河濱公園', '麥當勞大直店'], '公共 120 m 排在店家 100 m（權重 1.3）前面');
+  assert.ok(groups.toilet[0].svc & 32);
+  assert.equal((await stops('1253_6077')).filter((s) => s[7] === '大佳河濱公園').length, 1, '臺北公廁與河濱廁所（11 m、同名）合併成一處');
+  assert.equal(groups.toilet[1].access, 'customer');
+  assert.equal(groups.water[0].id, 'twd:D1');
+  assert.ok(!JSON.stringify(groups).includes('twd:D3'), '暫停的不列');
+  assert.equal((await call('t_runner', '/spots/nope404/rest')).status, 404);
+  // 運動場館：不收管理人姓名與電話；開放時間整理成標準寫法、原文去掉電話
+  const savId = (await stops('1251_6076')).find((s) => s[0].startsWith('sav:'))[0];
+  const sd = await detail(savId);
+  assert.equal(sd.json.stop.hours, '每日 06:00–22:00'); assert.equal(sd.json.stop.access, 'paid');
+  assert.match(sd.json.stop.attribution, /運動部/);
+  for (const t of [sd.text, (await call('t_runner', '/rest/cell/1251_6076')).text]) assert.ok(!/王小明|2345-6789|2377-0300|管理人/.test(t), '沒有管理人與電話');
+  // 外連只收 https
+  assert.equal((await detail('twd:D2')).json.stop.ref_url, null, '來源給 http 的水質頁不收');
+  assert.match((await detail('twd:D1')).json.stop.ref_url, /^https:\/\//);
+  // 幹部新增、修改、刪除（man）；官方資料不能刪
+  const add = { name: '測試補水點', type: 'water', subtype: 'shop', lat: 25.0737, lng: 121.5402, hours: '每日 07:00–19:00', access: 'customer', ref_url: 'https://example.com/x', note: '電話 02-2345-6789，請先詢問' };
+  assert.equal((await call('t_chair', '/rest', { method: 'POST', body: { ...add, ref_url: 'http://example.com' } })).status, 400);
+  assert.equal((await call('t_chair', '/rest', { method: 'POST', body: { ...add, ref_url: 'javascript:alert(1)' } })).status, 400);
+  assert.equal((await call('t_chair', '/rest', { method: 'POST', body: { ...add, type: 'spa' } })).status, 400);
+  assert.equal((await call('t_chair', '/rest', { method: 'POST', body: { ...add, svc: 2048 } })).status, 400);
+  assert.equal((await call('t_chair', '/rest', { method: 'POST', body: { ...add, lat: 40 } })).status, 400);
+  assert.equal((await call('t_chair', '/rest', { method: 'POST', body: { ...add, name: '名'.repeat(41) } })).status, 400);
+  const mk = await call('t_chair', '/rest', { method: 'POST', body: add });
+  assert.equal(mk.status, 200);
+  const md = (await detail(mk.json.id)).json.stop;
+  assert.equal(md.hours, '每日 07:00–19:00'); assert.equal(md.manual, true); assert.ok(!/2345/.test(md.note), '補充說明不存電話');
+  assert.ok((await ids('1253_6077')).includes(mk.json.id));
+  assert.equal((await call('t_chair', `/rest/${mk.json.id}`, { method: 'PUT', body: { ...add, hours: '看天氣' } })).status, 200);
+  const md2 = (await detail(mk.json.id)).json.stop;
+  assert.equal(md2.hours, null); assert.equal(md2.hours_raw, '看天氣', '看不懂的時間只存原文');
+  assert.equal((await call('t_chair', '/rest/twd:D1', { method: 'DELETE' })).status, 400, '官方資料不能刪');
+  assert.equal((await call('t_runner', `/rest/${mk.json.id}`, { method: 'DELETE' })).status, 403);
+  assert.equal((await call('t_chair', `/rest/${mk.json.id}`, { method: 'DELETE' })).status, 200);
+  assert.equal((await detail(mk.json.id)).status, 404);
+  assert.equal((await detail('cur:runbase-daan')).json.stop.checked_at, '2026-10-03', '整理清單有查證日');
+  // 分頁來源（臺灣騎跡，25 條路線 → 3 頁）：中途中斷後續跑，跑完一輪才停用消失的列；其他來源先關掉，排程才會輪到它
+  await mock('drop=0');
+  for (const k of ['twd', 'tpt', 'tprv', 'ntrv', 'tpbk', 'cpct', 'sav']) await toggle(k, false);
+  assert.equal(await cron('2027-07-05T17:30:00Z'), null, '台北 01:30：其他來源關掉了，騎跡 02:00 起才跑');
+  assert.match(String((await cron('2027-07-05T18:30:00Z')).tbk), /（1\/3）$/);
+  await mock('failPage=2');
+  assert.match(String((await cron('2027-07-05T18:40:00Z')).tbk), /^error: 來源回應 500/);
+  assert.equal((await srcs()).tbk.page, 1, '失敗時 cursor 不動');
+  await mock('failPage=0');
+  assert.equal(await cron('2027-07-05T21:30:00Z'), null, '05:00 不跑（攝影機時段）');
+  assert.match(String((await cron('2027-07-05T22:30:00Z')).tbk), /（2\/3）$/, '從中斷的那一頁續跑');
+  assert.equal((await cron('2027-07-05T22:40:00Z')).tbk, '28（3/3）');
+  assert.equal(await cron('2027-07-05T22:50:00Z'), null, '這個月已經跑完一輪');
+  const seven = (await stops('1170_6020')).find((s) => /7-ELEVEN/.test(s[7]));
+  assert.equal(seven[4], 'customer', '超商補給站是店家');
+  const tail = (await ids('1165_6015'))[0];
+  assert.ok(tail);
+  await mock('drop=1');
+  await cron('2027-07-31T18:30:00Z'); await cron('2027-07-31T18:40:00Z');
+  assert.equal((await detail(tail)).status, 200, '一輪還沒跑完不停用');
+  assert.equal((await cron('2027-07-31T22:30:00Z')).tbk, '27（3/3）');
+  assert.equal((await detail(tail)).status, 404, '跑完一輪才停用沒看到的列');
+  for (const k of ['twd', 'tpt', 'tprv', 'ntrv', 'tpbk', 'cpct', 'sav']) await toggle(k, true);
+  // 稽核紀錄
+  const au = (await call('t_chair', '/audit?action=rest.')).json.items.map((x) => x.action);
+  for (const a of ['rest.add', 'rest.fix', 'rest.hide', 'rest.delete']) assert.ok(au.includes(a), a);
+  const as = (await call('t_chair', '/audit?action=settings.rest')).json.items.map((x) => x.action);
+  assert.ok(as.includes('settings.rest') && as.includes('settings.rest_sync'));
+  // 刪除帳號：建立者與修改者欄位清掉，資料留著
+  const j = await fetch(`${BASE}/api/join`, { method: 'POST', headers: { origin: BASE, 'content-type': 'application/json' }, body: JSON.stringify({ code: 'test-join', name: '休息站測試', dist: 'fm', grp: 'D', consent: true }) });
+  const uid = (await j.json()).member.id;
+  assert.equal((await call('t_chair:mfa', `/members/${uid}/role`, { method: 'POST', body: { role: 'coach' } })).status, 200);
+  const ck = (await fetch(`${BASE}/api/dev/login?id=${uid}&mfa=1`, { redirect: 'manual' })).headers.get('set-cookie').split(';')[0];
+  const hd = { cookie: ck, origin: BASE, 'content-type': 'application/json' };
+  const mine = await (await fetch(`${BASE}/api/rest`, { method: 'POST', headers: hd, body: JSON.stringify({ ...add, name: '刪帳號測試點' }) })).json();
+  assert.ok(mine.id);
+  assert.ok((await detail(mine.id, 't_chair')).json.edit.added_by, '幹部看得到是誰新增的');
+  assert.equal((await fetch(`${BASE}/api/me`, { method: 'DELETE', headers: { cookie: ck, origin: BASE } })).status, 200);
+  const after = await detail(mine.id, 't_chair');
+  assert.equal(after.status, 200, '資料留著'); assert.equal(after.json.edit.added_by, null, '建立者清掉');
+  // 全站緊急停用
+  assert.equal((await call('t_chair', '/settings/features', { method: 'POST', body: { rest: false } })).status, 200);
+  assert.equal((await call('t_runner', '/rest/cell/1253_6077')).status, 404);
+  assert.equal((await call('t_runner', '/spots/seed07/rest')).status, 404);
+  await mock('reset=1');
+});

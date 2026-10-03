@@ -14,6 +14,7 @@ import { BADGES, earned, weeksOf } from '../public/badges.js';
 import { CATS, isCat, MUTABLE } from '../public/notif-cats.js';
 import { tpNow, shiftDays, daysBetween, evStart, signupEnd, signupState, STATE_TEXT, tpText, SIGNUP_DEFAULTS, windowError, isStamp } from '../public/signup-window.js';
 import * as Cams from './cams.js';
+import * as Rest from './rest.js';
 
 const COOKIE = '__Host-cil_sess';
 // 工作階段期限：一般跑友長期使用；幹部看得到別人的資料，期限短很多
@@ -855,6 +856,7 @@ async function api(req, env, path, method) {
   let member = member0;
   const setting = (k) => settingRows.find((r) => r.key === k)?.value;
   const camsOn = () => Cams.featureOn(setting('features'));
+  const restOn = () => Rest.featureOn(setting('features'));
   // 幹部兩步驟驗證：理事長開啟後，幹部的工作階段要用通行金鑰驗證過，才有管理權限（之前一律當一般跑友）
   const security = (() => { try { return JSON.parse(setting('security') || '{}'); } catch { return {}; } })();
   if (member && security.require_mfa && (norm(member.role) !== 'member' || member.team_officer) && !member.s_mfa) {
@@ -1061,7 +1063,7 @@ async function api(req, env, path, method) {
     }
     return json({ id, status: editor ? 'approved' : 'pending' });
   }
-  const msp = path.match(/^\/api\/spots\/([\w-]{1,32})(?:\/(reports|review|cams))?(?:\/([\w-]{1,32}))?$/);
+  const msp = path.match(/^\/api\/spots\/([\w-]{1,32})(?:\/(reports|review|cams|rest))?(?:\/([\w-]{1,32}))?$/);
   if (msp) {
     const g = need(); if (g) return g;
     const sp = await env.DB.prepare('SELECT * FROM spots WHERE id = ?').bind(msp[1]).first();
@@ -1073,6 +1075,11 @@ async function api(req, env, path, method) {
     if (sub === 'cams' && method === 'GET' && !msp[3]) {
       const r = camsOn() ? await Cams.forSpot(env, sp) : { cams: [], enabled: false, link: false };
       return json({ ...r, radius: Cams.RADIUS, fallback: Cams.FALLBACK }, 200, { 'cache-control': 'private, max-age=300' });
+    }
+    // 附近休息站：周圍 3×3 格、1 公里內每類最多 2 處（距離 × 權重排序）；功能開關關閉時 404
+    if (sub === 'rest' && method === 'GET' && !msp[3]) {
+      if (!restOn()) return fail(404, '找不到休息站');
+      return json(await Rest.nearSpot(env, sp), 200, { 'cache-control': 'private, max-age=300' });
     }
     if (!sub && method === 'GET') {
       const reps = (await env.DB.prepare(`SELECT id, data, created_at, member_id FROM spot_reports WHERE spot_id = ? AND created_at >= datetime('now', '-24 hours') ORDER BY created_at DESC LIMIT 20`).bind(sp.id).all()).results;
@@ -1232,6 +1239,148 @@ async function api(req, env, path, method) {
     await audit(env, req, member, 'settings.cams_sync', 'settings', `cams.${src}`, r.error ? `失敗：${r.error}` : `${r.count} 支，更新 ${r.changed}、停用 ${r.disabled}`);
     if (r.error) return fail(502, r.error);
     return json(r);
+  }
+  // ---- 跑者休息站（政府開放資料＋幹部整理；src/rest.js）----
+  //   整個功能由 features.rest 控制（預設關閉）：關閉時跑友端的 API 都回 404、排程不同步；來源設定與手動同步仍可以先調好（比照附近即時影像）
+  //   只開放給登入的跑友（避免被當成免費的資料代理）；伺服器只收到格子代碼或地點代碼，不收跑友的位置
+  const RID = /^(?:[a-z]{2,6}):[\w.~-]{1,64}$/;
+  const bumpRest = (source) => env.DB.prepare('UPDATE rest_sources SET rev = rev + 1 WHERE source = ?').bind(source);
+  // 資料來源清單（地圖選單的「休息站資料來源」）與目前版本（格子 API 的 ?v=）
+  if (path === '/api/rest/meta' && method === 'GET') {
+    const g = need(); if (g) return g;
+    if (!restOn()) return fail(404, '找不到休息站');
+    const st = await Rest.sourceState(env);
+    return json({ enabled: true, rev: st.rev, editor: canEditSpots(), sources: st.rows.filter((s) => s.enabled).map((s) => Rest.credit(s.source, s)) }, 200, { 'cache-control': 'private, max-age=300' });
+  }
+  // 一格（0.02 度）的休息站：精簡陣列；Cache API 用格子＋版本當 key；每位跑友 10 分鐘最多 300 次
+  const mrcell = path.match(/^\/api\/rest\/cell\/([^/]{1,20})$/);
+  if (mrcell && method === 'GET') {
+    const g = need(); if (g) return g;
+    if (!restOn()) return fail(404, '找不到休息站');
+    if (!Rest.CELL_RE.test(mrcell[1])) return fail(400, '格子代碼不正確');
+    if (await limited(env, `restc:${member.id}`, 300, 600)) return fail(429, '查詢太頻繁，請稍後再試');
+    const r = await Rest.cellStops(env, mrcell[1]);
+    return new Response(r.body, { headers: { ...SEC_HEADERS, 'content-type': 'application/json; charset=utf-8', 'cache-control': 'private, max-age=86400', 'x-rest-cache': r.hit ? 'hit' : 'miss' } });
+  }
+  // 來源開關與同步狀態（系統設定）：理事長、行政人員可以改；監事可以看
+  if (path === '/api/rest/sources' && method === 'GET') {
+    const g = need(); if (g) return g;
+    if (!can(member, 'settings') && !can(member, 'audit')) return fail(403, '只有理事長、行政人員與監事可以看');
+    const [srcs, counts] = (await env.DB.batch([
+      env.DB.prepare('SELECT source, enabled, last_sync_at, last_ok_at, last_count, last_error, data_date, cursor FROM rest_sources'),
+      env.DB.prepare('SELECT source, SUM(CASE WHEN enabled = 1 AND hidden = 0 THEN 1 ELSE 0 END) AS active, SUM(hidden) AS hidden FROM rest_stops GROUP BY source'),
+    ])).map((r) => r.results);
+    const cnt = Object.fromEntries(counts.map((r) => [r.source, r]));
+    const stuck = (r) => r.last_error === Rest.SYNCING && r.last_sync_at && Date.parse(`${r.last_sync_at.replace(' ', 'T')}Z`) < Date.now() - 120e3;
+    return json({ sources: Object.entries(Rest.SOURCES).map(([k, S]) => {
+      const r = srcs.find((x) => x.source === k) || {};
+      return { ...Rest.credit(k, r), manual: !!S.manual, enabled: !!r.enabled, every: S.every || null, paged: !!S.pages,
+        last_sync_at: r.last_sync_at || null, last_count: r.last_count ?? null, page: r.cursor ?? null,
+        last_error: stuck(r) ? '上次同步沒有完成（可能超過執行時間上限）' : r.last_error || null, active: cnt[k]?.active || 0, hidden: cnt[k]?.hidden || 0 };
+    }), editable: can(member, 'settings'), feature: restOn() });
+  }
+  if (path === '/api/rest/sources' && method === 'POST') {
+    const g = need(); if (g) return g;
+    if (!can(member, 'settings')) return fail(403, '只有理事長與行政人員可以修改系統設定');
+    const b = await body(), src = str(b.source, 10), S = Rest.sourceOf(src), on = b.enabled === true;
+    if (!S) return fail(400, '沒有這個來源');
+    await env.DB.prepare('INSERT INTO rest_sources (source, enabled) VALUES (?, ?) ON CONFLICT(source) DO UPDATE SET enabled = excluded.enabled, rev = rev + 1').bind(src, on ? 1 : 0).run();
+    await audit(env, req, member, 'settings.rest', 'settings', `rest.${src}`, `${S.name}：${on ? '開啟' : '關閉'}`);
+    return json({ ok: true });
+  }
+  // 立即同步（分頁來源一次一頁）：每個來源一小時最多 3 次
+  if (path === '/api/rest/sync' && method === 'POST') {
+    const g = need(); if (g) return g;
+    if (!can(member, 'settings')) return fail(403, '只有理事長與行政人員可以同步');
+    const src = str((await body()).source, 10), S = Rest.sourceOf(src);
+    if (!S || S.manual) return fail(400, '沒有這個來源');
+    if (!(await env.DB.prepare('SELECT enabled FROM rest_sources WHERE source = ?').bind(src).first())?.enabled) return fail(400, '請先開啟這個來源');
+    if (await limited(env, `restsync:${src}`, 3, 3600)) return fail(429, '這個來源一小時最多同步 3 次');
+    let r;
+    try { r = await Rest.syncSource(env, src); } catch (e) { r = { error: String(e?.message || e).slice(0, 120) }; await Rest.markFailed(env, src, r.error); }
+    await audit(env, req, member, 'settings.rest_sync', 'settings', `rest.${src}`, r.error ? `失敗：${r.error}` : `${r.count} 處，更新 ${r.changed}、停用 ${r.disabled}${r.pages ? `（第 ${r.page}／${r.pages} 頁）` : ''}`);
+    if (r.error) return fail(502, r.error);
+    return json(r);
+  }
+  // 幹部新增（source='man'）：權限同地點管理
+  if (path === '/api/rest' && method === 'POST') {
+    const g = need(); if (g) return g;
+    if (!canEditSpots()) return fail(403, '只有幹部可以新增休息站');
+    if (!restOn()) return fail(404, '跑者休息站沒有開啟');
+    if (!(await env.DB.prepare("SELECT enabled FROM rest_sources WHERE source = 'man'").first())?.enabled) return fail(400, '幹部新增的來源已關閉，請先在系統設定開啟');
+    if (await limited(env, `restadd:${member.id}`, 20, 3600)) return fail(429, '新增太頻繁，請稍後再試');
+    const v = Rest.readStop(await body());
+    if (v.error) return fail(400, v.error);
+    const s = v.value, id = `man:${rid(6)}`;
+    await env.DB.batch([
+      env.DB.prepare(`INSERT INTO rest_stops (id, source, type, subtype, svc, access, name, place, address, city, lat, lng, cell, hours, hours_raw, fee, note, ref_url, manual, checked_at, created_by, updated_by, hash)
+        VALUES (?, 'man', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, '')`)
+        .bind(id, s.type, s.subtype, s.svc, s.access, s.name, s.place, s.address, s.city, s.lat, s.lng, s.cell, s.hours, s.hours_raw, s.fee, s.note, s.ref_url, today(), member.id, member.id),
+      bumpRest('man'),
+    ]);
+    await audit(env, req, member, 'rest.add', 'rest', id, s.name);
+    return json({ id });
+  }
+  const mrs = path.match(/^\/api\/rest\/([^/]{1,80})$/);
+  if (mrs && RID.test(mrs[1]) && ['GET', 'PUT', 'DELETE'].includes(method)) {
+    const g = need(); if (g) return g;
+    const editor = canEditSpots();
+    if (method === 'GET') {
+      if (!restOn()) return fail(404, '找不到休息站');
+      const d = await Rest.detail(env, mrs[1], editor);
+      return d ? json(d, 200, { 'cache-control': 'private, max-age=300' }) : fail(404, '找不到休息站');
+    }
+    if (!editor) return fail(403, '只有幹部可以修改休息站');
+    if (!restOn()) return fail(404, '跑者休息站沒有開啟');
+    const row = await env.DB.prepare('SELECT id, source, name, lat, lng, fix, hidden, manual FROM rest_stops WHERE id = ?').bind(mrs[1]).first();
+    if (!row) return fail(404, '找不到休息站');
+    if (method === 'DELETE') {
+      // 官方資料不刪（同步會再出現），改用隱藏
+      if (!row.manual) return fail(400, '官方資料不能刪除，請改用隱藏');
+      await env.DB.batch([env.DB.prepare('DELETE FROM rest_stops WHERE id = ? AND manual = 1').bind(row.id), bumpRest(row.source)]);
+      await audit(env, req, member, 'rest.delete', 'rest', row.id, row.name);
+      return json({ ok: true });
+    }
+    // PUT：官方資料只能寫 fix、note 或隱藏；man 和 cur 可以整筆修改
+    const b = await body(), stmts = [];
+    const hidden = typeof b.hidden === 'boolean' ? b.hidden : null;
+    let fixed = false, name = row.name;
+    if (row.manual && b.name !== undefined) {
+      const v = Rest.readStop(b);
+      if (v.error) return fail(400, v.error);
+      const s = v.value;
+      name = s.name;
+      stmts.push(env.DB.prepare(`UPDATE rest_stops SET type = ?, subtype = ?, svc = ?, access = ?, name = ?, place = ?, address = ?, city = ?, lat = ?, lng = ?, cell = ?,
+        hours = ?, hours_raw = ?, fee = ?, note = ?, ref_url = ?, checked_at = ?, updated_by = ?, updated_at = datetime('now') WHERE id = ?`)
+        .bind(s.type, s.subtype, s.svc, s.access, s.name, s.place, s.address, s.city, s.lat, s.lng, s.cell, s.hours, s.hours_raw, s.fee, s.note, s.ref_url, today(), member.id, row.id));
+      fixed = true;
+    } else {
+      if (b.fix !== undefined) {
+        if (row.manual) return fail(400, '整理清單與幹部新增的資料請直接修改欄位');
+        const f = Rest.readFix(b.fix);
+        if (f.error) return fail(400, f.error);
+        // 修正位置時，格子跟著修正後的位置（同步不會改回來源的格子）
+        const lat = f.value?.lat ?? row.lat, lng = f.value?.lng ?? row.lng;
+        stmts.push(env.DB.prepare("UPDATE rest_stops SET fix = ?, cell = ?, updated_by = ?, updated_at = datetime('now') WHERE id = ?")
+          .bind(f.value ? JSON.stringify(f.value) : null, Rest.cellOf(lat, lng), member.id, row.id));
+        if (f.value?.name) name = f.value.name;
+        fixed = true;
+      }
+      if (b.note !== undefined) {
+        const note = typeof b.note === 'string' ? b.note.replace(/\s+/g, ' ').trim() : '';
+        if (note.length > 200) return fail(400, '補充說明最多 200 字');
+        stmts.push(env.DB.prepare("UPDATE rest_stops SET note = ?, updated_by = ?, updated_at = datetime('now') WHERE id = ?").bind(Rest.noPhone(note) || null, member.id, row.id));
+        fixed = true;
+      }
+    }
+    const hide = hidden !== null && hidden !== !!row.hidden;
+    if (hide) stmts.push(env.DB.prepare("UPDATE rest_stops SET hidden = ?, updated_by = ?, updated_at = datetime('now') WHERE id = ?").bind(hidden ? 1 : 0, member.id, row.id));
+    if (!stmts.length) return fail(400, '沒有要修改的內容');
+    stmts.push(bumpRest(row.source));
+    await env.DB.batch(stmts);
+    if (fixed) await audit(env, req, member, 'rest.fix', 'rest', row.id, name);
+    if (hide) await audit(env, req, member, 'rest.hide', 'rest', row.id, `${hidden ? '隱藏' : '取消隱藏'}：${name}`);
+    return json({ ok: true });
   }
   // 路線：在地圖上畫的路線，可以分享給全團、下載 GPX、拿來開揪跑
   if (path === '/api/routes' && method === 'GET') {
@@ -2400,6 +2549,9 @@ async function api(req, env, path, method) {
       env.DB.prepare('DELETE FROM spot_reports WHERE member_id = ?').bind(member.id),
       env.DB.prepare('UPDATE spots SET created_by = NULL WHERE created_by = ?').bind(member.id),
       env.DB.prepare('UPDATE cams SET created_by = NULL WHERE created_by = ?').bind(member.id),
+      env.DB.prepare('UPDATE rest_stops SET created_by = NULL WHERE created_by = ?').bind(member.id),
+      env.DB.prepare('UPDATE rest_stops SET updated_by = NULL WHERE updated_by = ?').bind(member.id),
+      env.DB.prepare('UPDATE rest_reports SET member_id = NULL WHERE member_id = ?').bind(member.id),
       env.DB.prepare('UPDATE calendar_items SET created_by = NULL WHERE created_by = ?').bind(member.id),
       env.DB.prepare('DELETE FROM members WHERE id = ?').bind(member.id),
     ]);
@@ -2515,6 +2667,8 @@ async function api(req, env, path, method) {
       for (const f of ['gps', 'studio', 'health', 'file', 'coach', 'party']) value[f] = b[f] !== false;
       // 附近即時影像預設關閉：要明確打開（staging 實測過 Cache API、出口 IP 與解析 CPU 時間之後）
       value.cams = b.cams === true;
+      // 跑者休息站預設關閉；沒帶這個欄位（還不認得它的舊版管理畫面）就維持原本的設定，避免存其他開關時被順手關掉
+      value.rest = typeof b.rest === 'boolean' ? b.rest : Rest.featureOn(setting('features'));
     } else if (key === 'tabs') {
       // 下方分頁列的名稱（每個最多 4 個字，空白就用預設）
       value = {};
@@ -3983,11 +4137,51 @@ async function syncCams(env, now) {
   return null;
 }
 
+// 跑者休息站：台北 01、02、06 點（避開 03:00 備份與清理、04–05 點攝影機）各跑一個到期的來源
+//   每天、每週或每月一次（onceOn 以週期為 key）；失敗的來源隔天重試；分頁來源（臺灣騎跡）一輪沒跑完就每次排程續跑下一頁
+//   功能開關（features.rest）關閉時完全不跑；開始前先標「同步中」，被強制中斷時管理後台看得到
+const periodOf = (every, now) => {
+  const d = tpDate(now);
+  if (every === 'month') return d.slice(0, 7);
+  if (every === 'week') { const t = taipei(now); return tpDate(new Date(now.getTime() - ((t.getUTCDay() + 6) % 7) * 864e5)); }
+  return d;
+};
+async function syncRest(env, now) {
+  if (!Rest.featureOn((await env.DB.prepare("SELECT value FROM settings WHERE key = 'features'").first())?.value)) return null;
+  const h = taipei(now).getUTCHours();
+  if (!Rest.ALLOWED_HOURS.includes(h)) return null;
+  const srcs = new Map((await env.DB.prepare('SELECT source, cursor FROM rest_sources WHERE enabled = 1').all()).results.map((r) => [r.source, r]));
+  const runs = new Map((await env.DB.prepare("SELECT job, last_run FROM job_runs WHERE job LIKE 'rest.%'").all()).results.map((r) => [r.job, r.last_run]));
+  const retry = `retry:${tpDate(now)}`;
+  let pick = null;
+  for (const [k, S] of Object.entries(Rest.SOURCES)) {
+    const src = srcs.get(k);
+    if (S.manual || !src) continue;
+    if (S.pages && src.cursor != null) { pick ??= { k, cont: true }; continue; }   // 續跑的分頁來源排在到期的來源後面
+    const last = runs.get(`rest.${k}`);
+    if (h < S.hour || last === periodOf(S.every, now) || last === retry) continue;
+    pick = { k, cont: false };
+    break;
+  }
+  if (!pick) return null;
+  const { k } = pick;
+  if (!pick.cont && !(await onceOn(env, `rest.${k}`, periodOf(Rest.SOURCES[k].every, now)))) return null;
+  let r;
+  try { r = await Rest.syncSource(env, k); } catch (e) {
+    const msg = String(e?.message || e).slice(0, 120);
+    await Rest.markFailed(env, k, msg);
+    r = { error: msg };
+  }
+  // 失敗：這一期還要再試，但今天不再試（避免每小時都打同一個壞掉的來源）；分頁來源的 cursor 不動，下次從同一頁續跑
+  if (r.error && !pick.cont) await env.DB.prepare('UPDATE job_runs SET last_run = ? WHERE job = ?').bind(retry, `rest.${k}`).run();
+  return { [k]: r.error ? `error: ${r.error}` : r.pages ? `${r.count}（${r.page}/${r.pages}）` : r.count };
+}
+
 async function scheduled(env, now = new Date()) {
   const res = {};
   for (const [k, fn] of [['events', remindEvents], ['weather', weatherAlerts], ['followups', runFollowups], ['renewals', remindRenewals], ['monthSummary', monthSummary],
     ['review', quarterlyReview], ['retention', retention], ['fatigue', fatigueCheck], ['auditDigest', auditDigest], ['backup', dailyBackup],
-    ['signupOpen', signupOpen], ['signupReviews', signupReviews], ['cams', syncCams]]) {
+    ['signupOpen', signupOpen], ['signupReviews', signupReviews], ['cams', syncCams], ['rest', syncRest]]) {
     try { res[k] = await fn(env, now); } catch (e) { console.error('cron', k, e); res[k] = `error: ${e.message}`; }
   }
   return res;
@@ -4017,6 +4211,8 @@ export default {
     }
     // 測試用：附近即時影像的假來源狀態（只有 CAM_MOCK=1、DEV_LOGIN=1 的本機有效）
     if (path === '/api/dev/cams-mock' && env.CAM_MOCK === '1' && env.DEV_LOGIN === '1' && ['localhost', '127.0.0.1'].includes(url.hostname)) return json(Cams.mockControl(url.searchParams));
+    // 測試用：跑者休息站的假來源狀態（只有 REST_MOCK=1、DEV_LOGIN=1 的本機有效）
+    if (path === '/api/dev/rest-mock' && env.REST_MOCK === '1' && env.DEV_LOGIN === '1' && ['localhost', '127.0.0.1'].includes(url.hostname)) return json(Rest.mockControl(url.searchParams));
     // 開發用登入：只有 .dev.vars 設 DEV_LOGIN=1 而且在 localhost 才有效，正式環境不會有這個設定
     if (path === '/api/dev/login' && req.method === 'GET' && env.DEV_LOGIN === '1' && ['localhost', '127.0.0.1'].includes(url.hostname)) {
       const m = await env.DB.prepare('SELECT * FROM members WHERE id = ?').bind(str(url.searchParams.get('id'), 32)).first();
