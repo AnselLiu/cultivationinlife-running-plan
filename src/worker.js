@@ -1274,7 +1274,7 @@ async function api(req, env, path, method) {
     const stuck = (r) => r.last_error === Rest.SYNCING && r.last_sync_at && Date.parse(`${r.last_sync_at.replace(' ', 'T')}Z`) < Date.now() - 120e3;
     return json({ sources: Object.entries(Rest.SOURCES).map(([k, S]) => {
       const r = srcs.find((x) => x.source === k) || {};
-      return { ...Rest.credit(k, r), manual: !!S.manual, enabled: !!r.enabled, every: S.every || null, paged: !!S.pages,
+      return { ...Rest.credit(k, r), manual: !!S.manual, local: !!S.local, enabled: !!r.enabled, every: S.every || null, paged: !!S.pages,
         last_sync_at: r.last_sync_at || null, last_count: r.last_count ?? null, page: r.cursor ?? null,
         last_error: stuck(r) ? '上次同步沒有完成（可能超過執行時間上限）' : r.last_error || null, active: cnt[k]?.active || 0, hidden: cnt[k]?.hidden || 0 };
     }), editable: can(member, 'settings'), feature: restOn() });
@@ -1289,11 +1289,13 @@ async function api(req, env, path, method) {
     return json({ ok: true });
   }
   // 立即同步（分頁來源一次一頁）：每個來源一小時最多 3 次
+  //   在電腦上同步的來源（大檔、多檔）不在 Worker 跑：免費方案每次執行只有 10 ms CPU，會被強制中斷
   if (path === '/api/rest/sync' && method === 'POST') {
     const g = need(); if (g) return g;
     if (!can(member, 'settings')) return fail(403, '只有理事長與行政人員可以同步');
     const src = str((await body()).source, 10), S = Rest.sourceOf(src);
     if (!S || S.manual) return fail(400, '沒有這個來源');
+    if (S.local) return fail(400, '這個來源要在電腦上同步（node tools/rest-sync.mjs）');
     if (!(await env.DB.prepare('SELECT enabled FROM rest_sources WHERE source = ?').bind(src).first())?.enabled) return fail(400, '請先開啟這個來源');
     if (await limited(env, `restsync:${src}`, 3, 3600)) return fail(429, '這個來源一小時最多同步 3 次');
     let r;
@@ -4156,7 +4158,7 @@ async function syncRest(env, now) {
   let pick = null;
   for (const [k, S] of Object.entries(Rest.SOURCES)) {
     const src = srcs.get(k);
-    if (S.manual || !src) continue;
+    if (S.manual || S.local || !src) continue;   // 在電腦上同步的來源：排程不跑
     if (S.pages && src.cursor != null) { pick ??= { k, cont: true }; continue; }   // 續跑的分頁來源排在到期的來源後面
     const last = runs.get(`rest.${k}`);
     if (h < S.hour || last === periodOf(S.every, now) || last === retry) continue;
@@ -4213,6 +4215,13 @@ export default {
     if (path === '/api/dev/cams-mock' && env.CAM_MOCK === '1' && env.DEV_LOGIN === '1' && ['localhost', '127.0.0.1'].includes(url.hostname)) return json(Cams.mockControl(url.searchParams));
     // 測試用：跑者休息站的假來源狀態（只有 REST_MOCK=1、DEV_LOGIN=1 的本機有效）
     if (path === '/api/dev/rest-mock' && env.REST_MOCK === '1' && env.DEV_LOGIN === '1' && ['localhost', '127.0.0.1'].includes(url.hostname)) return json(Rest.mockControl(url.searchParams));
+    // 測試用：用假資料同步任何一個來源（包含在電腦上同步的來源；正式環境的「立即同步」不收這些來源），不限次數、一次一頁
+    if (path === '/api/dev/rest-sync' && env.REST_MOCK === '1' && env.DEV_LOGIN === '1' && ['localhost', '127.0.0.1'].includes(url.hostname)) {
+      const k = url.searchParams.get('source') || '', S = Rest.sourceOf(k);
+      if (!S || S.manual) return json({ error: '沒有這個來源' }, 400);
+      const r = await Rest.syncSource(env, k);
+      return json(r, r.error ? 502 : 200);
+    }
     // 開發用登入：只有 .dev.vars 設 DEV_LOGIN=1 而且在 localhost 才有效，正式環境不會有這個設定
     if (path === '/api/dev/login' && req.method === 'GET' && env.DEV_LOGIN === '1' && ['localhost', '127.0.0.1'].includes(url.hostname)) {
       const m = await env.DB.prepare('SELECT * FROM members WHERE id = ?').bind(str(url.searchParams.get('id'), 32)).first();

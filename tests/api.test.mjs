@@ -1124,6 +1124,8 @@ test('跑者休息站：功能開關預設關閉、權限、同步轉換與完�
   const hits = async () => Object.values((await mock()).hits).reduce((n, v) => n + v, 0);
   const cron = async (at) => (await call(null, `/dev/cron?at=${at}`)).json.rest;
   const sync = (source, who = 't_chair') => call(who, '/rest/sync', { method: 'POST', body: { source } });
+  // 在電腦上同步的來源（tools/rest-sync.mjs）：正式環境的「立即同步」與排程都不跑，測試用開發端點走同一套解析與寫入
+  const devSync = async (source) => { const r = await fetch(`${BASE}/api/dev/rest-sync?source=${source}`); return { status: r.status, json: await r.json() }; };
   const srcs = async () => Object.fromEntries((await call('t_chair', '/rest/sources')).json.sources.map((s) => [s.source, s]));
   const stops = async (key, who = 't_runner') => (await call(who, `/rest/cell/${key}`)).json.stops;
   const ids = async (key) => (await stops(key)).map((s) => s[0]);
@@ -1147,18 +1149,25 @@ test('跑者休息站：功能開關預設關閉、權限、同步轉換與完�
   assert.equal(sv.status, 200); assert.equal(sv.json.editable, false);
   assert.equal((await call('t_super', '/rest/sources', { method: 'POST', body: { source: 'twd', enabled: false } })).status, 403);
   assert.equal((await toggle('__proto__', true)).status, 400, '來源代碼查不到原型上的東西');
+  assert.equal((await toggle('tpbk', false)).status, 200);
+  assert.equal((await sync('tpbk')).status, 400, '關閉的來源不能同步');
+  assert.equal((await toggle('tpbk', true)).status, 200);
   assert.equal((await sync('cur')).status, 400, '整理清單不能同步');
   assert.deepEqual(Object.entries(await srcs()).filter(([, s]) => !s.enabled).map(([k]) => k), [], '第一批來源預設都開啟');
   // 手動同步（功能開關關著也可以先測）：重複代碼合併、國外座標丟掉；沒變就不寫
-  const w = await sync('twd');
-  assert.equal(w.status, 200, w.text); assert.equal(w.json.count, 5);
+  assert.equal((await srcs()).twd.local, true); assert.equal((await srcs()).tprv.local, false);
+  const lw = await sync('twd');
+  assert.equal(lw.status, 400, '在電腦上同步的來源：立即同步不收（免費方案 CPU 不夠）'); assert.match(lw.json.error, /rest-sync/);
+  const w = await devSync('twd');
+  assert.equal(w.status, 200, JSON.stringify(w.json)); assert.equal(w.json.count, 5);
   assert.equal((await srcs()).twd.last_error, null, '同步成功後清掉「同步中」');
-  assert.equal((await sync('twd')).json.same, true, '內容雜湊沒變：不解析也不寫');
+  assert.equal((await devSync('twd')).json.same, true, '內容雜湊沒變：不解析也不寫');
   // 開啟功能（只送其他開關、不帶 rest 的舊版畫面不會把它關掉）
   assert.equal((await call('t_chair', '/settings/features', { method: 'POST', body: { rest: true } })).status, 200);
   assert.equal((await call('t_chair', '/settings/features', { method: 'POST', body: { cams: false } })).status, 200);
   assert.equal((await call('t_chair', '/rest/sources')).json.feature, true);
-  for (const k of ['tpt', 'tprv', 'ntrv', 'tpbk', 'cpct', 'sav']) { const r = await sync(k); assert.equal(r.status, 200, `${k} ${r.text}`); }
+  for (const k of ['tprv', 'ntrv', 'tpbk']) { const r = await sync(k); assert.equal(r.status, 200, `${k} ${r.text}`); }
+  for (const k of ['tpt', 'cpct', 'sav']) { const r = await devSync(k); assert.equal(r.status, 200, `${k} ${JSON.stringify(r.json)}`); }
   const meta = await call('t_runner', '/rest/meta');
   assert.equal(meta.status, 200);
   assert.ok(meta.json.sources.some((s) => s.source === 'twd' && /臺北自來水事業處，依政府資料開放授權條款第1版提供/.test(s.attribution) && s.data_date === '2026-08-14'));
@@ -1181,19 +1190,22 @@ test('跑者休息站：功能開關預設關閉、權限、同步轉換與完�
   for (const bad of ['12_34', 'abc', '1253_6077x', '1253-6077', '9_9', '12345_6077']) assert.equal((await call('t_runner', `/rest/cell/${bad}`)).status, 400, bad);
   // 完整性檢查：筆數掉到 70% 以下不寫入、不停用
   await mock('shrink=1');
-  const sh = await sync('twd');
+  const sh = await devSync('twd');
   assert.equal(sh.status, 502); assert.match(sh.json.error, /筆數從 5 掉到 1，這次不更新/);
   assert.ok((await ids('1251_6076')).includes('twd:D2'), '擋下時不停用任何一筆');
-  // 排程：台北 01:00 起，每次排程只跑一個到期的來源；少一筆（80%）照常更新並停用消失的列
+  // 少一筆（80%）照常更新並停用消失的列
   await mock('shrink=0&drop=1');
-  const r1 = await cron('2027-07-04T17:30:00Z');
-  assert.deepEqual(r1, { twd: 4 });
+  assert.equal((await devSync('twd')).json.count, 4);
   assert.ok(!(await ids('1255_6080')).includes('twd:D4'), '清單不再出現的直飲臺停用');
   assert.equal((await detail('twd:D4')).status, 404);
   assert.equal((await detail('twd:D4', 't_chair')).json.edit.enabled, false, '幹部看得到停用的列');
-  const r2 = await cron('2027-07-04T17:40:00Z');
-  assert.equal(Object.keys(r2).length, 1, '一次只跑一個來源'); assert.equal(Object.keys(r2)[0], 'tpt');
+  // 排程：只跑留在 Worker 的小來源（河濱廁所、租借站、新北河濱），台北 01:00 起每次排程只跑一個到期的來源；在電腦上同步的來源排程不跑
+  assert.deepEqual(await cron('2027-07-04T17:30:00Z'), { tprv: 2 }, '台北 01:30：直飲臺、臺北公廁在電腦上同步，排程輪到河濱廁所');
+  assert.equal(await cron('2027-07-04T17:40:00Z'), null, '01:40：沒有其他到期的 Worker 來源');
   assert.equal(await cron('2027-07-04T19:30:00Z'), null, '03:00 不跑（備份時段）');
+  assert.deepEqual(await cron('2027-07-04T22:30:00Z'), { tpbk: 2 }, '06:30：租借站與新北河濱都到期，一次只跑一個');
+  assert.deepEqual(await cron('2027-07-04T22:40:00Z'), { ntrv: 1 });
+  assert.equal(await cron('2027-07-04T22:50:00Z'), null, '這一期都跑完了（中油、運動場館、騎跡不在排程裡）');
   // 幹部修正與隱藏：同步後不被覆蓋
   const park = await find('1253_6076', '新生公園'), daan = await find('1251_6076', '大安森林公園');
   assert.ok(park && daan);
@@ -1203,7 +1215,7 @@ test('跑者休息站：功能開關預設關閉、權限、同步轉換與完�
   assert.equal((await call('t_chair', `/rest/${daan}`, { method: 'PUT', body: { hidden: true } })).status, 200);
   assert.ok(!(await ids('1251_6076')).includes(daan), '隱藏的不出現在格子');
   await mock('change=1');
-  const ch = await sync('tpt');
+  const ch = await devSync('tpt');
   assert.equal(ch.status, 200); assert.ok(ch.json.changed >= 1, '來源有變的列照常更新');
   const pk = (await detail(park)).json.stop;
   assert.equal(pk.name, '新生公園（近民族東路）'); assert.equal(pk.hours, '每日 05:00–23:00'); assert.equal(pk.note, '在公園東側');
@@ -1253,29 +1265,27 @@ test('跑者休息站：功能開關預設關閉、權限、同步轉換與完�
   assert.equal((await call('t_chair', `/rest/${mk.json.id}`, { method: 'DELETE' })).status, 200);
   assert.equal((await detail(mk.json.id)).status, 404);
   assert.equal((await detail('cur:runbase-daan')).json.stop.checked_at, '2026-10-03', '整理清單有查證日');
-  // 分頁來源（臺灣騎跡，25 條路線 → 3 頁）：中途中斷後續跑，跑完一輪才停用消失的列；其他來源先關掉，排程才會輪到它
+  // 分頁來源（臺灣騎跡，25 條路線 → 3 頁）：中途中斷後續跑，跑完一輪才停用消失的列（正式環境在電腦上一次跑完，這裡測 Worker 的分頁版本）
   await mock('drop=0');
-  for (const k of ['twd', 'tpt', 'tprv', 'ntrv', 'tpbk', 'cpct', 'sav']) await toggle(k, false);
-  assert.equal(await cron('2027-07-05T17:30:00Z'), null, '台北 01:30：其他來源關掉了，騎跡 02:00 起才跑');
-  assert.match(String((await cron('2027-07-05T18:30:00Z')).tbk), /（1\/3）$/);
+  assert.equal(await cron('2027-07-05T18:30:00Z'), null, '騎跡不在排程裡');
+  assert.equal((await devSync('tbk')).json.page, 1);
   await mock('failPage=2');
-  assert.match(String((await cron('2027-07-05T18:40:00Z')).tbk), /^error: 來源回應 500/);
+  const pf = await devSync('tbk');
+  assert.equal(pf.status, 502); assert.match(pf.json.error, /來源回應 500/);
   assert.equal((await srcs()).tbk.page, 1, '失敗時 cursor 不動');
   await mock('failPage=0');
-  assert.equal(await cron('2027-07-05T21:30:00Z'), null, '05:00 不跑（攝影機時段）');
-  assert.match(String((await cron('2027-07-05T22:30:00Z')).tbk), /（2\/3）$/, '從中斷的那一頁續跑');
-  assert.equal((await cron('2027-07-05T22:40:00Z')).tbk, '28（3/3）');
-  assert.equal(await cron('2027-07-05T22:50:00Z'), null, '這個月已經跑完一輪');
+  assert.equal((await devSync('tbk')).json.page, 2, '從中斷的那一頁續跑');
+  const t3 = (await devSync('tbk')).json;
+  assert.equal(t3.page, 3); assert.equal(t3.count, 28); assert.equal(t3.done, true);
   const seven = (await stops('1170_6020')).find((s) => /7-ELEVEN/.test(s[7]));
   assert.equal(seven[4], 'customer', '超商補給站是店家');
   const tail = (await ids('1165_6015'))[0];
   assert.ok(tail);
   await mock('drop=1');
-  await cron('2027-07-31T18:30:00Z'); await cron('2027-07-31T18:40:00Z');
+  await devSync('tbk'); await devSync('tbk');
   assert.equal((await detail(tail)).status, 200, '一輪還沒跑完不停用');
-  assert.equal((await cron('2027-07-31T22:30:00Z')).tbk, '27（3/3）');
+  assert.equal((await devSync('tbk')).json.count, 27);
   assert.equal((await detail(tail)).status, 404, '跑完一輪才停用沒看到的列');
-  for (const k of ['twd', 'tpt', 'tprv', 'ntrv', 'tpbk', 'cpct', 'sav']) await toggle(k, true);
   // 稽核紀錄
   const au = (await call('t_chair', '/audit?action=rest.')).json.items.map((x) => x.action);
   for (const a of ['rest.add', 'rest.fix', 'rest.hide', 'rest.delete']) assert.ok(au.includes(a), a);

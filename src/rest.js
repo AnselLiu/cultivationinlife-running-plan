@@ -20,17 +20,21 @@ const MB = 1024 * 1024;
 export const ALLOWED_HOURS = [1, 2, 6];   // 台北時間：避開 03:00 備份與清理、04–05 點的攝影機同步
 
 // 來源登錄表：網址、解析、主機白名單、顯名、節奏（hour 最早幾點跑；every 每天／每週／每月）、radius（null＝全收；第二批的環境部、Cool map 才用）
+//   local：在電腦上同步（tools/rest-sync.mjs 產生 SQL，再用 wrangler 寫進 D1），Worker 的排程與「立即同步」都不跑。
+//     Workers 免費方案每次執行只有 10 ms CPU、50 個子請求（D1 查詢也算）：大檔或多檔的來源第一次解析就超過
+//     （2026-10-03 在開發機實測冷啟動的解析＋清理：直飲臺 680 KB 11.6 ms、臺北公廁兩頁 14 ms、中油 XML＋1.3 MB JSON 13 ms，
+//      運動場館 10 MB CSV、騎跡 49 個路線檔更多）；留在 Worker 的三個都在 4 ms 以內（河濱廁所 3.8、租借站 2.8、新北河濱 2.0）
 export const SOURCES = {
   twd: {
     name: '臺北市直飲臺', provider: '臺北自來水事業處', license: LICENSE, attribution: gov('臺北自來水事業處'),
     dataset: 'https://data.gov.tw/dataset/128640', url: [TP('181097e0-c171-4bcd-ad41-c7b55dbc616e')], parse: parseTwd,
-    hosts: [/^data\.taipei$/], hour: 1, every: 'day', radius: null,
+    hosts: [/^data\.taipei$/], hour: 1, every: 'day', radius: null, local: true,
   },
   tpt: {
     name: '臺北市公廁', provider: '臺北市政府環境保護局', license: LICENSE, attribution: gov('臺北市政府環境保護局'),
     dataset: 'https://data.gov.tw/dataset/138798',
     url: [TP('9e0e6ad4-b9f9-4810-8551-0cffd1b915b3'), TP('9e0e6ad4-b9f9-4810-8551-0cffd1b915b3', 1000)], parse: parseTpt,
-    hosts: [/^data\.taipei$/], hour: 1, every: 'week', radius: null,
+    hosts: [/^data\.taipei$/], hour: 1, every: 'week', radius: null, local: true,
   },
   tprv: {
     name: '臺北市河濱廁所', provider: '臺北市政府工務局水利工程處', license: LICENSE, attribution: gov('臺北市政府工務局水利工程處'),
@@ -46,7 +50,7 @@ export const SOURCES = {
     name: '中油加油站無障礙公廁', provider: '台灣中油股份有限公司', license: LICENSE, attribution: gov('台灣中油股份有限公司'),
     dataset: 'https://data.gov.tw/dataset/59744',
     url: ['https://vipmbr.cpc.com.tw/CPCSTN/Accessibletoilets.asmx/getAccessibletoiletsData_XML', 'https://vipmbr.cpc.com.tw/opendata/getstationinfo'],
-    max: 4 * MB, parse: parseCpct, hosts: [/^vipmbr\.cpc\.com\.tw$/], hour: 2, every: 'week', radius: null,
+    max: 4 * MB, parse: parseCpct, hosts: [/^vipmbr\.cpc\.com\.tw$/], hour: 2, every: 'week', radius: null, local: true,
   },
   ntrv: {
     name: '新北市河濱景觀廁所', provider: '新北市政府水利局', license: LICENSE, attribution: gov('新北市政府水利局'),
@@ -56,13 +60,13 @@ export const SOURCES = {
   sav: {
     name: '全國運動場館', provider: '運動部', license: LICENSE, attribution: gov('運動部'),
     dataset: 'https://data.gov.tw/dataset/22849', url: ['https://ws.sports.gov.tw/FS01/FilePath/1/relfile/164/10269/5a511d68-e6b8-42ee-a449-acc395135268.csv'],
-    max: 16 * MB, parse: parseSav, hosts: [/^ws\.sports\.gov\.tw$/], hour: 6, every: 'month', radius: null,
+    max: 16 * MB, parse: parseSav, hosts: [/^ws\.sports\.gov\.tw$/], hour: 6, every: 'month', radius: null, local: true,
   },
-  // 分頁來源：每次排程只處理 per 條路線，跑完一整輪才停用消失的列
+  // 分頁來源：一次處理 per 條路線，跑完一整輪才停用消失的列（免費方案改在電腦上一次跑完全部頁數）
   tbk: {
     name: '臺灣騎跡補給站', provider: '交通部 臺灣騎跡', license: '政府網站資料開放宣告', license_url: 'https://taiwanbike.tw/gov', attribution: '資料來源：交通部 臺灣騎跡',
     dataset: 'https://taiwanbike.tw/bikeRoute/search', pages: { index: 'https://taiwanbike.tw/data/zh/bikeRoute.json', list: tbkRoutes, url: tbkRouteUrl, per: 10, gap: 500 },
-    max: 8 * MB, parse: parseTbk, hosts: [/^taiwanbike\.tw$/], hour: 2, every: 'month', radius: null,
+    max: 8 * MB, parse: parseTbk, hosts: [/^taiwanbike\.tw$/], hour: 2, every: 'month', radius: null, local: true,
   },
   cur: { name: '幹部整理清單', provider: '耕跑團', license: '', attribution: '資料整理：耕跑團', manual: true, hosts: [] },
   man: { name: '幹部新增', provider: '耕跑團', license: '', attribution: '資料整理：耕跑團幹部', manual: true, hosts: [] },
@@ -87,7 +91,7 @@ const BASE_SVC = { water: 1, toilet: 2, shower: 0, supply: 16 };
 
 const MAX = 4 * MB;
 // 測試模式（REST_MOCK=1 而且 DEV_LOGIN=1）：所有來源都用假資料，不連外
-const mocked = (env) => env?.REST_MOCK === '1' && env?.DEV_LOGIN === '1';
+export const mocked = (env) => env?.REST_MOCK === '1' && env?.DEV_LOGIN === '1';
 const restFetch = (env, url, init) => (mocked(env) ? Promise.resolve(Mock.fetchMock(url)) : fetch(url, init));
 export const mockControl = (q) => Mock.control(q);
 
@@ -508,9 +512,24 @@ export async function collectPage(env, source, page) {
   const { rows, dropped, bad } = finalize(source, S.parse(texts, {}));
   return { rows, dropped, bad, page, pages, date: dateOf(idx.modified) };
 }
+// 分頁來源一次抓完全部頁數（在電腦上同步用；頁之間停 gap 毫秒）：不同頁的同一處合併服務旗標
+export async function collectAll(env, source, { gap = 1000 } = {}) {
+  const byId = new Map(), bad = { skipped: 0, coord: 0, other: 0 };
+  let date = null, dropped = 0;
+  for (let p = 0, pages = 1; p < pages; p++) {
+    if (p && gap) await new Promise((r) => setTimeout(r, gap));
+    const g = await collectPage(env, source, p);
+    pages = g.pages; date = g.date; dropped += g.dropped;
+    for (const k of Object.keys(bad)) bad[k] += g.bad[k];
+    for (const r of g.rows) { const prev = byId.get(r.id); if (prev) prev.svc |= r.svc; else byId.set(r.id, r); }
+  }
+  const rows = [...byId.values()];
+  for (const r of rows) r.h = fnv(JSON.stringify(ROW_KEYS.slice(1, -1).map((k) => r[k])));
+  return { rows, dropped, bad, date };
+}
 
 // ---- 同步（寫入 D1）----
-const UPSERT = `INSERT INTO rest_stops (id, source, type, subtype, svc, access, name, place, address, city, lat, lng, cell, hours, hours_raw, ref_url, status, seen_gen, hash)
+export const UPSERT = `INSERT INTO rest_stops (id, source, type, subtype, svc, access, name, place, address, city, lat, lng, cell, hours, hours_raw, ref_url, status, seen_gen, hash)
   SELECT json_extract(value, '$.id'), ?1, json_extract(value, '$.type'), json_extract(value, '$.subtype'), json_extract(value, '$.svc'), json_extract(value, '$.access'),
     json_extract(value, '$.name'), json_extract(value, '$.place'), json_extract(value, '$.address'), json_extract(value, '$.city'), json_extract(value, '$.lat'),
     json_extract(value, '$.lng'), json_extract(value, '$.cell'), json_extract(value, '$.hours'), json_extract(value, '$.hours_raw'), json_extract(value, '$.ref_url'),
@@ -524,7 +543,7 @@ const UPSERT = `INSERT INTO rest_stops (id, source, type, subtype, svc, access, 
     seen_gen = excluded.seen_gen, hash = excluded.hash, enabled = 1, updated_at = datetime('now')
   WHERE rest_stops.manual = 0 AND (rest_stops.hash IS NOT excluded.hash OR rest_stops.enabled = 0 OR rest_stops.seen_gen IS NOT excluded.seen_gen)`;
 // 來源清單不再出現的列：停用（不刪除，幹部的修正留著）
-const DISABLE = `UPDATE rest_stops SET enabled = 0, updated_at = datetime('now')
+export const DISABLE = `UPDATE rest_stops SET enabled = 0, updated_at = datetime('now')
   WHERE source = ?1 AND manual = 0 AND enabled = 1 AND id NOT IN (SELECT value FROM json_each(?2))`;
 const DISABLE_GEN = `UPDATE rest_stops SET enabled = 0, updated_at = datetime('now') WHERE source = ?1 AND manual = 0 AND enabled = 1 AND seen_gen < ?2`;
 
@@ -643,9 +662,13 @@ export async function sourceState(env) {
 }
 const LIVE = "enabled = 1 AND hidden = 0 AND status != 'paused'";
 const COLS = 'id, source, type, subtype, svc, access, name, place, lat, lng, hours, hours_raw, status, fix, manual';
-async function cellRows(env, cells, on) {
+// box：只取這個範圍內的列（地點附近、詳情的同一處）。臺北市中心 3×3 格約 800 列，框到 1 公里內約 170 列：
+//   Worker 少解析八成的列（免費方案每次執行只有 10 ms CPU）；幹部修正過位置的列用修正後的座標
+const BOX = " AND COALESCE(json_extract(fix, '$.lat'), lat) BETWEEN ? AND ? AND COALESCE(json_extract(fix, '$.lng'), lng) BETWEEN ? AND ?";
+export const boxOf = (p, m) => { const dl = m / 111320, dg = m / (111320 * Math.cos(p.lat * RAD)); return [p.lat - dl, p.lat + dl, p.lng - dg, p.lng + dg]; };
+async function cellRows(env, cells, on, box = null) {
   const ph = cells.map(() => '?').join(',');
-  const rows = (await env.DB.prepare(`SELECT ${COLS} FROM rest_stops WHERE cell IN (${ph}) AND ${LIVE} LIMIT 3000`).bind(...cells).all()).results;
+  const rows = (await env.DB.prepare(`SELECT ${COLS} FROM rest_stops WHERE cell IN (${ph}) AND ${LIVE}${box ? BOX : ''} LIMIT 3000`).bind(...cells, ...(box || [])).all()).results;
   return rows.filter((r) => on.has(r.source)).map(applyFix);
 }
 const cachePut = (env, key, body, ttl) => {
@@ -675,7 +698,7 @@ export async function nearSpot(env, spot) {
   if (hit) return JSON.parse(hit);
   const [cy, cx] = cellOf(spot.lat, spot.lng).split('_').map(Number), cells = [];
   for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) cells.push(`${cy + dy}_${cx + dx}`);
-  const all = mergeRows(await cellRows(env, cells, st.on)).map((r) => ({ ...r, dist: Math.round(haversine(spot, r)) })).filter((r) => r.dist <= NEAR_RADIUS)
+  const all = mergeRows(await cellRows(env, cells, st.on, boxOf(spot, NEAR_RADIUS + 60))).map((r) => ({ ...r, dist: Math.round(haversine(spot, r)) })).filter((r) => r.dist <= NEAR_RADIUS)
     .map((r) => ({ ...r, score: Math.max(r.dist, 10) * weightOf(r) })).sort((a, b) => a.score - b.score);
   const groups = {};
   for (const [g, bits] of Object.entries(GROUPS)) {
@@ -704,7 +727,7 @@ export async function detail(env, id, editor) {
   // 同一處的其他來源（同類、60 公尺內、名稱相同）
   const [cy, cx] = cellOf(r.lat, r.lng).split('_').map(Number), cells = [];
   for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) cells.push(`${cy + dy}_${cx + dx}`);
-  const near = (await cellRows(env, cells, st.on)).filter((x) => x.id !== r.id && x.type === r.type && normName(x.name) === normName(r.name) && haversine(x, r) <= 60);
+  const near = (await cellRows(env, cells, st.on, boxOf(r, 80))).filter((x) => x.id !== r.id && x.type === r.type && normName(x.name) === normName(r.name) && haversine(x, r) <= 60);
   const also = [...new Set(near.map((x) => x.source))].filter((k) => k !== r.source).map((k) => credit(k, st.rows.find((s) => s.source === k)));
   const stop = { id: r.id, type: r.type, subtype: r.subtype, svc: near.reduce((n, x) => n | x.svc, r.svc), access: r.access, status: r.status, name: r.name, place: r.place,
     address: r.address, city: r.city, lat: r.lat, lng: r.lng, hours: r.hours || null, hours_raw: r.hours_raw || null, fee: r.fee || null, note: r.note || null,
