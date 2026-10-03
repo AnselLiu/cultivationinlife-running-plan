@@ -207,6 +207,20 @@ export function createCoach(ctx = {}) {
     for(const x of list){x.race=P.isRaceDay(x,w.n);x.notes=x.noteKeys.map(noteText_);}
     return list;
   }
+  // 複製文字與 PDF 用：跟 App 一樣，W20 比賽當天與之後的課不列（P.dayDates 同一套規則）；
+  //   「週五或週六」遇到週六比賽只留週五，「週末」遇到週日比賽只留週六
+  const WD_CH=['一','二','三','四','五','六','日'];
+  function exportDays(w){
+    const list=planDays(w); if(!list||w.n!==20) return list;
+    const ws=weekStart(20), rd=raceDay();
+    return list.flatMap(x=>{
+      if(isRaceDay(x)){const wd=(rd.getDay()+6)%7; return [wd===6?x:{...x,d:`週${WD_CH[wd]}`}];}   // 比賽列寫比賽那天（週日比賽照原本的「週末」）
+      const idx=[...String(x.d).matchAll(/[週周]([一二三四五六日末])/g)].flatMap(m=>P.WD_IDX[m[1]]);
+      const all=idx.length?idx:[0], keep=all.filter(i=>dayDiff(addDays(ws,i),rd)<0);
+      if(!keep.length) return [];
+      return keep.length<all.length?[{...x,d:keep.map(i=>`週${WD_CH[i]}`).join('或')}]:[x];
+    });
+  }
 
   /* 成績推算、提醒（1283-1284、1296-1308） */
   function predictedMin(){const t=parseTime(S.pbTime),d=+S.pbDist;if(!t||!d)return null;return t*Math.pow(raceKm()/d,1.06);}
@@ -234,7 +248,7 @@ export function createCoach(ctx = {}) {
         `${grpName(g[0])} (SUB ${g[1]}) | ${S.dist==='fm'?'MP':'HMP'} ${fmtP(goalPace())}/km | ${S.days} days/week | ${S.club?'Thursday club run':'Thursday solo'}`)];
   }
   function weekText(w){
-    const st=weekStart(w.n), list=planDays(w);
+    const st=weekStart(w.n), list=exportDays(w);
     const lines=[`■ ${wkName(w.n)} ${weekLabel(w)}${L('（',' (')}${mdw(st)}–${mdw(addDays(st,6))}${L('）',')')}`];
     if(!list){lines.push(L('（沒有課表資料）','(no sessions)'));return lines;}
     for(const x of list){
@@ -421,7 +435,7 @@ export function createCoach(ctx = {}) {
   }
 
   return { S, raceDay, raceName, runnerName, planTitle, distName, grpName, grpInfo, raceKm, targetMin, goalPace,
-    w1Monday, weekStart, weekIndex, currentWeek, weekLabel, wkName, md, mdw, planDays, paceNotes, isRaceDay, dispText, dispDay, kindLabel,
+    w1Monday, weekStart, weekIndex, currentWeek, weekLabel, wkName, md, mdw, planDays, exportDays, paceNotes, isRaceDay, dispText, dispDay, kindLabel,
     predictedMin, suggestGroup, volTier, warnings, breakfastAt, raceDayPlan, explain, hrZoneText,
     headerText, weekText, copyPayload, paceRows, dayOffset, buildIcs, weekStat, seasonStat, noteText: noteText_, weeks: WEEKS };
 }
@@ -574,6 +588,10 @@ export function planLegacyImport({ model, dash, weeks, today, races = [], existi
     cds: legacyCountdowns(dash, { today, races }),
     logs: legacyLogs({ model: m, dash, weeks, today, existing, include }),
   };
+}
+// 只有完成紀錄的備份（上傳結果旁的「下載這些紀錄的備份」）：不含姓名、年齡、性別、體重、安靜心率與倒數
+export function legacyLogBackup(dash, now = new Date()) {
+  return JSON.stringify({ app: 'gengpao-coach', v: 1, exported: new Date(now).toISOString(), dash: { log: obj(obj(dash).log) } }, null, 2);
 }
 // 舊版格式的備份（跟舊版「匯出備份」一樣，舊版頁面可以還原）
 export function legacyBackup(model, dash, now = new Date()) {

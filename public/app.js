@@ -218,10 +218,22 @@ document.addEventListener('visibilitychange', () => { if (document.visibilitySta
 // 登出、刪除帳號：清掉這台裝置暫存的個人資料
 const clearDeviceData = () => {
   navigator.serviceWorker?.controller?.postMessage({ type: 'CLEAR_DATA' });
-  try { localStorage.removeItem('cil-log-queue'); localStorage.removeItem('cil-coach'); } catch {}
+  try { localStorage.removeItem('cil-log-queue'); localStorage.removeItem('cil-coach'); localStorage.removeItem(OWNER_KEY); } catch {}
   navigator.clearAppBadge?.().catch(() => {});
   bellAt = 0; bellFor = null; bellState = { badge: 0, unread: 0 };
 };
+// 這台裝置的課表設定（身體資料）與離線暫存屬於哪個帳號：登入狀態過期、從別台裝置登出所有裝置後，
+//   換另一個人在這台登入時，先清掉上一位的資料（不只靠按「登出」）
+const OWNER_KEY = 'cil-device-owner';
+function bindDeviceData(id) {
+  if (!id) return;
+  try {
+    const cur = localStorage.getItem(OWNER_KEY);
+    if (cur === id) return;
+    if (cur) { localStorage.removeItem('cil-log-queue'); localStorage.removeItem('cil-coach'); }
+    localStorage.setItem(OWNER_KEY, id);
+  } catch {}
+}
 // 登出前：這台裝置的推播訂閱先從伺服器刪掉，再取消瀏覽器端的訂閱（登出後不再收到這個帳號的推播）
 async function dropPush(server = true) {
   try {
@@ -432,7 +444,10 @@ const planSeg = (active) => (feat('coach') ? `<div class="seg planseg" role="gro
   `<button type="button" data-pseg="${h}" aria-pressed="${h === active}">${l}</button>`).join('')}</div>` : '');
 document.addEventListener('click', (e) => {
   const b = e.target.closest?.('[data-pseg]');
-  if (b && b.getAttribute('aria-pressed') !== 'true') location.replace(`#${b.dataset.pseg}`);
+  if (!b || b.getAttribute('aria-pressed') === 'true') return;
+  // 上一頁就是要去的分段（例如從單週點「工具 › 全季課表」進來）：直接返回，不然歷史裡會有兩個一樣的頁面，返回鍵按了像沒反應
+  if (navStack[navStack.length - 2] === b.dataset.pseg) history.back();
+  else location.replace(`#${b.dataset.pseg}`);
 });
 // 課表頁網址：個人週期的會員在看協會賽季時帶 ?c=club（只能看）
 const planHref = (c, n) => `#/plan${n ? `/${n}` : ''}${c.kind === 'club' && myCycle().kind !== 'club' ? '?c=club' : ''}`;
@@ -866,7 +881,9 @@ async function todayCard(events) {
   const t = ymd(new Date()), c = myCycle(), personal = c.kind !== 'club', wi = P.weekIndexOf(t, c);
   // 離線時先存在手機、還沒上傳的紀錄也算（剛按「完成了」就看得到，不會再按一次）
   const pend = (from) => logQueue.get().filter((x) => x.date >= from && x.date <= t).map((x) => ({ ...x, id: null, pending: true }));
-  const logs = [...(takeBoot('todayLogs') || (await api(`/logs?from=${t}&to=${t}`).catch(() => ({ logs: [] }))).logs), ...pend(t)];
+  // 開 App 時一起帶回這週一到今天的紀錄（boot）：擇一天的課不必再等一輪網路才畫得出來
+  const wk = takeBoot('weekLogs'), bootToday = takeBoot('todayLogs');
+  const logs = [...notQueued(wk ? wk.logs.filter((l) => l.date === t) : bootToday || (await api(`/logs?from=${t}&to=${t}`).catch(() => ({ logs: [] }))).logs), ...pend(t)];
   const done = logs.find((l) => l.status !== 'skip') || logs[0];
   const todays = events.filter((e) => e.date === t && (e.mine === 'in' || e.mine === 'wait'));
   todayTick = null;
@@ -884,7 +901,10 @@ async function todayCard(events) {
     // 擇一天的課：前幾天已經記錄過就不再出現（要多查這週前幾天的紀錄）
     const firstDate = ses.map((r) => P.dayDates(wi, r.d, c, r)[0]).sort()[0];
     let weekLogs = logs;
-    if (firstDate && firstDate < t) weekLogs = [...(await api(`/logs?from=${firstDate}&to=${t}`).catch(() => ({ logs: logs.filter((l) => !l.pending) }))).logs, ...pend(firstDate)];
+    if (firstDate && firstDate < t) {
+      weekLogs = wk?.from <= firstDate ? [...notQueued(wk.logs.filter((l) => l.date >= firstDate)), ...pend(firstDate)]
+        : [...notQueued((await api(`/logs?from=${firstDate}&to=${t}`).catch(() => ({ logs: logs.filter((l) => !l.pending) }))).logs), ...pend(firstDate)];
+    }
     const logOf = (r) => weekLogs.filter((l) => P.logMatches(l, c, wi, r));
     ses = ses.filter((r) => !logOf(r).some((l) => l.date < t));
     const race = ses.find((r) => P.isRaceDay(r, wi));
@@ -2332,7 +2352,7 @@ async function planView(n) {
     postWeek ? api(`/plans?week=${postWeek}`).then((r) => r.plans).catch(() => []) : [],
     api(`/logs?from=${from}&to=${to}`).then((r) => r.logs).catch(() => [])]);
   // 離線時先存在手機、還沒上傳的紀錄也算進來（打勾後馬上看得到）
-  const logs = [...got, ...logQueue.get().filter((x) => x.date >= from && x.date <= to).map((x) => ({ ...x, id: null, pending: true }))];
+  const logs = [...notQueued(got), ...logQueue.get().filter((x) => x.date >= from && x.date <= to).map((x) => ({ ...x, id: null, pending: true }))];
   const isNow = week === wi;
   // 這週的訓練紀錄：一律用 P.logMatches 對到每一列（同一個週期、同一週、同一天）
   const logOf = (d) => logs.filter((l) => P.logMatches(l, c, week, d));
@@ -2354,9 +2374,11 @@ async function planView(n) {
   if (wi < 1 && week === 1) notices.push(`<b>${w1Line(c, today)}</b><br><span>這段時間照平常的量跑${personal ? '，或' : '。'}</span>${personal ? '<a href="#/plan?c=club">先看協會課表 ›</a>' : ''}`);
   if (info?.src?.startsWith('推估') && (personal || !posts.length)) notices.push(personal ? '個人週期照協會課表範本排課；W9 以後是依 2025 同期推估。' : '教練還沒公告這週課表，先參考去年同期。');
   if (weekday && week === 20) notices.push('你的比賽不在週末，賽事週的課請跟教練確認');
-  const NOTE = { club: `週四團練${venue ? `・<span translate="no">${esc(venue)}</span>` : ''}`, self: '自己練：團體熱身改 10 分鐘自主熱身', opt: '天數不夠時先省略' };
+  const NOTE = { club: `週四團練${venue ? `・<span translate="no">${esc(venue)}</span>` : ''}`, self: '自己練：團體熱身改 10 分鐘自主熱身', opt: '天數不夠時先省略',
+    rd: '<a class="notelink" href="#/plan/race">比賽日計劃 ›</a>' };
   const hdrBtns = [canPublishPlan() && c.kind === 'club' ? '<a class="btn ghost sm" href="#/plan/new">發布這週課表</a>' : '',
-    coach && days ? `<button class="btn ghost sm" id="xall" aria-pressed="${coachPrefs().ui.explain === true}" hidden>全部展開</button>` : ''].filter(Boolean);
+    // 全部展開：畫面一出來就在（閒下來才綁定），避免之後才冒出來把下面每一列往下推
+    coach && days?.some((d) => d.kind !== 'rest') ? `<button class="btn ghost sm" id="xall" aria-pressed="${coachPrefs().ui.explain === true}">全部展開</button>` : ''].filter(Boolean);
   const pace = `${me.dist === 'hm' ? 'HMP' : 'MP'} ${P.fmtPace(P.goalPace(me.dist, me.grp))}/km`;
   const postCards = posts.map((po) => `<section class="card">
       <div class="row spread"><h3><span translate="no">${esc(po.title)}</span></h3>${po.team_id ? teamTag(teamOf(po.team_id)) : '<span class="pill">教練發布</span>'}</div>
@@ -2386,7 +2408,6 @@ async function planView(n) {
       </div>
       ${notices.map((x) => `<p class="notice" style="margin:0">${x}</p>`).join('')}
       ${hdrBtns.length ? `<div class="row" style="gap:8px">${hdrBtns.join('')}</div>` : ''}
-      ${coach ? '<div class="warnslot" hidden></div>' : ''}
     </section>
     ${stage ? `<section class="card stagecard ${stage}">
       ${stage === 'prep' ? `<h3>${MI.flag}賽前 ${P.dayDiff(P.parseISO(stageISO), P.parseISO(today))} 天</h3><p class="tiny" style="margin:0"><span translate="no">${esc(stageName)}</span>・${dstr(stageISO)}</p>
@@ -2418,7 +2439,8 @@ async function planView(n) {
       const hint = race && personal ? '' : P.paceHint(d.t, me.dist, me.grp);
       const notes = coach ? d.noteKeys.filter((k) => NOTE[k]).map((k) => `<span class="note">${NOTE[k]}</span>`).join('') : '';
       const tick = other ? '' : d.kind === 'rest' ? '<span class="tick none" aria-hidden="true"></span>'
-        : `<button type="button" class="tick${st ? ` ${st}` : ''}" role="checkbox" aria-checked="${st === 'done' ? 'true' : st === 'partial' ? 'mixed' : 'false'}" aria-label="標記完成：${esc(dayLabel(d.d))} ${race && personal ? '比賽日' : esc(fixText(d.t))}" data-tick="${i}" ${(!top && !canLog) || top?.pending ? 'disabled' : ''}>${st ? LOG_ICON[st] : ''}</button>`;
+        // 還沒記錄是勾選框（點了記「完成」）；已經有紀錄點了是打開那筆修改，就當一般按鈕念出狀態
+        : `<button type="button" class="tick${st ? ` ${st}` : ''}" ${top ? `aria-label="修改紀錄（${LOG_STATUS_NAME[st]}）：` : 'role="checkbox" aria-checked="false" aria-label="標記完成：'}${esc(dayLabel(d.d))} ${race && personal ? '比賽日' : esc(fixText(d.t))}" data-tick="${i}" ${(!top && !canLog) || top?.pending ? 'disabled' : ''}>${st ? LOG_ICON[st] : ''}</button>`;
       return `<div class="day ${d.kind}${d.opt ? ' opt' : ''}${top ? ` logged ${st}` : ''}" data-i="${i}">
         ${tick}
         <span class="dl"><span>${esc(dayLabel(d.d))}</span><span class="k">${P.KIND_LABEL[d.kind]}</span>${d.opt ? '<span class="pill opt">可省略</span>' : ''}</span>
@@ -2427,10 +2449,11 @@ async function planView(n) {
           ${top ? `<span class="logline">${top.pending ? '待上傳・' : ''}${LOG_STATUS_NAME[st]}${top.km ? `・${top.km} km` : ''}${top.seconds ? `・${S.fmtDuration(top.seconds)}` : ''}${top.rpe ? `・RPE ${top.rpe}` : ''}${L.some((l) => l.unread) ? '<span class="pill solid" style="margin-left:6px">教練回饋</span>' : L.some((l) => l.comments) ? '・有回饋' : ''}</span>` : ''}
           ${coach && d.kind !== 'rest' ? `<details class="xd" data-xd="${i}"><summary>詳細內容</summary><div class="xdb"></div></details>` : ''}
         </div>
-        ${top?.pending ? `<span class="logbtn done" aria-label="待上傳">${LOG_ICON.done}</span>`
+        ${top?.pending ? `<span class="logbtn done" role="img" aria-label="待上傳">${LOG_ICON.done}</span>`
           : top ? `<a class="logbtn ${st}" href="#/log?id=${top.id}" aria-label="修改紀錄">${LOG_ICON[st]}</a>`
           : canLog ? `<a class="logbtn" href="#/log?w=${week}&i=${i}${personal ? '&c=r' : ''}" aria-label="記錄${esc(d.d)}">記錄</a>` : ''}
       </div>`; }).join('') : `<div class="card"><p class="muted">${info?.missing ? `W${week} 課表還沒公告` : '這週沒有課表資料。'}</p></div>`}</div>
+    ${coach && days && !other ? '<div class="warnslot" hidden></div>' : ''}
     ${extras.length || others.length ? `<section class="card"><h3>${others.length ? '自主加練與其他週期的紀錄' : '自主加練'}</h3><div class="roster">${[...others, ...extras].map((l) => `<a class="r" ${l.id ? `href="#/log?id=${l.id}"` : ''}><span class="av">${l.status === 'extra' || !l.plan_day ? '＋' : LOG_ICON[l.status] || '＋'}</span>
       <span>${esc(dstr(l.date))}${l.plan_day && l.status !== 'extra' ? `・${esc(P.logWeekLabel(l))} ${esc(dayLabel(l.plan_day))}` : ''}${l.km ? `・${l.km} km` : ''}${l.seconds ? `・${S.fmtDuration(l.seconds)}` : ''}${l.pending ? '・待上傳' : ''}<span class="tiny" style="display:block"><span translate="no">${esc(l.note || '')}</span></span></span><span class="tiny">›</span></a>`).join('')}</div>
       ${others.length ? '<p class="tiny" style="margin:0">其他週期的紀錄只算里程，不算這週的完成率。</p>' : ''}</section>` : ''}
@@ -2475,8 +2498,13 @@ async function planView(n) {
   if (coach && days) {
     const mark = {}; view.planMark = mark;
     whenIdle(async () => {
-      if (view.planMark !== mark) return;   // 已經換頁或重畫
-      try { viewCleanup = await coachWeekExtras(view, { week, cycle: c, other, rows: days, venue, hl: q.get('hl'), wi }); } catch {}
+      const fresh = () => view.planMark === mark;
+      if (!fresh()) return;   // 已經換頁或重畫
+      try {
+        const done = await coachWeekExtras(view, { week, cycle: c, other, rows: days, venue, hl: q.get('hl'), wi, alive: fresh });
+        // 載入期間換了頁：這次的監聽馬上拿掉，不蓋掉新頁面的清理
+        if (fresh()) viewCleanup = done; else done?.();
+      } catch {}
     });
   }
 }
@@ -2606,12 +2634,17 @@ const logQueue = {
   get() { try { return JSON.parse(localStorage.getItem('cil-log-queue') || '[]'); } catch { return []; } },
   set(v) { try { v.length ? localStorage.setItem('cil-log-queue', JSON.stringify(v)) : localStorage.removeItem('cil-log-queue'); } catch {} },
 };
-// 每筆有一個裝置端的 qid（之後「復原」用來從暫存區刪掉）；回傳 qid
+// 每筆有一個裝置端的 qid（之後「復原」用來從暫存區刪掉）；回傳 qid。
+//   修改既有紀錄時保留 id，連上網路後是更新那一筆，不會變成新增（也不會被 if_absent 當成重複丟掉）
 const queueLog = (body) => {
   const qid = `q${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
-  logQueue.set([...logQueue.get(), { ...body, id: undefined, qid, queued: Date.now() }].slice(-30));
+  logQueue.set([...logQueue.get(), { ...body, qid, queued: Date.now() }].slice(-30));
   return qid;
 };
+// 伺服器的紀錄裡，離線時改過、還在暫存區的那幾筆先不列（改用暫存區那筆「待上傳」的新內容，不會一天出現兩筆）
+const notQueued = (list) => { const ids = new Set(logQueue.get().map((x) => x.id).filter(Boolean)); return ids.size ? list.filter((l) => !ids.has(l.id)) : list; };
+// 這次開 App 期間補傳過的離線紀錄：qid → 伺服器回傳（{ id, existed }），「復原」時暫存區已經清掉就用這個刪
+const flushed = new Map();
 // ---------- 快速打勾：照課表記「完成」（不必填距離），6 秒內可以復原 ----------
 const ticking = new Set();
 // 回傳 { id, existed }，離線時先存在手機回傳 { qid }；個人週期的比賽那一列只記「比賽日」，不記比賽名稱
@@ -2623,7 +2656,12 @@ async function tickPlanRow(c, n, row, date) {
 }
 // 復原：線上的刪掉剛新增的那筆（原本就有的不刪）；離線的從暫存區拿掉
 async function undoTick(r) {
-  if (r.qid) { logQueue.set(logQueue.get().filter((x) => x.qid !== r.qid)); return; }
+  if (r.qid) {
+    const q = logQueue.get();
+    if (q.some((x) => x.qid === r.qid)) { logQueue.set(q.filter((x) => x.qid !== r.qid)); return; }
+    // 復原前剛好連上網路、已經補傳：改刪伺服器上的那一筆（原本就有的不刪）
+    r = flushed.get(r.qid) || {};
+  }
   if (r.id && !r.existed) await api(`/logs/${r.id}`, { method: 'DELETE' });
 }
 // 同一列處理中不重複送（連點兩下也只有一筆）；記好後重畫，提示可以復原
@@ -2634,7 +2672,11 @@ async function quickTick(btn, c, n, row, date) {
   btn.disabled = true; btn.setAttribute('aria-busy', 'true');
   try {
     const r = await tickPlanRow(c, n, row, date);
+    const i = btn.dataset.tick;
     await render();
+    // 重畫後焦點回到同一列，鍵盤與 VoiceOver 不會跳回頁首
+    const again = view.querySelector(`[data-tick="${i}"]`);
+    if (again && !again.disabled) again.focus({ preventScroll: true });
     if (r.existed) { toast('這一天已經記錄過了'); return; }
     toast(r.qid ? '目前離線，已先存在手機' : '已記錄完成', { action: '復原', ms: 6000, onAction: async () => {
       try { await undoTick(r); toast('已復原'); } catch (e) { toast(e.message); }
@@ -2646,13 +2688,26 @@ async function quickTick(btn, c, n, row, date) {
   } finally { ticking.delete(key); }
 }
 async function flushLogQueue() {
+  if (!me) return;
+  bindDeviceData(me.id);   // 暫存區是上一位登入者的就先清掉，不會傳到這個帳號
   const q = logQueue.get();
-  if (!q.length || !me) return;
+  if (!q.length) return;
   const left = [];
-  // 照課表的紀錄帶 if_absent：同一週、同一天已經有紀錄（例如另一台裝置記過）就不重複新增
-  for (const { queued, qid, ...b } of q) { try { await api('/logs', { method: 'POST', body: { ...b, if_absent: true } }); } catch (e) { if (e instanceof TypeError) left.push({ ...b, qid, queued }); } }
+  let up = 0, dup = 0;
+  // 原樣送出：只有快速打勾的那幾筆本來就帶 if_absent（同一週、同一天已經有紀錄就不重複新增）；
+  //   修改既有紀錄帶 id 是更新；那一筆已經在別的裝置刪掉，就改成新增，不讓這次的修改不見
+  for (const { queued, qid, ...b } of q) {
+    try {
+      let r;
+      try { r = await api('/logs', { method: 'POST', body: b }); }
+      catch (e) { if (b.id && !(e instanceof TypeError) && /找不到這筆紀錄/.test(e.message)) r = await api('/logs', { method: 'POST', body: { ...b, id: undefined } }); else throw e; }
+      if (qid) flushed.set(qid, r);
+      if (r?.existed) dup++; else up++;
+    } catch (e) { if (e instanceof TypeError) left.push({ ...b, qid, queued }); }
+  }
   logQueue.set(left);
-  if (left.length < q.length) toast(`已上傳 ${q.length - left.length} 筆離線時的訓練紀錄`);
+  if (up) toast(`已上傳 ${up} 筆離線時的訓練紀錄`);
+  else if (dup) toast('離線時打勾的那幾天已經記錄過了');
 }
 
 // ---------- report.js（用到才載入）----------
@@ -3385,6 +3440,7 @@ async function renderOnce() {
   if (!me) {
     try { const r = await api('/me'); me = r.member; cfg = r; } catch { me = null; }
   }
+  bindDeviceData(me?.id);
   paintCountdown();
   applyFeatures();
   $('#bell').hidden = !me;

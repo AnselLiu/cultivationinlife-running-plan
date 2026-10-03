@@ -1,6 +1,6 @@
 // coachcalc.js 單元測試：跟 coach.html 原本的計算結果（tests/fixtures/coach-golden.json）逐項比對
 // 對照答案由 tools/coach-golden.mjs 直接執行 coach.html 的程式產生
-process.env.TZ = 'Asia/Taipei';
+import './tz.mjs';   // 一定要第一個載入（見 tz.mjs）
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -129,9 +129,28 @@ test('個人週期：週次、全季文字、.ics 跟課表教練一樣', () => 
       assert.equal(c.weekIndex(), x.weekIndex, `${a} ${d}`);
     }
     const c = coach({ raceDate: a, race: '我的比賽' });
-    assert.equal(h(c.copyPayload('all')), r.copyAll, `${a} 複製`);
+    // 複製文字：週日比賽跟課表教練一模一樣；不是週日的比賽，W20 改成跟 App 一樣（A4.2，下一個測試），課表教練原本全部列出
+    if (P.parseISO(a).getDay() === 0) assert.equal(h(c.copyPayload('all')), r.copyAll, `${a} 複製`);
     assert.equal(h(c.buildIcs()), r.ics, `${a} ics`);
   }
+});
+
+test('複製文字與 PDF：W20 比賽當天與之後的課不列（週六比賽只留週五；週三比賽之後全不列）', () => {
+  const season = JSON.parse(read('public/data/season-2026.json'));
+  const mk = (anchor) => K.createCoach({ dist: 'fm', grp: 'D', weeks: season, now: nowAt('2026-10-03'), cycle: { kind: 'race', anchor, name: '我的比賽' } });
+  const sat = mk('2027-02-13'), satText = sat.weekText(season[19]).join('\n');
+  assert.match(satText, /^週五｜輕鬆｜/m);
+  assert.doesNotMatch(satText, /週五或週六/);
+  assert.match(satText, /^週六｜比賽｜比賽日：我的比賽/m);
+  assert.deepEqual(sat.exportDays(season[19]).map((x) => x.d), ['週一', '週二', '週三', '週四', '週五', '週六']);
+  const wed = mk('2027-03-17');
+  assert.deepEqual(wed.exportDays(season[19]).map((x) => x.d), ['週一', '週二', '週三']);
+  assert.match(wed.copyPayload('all'), /^週三｜比賽｜比賽日：我的比賽/m);
+  // 週日比賽、協會賽季照原本
+  const sun = mk('2027-03-21');
+  assert.deepEqual(sun.exportDays(season[19]).map((x) => x.d), sun.planDays(season[19]).map((x) => x.d));
+  // 其他週不受影響
+  assert.deepEqual(wed.exportDays(season[8]), wed.planDays(season[8]));
 });
 
 test('協會課表（W20 寫臺北馬拉松）也認得比賽列；週四團練地點由設定決定', () => {

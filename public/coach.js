@@ -6,7 +6,7 @@
 import { $, api, cfg, choose, coachPrefs, dayLabel, dstr, emptyState, esc, feat, fixText, group, IC, ic, largeTitle, legacyData, me, MI, myCycle, org, paintCountdown, planSeg,
   raceTarget, refreshMe, removeLegacy, render, row, setCoachPrefs, startKey, subTitle, toast, view } from './app.js';
 import * as P from './plan.js';
-import { ageGrade, createCoach, EST_LINE, fuelCalc, GL, GL_ORDER, hrCalc, icsTranslate, legacyBackup, legacyPatch, legacyRange, lvl, parseGoal, planLegacyImport, std100,
+import { ageGrade, createCoach, EST_LINE, fuelCalc, GL, GL_ORDER, hrCalc, icsTranslate, legacyBackup, legacyLogBackup, legacyPatch, legacyRange, lvl, parseGoal, planLegacyImport, std100,
   termSpans, termsIn, verdict, VOL, xdRows } from './coachcalc.js';
 import { lang, t } from './i18n.js';
 
@@ -28,8 +28,10 @@ function termHTML(text) {
 // 有設定過每週天數、週四團練或跑量才顯示提醒（預設值不提醒）
 const prefsSet = (p) => Number(p.days) !== 6 || p.club === false || p.vol != null;
 
-export async function weekExtras(root, { week, cycle, other, rows, venue = '', hl = null, wi }) {
+export async function weekExtras(root, { week, cycle, other, rows, venue = '', hl = null, wi, alive = () => true }) {
   const coach = await coachOf(cycle, venue);
+  // 等模組與課表資料的這段時間已經換週或換頁：不碰新畫面（不然會把上一週的內容寫到這一週）
+  if (!alive()) return () => {};
   const days = root.querySelector('.days');
   if (!days || !rows) return () => {};
   const personal = cycle.kind !== 'club';
@@ -52,7 +54,7 @@ export async function weekExtras(root, { week, cycle, other, rows, venue = '', h
     det.dataset.filled = '1';
     const r = rowOf(det), list = xdRows(coach, { ...r, race: P.isRaceDay(r, week) });
     det.querySelector('.xdb').innerHTML = `<dl>${list.map((x) => `<div><dt>${esc(x.label)}</dt><dd>${esc(x.value)}${x.est ? ' <span class="pill est">估算</span>' : ''}
-      ${x.zone ? '<span class="tiny" style="display:block">到課表設定填年齡就會顯示心率</span>' : ''}</dd></div>`).join('')}</dl>
+      ${x.zone ? '<a class="tiny xdlink" href="#/plan/setup?go=body">到課表設定填年齡就會顯示心率 ›</a>' : ''}</dd></div>`).join('')}</dl>
       ${list.some((x) => x.est) ? `<p class="tiny" style="margin:0">${EST_LINE}</p>` : ''}`;
   };
   const dets = [...days.querySelectorAll('details.xd')];
@@ -98,6 +100,7 @@ export async function weekExtras(root, { week, cycle, other, rows, venue = '', h
     const body = `<h3><span translate="no">${esc(GL[key].name)}</span></h3><p style="margin:0">${esc(GL[key].zh)}</p>
       <p class="tiny" style="margin:0">本週 ${n} 堂用到</p>
       <div class="choices"><button type="button" class="btn block" data-hl="${hlNow === key ? '' : key}">${hlNow === key ? '取消標示' : '標示本週全部'}</button>
+      <a class="btn ghost block" href="#/plan/guide?term=${key}">看配速與用語 ›</a>
       <button type="button" class="btn ghost block" data-close>關閉</button></div>`;
     back = btn;
     if (matchMedia('(min-width:820px)').matches) {
@@ -141,6 +144,7 @@ export async function weekExtras(root, { week, cycle, other, rows, venue = '', h
     if (n >= 1 && n <= 21) location.hash = `#/plan/${n}${other ? '?c=club' : ''}`;
   });
 
+  days.dataset.extras = String(week);   // 加強功能已經接上（測試等這個）
   return () => { close(); off.splice(0).forEach((f) => f()); };
 }
 
@@ -220,7 +224,7 @@ async function raceView(q) {
   const chips = [`${esc(g[0])} 組 SUB ${esc(subTime)}`, `${fm ? 'MP' : 'HMP'} ${P.fmtP(coach.goalPace())}/km`, `每週 ${coach.S.days} 天`];
   const srcLine = useGoal ? `<span>目標時間用我的目標 </span><b class="num">${P.fmtHMS(goalMin)}</b>` : `<span>目標時間依 ${esc(g[0])} 組中間值 </span><b class="num">${P.fmtHMS(mid)}</b>`;
   const goalCtl = goalMin != null ? `<button type="button" class="btn ghost sm" id="goalBtn" aria-pressed="${useGoal}">${useGoal ? '改用組別中間值' : `改用我的目標 ${P.fmtHMS(goalMin)}`}</button>`
-    : race.goal ? `<span class="tiny">目標成績「<span translate="no">${esc(race.goal)}</span>」看不懂，先用組別中間值（格式：時:分:秒）</span>` : '';
+    : race.goal ? `<span class="tiny"><span>看不懂目標成績</span>「<span translate="no">${esc(race.goal)}</span>」<span>先用組別中間值（格式：時:分:秒）</span></span>` : '';
 
   const rp = coach.raceDayPlan();
   const kg = body.kg, sweat = body.sweat || '中', R = Math.round;
@@ -269,7 +273,7 @@ async function raceView(q) {
           ${fuelRow('賽後 4 小時', `每小時碳水 ${R(kg)}–${R(1.2 * kg)} g＋蛋白質 ${R(0.3 * kg)} g`, '喝回流失體重的 125–150%')}`
           : `<div class="row spread"><span class="tiny">肝醣超補、比賽早餐與咖啡因的克數要用體重算：到課表設定填體重就會顯示。</span>${toSetup('body', '填體重')}</div>`}
       </div>
-      <p class="tiny" style="margin:0">建議在 W13 以後的長跑課，用比賽配速照這個計畫演練一次。一般運動營養建議（ACSM 等），不是醫療建議。</p>
+      <p class="tiny" style="margin:0">建議在 W13 以後的長跑課，用比賽配速照這個計劃演練一次。一般運動營養建議（ACSM 等），不是醫療建議。</p>
     </section>
 
     ${ageCard(coach, body, fm, g, tMin)}
@@ -331,8 +335,8 @@ function ageCard(coach, body, fm, g, tMin) {
       <div class="bar">${pp != null ? `<span class="mk now" style="left:${pos(pp)}%"></span>` : ''}<span class="mk goal" style="left:${pos(tp)}%"></span></div>
       <div class="scale num">${scale.map(([x, l]) => `<span style="left:${pos(x)}%">${l}</span>`).join('')}</div></div>
     <dl class="kv">
-      <dt>目標</dt><dd><b class="num">${tp.toFixed(1)}%</b> <span class="num">${P.fmtHMS(tMin)}</span>・<span>${lvl(tp)}</span><span>（深色標記）</span></dd>
-      ${pp != null ? `<dt>目前能力</dt><dd><b class="num">${pp.toFixed(1)}%</b> <span>依成績推算全馬</span> <span class="num">${P.fmtT(pMin)}</span>・<span>${lvl(pp)}</span><span>（淺色標記）</span></dd>` : `<dt>目前能力</dt><dd><a href="#/plan/setup?go=pb">填一場最近的成績就能比較 ›</a></dd>`}
+      <dt>目標</dt><dd><b class="num">${tp.toFixed(1)}%</b> <span class="num">${P.fmtHMS(tMin)}</span>・<span>${lvl(tp)}</span><span>（實心直線）</span></dd>
+      ${pp != null ? `<dt>目前能力</dt><dd><b class="num">${pp.toFixed(1)}%</b> <span>依成績推算全馬</span> <span class="num">${P.fmtT(pMin)}</span>・<span>${lvl(pp)}</span><span>（空心圓點）</span></dd>` : `<dt>目前能力</dt><dd><a href="#/plan/setup?go=pb">填一場最近的成績就能比較 ›</a></dd>`}
       <dt>換成 30 歲</dt><dd><b class="num">${P.fmtHMS((tMin * std100(30, sex)) / std)}</b> <span>${sex === 'M' ? '同等水準的 30 歲男性成績' : '同等水準的 30 歲女性成績'}</span></dd>
     </dl>
     ${v ? notice(`<b class="num">差距 ${gap > 0 ? '+' : ''}${gap.toFixed(1)}%</b>　${esc(v[1])}`) : ''}
@@ -683,7 +687,9 @@ async function legacySection(raw, { races, startRace }) {
     ${h3('完成紀錄')}<div id="lgLogs" aria-live="polite">${logsHTML()}</div>
     <div id="lgCdsBox">${cdsHTML()}</div>${secEnd}</div></section>`;
 
+  // 完整備份（含身體資料，給「下載備份後刪除」）；上傳結果旁的按鈕只存完成紀錄
   const backup = () => saveFile(new Blob([legacyBackup(raw.model, raw.dash)], { type: 'application/json' }), `耕跑課表備份_${t0}.json`);
+  const logBackup = () => saveFile(new Blob([legacyLogBackup(raw.dash)], { type: 'application/json' }), `耕跑課表完成紀錄_${t0}.json`);
   const finish = (state) => setCoachPrefs({ legacy: { state, at: new Date().toISOString(), logs: legacyTotals.logs, races: legacyTotals.races } });
   const reloadRaces = async () => { raceList = (await api('/races').catch(() => ({ races: raceList }))).races || raceList; M = calc(); };
   function bind() {
@@ -720,7 +726,7 @@ async function legacySection(raw, { races, startRace }) {
         include = c.checked ? [...new Set([...include, c.dataset.anchor])] : include.filter((a) => a !== c.dataset.anchor);
         M = calc(); paintLogs();
       };
-      $('#lgBk')?.addEventListener('click', backup);
+      $('#lgBk')?.addEventListener('click', logBackup);
       $('#lgUp')?.addEventListener('click', async (e) => {
         const btn = e.currentTarget;
         if (navigator.onLine === false) { toast('目前沒有網路，連上後再試一次'); return; }

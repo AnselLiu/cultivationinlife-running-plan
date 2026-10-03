@@ -1,6 +1,6 @@
 // plan.js 單元測試：課表引擎（分類、配速、週期、日期、可省略、完成率）
 // 跑法：mise exec node@22.23.2 -- npm run test:unit（tests/run.mjs 也會先跑）
-process.env.TZ = 'Asia/Taipei';
+import './tz.mjs';   // 一定要第一個載入（見 tz.mjs）
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';

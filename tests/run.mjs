@@ -5,7 +5,7 @@ import { rmSync } from 'node:fs';
 
 // 先跑不需要伺服器的單元測試（課表引擎、課表教練計算、舊版資料搬移）；失敗就不用啟動伺服器
 const UNIT = ['tests/plan.test.mjs', 'tests/coachcalc.test.mjs', 'tests/migrate.test.mjs'];
-const unit = spawnSync(process.execPath, ['--test', ...UNIT], { stdio: 'inherit' });
+const unit = spawnSync(process.execPath, ['--test', ...UNIT], { stdio: 'inherit', env: { ...process.env, TZ: 'Asia/Taipei' } });
 if (unit.status !== 0) process.exit(unit.status ?? 1);
 
 const PORT = Number(process.env.TEST_PORT) || 8799, STATE = '.wrangler/test-state';

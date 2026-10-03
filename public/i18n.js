@@ -33,6 +33,8 @@ const PATTERNS = [
   [/^已選 ([A-Z]) 組，按儲存才會生效$/, 'Group $1 selected — tap Save to apply'],
   [/^本週 (\d+) 堂用到$/, '$1 sessions this week use it'],
   [/^W(\d+) 課表還沒公告$/, 'W$1 plan not posted yet'],
+  [/^年齡分級：目標 ([\d.]+)%(?:，目前 ([\d.]+)%)?$/, (_, a, b) => `Age grade: goal ${a}%${b ? `, current ${b}%` : ''}`],
+  [/^已上傳 (\d+) 筆離線時的訓練紀錄$/, 'Uploaded $1 training logs saved while offline'],
   // 舊版課表教練資料搬移
   [/^已上傳 (\d+) 筆・已存在 (\d+) 筆・其他週期 (\d+) 筆・對不到 (\d+) 筆$/, 'Uploaded $1 · already there $2 · other cycles $3 · no match $4'],
   [/^・略過 (\d+) 筆（每天最多 5 筆）$/, ' · skipped $1 (at most 5 a day)'],

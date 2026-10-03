@@ -1,5 +1,5 @@
 // 舊版課表教練資料搬移（coachcalc.js 的 planLegacyImport 等純函式）單元測試
-process.env.TZ = 'Asia/Taipei';
+import './tz.mjs';   // 一定要第一個載入（見 tz.mjs）
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -175,4 +175,11 @@ test('備份：舊版的格式（舊版頁面可以還原）', () => {
   assert.deepEqual(Object.keys(j), ['app', 'v', 'exported', 'settings', 'dash']);
   assert.equal(j.app, 'gengpao-coach');
   assert.equal(j.settings.grp, 'C');
+});
+
+test('只有完成紀錄的備份：不含設定與身體資料、倒數', () => {
+  const j = JSON.parse(K.legacyLogBackup({ log: { '2026-12-20|3|1': 1 }, cds: [{ name: 'x' }] }, new Date('2026-11-04T00:00:00Z')));
+  assert.deepEqual(Object.keys(j), ['app', 'v', 'exported', 'dash']);
+  assert.deepEqual(j.dash, { log: { '2026-12-20|3|1': 1 } });
+  assert.ok(!('settings' in j));
 });

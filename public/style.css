@@ -258,6 +258,7 @@ textarea{min-height:96px;resize:vertical;line-height:1.5}
 .av{width:32px;height:32px;border-radius:50%;object-fit:cover;background:var(--accent-soft);color:var(--accent);
   display:grid;place-items:center;font-size:13px;font-weight:700;overflow:hidden;flex:none}
 .notice{border-radius:var(--r-m);padding:11px 13px;font-size:14px;background:var(--warn-bg);color:var(--warn)}
+.notice a{font-weight:700;text-decoration:underline;text-underline-offset:2px}   /* 深色模式連結跟提示文字同色，靠粗體底線分開 */
 pre.out{white-space:pre-wrap;word-break:break-word;background:var(--glass-hi);border-radius:var(--r-m);
   padding:12px;font:13px/1.6 ui-monospace,"SF Mono",Menlo,monospace;max-height:340px;overflow:auto;margin:0}
 
@@ -1356,7 +1357,7 @@ html.fullmap{background:var(--sheet-solid)}
 .nskel span{display:grid;gap:8px;align-content:center}
 .nskel b{display:block;height:11px;border-radius:6px;background:color-mix(in srgb,var(--ink) 8%,transparent)}
 .nskel b:first-child{width:60%}.nskel b:last-child{width:40%}
-.toast .toastbtn{margin-left:14px;border:0;background:none;color:inherit;font:inherit;font-weight:700;text-decoration:underline;cursor:pointer;padding:0}
+.toast .toastbtn{margin:-8px -10px -8px 4px;border:0;background:none;color:inherit;font:inherit;font-weight:700;text-decoration:underline;cursor:pointer;padding:8px 10px;min-height:30px}   /* 點擊範圍放大，看起來一樣大 */
 @media (min-width:1024px){.nwrap-page,.lt:has(+ .nwrap-page){max-width:720px}}
 #bcOut.err{color:var(--race)}
 /* ---- 課表教練整合（P3）：階段色、週次列、快速打勾、可省略、用語、詳細內容、賽前階段 ---- */
@@ -1402,7 +1403,8 @@ html.fullmap{background:var(--sheet-solid)}
 button.term{display:inline-block;min-width:30px;min-height:30px;margin:-6px -2px;padding:6px 2px;border:0;background:none;font:inherit;color:inherit;
   text-decoration:underline dotted;text-decoration-thickness:1.5px;text-underline-offset:3px;cursor:pointer;vertical-align:baseline;border-radius:6px}
 button.term.on{background:var(--accent-soft)}
-.day.term-hl{box-shadow:inset 0 0 0 2px var(--accent), var(--shadow-s)}
+.day.term-hl,.day.logged.term-hl{box-shadow:inset 0 0 0 2px var(--accent), var(--shadow-s)}
+.day.logged.done.term-hl{box-shadow:inset 3px 0 0 #34C759, inset 0 0 0 2px var(--accent), var(--shadow-s)}
 .termpop{position:absolute;z-index:60;width:min(340px,calc(100vw - 32px));box-shadow:var(--shadow-l);background:color-mix(in srgb,var(--glass-hi) 80%,var(--bg))}
 /* 詳細內容 */
 details.xd{margin-top:4px}
@@ -1416,6 +1418,9 @@ details.xd dt{color:var(--ink-3);font-weight:650}
 details.xd dd{margin:0}
 .pill.est{font-size:11px;padding:1px 7px;background:color-mix(in srgb,var(--ink) 9%,transparent);color:var(--ink-2)}
 .warnslot{display:grid}
+.warnslot:empty{display:none}
+.day .note .notelink{display:inline-flex;align-items:center;min-height:30px}
+details.xd .xdlink{display:flex;align-items:center;min-height:30px;font-weight:650}
 /* 賽前階段 */
 .stagecard{gap:8px;border:1px solid color-mix(in srgb,var(--race) 25%,transparent)}
 .stagecard h3{display:flex;align-items:center;gap:8px;margin:0}
@@ -1462,7 +1467,7 @@ table.splits tr:last-child td,table.hz tr:last-child td{border-bottom:0}
 .agemeter{padding:6px 0 22px}
 .agemeter .bar{position:relative;height:10px;border-radius:5px;background:linear-gradient(90deg,color-mix(in srgb,var(--ink) 10%,transparent),color-mix(in srgb,var(--accent) 45%,transparent))}
 .agemeter .mk{position:absolute;top:-5px;width:4px;height:20px;border-radius:2px;background:var(--ink);transform:translateX(-50%)}
-.agemeter .mk.now{background:var(--ink-3)}
+.agemeter .mk.now{top:-3px;width:16px;height:16px;border-radius:50%;background:var(--bg);border:3px solid var(--ink);box-sizing:border-box}   /* 目標是實心直線、目前是空心圓點：靠形狀分，不靠深淺（深色模式也對） */
 .agemeter .scale{position:relative;height:16px;margin-top:6px;font-size:11px;color:var(--ink-3)}
 .agemeter .scale span{position:absolute;transform:translateX(-50%);white-space:nowrap}
 .agemeter .scale span:first-child{transform:none}.agemeter .scale span:last-child{transform:translateX(-100%)}

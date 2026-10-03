@@ -1316,18 +1316,20 @@ async function api(req, env, path, method) {
   if (path === '/api/me' && method === 'GET') {
     const st = await getSettings(env, settingRows.filter((r) => ['org', 'features', 'docs', 'privacy', 'tabs'].includes(r.key)));
     const boot = !!member && url0(req).searchParams.get('boot') === '1';
-    const [race, teamList, events, todayLogs, planCycle] = await Promise.all([
+    // 這週一（臺北時間）到今天的紀錄：首頁「今天」卡片的擇一天課（週五或週六、週末）要看前幾天記過沒，不用再多等一輪
+    const t0 = today(), monday = new Date(Date.parse(`${t0}T00:00:00Z`) - ((new Date(`${t0}T00:00:00Z`).getUTCDay() + 6) % 7) * 864e5).toISOString().slice(0, 10);
+    const [race, teamList, events, weekLogs, planCycle] = await Promise.all([
       countdownTarget(env, member, settingRows), member ? listTeams() : [],
       boot ? listEvents(false, [today(), new Date(Date.now() + 180 * 864e5).toISOString().slice(0, 10)]) : null,
       boot ? env.DB.prepare(`SELECT id, date, week_no, plan_day, cycle_anchor, cycle_week, kind, plan_text, status, km, seconds, hr, rpe, feel, note, source, 0 AS comments, 0 AS unread
-        FROM training_logs WHERE member_id = ? AND date = ? ORDER BY created_at`).bind(member.id, today()).all().then((r) => r.results) : null,
+        FROM training_logs WHERE member_id = ? AND date BETWEEN ? AND ? ORDER BY created_at`).bind(member.id, monday, t0).all().then((r) => r.results) : null,
       planCycleOf(member),
     ]);
     return json({ member: member ? pub(member) : null, vapid: env.VAPID_PUBLIC_KEY || null, googleLogin: !!(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET),
       settings: st, privacyVersion: st.privacy.version, needConsent: !!member && member.consent_version !== st.privacy.version,
       race, planCycle, teams: teamList, calendarOn: !!member?.cal_token_hash, calScope: member?.cal_scope || 'all', requireMfa: !!security.require_mfa, shortcut: setting('health_shortcut') || null,
       homeSpot: member?.home_spot ? await env.DB.prepare("SELECT id, name, lat, lng FROM spots WHERE id = ? AND status = 'approved'").bind(member.home_spot).first() : null,
-      ...(boot ? { boot: { events, todayLogs, today: today() } } : {}) });
+      ...(boot ? { boot: { events, todayLogs: weekLogs.filter((l) => l.date === t0), weekLogs: { from: monday, logs: weekLogs }, today: t0 } } : {}) });
   }
 
   // 已登入的人輸入幹部碼或理事長碼升級
@@ -1396,6 +1398,7 @@ async function api(req, env, path, method) {
   // 課表設定：項目、組別、課表週期（只改有送來的欄位；不碰暱稱、電話等個人資料）
   if (path === '/api/me/plan' && method === 'PUT') {
     const g = need(); if (g) return g;
+    if (await limited(env, `plan:${member.id}`, 60, 3600)) return fail(429, '改太頻繁，請稍後再試');
     const b = await body(), has = (k) => Object.prototype.hasOwnProperty.call(b, k);
     let dist = member.dist, grp = member.grp;
     if (has('dist')) { if (b.dist !== 'fm' && b.dist !== 'hm') return fail(400, '項目只能是全馬或半馬'); dist = b.dist; }
@@ -1417,7 +1420,8 @@ async function api(req, env, path, method) {
     }
     await env.DB.prepare('UPDATE members SET dist = ?, grp = ?, plan_cycle = ?, plan_race_id = ? WHERE id = ?').bind(dist, grp, cycle, raceId, member.id).run();
     const m2 = { ...member, dist, grp, plan_cycle: cycle, plan_race_id: raceId };
-    if (has('cycle')) await audit(env, req, member, 'plan.cycle', 'member', member.id, cycle);
+    // 稽核只記週期真的有變（同樣的值重送不寫）
+    if (has('cycle') && (cycle !== (member.plan_cycle === 'race' ? 'race' : 'club') || raceId !== (member.plan_race_id || null))) await audit(env, req, member, 'plan.cycle', 'member', member.id, cycle);
     return json({ member: pub(m2), planCycle: await planCycleOf(m2), ...(note ? { note } : {}) });
   }
 
@@ -2078,6 +2082,8 @@ async function api(req, env, path, method) {
       value = {};
       // 預設開；後台關掉才是 false。沒送的開關保留原值（舊版後台不認得的新開關不會被改掉）
       for (const f of ['gps', 'studio', 'health', 'file', 'coach', 'party', 'plan_export', 'plan_cycle']) value[f] = has(f) ? b[f] !== false : cur[f] !== false;
+      // 附近即時影像（main 的 cams）是預設關：明確送 true 才開，沒送保留原值；不能併進上面預設開的迴圈
+      value.cams = has('cams') ? b.cams === true : cur.cams === true;
     } else if (key === 'tabs') {
       // 下方分頁列的名稱（每個最多 4 個字，空白就用預設）
       value = {};
@@ -2426,8 +2432,9 @@ async function api(req, env, path, method) {
     await env.DB.prepare('INSERT INTO plan_posts (id, week_no, title, phase, body, author_id, team_id) VALUES (?, ?, ?, ?, ?, ?, ?)')
       .bind(id, week, title, str(b.phase, 20), bodyText, member.id, teamId).run();
     await audit(env, req, member, 'plan.publish', 'plan', id, title);
+    // 連結指定協會賽季（?c=club）：教練公告是協會週次，個人週期的會員點進來才不會跑到自己的同號週
     if (b.notify !== false) await notify(env, teamId ? await teamMemberIds(teamId, member.id) : await allMemberIds(env, member.id), 'training',
-      { kind: 'plan', title: `新課表：${title}`, body: `${member.title || member.nickname || '教練'} 發布了${week ? ` W${week}` : ''}課表`, url: week ? `/#/plan/${week}` : '/#/plan' });
+      { kind: 'plan', title: `新課表：${title}`, body: `${member.title || member.nickname || '教練'} 發布了${week ? ` W${week}` : ''}課表`, url: week ? `/#/plan/${week}?c=club` : '/#/plan' });
     return json({ id });
   }
   const pdel = path.match(/^\/api\/plans\/([\w-]{1,32})$/);

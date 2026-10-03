@@ -186,7 +186,7 @@ test('快速打勾：記一筆、更新完成率，連點也只有一筆，復�
   const ring = page.locator('.logsum .ring');
   const pct0 = await ring.getAttribute('aria-label');
   const tick = firstTick(page);
-  const label = await tick.getAttribute('aria-label');
+  const label = await tick.getAttribute('aria-label'), idx = await tick.getAttribute('data-tick');
   await tick.dblclick();
   await expect(page.getByText('已記錄完成')).toBeVisible();
   const after = await logsOf(request, 't_other', ...W3);
@@ -195,7 +195,12 @@ test('快速打勾：記一筆、更新完成率，連點也只有一筆，復�
   expect(added).toMatchObject({ status: 'done', week_no: 3 });
   expect(added.cycle_anchor ?? null).toBeNull();
   await expect(ring).not.toHaveAttribute('aria-label', pct0);
-  await expect(page.locator(`.days .tick[aria-label="${label}"]`)).toHaveAttribute('aria-checked', 'true');
+  // 記好後同一列變成「修改紀錄」按鈕，焦點留在這一列
+  const same = page.locator(`.days .tick[data-tick="${idx}"]`);
+  await expect(same).toHaveAttribute('aria-label', /^修改紀錄（完成）：/);
+  await expect(same).not.toHaveAttribute('role', 'checkbox');
+  await expect(same).toBeFocused();
+  expect(label).toMatch(/^標記完成：/);
   await page.getByRole('button', { name: '復原' }).click();
   await expect(page.getByText('已復原')).toBeVisible();
   expect((await logsOf(request, 't_other', ...W3)).length).toBe(before.length);
@@ -226,6 +231,29 @@ test('離線打勾：先存在手機，復原從暫存區拿掉；連上網路�
   const after = await logsOf(request, 't_other', ...W3);
   expect(after.length).toBe(before.length + 1);
   await apiAs(request, 't_other', `/logs/${again.id}`, { method: 'DELETE' });
+});
+
+test('離線修改既有紀錄：連上網路後更新那一筆，不會被當成重複丟掉、也不會多一筆', async ({ page, context, request }) => {
+  await enter(page, 't_other');
+  const made = await apiAs(request, 't_other', '/logs', { method: 'POST', body: { date: '2026-08-19', status: 'done', week_no: 3, plan_day: '週三', source: 'manual' } });
+  try {
+    const before = await logsOf(request, 't_other', ...W3);
+    await page.goto(`/#/log?id=${made.id}`);
+    await expect(page.locator('#lf [name=km]')).toBeVisible();
+    await context.setOffline(true);
+    await page.locator('#lf [name=km]').fill('7.5');
+    await page.locator('#lf').getByRole('button', { name: '儲存' }).click();
+    await expect(page.getByText('目前離線，已先存在手機')).toBeVisible();
+    const q = await page.evaluate(() => JSON.parse(localStorage.getItem('cil-log-queue') || '[]'));
+    expect(q).toHaveLength(1);
+    expect(q[0].id).toBe(made.id);   // 保留 id：補傳時是更新
+    await context.setOffline(false);
+    await page.evaluate(() => dispatchEvent(new Event('online')));
+    await expect.poll(() => page.evaluate(() => localStorage.getItem('cil-log-queue'))).toBeNull();
+    const after = await logsOf(request, 't_other', ...W3);
+    expect(after.length).toBe(before.length);
+    expect(after.find((l) => l.id === made.id).km).toBe(7.5);
+  } finally { await apiAs(request, 't_other', `/logs/${made.id}`, { method: 'DELETE' }); }
 });
 
 test('可省略：每週 4 天時課表標「可省略」，完成率的分母一起變少', async ({ page }) => {
@@ -267,7 +295,7 @@ test('用語：點開說明、標示本週全部（?hl=）；詳細內容有主�
 test('滑動換週：從螢幕邊緣 24px 內開始不換週，中間滑動才換', async ({ page }) => {
   await enter(page, 't_other');
   await page.goto('/#/plan/5');
-  await expect(page.locator('#xall')).toBeVisible();   // 閒下來才載入的加強功能（滑動、用語）已經接上
+  await expect(page.locator('.days[data-extras="5"]')).toHaveCount(1);   // 閒下來才載入的加強功能（滑動、用語）已經接上
   const swipe = (x0, x1) => page.evaluate(([a, b]) => {
     const el = document.querySelector('.days .day .dl'), y = el.getBoundingClientRect().top + 10;
     const t = (x) => new Touch({ identifier: 1, target: el, clientX: x, clientY: y });
