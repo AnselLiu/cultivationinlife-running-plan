@@ -7,6 +7,7 @@ const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const ic = (d) => `<svg class="ic" viewBox="0 0 24 24" aria-hidden="true">${d}</svg>`;
 const I = {
+  map: ic('<path d="M9 4.5 3.5 6.6v13l5.5-2.1 6 2.1 5.5-2.1v-13L15 6.6Z"/><path d="M9 4.5v13M15 6.6v13"/>'),
   calendar: ic('<rect x="3.2" y="4.8" width="17.6" height="15.4" rx="3.4"/><path d="M3.4 9.6h17.2M8 3.2v3.4M16 3.2v3.4"/>'),
   sun: ic('<circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.2 5.2l1.4 1.4M17.4 17.4l1.4 1.4M5.2 18.8l1.4-1.4M17.4 6.6l1.4-1.4"/>'),
   megaphone: ic('<path d="M4 10v4a1 1 0 0 0 1 1h2l6 4V5L7 9H5a1 1 0 0 0-1 1Z"/><path d="M16.5 9a4 4 0 0 1 0 6"/>'),
@@ -48,8 +49,10 @@ const STEPS = [
     at: () => pick('#bell') },
   { id: 'plan', icon: I.plan, t: '課表與訓練紀錄', l: ['照你的組別換算配速；每天練完按「記錄」，', '本週完成率、里程與強度自動算好。'],
     go: () => go('#/plan', ['.logsum', '.days']), at: () => [pick('.logsum'), pick('.days .day')].filter(Boolean), ring: () => pick('.days .logbtn') },
-  { id: 'run', icon: I.runner, t: '跑步記錄', l: ['手機計時加上 GPS，跑完算好距離、配速與分段。', '練跑地圖有地點、現場回報、天氣，還能畫路線開揪跑。'],
+  { id: 'run', icon: I.runner, t: '跑步記錄', l: ['手機計時加上 GPS，跑完算好距離、配速與分段。', '可以邊跑邊看今天的課表。'],
     need: () => shown(tab('/run')), go: () => go('#/run', ['.runstart', '.runlive', '.kpis']), at: () => pick('.runstart', '.runlive', '.kpis'), ring: () => pick('#runGo') },
+  { id: 'map', icon: I.map, t: '練跑地圖', l: ['全台常用的田徑場、河濱、公園與步道，可以搜尋、依類型和縣市篩選。', '看現場回報與天氣，也能畫路線、存 GPX、開揪跑。'],
+    need: () => shown(tab('/map')), go: () => go('#/map', ['.mapwrap', '.spotlist']), at: () => pick('.mapwrap'), ring: () => pick(tab('/map')) },
   { id: 'studio', icon: I.camera, t: '拍照分享', l: ['把今天的距離、時間和路線放進照片，', '直接分享到 IG 限時動態或 Reels。'],
     need: () => shown(tab('/studio')), go: () => go('#/studio', '.stage-card'), at: () => pick(tab('/studio')) },
   { id: 'me', icon: I.person, t: '我的', l: ['個人資料、賽事報名資料、主團、通知與安全，', '分組放在這裡，點一列就進去設定。'],

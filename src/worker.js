@@ -1940,7 +1940,7 @@ async function api(req, env, path, method) {
     } else if (key === 'tabs') {
       // 下方分頁列的名稱（每個最多 4 個字，空白就用預設）
       value = {};
-      for (const k of ['home', 'plan', 'studio', 'coach', 'me']) { const v = str(b[k], 4); if (v) value[k] = v; }
+      for (const k of ['home', 'plan', 'run', 'map', 'studio', 'me']) { const v = str(b[k], 4); if (v) value[k] = v; }
     } else if (key === 'docs') {
       const list = Array.isArray(b.docs) ? b.docs.slice(0, 30) : [];
       value = list.map((d) => ({ title: str(d.title, 40), url: httpsUrl(d.url), note: str(d.note, 80) })).filter((d) => d.title && d.url);

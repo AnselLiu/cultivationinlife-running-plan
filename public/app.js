@@ -496,7 +496,7 @@ function loginView() {
 
 // 依功能開關顯示或隱藏分頁
 // 下方分頁列：管理員可以改名稱，每個人可以選只顯示圖示
-const TAB_DEFAULT = { home: '團練', plan: '課表', run: '跑步', studio: '拍照', me: '我的' };
+const TAB_DEFAULT = { home: '團練', plan: '課表', run: '跑步', map: '地圖', studio: '拍照', me: '我的' };
 const iconsOnly = { get() { try { return localStorage.getItem('cil-tab-icons') === '1'; } catch { return false; } }, set(v) { try { v ? localStorage.setItem('cil-tab-icons', '1') : localStorage.removeItem('cil-tab-icons'); } catch {} } };
 function applyTabs() {
   const names = { ...TAB_DEFAULT, ...(cfg.settings?.tabs || {}) };
@@ -2457,13 +2457,12 @@ async function render() {
 }
 // 返回鍵：分頁以外的頁面在左上角顯示「‹ 上一層」。App 裡有上一頁就退回上一頁（保留捲動與篩選），
 //   從通知或分享連結直接打開的就回到它的上一層（加到主畫面後沒有瀏覽器的返回鍵）
-const TOP_PAGES = ['/', '/plan', '/run', '/studio', '/me'];
+const TOP_PAGES = ['/', '/plan', '/run', '/map', '/studio', '/me'];
 function parentOf(h) {
   const p = h.split('/');
   if (h.startsWith('/me/')) return ['#/me', '我的'];
   if (h.startsWith('/e/') && p.length > 3) return [`#/e/${p[2]}`, '活動'];
   if (h.startsWith('/edit/')) return [`#/e/${p[2]}`, '活動'];
-  if (h === '/map') return ['#/run', '跑步'];
   if (['/challenge', '/report', '/log', '/plan/new', '/logs/team'].includes(h) || h.startsWith('/plan/')) return ['#/plan', '課表'];
   if (h.startsWith('/t/')) return ['#/teams', '分團'];
   if (['/teams', '/tickets', '/admin', '/roster'].includes(h) || h.startsWith('/m/')) return ['#/me', '我的'];
@@ -2471,7 +2470,7 @@ function parentOf(h) {
 }
 // 這一頁屬於哪個分頁：本身是分頁就是自己，不然沿著上一層往上找（最多找 4 層）
 function tabOf(h) {
-  const TOP = ['/', '/plan', '/run', '/studio', '/me'];
+  const TOP = ['/', '/plan', '/run', '/map', '/studio', '/me'];
   for (let i = 0; i < 4 && !TOP.includes(h); i++) h = parentOf(h)[0].slice(1);
   return h;
 }
