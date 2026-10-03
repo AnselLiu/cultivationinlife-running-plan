@@ -20,10 +20,14 @@ const MB = 1024 * 1024;
 export const ALLOWED_HOURS = [1, 2, 6];   // 台北時間：避開 03:00 備份與清理、04–05 點的攝影機同步
 
 // 來源登錄表：網址、解析、主機白名單、顯名、節奏（hour 最早幾點跑；every 每天／每週／每月）、radius（null＝全收；第二批的環境部、Cool map 才用）
-//   local：在電腦上同步（tools/rest-sync.mjs 產生 SQL，再用 wrangler 寫進 D1），Worker 的排程與「立即同步」都不跑。
-//     Workers 免費方案每次執行只有 10 ms CPU、50 個子請求（D1 查詢也算）：大檔或多檔的來源第一次解析就超過
-//     （2026-10-03 在開發機實測冷啟動的解析＋清理：直飲臺 680 KB 11.6 ms、臺北公廁兩頁 14 ms、中油 XML＋1.3 MB JSON 13 ms，
-//      運動場館 10 MB CSV、騎跡 49 個路線檔更多）；留在 Worker 的三個都在 4 ms 以內（河濱廁所 3.8、租借站 2.8、新北河濱 2.0）
+//   local：Worker 能不能同步這個來源。true＝只由維護工具同步（tools/rest-sync.mjs 在電腦上用同一套解析產生 SQL，再用 wrangler 寫進 D1），
+//     Worker 的排程與「立即同步」都不跑；沒有標的才留在 Worker 排程。
+//     Workers 免費方案每次執行只有 10 ms CPU、50 個子請求（D1 查詢也算）。留在 Worker 的條件：SHA-256＋解析＋清理遠低於 5 ms，
+//     而且一次同步（含 batch 裡的每個指令）大約 10 個 D1 指令以內。2026-10-03 用 node 22 實測真實資料的程序 CPU 時間
+//     （第一次＝程式碼冷、執行環境已暖；暖＝第三次；取多次的最小值，開發機負載高，數字偏大）：
+//       新北河濱 8 KB 63 處 3.0／0.7 ms、租借站 6 KB 9 處 4.8／1.5 ms（第一次裡約 2.5 ms 是開放時間解析程式只做一次的編譯）→ 留在 Worker
+//       河濱廁所 117 KB 182 處 6.0／3.2 ms、直飲臺 666 KB 21／17 ms、臺北公廁 814 KB 22／13 ms、中油 1.2 MB 23／23 ms、
+//       運動場館 9.8 MB 約 450 ms、騎跡每 10 條路線 18–92 ms → 只由維護工具同步
 export const SOURCES = {
   twd: {
     name: '臺北市直飲臺', provider: '臺北自來水事業處', license: LICENSE, attribution: gov('臺北自來水事業處'),
@@ -39,7 +43,7 @@ export const SOURCES = {
   tprv: {
     name: '臺北市河濱廁所', provider: '臺北市政府工務局水利工程處', license: LICENSE, attribution: gov('臺北市政府工務局水利工程處'),
     dataset: 'https://data.gov.tw/dataset/143903', url: [TP('4b33aa03-cf03-459d-888b-865ee7ea16db')], parse: parseTprv,
-    hosts: [/^data\.taipei$/], hour: 1, every: 'week', radius: null,
+    hosts: [/^data\.taipei$/], hour: 1, every: 'week', radius: null, local: true,
   },
   tpbk: {
     name: '臺北市河濱自行車租借站', provider: '臺北市政府工務局水利工程處', license: LICENSE, attribution: gov('臺北市政府工務局水利工程處'),
@@ -116,8 +120,9 @@ export const hostOk = (source, u) => {
 };
 // 外連網址（來源給的水質頁、官網）：只收 https、不能有帳密；北水處水質頁只在 8443 埠，所以外連允許指定埠
 export const linkOk = (u, max = 300) => {
+  const s = String(u || '').trim();
+  if (!/^https:\/\//i.test(s)) return '';   // 大多數列沒有網址：先擋掉，不要每列都建 URL、丟例外（Worker CPU）
   try {
-    const s = String(u || '').trim();
     const x = new URL(s);
     return x.protocol === 'https:' && !x.username && !x.password && /\.[a-z]{2,}$/i.test(x.hostname) && s.length <= max && !/[\s<>"']/.test(s) ? s : '';
   } catch { return ''; }
@@ -563,9 +568,10 @@ const parseTag = (s) => { try { const o = JSON.parse(s || 'null'); return o && t
 export async function syncSource(env, source) {
   const S = sourceOf(source);
   if (!S || S.manual) return { error: '這個來源不能同步' };
-  const src = await env.DB.prepare('SELECT enabled, last_count, etag, cursor, gen FROM rest_sources WHERE source = ?').bind(source).first();
-  if (!src?.enabled) return { error: '來源沒有開啟' };   // 關閉的來源不發出任何連線
-  await setError(env, source, SYNCING);
+  // 讀狀態與標成「同步中」一個指令完成（免費方案每次執行 50 個子請求，D1 指令也算）；關閉的來源不更新、不發出任何連線
+  const src = await env.DB.prepare(`UPDATE rest_sources SET last_sync_at = datetime('now'), last_error = ? WHERE source = ? AND enabled = 1
+    RETURNING enabled, last_count, etag, cursor, gen`).bind(SYNCING, source).first();
+  if (!src?.enabled) return { error: '來源沒有開啟' };
   if (S.pages) return syncPaged(env, source, src);
   let got;
   try { got = await collect(env, source, parseTag(src.etag)); } catch (e) { const error = errText(e); await markFailed(env, source, error); return { error }; }
@@ -664,11 +670,13 @@ const LIVE = "enabled = 1 AND hidden = 0 AND status != 'paused'";
 const COLS = 'id, source, type, subtype, svc, access, name, place, lat, lng, hours, hours_raw, status, fix, manual';
 // box：只取這個範圍內的列（地點附近、詳情的同一處）。臺北市中心 3×3 格約 800 列，框到 1 公里內約 170 列：
 //   Worker 少解析八成的列（免費方案每次執行只有 10 ms CPU）；幹部修正過位置的列用修正後的座標
+//   上限 800 列：第一批真實資料最密的一格（北門、大稻埕一帶）189 列，合併＋JSON 暖的時候約 0.3 ms、第一次約 1.5 ms；上限只防資料暴增時 CPU 失控
 const BOX = " AND COALESCE(json_extract(fix, '$.lat'), lat) BETWEEN ? AND ? AND COALESCE(json_extract(fix, '$.lng'), lng) BETWEEN ? AND ?";
 export const boxOf = (p, m) => { const dl = m / 111320, dg = m / (111320 * Math.cos(p.lat * RAD)); return [p.lat - dl, p.lat + dl, p.lng - dg, p.lng + dg]; };
+export const CELL_LIMIT = 800;
 async function cellRows(env, cells, on, box = null) {
   const ph = cells.map(() => '?').join(',');
-  const rows = (await env.DB.prepare(`SELECT ${COLS} FROM rest_stops WHERE cell IN (${ph}) AND ${LIVE}${box ? BOX : ''} LIMIT 3000`).bind(...cells, ...(box || [])).all()).results;
+  const rows = (await env.DB.prepare(`SELECT ${COLS} FROM rest_stops WHERE cell IN (${ph}) AND ${LIVE}${box ? BOX : ''} LIMIT ${CELL_LIMIT}`).bind(...cells, ...(box || [])).all()).results;
   return rows.filter((r) => on.has(r.source)).map(applyFix);
 }
 const cachePut = (env, key, body, ttl) => {

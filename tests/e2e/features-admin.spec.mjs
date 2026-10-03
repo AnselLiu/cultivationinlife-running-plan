@@ -130,3 +130,15 @@ test('活動報名預設：設定活動前 7 天 20:00，預覽跟著更新', as
   await expect(page.getByText('已儲存活動報名預設')).toBeVisible();
   await apiAs(request, 't_chair', '/settings/signup', { method: 'POST', body: { approval: false, notify: true, open_days: null, close_days: null } });
 });
+
+test('系統設定：休息站資料來源，只由維護工具同步的來源沒有「立即同步」，顯示上次同步的時間；小來源有按鈕', async ({ page, request }) => {
+  await request.get('/api/dev/rest-sync?source=twd');   // 代替維護工具寫入（REST_MOCK 不連外）
+  await enter(page, 't_chair');
+  await page.goto('/#/admin?tab=settings');
+  const row = (k) => page.locator('#restSrcList .camsrc').filter({ has: page.locator(`[data-restsrc="${k}"]`) });
+  await expect(row('twd')).toContainText('由維護工具同步');
+  await expect(row('twd')).toContainText('上次同步');
+  for (const k of ['twd', 'tpt', 'tprv', 'cpct', 'sav', 'tbk']) await expect(row(k).locator('[data-restsync]')).toHaveCount(0);
+  await expect(row('tpbk').locator('[data-restsync="tpbk"]')).toBeVisible();
+  await expect(row('ntrv').locator('[data-restsync="ntrv"]')).toBeVisible();
+});

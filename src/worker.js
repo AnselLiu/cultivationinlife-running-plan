@@ -1289,13 +1289,14 @@ async function api(req, env, path, method) {
     return json({ ok: true });
   }
   // 立即同步（分頁來源一次一頁）：每個來源一小時最多 3 次
-  //   在電腦上同步的來源（大檔、多檔）不在 Worker 跑：免費方案每次執行只有 10 ms CPU，會被強制中斷
+  //   只由維護工具同步的來源（SOURCES 標 local：大檔、多檔）不在 Worker 跑：免費方案每次執行只有 10 ms CPU，會被強制中斷
+  //   D1 指令：登入與設定 2–4＋開啟檢查 1＋節流 1＋同步 5＋稽核 1，最多約 12 個
   if (path === '/api/rest/sync' && method === 'POST') {
     const g = need(); if (g) return g;
     if (!can(member, 'settings')) return fail(403, '只有理事長與行政人員可以同步');
     const src = str((await body()).source, 10), S = Rest.sourceOf(src);
     if (!S || S.manual) return fail(400, '沒有這個來源');
-    if (S.local) return fail(400, '這個來源要在電腦上同步（node tools/rest-sync.mjs）');
+    if (S.local) return fail(400, '這個來源由維護工具同步（tools/rest-sync.mjs），不能在這裡立即同步');
     if (!(await env.DB.prepare('SELECT enabled FROM rest_sources WHERE source = ?').bind(src).first())?.enabled) return fail(400, '請先開啟這個來源');
     if (await limited(env, `restsync:${src}`, 3, 3600)) return fail(429, '這個來源一小時最多同步 3 次');
     let r;
@@ -4140,34 +4141,40 @@ async function syncCams(env, now) {
 }
 
 // 跑者休息站：台北 01、02、06 點（避開 03:00 備份與清理、04–05 點攝影機）各跑一個到期的來源
-//   每天、每週或每月一次（onceOn 以週期為 key）；失敗的來源隔天重試；分頁來源（臺灣騎跡）一輪沒跑完就每次排程續跑下一頁
+//   每天、每週或每月一次（job_runs 以週期為 key）；失敗的來源隔天重試；分頁來源（臺灣騎跡）一輪沒跑完就每次排程續跑下一頁
 //   功能開關（features.rest）關閉時完全不跑；開始前先標「同步中」，被強制中斷時管理後台看得到
+//   只跑 Worker 可以同步的來源（SOURCES 沒有標 local）；標 local 的只由維護工具（tools/rest-sync.mjs）同步
+//   免費方案每次執行 50 個子請求（D1 指令也算）：一次排程最多 1＋1＋（1＋3＋1）＝7 個 D1 指令，失敗再加 2 個；不在 01、02、06 點時一個都不查
 const periodOf = (every, now) => {
   const d = tpDate(now);
   if (every === 'month') return d.slice(0, 7);
   if (every === 'week') { const t = taipei(now); return tpDate(new Date(now.getTime() - ((t.getUTCDay() + 6) % 7) * 864e5)); }
   return d;
 };
+const REST_WORKER = Object.keys(Rest.SOURCES).filter((k) => !Rest.SOURCES[k].manual && !Rest.SOURCES[k].local);
 async function syncRest(env, now) {
-  if (!Rest.featureOn((await env.DB.prepare("SELECT value FROM settings WHERE key = 'features'").first())?.value)) return null;
   const h = taipei(now).getUTCHours();
-  if (!Rest.ALLOWED_HOURS.includes(h)) return null;
-  const srcs = new Map((await env.DB.prepare('SELECT source, cursor FROM rest_sources WHERE enabled = 1').all()).results.map((r) => [r.source, r]));
-  const runs = new Map((await env.DB.prepare("SELECT job, last_run FROM job_runs WHERE job LIKE 'rest.%'").all()).results.map((r) => [r.job, r.last_run]));
+  if (!Rest.ALLOWED_HOURS.includes(h) || !REST_WORKER.length) return null;
+  // 功能開關、開啟中的來源、上次執行的週期：一個指令查完
+  const rows = (await env.DB.prepare(`SELECT s.source, s.cursor, j.last_run, (SELECT value FROM settings WHERE key = 'features') AS features
+    FROM rest_sources s LEFT JOIN job_runs j ON j.job = 'rest.' || s.source WHERE s.enabled = 1`).all()).results;
+  if (!rows.length || !Rest.featureOn(rows[0].features)) return null;
+  const srcs = new Map(rows.map((r) => [r.source, r]));
   const retry = `retry:${tpDate(now)}`;
   let pick = null;
-  for (const [k, S] of Object.entries(Rest.SOURCES)) {
-    const src = srcs.get(k);
-    if (S.manual || S.local || !src) continue;   // 在電腦上同步的來源：排程不跑
+  for (const k of REST_WORKER) {
+    const S = Rest.SOURCES[k], src = srcs.get(k);
+    if (!src) continue;
     if (S.pages && src.cursor != null) { pick ??= { k, cont: true }; continue; }   // 續跑的分頁來源排在到期的來源後面
-    const last = runs.get(`rest.${k}`);
-    if (h < S.hour || last === periodOf(S.every, now) || last === retry) continue;
+    if (h < S.hour || src.last_run === periodOf(S.every, now) || src.last_run === retry) continue;
     pick = { k, cont: false };
     break;
   }
   if (!pick) return null;
   const { k } = pick;
-  if (!pick.cont && !(await onceOn(env, `rest.${k}`, periodOf(Rest.SOURCES[k].every, now)))) return null;
+  // 這一期只跑一次（同時兩個排程時只有一個拿得到）：寫入與判斷同一個指令
+  if (!pick.cont && !(await env.DB.prepare(`INSERT INTO job_runs (job, last_run) VALUES (?, ?)
+    ON CONFLICT(job) DO UPDATE SET last_run = excluded.last_run WHERE job_runs.last_run IS NOT excluded.last_run RETURNING job`).bind(`rest.${k}`, periodOf(Rest.SOURCES[k].every, now)).first())) return null;
   let r;
   try { r = await Rest.syncSource(env, k); } catch (e) {
     const msg = String(e?.message || e).slice(0, 120);

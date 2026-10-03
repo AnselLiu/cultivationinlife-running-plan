@@ -551,7 +551,7 @@ function settingsPanel() {
   </section>
   <section class="card" id="restSrcCard">
     <h3>休息站資料來源</h3>
-    <p class="tiny" style="margin:0">練跑地圖的「休息站」圖層與地點卡的「附近休息站」：政府開放資料加上幹部整理的清單，每筆都標出處與授權。小的來源由排程在清晨自動同步；檔案大或很多檔的來源（Workers 免費方案每次執行只有 10 ms CPU，跑不完）要在電腦上同步。關掉來源後立即不再顯示，也不再連線。</p>
+    <p class="tiny" style="margin:0">練跑地圖的「休息站」圖層與地點卡的「附近休息站」：政府開放資料加上幹部整理的清單，每筆都標出處與授權。小的來源由排程在清晨自動同步；檔案大或很多檔的來源（Workers 免費方案每次執行只有 10 ms CPU，跑不完）由維護工具在電腦上同步，這裡只顯示上次同步的時間。關掉來源後立即不再顯示，也不再連線。</p>
     <div id="restSrcList" class="toggles"><p class="tiny" style="margin:0">載入中…</p></div>
   </section>
   <section class="card">
@@ -666,7 +666,7 @@ function bindSettings() {
     if (refocus) (box.querySelector(refocus) || box.querySelector('[data-camsrc]'))?.focus();
   };
   loadCamSrc();
-  // 跑者休息站：來源開關、上次同步、筆數、資料日期、錯誤；小來源可以立即同步，大的要在電腦上同步（tools/rest-sync.mjs）
+  // 跑者休息站：來源開關、上次同步、筆數、資料日期、錯誤；小來源可以立即同步，大的由維護工具同步（tools/rest-sync.mjs，沒有按鈕）
   const EVERY = { day: 1, week: 7, month: 31 };
   const loadRestSrc = async (refocus) => {
     const r = await api('/rest/sources').catch(() => null);
@@ -680,7 +680,7 @@ function bindSettings() {
         <span class="tiny" style="display:block">${esc(x.attribution)}</span></span>
         <input type="checkbox" data-restsrc="${esc(x.source)}" ${x.enabled ? 'checked' : ''} ${r.editable ? '' : 'disabled'}><i></i></label>
       ${!x.manual ? `<div class="row restsrcrow">${x.dataset ? `<a class="btn ghost sm" href="${esc(x.dataset)}" target="_blank" rel="noopener noreferrer">資料集 ${IC.external}</a>` : ''}
-        ${x.local ? `<span class="tiny">在電腦上同步：<code translate="no">node tools/rest-sync.mjs ${esc(x.source)} --apply=remote</code>${stale(x) ? '・<span class="ostat off">已經很久沒有同步</span>' : ''}</span>`
+        ${x.local ? `<span class="tiny">由維護工具同步・${x.last_ok_at ? `上次同步 ${camTime(x.last_ok_at)}` : '還沒有同步過'}${stale(x) ? '・<span class="ostat off">已經很久沒有同步</span>' : ''}</span>`
           : x.enabled && r.editable ? `<button type="button" class="btn ghost sm" data-restsync="${esc(x.source)}">立即同步</button>` : ''}</div>` : ''}</div>`).join('');
     for (const c of box.querySelectorAll('[data-restsrc]')) c.onchange = async () => {
       const x = r.sources.find((s) => s.source === c.dataset.restsrc);

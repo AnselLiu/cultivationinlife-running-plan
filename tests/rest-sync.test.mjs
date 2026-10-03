@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
-import { gather, buildSql, localSources } from '../tools/rest-sync.mjs';
+import { gather, buildSql, localSources, checkSql, checkRows, parseArgs, wranglerArgs } from '../tools/rest-sync.mjs';
 import { control } from '../src/rest-mock.js';
 import { SOURCES } from '../src/rest.js';
 
@@ -22,9 +22,35 @@ const src = (db, k) => db.prepare('SELECT * FROM rest_sources WHERE source = ?')
 const row = (db, id) => db.prepare('SELECT * FROM rest_stops WHERE id = ?').get(id);
 const live = (db, k) => db.prepare('SELECT COUNT(*) AS n FROM rest_stops WHERE source = ? AND enabled = 1').get(k).n;
 
-test('在電腦上同步的來源：大檔與多檔的都在清單上，Worker 排程只留小來源', () => {
-  assert.deepEqual(localSources().sort(), ['cpct', 'sav', 'tbk', 'tpt', 'twd']);
-  assert.deepEqual(Object.keys(SOURCES).filter((k) => !SOURCES[k].manual && !SOURCES[k].local).sort(), ['ntrv', 'tpbk', 'tprv']);
+test('只由維護工具同步的來源：大檔與多檔的都在清單上，Worker 排程只留兩個小來源（免費方案）', () => {
+  assert.deepEqual(localSources().sort(), ['cpct', 'sav', 'tbk', 'tprv', 'tpt', 'twd']);
+  assert.deepEqual(Object.keys(SOURCES).filter((k) => !SOURCES[k].manual && !SOURCES[k].local).sort(), ['ntrv', 'tpbk']);
+});
+
+test('維護工具的參數：預設只試跑；寫進資料庫一定要指定測試站或正式站；不讀金鑰', () => {
+  assert.equal(parseArgs(['twd']).target, null, '預設試跑');
+  assert.throws(() => parseArgs(['--apply']), /--env staging 或 --env production/);
+  assert.throws(() => parseArgs(['--apply', '--env=prod']), /--env staging 或 --env production/);
+  assert.deepEqual(wranglerArgs(parseArgs(['--apply', '--env=staging']).target, 'x.sql'), ['wrangler', 'd1', 'execute', 'cil-run-staging', '--remote', '--env', 'staging', '--file', 'x.sql']);
+  assert.deepEqual(wranglerArgs(parseArgs(['--apply', '--env=production']).target, 'x.sql'), ['wrangler', 'd1', 'execute', 'cil-run', '--remote', '--file', 'x.sql']);
+  assert.deepEqual(wranglerArgs(parseArgs(['--apply=local']).target, 'x.sql', '.st'), ['wrangler', 'd1', 'execute', 'cil-run', '--local', '--persist-to', '.st', '--file', 'x.sql']);
+  const src = readFileSync(new URL('../tools/rest-sync.mjs', import.meta.url), 'utf8');
+  assert.ok(!/process\.env\.[A-Z_]*(TOKEN|KEY|SECRET|PASS)/.test(src) && !/\.dev\.vars/.test(src), '不讀金鑰或 .dev.vars');
+});
+
+test('D1 限制與寫入前的第二道檢查：指令 100 KB、LIKE／GLOB 樣式 50 bytes、欄位白名單、電話、座標、開放時間', async () => {
+  assert.doesNotThrow(() => checkSql(["SELECT 1 WHERE x LIKE 'rest.%'", "SELECT 1 WHERE x GLOB '[0-9]*'"]));
+  assert.throws(() => checkSql([`SELECT 1 WHERE x GLOB '${'[0-9]'.repeat(11)}'`]), /LIKE／GLOB 樣式 55 bytes/);
+  assert.throws(() => checkSql([`SELECT '${'臺'.repeat(34000)}'`]), /超過 D1 上限/);
+  control(new URLSearchParams('reset=1'));
+  const { rows } = await gather(env, 'twd');
+  assert.doesNotThrow(() => checkRows('twd', rows));
+  assert.throws(() => checkRows('twd', [{ ...rows[0], phone: '0223456789' }]), /不該存的欄位 phone/);
+  assert.throws(() => checkRows('twd', [{ ...rows[0], place: '服務台 02-2345-6789' }]), /電話/);
+  assert.throws(() => checkRows('twd', [{ ...rows[0], lat: 35, lng: 139 }]), /不在臺灣/);
+  assert.throws(() => checkRows('twd', [{ ...rows[0], hours: '看天氣' }]), /開放時間看不懂/);
+  assert.throws(() => checkRows('twd', [{ ...rows[0], id: 'tpt:x' }]), /代碼或類型不對/);
+  assert.throws(() => buildSql('twd', { rows: [{ ...rows[0], manager: '王小明' }], tag: 'x' }), /不該存的欄位/, '有問題就不產生 SQL');
 });
 
 test('直飲臺：第一次寫入、沒變只記時間、少一筆照常更新並停用、掉到 70% 以下不寫、來源關閉不寫', async () => {

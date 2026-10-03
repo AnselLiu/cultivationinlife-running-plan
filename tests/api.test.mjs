@@ -2,6 +2,7 @@
 // 需要：測試用伺服器（npm run test:ci 會自動啟動），帳號見 tests/seed.sql
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { SOURCES as REST_SOURCES } from '../src/rest.js';
 
 const BASE = process.env.BASE || 'http://localhost:8799';
 const cookies = {};
@@ -1124,7 +1125,7 @@ test('跑者休息站：功能開關預設關閉、權限、同步轉換與完�
   const hits = async () => Object.values((await mock()).hits).reduce((n, v) => n + v, 0);
   const cron = async (at) => (await call(null, `/dev/cron?at=${at}`)).json.rest;
   const sync = (source, who = 't_chair') => call(who, '/rest/sync', { method: 'POST', body: { source } });
-  // 在電腦上同步的來源（tools/rest-sync.mjs）：正式環境的「立即同步」與排程都不跑，測試用開發端點走同一套解析與寫入
+  // 只由維護工具同步的來源（tools/rest-sync.mjs）：正式環境的「立即同步」與排程都不跑，測試用開發端點走同一套解析與寫入
   const devSync = async (source) => { const r = await fetch(`${BASE}/api/dev/rest-sync?source=${source}`); return { status: r.status, json: await r.json() }; };
   const srcs = async () => Object.fromEntries((await call('t_chair', '/rest/sources')).json.sources.map((s) => [s.source, s]));
   const stops = async (key, who = 't_runner') => (await call(who, `/rest/cell/${key}`)).json.stops;
@@ -1155,9 +1156,9 @@ test('跑者休息站：功能開關預設關閉、權限、同步轉換與完�
   assert.equal((await sync('cur')).status, 400, '整理清單不能同步');
   assert.deepEqual(Object.entries(await srcs()).filter(([, s]) => !s.enabled).map(([k]) => k), [], '第一批來源預設都開啟');
   // 手動同步（功能開關關著也可以先測）：重複代碼合併、國外座標丟掉；沒變就不寫
-  assert.equal((await srcs()).twd.local, true); assert.equal((await srcs()).tprv.local, false);
+  assert.equal((await srcs()).twd.local, true); assert.equal((await srcs()).tpbk.local, false);
   const lw = await sync('twd');
-  assert.equal(lw.status, 400, '在電腦上同步的來源：立即同步不收（免費方案 CPU 不夠）'); assert.match(lw.json.error, /rest-sync/);
+  assert.equal(lw.status, 400, '只由維護工具同步的來源：立即同步不收（免費方案 CPU 不夠）'); assert.match(lw.json.error, /維護工具/);
   const w = await devSync('twd');
   assert.equal(w.status, 200, JSON.stringify(w.json)); assert.equal(w.json.count, 5);
   assert.equal((await srcs()).twd.last_error, null, '同步成功後清掉「同步中」');
@@ -1166,8 +1167,8 @@ test('跑者休息站：功能開關預設關閉、權限、同步轉換與完�
   assert.equal((await call('t_chair', '/settings/features', { method: 'POST', body: { rest: true } })).status, 200);
   assert.equal((await call('t_chair', '/settings/features', { method: 'POST', body: { cams: false } })).status, 200);
   assert.equal((await call('t_chair', '/rest/sources')).json.feature, true);
-  for (const k of ['tprv', 'ntrv', 'tpbk']) { const r = await sync(k); assert.equal(r.status, 200, `${k} ${r.text}`); }
-  for (const k of ['tpt', 'cpct', 'sav']) { const r = await devSync(k); assert.equal(r.status, 200, `${k} ${JSON.stringify(r.json)}`); }
+  for (const k of ['ntrv', 'tpbk']) { const r = await sync(k); assert.equal(r.status, 200, `${k} ${r.text}`); }
+  for (const k of ['tprv', 'tpt', 'cpct', 'sav']) { const r = await devSync(k); assert.equal(r.status, 200, `${k} ${JSON.stringify(r.json)}`); }
   const meta = await call('t_runner', '/rest/meta');
   assert.equal(meta.status, 200);
   assert.ok(meta.json.sources.some((s) => s.source === 'twd' && /臺北自來水事業處，依政府資料開放授權條款第1版提供/.test(s.attribution) && s.data_date === '2026-08-14'));
@@ -1199,9 +1200,8 @@ test('跑者休息站：功能開關預設關閉、權限、同步轉換與完�
   assert.ok(!(await ids('1255_6080')).includes('twd:D4'), '清單不再出現的直飲臺停用');
   assert.equal((await detail('twd:D4')).status, 404);
   assert.equal((await detail('twd:D4', 't_chair')).json.edit.enabled, false, '幹部看得到停用的列');
-  // 排程：只跑留在 Worker 的小來源（河濱廁所、租借站、新北河濱），台北 01:00 起每次排程只跑一個到期的來源；在電腦上同步的來源排程不跑
-  assert.deepEqual(await cron('2027-07-04T17:30:00Z'), { tprv: 2 }, '台北 01:30：直飲臺、臺北公廁在電腦上同步，排程輪到河濱廁所');
-  assert.equal(await cron('2027-07-04T17:40:00Z'), null, '01:40：沒有其他到期的 Worker 來源');
+  // 排程：只跑留在 Worker 的小來源（租借站、新北河濱），每次排程只跑一個到期的來源；只由維護工具同步的來源排程不跑
+  assert.equal(await cron('2027-07-04T17:30:00Z'), null, '台北 01:30：直飲臺、臺北公廁、河濱廁所都由維護工具同步，排程沒有到期的來源');
   assert.equal(await cron('2027-07-04T19:30:00Z'), null, '03:00 不跑（備份時段）');
   assert.deepEqual(await cron('2027-07-04T22:30:00Z'), { tpbk: 2 }, '06:30：租借站與新北河濱都到期，一次只跑一個');
   assert.deepEqual(await cron('2027-07-04T22:40:00Z'), { ntrv: 1 });
@@ -1307,5 +1307,39 @@ test('跑者休息站：功能開關預設關閉、權限、同步轉換與完�
   assert.equal((await call('t_chair', '/settings/features', { method: 'POST', body: { rest: false } })).status, 200);
   assert.equal((await call('t_runner', '/rest/cell/1253_6077')).status, 404);
   assert.equal((await call('t_runner', '/spots/seed07/rest')).status, 404);
+  await mock('reset=1');
+});
+
+test('跑者休息站（免費方案）：每個來源標明 Worker 能不能同步；只由維護工具同步的來源沒有立即同步、排程不碰，管理後台看得到上次同步時間', async () => {
+  const mock = (q = '') => fetch(`${BASE}/api/dev/rest-mock?${q}`).then((r) => r.json());
+  const cron = async (at) => (await call(null, `/dev/cron?at=${at}`)).json.rest;
+  const toolOnly = Object.keys(REST_SOURCES).filter((k) => REST_SOURCES[k].local);
+  const urls = new Set(toolOnly.flatMap((k) => [...(REST_SOURCES[k].url || []), ...(REST_SOURCES[k].pages ? [REST_SOURCES[k].pages.index] : [])]));
+  const toolHits = async () => Object.entries((await mock()).hits).filter(([u]) => urls.has(u)).reduce((n, [, v]) => n + v, 0);
+  await mock('reset=1');
+  // 來源清單的 local 旗標跟程式的登錄表一致；大檔、多檔的都是 local
+  const list = (await call('t_chair', '/rest/sources')).json.sources;
+  for (const s of list) assert.equal(s.local, !!REST_SOURCES[s.source].local, s.source);
+  for (const k of ['twd', 'tpt', 'tprv', 'cpct', 'sav', 'tbk']) assert.ok(toolOnly.includes(k), `${k} 只由維護工具同步`);
+  // 立即同步：只由維護工具同步的來源一律 400，也不連線
+  for (const k of toolOnly) {
+    const r = await call('t_chair', '/rest/sync', { method: 'POST', body: { source: k } });
+    assert.equal(r.status, 400, k); assert.match(r.json.error, /維護工具/);
+  }
+  assert.equal(await toolHits(), 0, '沒有對這些來源發出任何連線');
+  // 排程（功能開啟）：新的一週、一個月，01、02、06 點都只輪到 Worker 的來源
+  assert.equal((await call('t_chair', '/settings/features', { method: 'POST', body: { rest: true } })).status, 200);
+  const got = [];
+  for (const at of ['2027-08-08T17:30:00Z', '2027-08-08T18:30:00Z', '2027-08-08T18:40:00Z', '2027-08-08T22:30:00Z', '2027-08-08T22:40:00Z', '2027-08-08T22:50:00Z']) {
+    const r = await cron(at);
+    if (r) got.push(...Object.keys(r));
+  }
+  assert.deepEqual(got, ['tpbk', 'ntrv'], '一期各跑一次，只有租借站與新北河濱');
+  assert.equal(await toolHits(), 0, '排程沒有碰只由維護工具同步的來源');
+  // 管理後台：維護工具寫入後看得到上次同步時間（這裡用開發端點代替維護工具）
+  assert.equal((await fetch(`${BASE}/api/dev/rest-sync?source=tprv`)).status, 200);
+  const tp = (await call('t_chair', '/rest/sources')).json.sources.find((s) => s.source === 'tprv');
+  assert.equal(tp.local, true); assert.ok(tp.last_ok_at, '有上次同步時間'); assert.equal(tp.last_error, null);
+  assert.equal((await call('t_chair', '/settings/features', { method: 'POST', body: { rest: false } })).status, 200);
   await mock('reset=1');
 });
