@@ -3,7 +3,7 @@ import { test, expect } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
 import { login, apiAs, acceptPrivacyIfAsked, plus } from './helpers.mjs';
 
-const PAGES = ['#/', '#/plan', '#/run', '#/calendar', '#/challenge', '#/me', '#/me/profile', '#/me/notify', '#/me/calendar', '#/me/display', '#/me/reg', '#/map', '#/tickets', '#/notifications'];
+const PAGES = ['#/', '#/plan', '#/run', '#/calendar', '#/challenge', '#/me', '#/me/profile', '#/me/notify', '#/me/reg', '#/map', '#/tickets', '#/notifications'];
 test('登入頁沒有嚴重的無障礙問題', async ({ page }) => {
   await page.goto('/');
   await page.waitForSelector('.welcome');
@@ -11,6 +11,7 @@ test('登入頁沒有嚴重的無障礙問題', async ({ page }) => {
   const bad = r.violations.filter((v) => ['critical', 'serious'].includes(v.impact));
   expect(bad.map((v) => `${v.id}: ${v.nodes.slice(0, 3).map((n) => n.target.join(' ')).join(' | ')}`)).toEqual([]);
 });
+PAGES.push('#/me/calendar', '#/me/display');   // 「我的」的行事曆訂閱、外觀與語言子頁
 for (const p of PAGES) {
   test(`無障礙 ${p}`, async ({ page }) => {
     await login(page, 't_runner'); await acceptPrivacyIfAsked(page);

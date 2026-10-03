@@ -3209,8 +3209,6 @@ async function render() {
 // 返回鍵：分頁以外的頁面在左上角顯示「‹ 上一層」。App 裡有上一頁就退回上一頁（保留捲動與篩選），
 //   從通知或分享連結直接打開的就回到它的上一層（加到主畫面後沒有瀏覽器的返回鍵）
 const TOP_PAGES = ['/', '/plan', '/run', '/map', '/studio', '/me'];
-// GPS 跑步開著時，拍照收進「跑步」：是跑步的子頁（返回鍵「‹ 跑步」、分頁列亮跑步）；關掉 GPS 時拍照才是分頁
-const isTop = (h) => TOP_PAGES.includes(h) && !(h === '/studio' && feat('gps'));
 function parentOf(h) {
   if (h === '/studio') return feat('gps') ? ['#/run', '跑步'] : ['#/', '團練'];
   const p = h.split('/');
@@ -3239,6 +3237,8 @@ function nameOf(h) {
   if (h.startsWith('/plan/')) return '課表';
   return '返回';
 }
+// GPS 跑步開著時，拍照收進「跑步」：是跑步的子頁（返回鍵「‹ 跑步」、分頁列亮跑步）；關掉 GPS 時拍照才是分頁
+const isTop = (h) => TOP_PAGES.includes(h) && !(h === '/studio' && feat('gps'));
 const navStack = [];
 function paintBack(hash) {
   if (navStack[navStack.length - 2] === hash) navStack.pop(); else if (navStack[navStack.length - 1] !== hash) navStack.push(hash);
