@@ -66,7 +66,7 @@ async function reportView(range = '12w') {
     ${done.length ? `<section class="card"><h3>課表完成率</h3>${barChart(done, { unit: '%', h: 120, max: 100 })}<p class="tiny" style="margin:0">完成算 1 堂、部分完成算半堂，休息日不算。</p></section>` : ''}
     <section class="card"><h3>自覺強度（RPE）</h3>${lineChart(rpeItems)}<p class="tiny" style="margin:0">一般來說，輕鬆跑 3–4、質量課 7–8；長期都在 7 以上要注意恢復。</p></section>
     <section class="card"><h3>個人最佳</h3><div class="prs">${prs.map((x) => `<div class="pr"><span class="tiny">${x.name}</span>
-      ${x.best ? `<b class="num">${S.fmtDuration(Math.round(x.best.seconds / x.best.km * ({ '5K': 5, '10K': 10, 半馬: 21.0975, 全馬: 42.195 }[x.name])))}</b><span class="tiny">${esc(x.best.date)}・${S.fmtPace(x.best.km * 1000, x.best.seconds)}</span>` : '<b class="num muted">—</b>'}</div>`).join('')}</div>
+      ${x.best ? `<b class="num">${S.fmtDuration(Math.round(x.best.seconds / x.best.km * ({ '5K': 5, '10K': 10, 半馬: 21.0975, 全馬: 42.195 }[x.name])))}</b><span class="tiny"><span class="nw">${esc(x.best.date)}・</span><span class="nw">${S.fmtPace(x.best.km * 1000, x.best.seconds)}</span></span>` : '<b class="num muted">—</b>'}</div>`).join('')}</div>
       <p class="tiny" style="margin:0">依距離接近的紀錄換算，比賽成績以官方為準。</p></section>
     </div>
     <section class="card"><h3>每月</h3><div class="mtable">${Object.entries(months).sort().reverse().map(([k, m]) => `<div><span>${k.replace('-', ' 年 ')} 月</span><span class="num">${m.km.toFixed(1)} km</span><span class="num">${m.n} 次</span><span class="num">${S.fmtDuration(m.sec) || '—'}</span></div>`).join('') || '<p class="muted" style="margin:0">這段期間沒有紀錄</p>'}</div></section>`;

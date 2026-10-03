@@ -984,7 +984,7 @@ async function eventView(id) {
       ${ev.group_reg ? '<p class="tiny" style="margin:0;color:rgba(255,255,255,.85)">由幹部代為團體報名</p>' : ''}
       ${(ev.series || []).length > 1 ? `<div class="serieschips" aria-label="定期揪跑的其他場次">${ev.series.filter((x) => x.date >= ymd(new Date())).slice(0, 8).map((x) => `<a class="${x.id === ev.id ? 'on' : ''}" href="#/e/${esc(x.id)}">${esc(dstr(x.date))}</a>`).join('')}</div>` : ''}
       ${ev.note ? `<p class="muted" style="margin:0;white-space:pre-wrap"><span translate="no">${esc(ev.note)}</span></p>` : ''}
-      ${ev.link_url ? `<a class="btn block" style="background:#fff;color:#1C4698" href="${esc(ev.link_url)}" target="_blank" rel="noopener">${esc(ev.link_label || '前往登記')} ${IC.external}</a>` : ''}
+      ${ev.link_url ? `<a class="btn block" style="background:#fff;color:#1C4698" href="${esc(ev.link_url)}" target="_blank" rel="noopener">${ev.link_label ? `<span translate="no">${esc(ev.link_label)}</span>` : '前往登記'} ${IC.external}</a>` : ''}
       ${inviteOnly && !admin ? '' : `<div class="row sharebar">
         <button class="btn sm glassbtn" id="shareEv"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V3.5M7.5 8 12 3.5 16.5 8M5 12.5v6A2.5 2.5 0 0 0 7.5 21h9a2.5 2.5 0 0 0 2.5-2.5v-6"/></svg>分享</button>
         <a class="btn sm glassbtn" id="shareLine" href="#" rel="noopener">分享到 LINE</a>
@@ -1905,7 +1905,7 @@ function bindQuote(f, ev) {
     if (!box) return;
     const signedOn = ev.mySignedOn || nowTp().slice(0, 10);   // 早鳥看這次報名的日期（台北時間）
     const q = quote(ev, { option: f.querySelector('[name=option]:checked')?.value || null, guests: Number(f.guests?.value || 0), items: readItems(f), membership: ev.myMembership, signedOn });
-    box.innerHTML = q.lines.length ? `${q.lines.map((l) => `<div class="ql ${l.amount < 0 ? 'off' : ''}"><span><span translate="no">${esc(l.label)}</span>${l.qty > 1 ? ` × ${l.qty}` : ''}</span><span class="num">${l.amount < 0 ? '−' : ''}${money(Math.abs(l.amount))}</span></div>`).join('')}
+    box.innerHTML = q.lines.length ? `${q.lines.map((l) => `<div class="ql ${l.amount < 0 ? 'off' : ''}"><span>${lineLabel(l)}${l.qty > 1 ? ` × ${l.qty}` : ''}</span><span class="num">${l.amount < 0 ? '−' : ''}${money(Math.abs(l.amount))}</span></div>`).join('')}
       <div class="ql total"><span>合計</span><b class="num">${money(q.total)}</b></div>` : '';
   };
   for (const st of f.querySelectorAll('.stepper')) for (const b of st.querySelectorAll('[data-step]')) b.onclick = () => {
@@ -1926,7 +1926,7 @@ function payCard(ev) {
   const M = { transfer: '銀行轉帳', cash: '現金', linepay: 'LINE Pay' };
   return `<section class="card paycard ${paid ? 'paid' : ev.myPayReported ? 'reported' : ''}" id="payCard">
     <div class="row spread"><h3>${paid ? '已完成繳費' : ev.myPayReported ? '已回報，等幹部確認' : '繳費'}</h3><b class="num amount">${money(amount)}</b></div>
-    ${(ev.myLines || []).length ? `<div class="quote">${ev.myLines.map((l) => `<div class="ql ${l.amount < 0 ? 'off' : ''}"><span><span translate="no">${esc(l.label)}</span>${l.qty > 1 ? ` × ${l.qty}` : ''}</span><span class="num">${l.amount < 0 ? '−' : ''}${money(Math.abs(l.amount))}</span></div>`).join('')}</div>` : ''}
+    ${(ev.myLines || []).length ? `<div class="quote">${ev.myLines.map((l) => `<div class="ql ${l.amount < 0 ? 'off' : ''}"><span>${lineLabel(l)}${l.qty > 1 ? ` × ${l.qty}` : ''}</span><span class="num">${l.amount < 0 ? '−' : ''}${money(Math.abs(l.amount))}</span></div>`).join('')}</div>` : ''}
     ${ev.myPaidNote && !paid ? `<p class="notice" style="margin:0"><span translate="no">${esc(ev.myPaidNote)}</span></p>` : ''}
     ${ev.myPickCode && !ev.myPicked ? `<div class="pickbox"><div class="qrbox" id="pickQR" data-code="${esc(ev.myPickCode)}"></div><div><b>領取 QR</b><span class="tiny" style="display:block">${ev.pickupNote ? `<span translate="no">${esc(ev.pickupNote)}</span>・` : ''}領取時出示給幹部掃描</span><span class="code num">${esc(ev.myPickCode)}</span></div></div>` : ''}
     ${paid ? `<p class="tiny" style="margin:0">${ev.myPaid === 'waived' ? '這筆免繳。' : '幹部已經確認收到款項，謝謝。'}${ev.myPicked ? '商品已領取。' : (ev.items || []).length && !ev.arrived ? '商品到貨後幹部會通知領取。' : ''}</p>`
@@ -1976,7 +1976,7 @@ function readQuestionFields(form, qs) {
 }
 function ticketCard(t, ev, title = '我的入場券') {
   return `<section class="card ticket">
-    <div class="row spread"><h3><span translate="no">${esc(title)}</span></h3>${t.checked_in_at ? '<span class="pill solid">已報到</span>' : '<span class="pill">未報到</span>'}</div>
+    <div class="row spread"><h3>${title === '我的入場券' ? title : `<span translate="no">${esc(title)}</span>`}</h3>${t.checked_in_at ? '<span class="pill solid">已報到</span>' : '<span class="pill">未報到</span>'}</div>
     <div class="qrbox" ${title === '我的入場券' ? 'id="qrBox"' : ''} data-code="${esc(t.code)}" data-ev="${esc(ev.id)}"></div>
     <div class="code num"><span translate="no">${esc(t.code)}</span></div>
     <div class="trow">
@@ -2492,8 +2492,17 @@ const memberLogsView = lazy('./report.js', 'memberLogsView');
 const reportView = lazy('./report.js', 'reportView');
 // 圖表的刻度字：SVG 用固定寬度的座標，手機上字會跟著縮到 8px。依實際寬度換算（--k），刻度字永遠約 12px
 const chartRO = 'ResizeObserver' in window ? new ResizeObserver((es) => {
-  for (const e of es) { const w = e.contentRect.width, vb = e.target.viewBox?.baseVal?.width; if (w && vb) e.target.style.setProperty('--k', (vb / w).toFixed(3)); }
+  for (const e of es) { const w = e.contentRect.width, vb = e.target.viewBox?.baseVal?.width; if (w && vb) { e.target.style.setProperty('--k', (vb / w).toFixed(3)); thinAxis(e.target, vb / w); } }
 }) : null;
+// X 軸標籤：依實際字寬與柱距決定隔幾根標一次，標籤之間至少留 8px，不會黏成一串
+function thinAxis(svg, k) {
+  const ls = [...svg.querySelectorAll('text.xl')], bw = Number(svg.dataset.bw);
+  if (!ls.length || !bw) return;
+  for (const t of ls) t.style.display = '';
+  const need = Math.max(...ls.map((t) => { try { return t.getComputedTextLength(); } catch { return 0; } })) + 8 * k;
+  const s0 = Number(svg.dataset.s) || 1, every = Math.max(1, Math.ceil(Math.ceil(need / bw) / s0)) * s0;
+  for (const t of ls) t.style.display = Number(t.dataset.i) % every ? 'none' : '';
+}
 if (chartRO) new MutationObserver((ms) => { for (const m of ms) for (const n of m.addedNodes) if (n.nodeType === 1) for (const c of n.matches('svg.chart') ? [n] : n.querySelectorAll('svg.chart')) chartRO.observe(c); })
   .observe(document.body, { childList: true, subtree: true });
 function barChart(items, { unit = '', h = 150, color = 'var(--accent)', fmt = (v) => v, max: fixedMax } = {}) {
@@ -2501,12 +2510,12 @@ function barChart(items, { unit = '', h = 150, color = 'var(--accent)', fmt = (v
   // 柱子最寬 72（項目少時不會撐滿整張圖）；刻度用整數步距，格線的位置跟標籤一致
   const step = Math.max(1, Math.ceil(Math.max(1, ...items.map((x) => x.v)) / 2));
   const W = 600, pad = 34, bw = Math.min((W - pad) / items.length, 72), max = fixedMax || step * 2;
-  return `<svg class="chart" viewBox="0 0 ${W} ${h + 34}" role="img" aria-label="${esc(items.map((x) => `${x.l} ${fmt(x.v)}${unit}`).join('，'))}">
+  return `<svg class="chart" data-bw="${bw.toFixed(2)}" data-s="${items.length <= 16 ? 1 : Math.ceil(items.length / 12)}" viewBox="0 0 ${W} ${h + 34}" role="img" aria-label="${esc(items.map((x) => `${x.l} ${fmt(x.v)}${unit}`).join('，'))}">
     <line x1="${pad}" x2="${W}" y1="${h}" y2="${h}" class="grid"/>
     ${[0.5, 1].map((k) => `<line x1="${pad}" x2="${W}" y1="${h - h * k * 0.9}" y2="${h - h * k * 0.9}" class="grid"/><text x="0" y="${h - h * k * 0.9 + 4}" class="axis">${fmt(Math.round(max * k))}</text>`).join('')}
     ${items.map((x, i) => { const bh = Math.max(x.v ? 3 : 0, (x.v / max) * h * 0.9), xx = pad + i * bw + bw * 0.18;
       return `<rect x="${xx}" y="${h - bh}" width="${bw * 0.64}" height="${bh}" rx="${Math.min(6, bw * 0.2)}" style="fill:${x.c || color}"><title>${esc(x.l)}：${fmt(x.v)}${unit}</title></rect>
-        ${items.length <= 16 || i % Math.ceil(items.length / 12) === 0 ? `<text x="${xx + bw * 0.32}" y="${h + 20}" text-anchor="middle" class="axis">${esc(x.l)}</text>` : ''}`; }).join('')}
+        ${items.length <= 16 || i % Math.ceil(items.length / 12) === 0 ? `<text x="${xx + bw * 0.32}" y="${h + 20}" text-anchor="middle" class="axis xl" data-i="${i}">${esc(x.l)}</text>` : ''}`; }).join('')}
   </svg>`;
 }
 function bindComments() {
@@ -2694,10 +2703,13 @@ setInterval(runBar, 1000);
 const formView = lazy('./manage.js', 'formView');
 const statsView = lazy('./manage.js', 'statsView');
 const money = (n) => `NT$${Number(n || 0).toLocaleString('zh-TW')}`;
+// 費用明細的項目名稱：系統產生的照翻，組別與商品名稱是幹部自填的內容，標 translate="no"
+const SYS_LINE = new Set(['報名費', '早鳥優惠', '協會會員優惠']);
+const lineLabel = (l) => (SYS_LINE.has(l.label) ? l.label : `<span translate="no">${esc(l.label)}</span>`);
 const PAID_NAME = { unpaid: '未繳', paid: '已繳', waived: '免繳', refunded: '已退費' };
-const bars = (entries, total) => {
+const bars = (entries, total, user = false) => {
   const max = Math.max(1, ...entries.map(([, n]) => n));
-  return `<div class="bars">${entries.map(([k, n]) => `<div class="bar-row"><span class="k">${esc(k)}</span>
+  return `<div class="bars">${entries.map(([k, n]) => `<div class="bar-row"><span class="k"${user ? ' translate="no"' : ''}>${esc(k)}</span>
     <span class="track"><i style="width:${Math.round(n / max * 100)}%"></i></span>
     <span class="n num">${n}${total ? `<span class="tiny"> ${Math.round(n / total * 100)}%</span>` : ''}</span></div>`).join('') || '<p class="muted" style="margin:0">還沒有資料</p>'}</div>`;
 };

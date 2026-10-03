@@ -51,7 +51,7 @@ async function formView(id) {
         <label>地點<input name="place" maxlength="60" value="${esc(d.place || '')}" placeholder="臺北田徑場 400 場"></label>
         ${addrField('address', '地址', '選填・餐廳或場館，送郵局核對')}
         <div class="grid2">
-          <label>練跑地圖的地點<select name="spot_id"><option value="">（不指定）</option>${spots.filter((x) => x.status === 'approved').map((x) => `<option value="${esc(x.id)}" ${d.spot_id === x.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select></label>
+          <label>練跑地圖的地點<select name="spot_id"><option value="">（不指定）</option>${spots.filter((x) => x.status === 'approved').map((x) => `<option value="${esc(x.id)}" translate="no" ${d.spot_id === x.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select></label>
           <label>路線<select name="route_id"><option value="">（不指定）</option>${routes.map((r) => `<option value="${esc(r.id)}" ${d.route_id === r.id ? 'selected' : ''}>${esc(r.name)}・${(r.distance / 1000).toFixed(1)} 公里</option>`).join('')}</select></label>
         </div>
         <p class="tiny" style="margin:0">選了地點，活動頁會顯示當天的場地天氣與跑步建議；選了路線，大家可以下載 GPX。<a href="#/map">到練跑地圖新增 ›</a></p>
@@ -68,7 +68,7 @@ async function formView(id) {
       </fieldset>
       <fieldset class="group" id="signupBox"><legend>報名設定</legend>
         <label class="switch"><span>開放報名<span class="tiny" style="display:block">關掉後誰都不能報名（幹部代為報名不受影響）</span></span><input type="checkbox" name="signup_open" ${d.signup_open ? 'checked' : ''}><i></i></label>
-        <div class="grid2">
+        <div class="grid2 dt">
           <label>報名開始<input type="datetime-local" name="signup_start" value="${esc(d.signup_start || '')}" data-auto="${id ? 0 : 1}"></label>
           <label><span data-when="!survey">報名截止</span><span data-when="survey">回覆截止</span><input type="datetime-local" name="deadline" value="${esc(d.deadline || '')}" data-auto="${id ? 0 : 1}"></label>
         </div>
@@ -310,13 +310,13 @@ const money2 = (n) => `NT$${Number(n || 0).toLocaleString('zh-TW')}`;
 // 訂購明細：一項一段，最後由呼叫的地方用「・」接起來（不會在行尾留下孤單的「・」）
 const itemText = (items, defs) => (items || []).map((x) => { const d = (defs || []).find((y) => y.id === x.id); return d ? `${d.name}${x.size ? ` ${x.size}` : ''}×${x.qty}` : ''; }).filter(Boolean);
 const PAY_METHOD = { transfer: '銀行轉帳', cash: '現金', linepay: 'LINE Pay' };
+// 商品列：名稱拿整行（右邊是移除），下面兩行是 單價｜尺寸、庫存｜每人上限
 const itemRow = (it = {}) => `<div class="itemrow" data-id="${esc(it.id || '')}">
-  <div class="grid2"><input data-k="name" maxlength="30" placeholder="商品，例如 團服" aria-label="商品名稱" value="${esc(it.name || '')}">
-    <input data-k="price" type="number" min="0" max="100000" inputmode="numeric" placeholder="單價" aria-label="單價（元）" value="${it.price ?? ''}"></div>
-  <div class="grid3"><input data-k="sizes" maxlength="80" placeholder="尺寸：S,M,L（沒有就空白）" aria-label="尺寸" value="${esc((it.sizes || []).join(','))}">
-    <input data-k="stock" type="number" min="1" inputmode="numeric" placeholder="庫存（不限）" aria-label="庫存" value="${it.stock ?? ''}">
-    <input data-k="max" type="number" min="1" max="99" inputmode="numeric" placeholder="每人上限 10" aria-label="每人上限" value="${it.max && it.max !== 10 ? it.max : ''}"></div>
-  <button type="button" class="btn danger sm" data-rmi>移除</button></div>`;
+  <div class="itemhead"><input data-k="name" maxlength="30" placeholder="商品，例如 團服" aria-label="商品名稱" value="${esc(it.name || '')}"><button type="button" class="iconx rm" data-rmi aria-label="移除">${IC.minus}</button></div>
+  <input data-k="price" type="number" min="0" max="100000" inputmode="numeric" placeholder="單價" aria-label="單價（元）" value="${it.price ?? ''}">
+  <input data-k="sizes" maxlength="80" placeholder="尺寸 S,M,L" aria-label="尺寸（逗號分隔，沒有就空白）" value="${esc((it.sizes || []).join(','))}">
+  <input data-k="stock" type="number" min="1" inputmode="numeric" placeholder="庫存（不限）" aria-label="庫存" value="${it.stock ?? ''}">
+  <input data-k="max" type="number" min="1" max="99" inputmode="numeric" placeholder="每人上限 10" aria-label="每人上限" value="${it.max && it.max !== 10 ? it.max : ''}"></div>`;
 const nextYear = (date) => { const [y, m, dd] = date.split('-'); return `${Number(y) + 1}-${m}-${dd}`; };
 const Q_TYPE_NAME = { single: '單選', multi: '複選', text: '簡答' };
 const qRow = (q = {}) => `<div class="qrow" data-type="${q.type || 'single'}" data-id="${esc(q.id || '')}">
@@ -397,10 +397,10 @@ async function statsView(id) {
       <button class="btn ghost sm" id="regCsv">下載團體報名資料（含身分證字號）</button>
       <p class="tiny" style="margin:0">只包含已同意提供的人。檔案含身分證字號等個資，送出報名後請立刻刪除，下載紀錄會寫進稽核。</p></section>` : ''}
     <div class="statgrid">
-      ${st.byOption ? `<section class="card"><h3>報名組別</h3>${bars(Object.entries(st.byOption), t.in)}</section>` : ''}
-      <section class="card"><h3>各分團</h3>${bars(st.byTeam.map((x) => [x.k, x.n]).sort((a, b) => b[1] - a[1]), t.in)}
+      ${st.byOption ? `<section class="card"><h3>報名組別</h3>${bars(Object.entries(st.byOption), t.in, true)}</section>` : ''}
+      <section class="card"><h3>各分團</h3>${bars(st.byTeam.map((x) => [x.k, x.n]).sort((a, b) => b[1] - a[1]), t.in, true)}
         <p class="tiny" style="margin:0">同時在兩個分團的人，兩邊都會算到。</p></section>
-      ${st.byMeal ? `<section class="card"><h3>餐點</h3>${bars(Object.entries(st.byMeal), t.in)}</section>` : ''}
+      ${st.byMeal ? `<section class="card"><h3>餐點</h3>${bars(Object.entries(st.byMeal), t.in, true)}</section>` : ''}
       ${survey ? '' : `<section class="card"><h3>組別</h3>${bars(Object.entries(st.byGroup).sort(), t.in)}</section>`}
       <section class="card"><h3>每天新增${survey ? '回覆' : '報名'}</h3>${bars(st.byDay.slice(-14).map(([d, n]) => [d.slice(5).replace('-', '/'), n]))}</section>
     </div>
@@ -408,7 +408,7 @@ async function statsView(id) {
       <div class="row spread"><h3><span translate="no">${esc(q.label)}</span></h3><span class="tiny">${Q_TYPE_NAME[q.type]}${q.type === 'text' ? `・${q.answers.length} 則` : `・${q.answered}/${t.in} 人回答`}</span></div>
       ${q.type === 'text'
         ? `<div class="answers">${q.answers.map((a) => `<div><b><span translate="no">${esc(a.name)}</span></b><span>${esc(a.text)}</span></div>`).join('') || '<p class="muted" style="margin:0">還沒有回答</p>'}</div>`
-        : bars(q.counts.map((c) => [c.o, c.n]), q.answered)}
+        : bars(q.counts.map((c) => [c.o, c.n]), q.answered, true)}
     </section>`).join('')}
     ${survey ? '' : `<section class="card">
       <div class="row spread"><h3>名單</h3><span class="tiny" id="pcount">${st.people.length} 人</span></div>
