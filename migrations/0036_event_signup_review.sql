@@ -35,13 +35,16 @@ DELETE FROM tickets WHERE checked_in_at IS NULL
   AND NOT EXISTS (SELECT 1 FROM signups s WHERE s.event_id = tickets.event_id AND s.member_id = tickets.member_id AND s.status = 'in');
 
 -- 報名截止以前沒檢查格式：空字串改 NULL、空白改 T、多的秒數去掉，其餘不合格式的清掉（改成活動開始時截止）
+--   D1 的 GLOB 樣式最多 50 個字元（超過整個遷移會失敗）：用 ? 比對形狀，數字與範圍另外檢查
+--   （測試站已用舊寫法套用過，當時沒有任何活動有截止時間，結果相同）
 UPDATE events SET deadline = NULL WHERE deadline = '';
-UPDATE events SET deadline = replace(deadline, ' ', 'T')
-  WHERE deadline GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] [0-9][0-9]:[0-9][0-9]*';
-UPDATE events SET deadline = substr(deadline, 1, 16)
-  WHERE deadline GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]?*';
+UPDATE events SET deadline = replace(deadline, ' ', 'T') WHERE deadline GLOB '????-??-?? ??:??*';
+UPDATE events SET deadline = substr(deadline, 1, 16) WHERE deadline GLOB '????-??-??T??:???*';
 UPDATE events SET deadline = NULL
-  WHERE deadline IS NOT NULL AND deadline NOT GLOB '[0-9][0-9][0-9][0-9]-[01][0-9]-[0-3][0-9]T[0-2][0-9]:[0-5][0-9]';
+  WHERE deadline IS NOT NULL AND (deadline NOT GLOB '????-??-??T??:??'
+    OR replace(replace(replace(deadline, '-', ''), 'T', ''), ':', '') GLOB '*[^0-9]*'
+    OR substr(deadline, 6, 2) NOT BETWEEN '01' AND '12' OR substr(deadline, 9, 2) NOT BETWEEN '01' AND '31'
+    OR substr(deadline, 12, 2) > '23' OR substr(deadline, 15, 2) > '59');
 
 -- 候補、待審核的排隊順序與統計
 CREATE INDEX IF NOT EXISTS signups_queue ON signups(event_id, status, created_at);
