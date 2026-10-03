@@ -944,3 +944,51 @@ details.group[open] > summary{margin-bottom:2px}
 .serieschips{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none;padding:2px 0}
 .serieschips a{flex:none;font-size:13px;padding:5px 10px;border-radius:999px;background:rgba(255,255,255,.16);color:#fff;white-space:nowrap}
 .serieschips a.on{background:#fff;color:#1C4698;font-weight:700}
+
+/* ---------- 練跑地圖 ---------- */
+.mapbase{margin:-4px 0 0}
+.mapwrap{padding:0;overflow:hidden;position:relative;gap:0}
+#map{height:min(58vh,520px);min-height:320px;border-radius:inherit;background:var(--glass-hi);z-index:0}
+#map.picking{cursor:crosshair}
+.leaflet-container{font:inherit}
+.leaflet-control-attribution{font-size:10px;background:rgba(255,255,255,.7)!important;backdrop-filter:blur(8px)}
+.mapfab{position:absolute;top:12px;right:12px;z-index:500;display:grid;gap:8px}
+.fab{width:44px;height:44px;border-radius:14px;border:0;display:grid;place-items:center;cursor:pointer;color:var(--accent);
+  background:var(--glass-hi);-webkit-backdrop-filter:var(--blur);backdrop-filter:var(--blur);box-shadow:var(--shadow-s),inset 0 1px 0 var(--rim);transition:transform .15s var(--tap)}
+.fab:active{transform:scale(.92)}
+.fab svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.drawbar{position:absolute;left:12px;right:68px;bottom:12px;z-index:500;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;padding:10px 12px;border-radius:16px;
+  background:var(--glass-hi);-webkit-backdrop-filter:var(--blur);backdrop-filter:var(--blur);box-shadow:var(--shadow-l),inset 0 1px 0 var(--rim)}
+.drawbar b{font-size:20px;margin-right:8px}
+.pin{position:absolute;transform:translate(-50%,-100%);width:30px;height:30px;border-radius:50% 50% 50% 4px;rotate:-45deg;display:grid;place-items:center;
+  background:var(--kc,#1C4698);border:2.5px solid #fff;box-shadow:0 4px 12px rgba(11,27,51,.35)}
+.pin > span{rotate:45deg;color:#fff;font-size:12px;font-weight:800}
+.pin > i{position:absolute;top:-4px;right:-4px;width:11px;height:11px;border-radius:50%;background:#34C759;border:2px solid #fff;rotate:45deg}
+.pin > i.warn{background:#FF9F0A}
+.pin.pending{opacity:.6;border-style:dashed}
+.pin.small{position:relative;transform:none;width:28px;height:28px;flex:none}
+.k-track{--kc:#1C4698}.k-river{--kc:#0A84FF}.k-park{--kc:#34A853}.k-trail{--kc:#8E5B2F}.k-road{--kc:#5E5CE6}.k-other{--kc:#636366}
+.pintip{font-weight:600;font-size:12px;border-radius:8px;padding:2px 8px;border:0;box-shadow:var(--shadow-s)}
+.spotrow{width:100%;background:none;border:0;font:inherit;color:inherit;text-align:left;cursor:pointer}
+.infochips{display:flex;flex-wrap:wrap;gap:8px}
+.infochips > span{display:grid;padding:8px 12px;border-radius:12px;background:var(--glass-hi);border:1px solid var(--stroke);min-width:84px}
+.infochips b{font-size:14px}
+.wx{display:grid;gap:10px}
+.wxnow{display:grid;gap:8px;padding:14px;border-radius:var(--r-m);background:var(--glass-hi);border-left:5px solid var(--stroke)}
+.wxnow > div:first-child{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+.wxnow b{font-size:34px;letter-spacing:-.02em}
+.wxnow.good{border-left-color:#34C759}.wxnow.ok{border-left-color:#FF9F0A}.wxnow.poor{border-left-color:var(--race)}
+.wxnow.good .pill{background:color-mix(in srgb,#34C759 16%,transparent);color:#1E7E34}
+.wxnow.ok .pill{background:color-mix(in srgb,#FF9F0A 16%,transparent);color:#A15C00}
+.wxnow.poor .pill{background:color-mix(in srgb,var(--race) 14%,transparent);color:var(--race)}
+.wxadv{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.wxhours{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(52px,1fr);gap:6px;overflow-x:auto;scrollbar-width:none;padding-bottom:2px}
+.wxhours > div{display:grid;justify-items:center;gap:2px;padding:8px 4px;border-radius:12px;background:var(--glass-hi);border-bottom:3px solid transparent}
+.wxhours > div.ok{border-bottom-color:#FF9F0A}.wxhours > div.poor{border-bottom-color:var(--race)}
+.wxhours b{font-size:16px}
+.reports{display:grid;gap:10px}
+.rep{padding:10px 12px;border-radius:12px;background:var(--glass-hi);border:1px solid var(--stroke)}
+.rep > div{display:flex;flex-wrap:wrap;gap:6px}
+.repform{display:grid;gap:12px}
+.linkbtn{border:0;background:none;color:var(--accent);cursor:pointer;padding:0;font:inherit}
+.routesvg path{fill:none;stroke:var(--accent);stroke-width:4;stroke-linejoin:round;stroke-linecap:round}

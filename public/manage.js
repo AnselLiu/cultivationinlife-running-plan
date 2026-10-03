@@ -10,6 +10,10 @@ async function formView(id) {
   const d = src ? { ...src, ...(from ? { title: src.title.replace(/20\d\d/, (y) => String(Number(y) + 1)), date: nextYear(src.date), deadline: '' } : {}) }
     : { kind: 'track', date: /^\d{4}-\d{2}-\d{2}$/.test(qp.get('date') || '') ? qp.get('date') : new Date().toISOString().slice(0, 10), signup_open: 1, team_id: qp.get('team') || null };
   // 分團選項：協會幹部可以選全協會與任何分團；分團幹部只能選自己帶的分團
+  // 練跑地圖的地點與路線：選了地點，活動頁會顯示場地天氣；選了路線，大家可以下載 GPX
+  const [{ spots = [] }, { routes = [] }] = await Promise.all([api('/spots').catch(() => ({})), api('/routes').catch(() => ({}))]);
+  d.spot_id ||= qp.get('spot') || null; d.route_id ||= qp.get('route') || null;
+  if (!id && !d.place && d.spot_id) d.place = spots.find((x) => x.id === d.spot_id)?.name || '';
   const teamOpts = [...(allow('event') ? [['', '全協會']] : []), ...teams().filter((t) => teamAllow(t.id, 'event')).map((t) => [t.id, t.name])];
   if (!teamOpts.length) { view.innerHTML = `<div class="card">${emptyState('calendar', '只有幹部與分團幹部可以建立活動')}</div>`; return; }
   view.innerHTML = `${largeTitle(id ? '編輯活動' : from ? '複製活動' : '新增活動', from ? `從「${esc(src.title)}」複製，座位圖也會一起帶過來` : '')}
@@ -30,6 +34,11 @@ async function formView(id) {
       </div>
       <div data-when="!survey">
         <label>地點<input name="place" maxlength="60" value="${esc(d.place || '')}" placeholder="臺北田徑場 400 場"></label>
+        <div class="grid2">
+          <label>練跑地圖的地點<select name="spot_id"><option value="">（不指定）</option>${spots.filter((x) => x.status === 'approved').map((x) => `<option value="${esc(x.id)}" ${d.spot_id === x.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select></label>
+          <label>路線<select name="route_id"><option value="">（不指定）</option>${routes.map((r) => `<option value="${esc(r.id)}" ${d.route_id === r.id ? 'selected' : ''}>${esc(r.name)}・${(r.distance / 1000).toFixed(1)} 公里</option>`).join('')}</select></label>
+        </div>
+        <p class="tiny" style="margin:0">選了地點，活動頁會顯示當天的場地天氣與跑步建議；選了路線，大家可以下載 GPX。<a href="#/map">到練跑地圖新增 ›</a></p>
         <div class="grid2">
           <label>帶團<input name="lead" maxlength="30" value="${esc(d.lead || '')}" placeholder="教練或領跑員"></label>
           <label>人數上限<input type="number" name="capacity" min="1" max="999" value="${d.capacity || ''}" placeholder="不限"></label>
@@ -127,6 +136,7 @@ async function formView(id) {
   const bindI = () => { for (const b of f.querySelectorAll('[data-rmi]')) b.onclick = () => b.closest('.itemrow').remove(); };
   bindI();
   $('#addItem').onclick = () => { $('#itemRows').insertAdjacentHTML('beforeend', itemRow()); bindI(); $('#itemRows').lastElementChild.querySelector('input').focus(); };
+  f.spot_id.addEventListener('change', () => { const sp = spots.find((x) => x.id === f.spot_id.value); if (sp && (!f.place.value || spots.some((x) => x.name === f.place.value))) f.place.value = sp.name; });
   f.kind.addEventListener('change', () => { if (f.kind.value === 'buy') { $('#itemBox').open = true; if (!f.querySelector('.itemrow')) $('#addItem').click(); } });
   $('#addOpt').onclick = () => { $('#optRows').insertAdjacentHTML('beforeend', optRow()); bindO(); $('#optRows').lastElementChild.querySelector('input').focus(); };
   bindQ();
@@ -155,7 +165,7 @@ async function formView(id) {
       options: [...f.querySelectorAll('.optrow')].map((r) => ({ name: r.querySelector('[data-k=name]').value.trim(), price: Number(r.querySelector('[data-k=price]').value) || 0 })).filter((o) => o.name),
       items: [...f.querySelectorAll('.itemrow')].map((r) => { const v = (k) => r.querySelector(`[data-k=${k}]`).value.trim();
         return { id: r.dataset.id || undefined, name: v('name'), price: Number(v('price')) || 0, sizes: v('sizes'), stock: v('stock') ? Number(v('stock')) : null, max: v('max') ? Number(v('max')) : 10 }; }).filter((x) => x.name),
-      min_qty: num(f.min_qty),
+      min_qty: num(f.min_qty), spot_id: f.spot_id.value || null, route_id: f.route_id.value || null,
       pricing: { early_until: f.early_until.value, early_off: Number(f.early_off.value) || 0, member_off: Number(f.member_off.value) || 0 },
       pay_info: { account: f.pay_account.value.trim(), due: f.pay_due.value, note: f.pay_note.value.trim(), methods: [...f.querySelectorAll('[name=pay_methods]:checked')].map((c) => c.value) },
       notify: f.notify ? f.notify.checked : undefined, copy_from: from || undefined,

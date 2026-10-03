@@ -353,3 +353,33 @@ test('行事曆：定期揪跑一次建立每一場、刪除之後的場次；�
   // 假日匯入只有理事長與行政人員
   assert.equal((await call('t_runner', '/holidays/import', { method: 'POST', body: { year: 2027 } })).status, 403);
 });
+
+test('練跑地圖：幹部新增直接上架、團員提議要審核；現場回報不顯示是誰、一小時一次；路線與開揪跑', async () => {
+  const a = await call('t_chair', '/spots', { method: 'POST', body: { name: '測試田徑場', kind: 'track', lat: 25.0487, lng: 121.552, intro: '400 公尺跑道', info: { lap: '400m', light: '有' } } });
+  assert.equal(a.json.status, 'approved');
+  const p = await call('t_runner', '/spots', { method: 'POST', body: { name: '我家附近河濱', kind: 'river', lat: 25.07, lng: 121.53 } });
+  assert.equal(p.json.status, 'pending');
+  assert.ok(!(await call('t_super', '/spots')).json.spots.some((x) => x.id === p.json.id), '審核前別人看不到');
+  assert.equal((await call('t_runner', `/spots/${p.json.id}/review`, { method: 'POST', body: { approve: true } })).status, 403);
+  assert.equal((await call('t_chair', `/spots/${p.json.id}/review`, { method: 'POST', body: { approve: true } })).status, 200);
+  assert.ok((await call('t_other', '/spots')).json.spots.some((x) => x.id === p.json.id));
+  assert.equal((await call('t_runner', '/spots', { method: 'POST', body: { name: '', lat: 999, lng: 0 } })).status, 400);
+  // 現場回報
+  assert.equal((await call('t_runner', `/spots/${a.json.id}/reports`, { method: 'POST', body: {} })).status, 400);
+  assert.equal((await call('t_runner', `/spots/${a.json.id}/reports`, { method: 'POST', body: { crowd: '多', surface: '濕滑', note: '跑道內圈積水' } })).status, 200);
+  assert.equal((await call('t_runner', `/spots/${a.json.id}/reports`, { method: 'POST', body: { crowd: '少' } })).status, 429, '一小時一次');
+  const d = (await call('t_super', `/spots/${a.json.id}`)).json;
+  assert.equal(d.reports[0].crowd, '多');
+  assert.ok(!JSON.stringify(d.reports).includes('t_runner') && d.reports[0].mine === false, '不顯示是誰');
+  assert.equal((await call('t_super', `/spots/${a.json.id}/reports/${d.reports[0].id}`, { method: 'DELETE' })).status, 403);
+  // 路線
+  const rt = await call('t_runner', '/routes', { method: 'POST', body: { name: '河濱 5K', points: [[25.07, 121.53], [25.08, 121.53], [25.08, 121.54]], spot_id: p.json.id } });
+  assert.ok(rt.json.distance > 2000 && rt.json.distance < 2300, `距離 ${rt.json.distance}`);
+  assert.equal((await call('t_runner', '/routes', { method: 'POST', body: { points: [[25, 121]] } })).status, 400);
+  const ev = await call('t_chair', '/events', { method: 'POST', body: { kind: 'long', title: '河濱揪跑', date: plus(2), notify: false, spot_id: p.json.id, route_id: rt.json.id } });
+  const e = (await call('t_other', `/events/${ev.json.id}`)).json;
+  assert.equal(e.spot.name, '我家附近河濱');
+  assert.equal(e.route.points.length, 3);
+  assert.equal((await call('t_super', `/routes/${rt.json.id}`, { method: 'DELETE' })).status, 403);
+  assert.equal((await call('t_runner', '/weather?lat=999&lng=0')).status, 400);
+});

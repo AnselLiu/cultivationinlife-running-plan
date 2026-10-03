@@ -9,6 +9,7 @@ import { quote, charges } from './pricing.js';
 // 用到才下載的模組：管理後台、拍照、報表、活動表單與統計、分團
 // 剛部署的那幾秒可能拿到舊檔：載入失敗就等一下、加版本參數再試一次，仍失敗才顯示錯誤
 const calendarView = (...a) => lazy('./calendar.js', 'calendarView')(...a);
+const mapView = (...a) => lazy('./map.js', 'mapView')(...a);
 const lazy = (file, name) => async (...a) => {
   let m;
   try { m = await import(file); } catch { await new Promise((r) => setTimeout(r, 800)); m = await import(`${file}?r=${Date.now()}`); }
@@ -619,6 +620,9 @@ async function eventView(id) {
         <span class="t">${esc(myDay.t)} <span class="hint">${P.paceHint(myDay.t, me.dist, me.grp)}</span></span>
       </div></section>` : ''}
     ${ev.plan_text ? `<section class="card"><h3>課表</h3><pre class="out">${esc(ev.plan_text)}</pre></section>` : ''}
+    ${ev.spot ? `<section class="card"><div class="row spread"><h3>場地天氣</h3><a class="tiny" href="#/map?spot=${esc(ev.spot.id)}">${esc(ev.spot.name)} ›</a></div><div id="evWx"><p class="tiny" style="margin:0">載入中…</p></div></section>` : ''}
+    ${ev.route ? `<section class="card"><div class="row spread"><h3>路線・${(ev.route.distance / 1000).toFixed(1)} 公里</h3><a class="tiny" href="#/map?route=${esc(ev.route.id)}">在地圖上看 ›</a></div>
+      ${routeSvg(ev.route.points)}<div class="row" style="gap:8px"><button class="btn ghost sm" id="evGpx">下載 GPX</button></div></section>` : ''}
 
     ${party && myTicket ? ticketCard(myTicket, ev) : ''}
     ${mine?.status === 'in' && (ev.myAmount || (ev.myAmount == null && charges(ev))) ? payCard(ev) : ''}
@@ -712,6 +716,9 @@ async function eventView(id) {
     if (!confirm(survey ? '確定撤回回覆？' : '確定取消報名？')) return;
     try { await api(`/events/${id}/signup`, { method: 'DELETE' }); toast('已取消報名'); render(); } catch (e) { toast(e.message); }
   });
+  if (ev.spot) import('./weather.js').then((W) => W.load(ev.spot.lat, ev.spot.lng).then((w) => { if ($('#evWx')) $('#evWx').innerHTML = W.forEvent(w, ev.date, ev.gather_time); }))
+    .catch((e) => { if ($('#evWx')) $('#evWx').innerHTML = `<p class="tiny" style="margin:0">${esc(e.message)}</p>`; });
+  $('#evGpx')?.addEventListener('click', async () => (await import('./map.js')).downloadGpx(ev.route.name, ev.route.points));
   if ($('#pform')) bindQuote($('#pform'), ev);
   bindPayCard(ev);
   $('#pform')?.addEventListener('submit', async (e) => {
@@ -1634,6 +1641,7 @@ async function runView() {
   // 開始前
   if (!x) {
     view.innerHTML = `${largeTitle('跑步記錄', '計時加上 GPS，跑完自動算出今天的成績')}
+      <a class="card tight lit maplink" href="#/map"><div class="row spread"><span class="row" style="gap:10px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4 3.5 6v14L9 18l6 2 5.5-2V4L15 6Z"/><path d="M9 4v14M15 6v14"/></svg><span><b>練跑地圖</b><span class="tiny" style="display:block">地點、現場回報、天氣，畫路線存 GPX、開揪跑</span></span></span><span class="tiny">›</span></div></a>
       <section class="card runstart">
         <button class="runbtn go" id="runGo" aria-label="開始跑步記錄"><span>開始</span></button>
         <p class="tiny center" style="margin:0">第一次使用會詢問定位權限。跑步時螢幕會保持亮著；如果鎖上螢幕，iPhone 會暫停定位，解鎖後再接著記錄。</p>
@@ -2067,7 +2075,7 @@ async function renderOnce() {
   const raw = location.hash.replace(/^#/, '') || '/';
   const hash = raw.split('?')[0];
   for (const a of document.querySelectorAll('.tabs a')) {
-    const on = a.dataset.tab === '/' ? hash === '/' : hash.startsWith(a.dataset.tab);
+    const on = a.dataset.tab === '/' ? hash === '/' || hash === '/calendar' : a.dataset.tab === '/run' ? hash === '/run' || hash === '/map' : hash.startsWith(a.dataset.tab);
     a.toggleAttribute('aria-current', on);
   }
   paintCountdown();
@@ -2134,6 +2142,7 @@ async function route(hash) {
     if (hash === '/') return await listView();
     if (hash === '/past') return await pastView();
     if (hash === '/calendar') return await calendarView();
+    if (hash === '/map') return await mapView();
     if (hash === '/coach') { location.replace('#/plan'); return; }
     if (hash === '/studio') return feat('studio') ? await studioView() : (view.innerHTML = `<div class="card">${emptyState('runner', '這個功能目前沒有開放')}</div>`);
     if (hash === '/notifications') return await notificationsView();

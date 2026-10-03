@@ -318,7 +318,7 @@ async function openPrivate(env, enc) {
 const maskId = (v) => (v ? `${v.slice(0, 2)}${'*'.repeat(Math.max(0, v.length - 5))}${v.slice(-3)}` : '');
 
 // ---- 活動 ----
-const eventCols = 'id, kind, title, date, gather_time, end_time, place, lead, note, week_no, plan_text, capacity, signup_open, deadline, status, created_at, fee, guest_max, meal_options, link_url, link_label, team_id, questions, visibility, created_by, options, group_reg, items, pricing, pay_info, min_qty, series_id';
+const eventCols = 'id, kind, title, date, gather_time, end_time, place, lead, note, week_no, plan_text, capacity, signup_open, deadline, status, created_at, fee, guest_max, meal_options, link_url, link_label, team_id, questions, visibility, created_by, options, group_reg, items, pricing, pay_info, min_qty, series_id, spot_id, route_id';
 
 // 報名問卷：單選、複選、簡答；最多 12 題
 const Q_TYPES = ['single', 'multi', 'text'];
@@ -398,6 +398,8 @@ function readEvent(b) {
         methods: (Array.isArray(p.methods) ? p.methods : []).filter((m) => PAY_METHODS[m]).slice(0, 3) };
       return o.account || o.due || o.note || o.methods.length ? JSON.stringify(o) : null; })(),
     min_qty: Number.isInteger(b.min_qty) && b.min_qty > 0 ? Math.min(b.min_qty, 99999) : null,
+    spot_id: /^[\w-]{1,32}$/.test(b.spot_id || '') ? b.spot_id : null,
+    route_id: /^[\w-]{1,32}$/.test(b.route_id || '') ? b.route_id : null,
   };
   if (!e.title || !isDate(e.date) || !isTime(e.gather_time) || !isTime(e.end_time)) return null;
   return e;
@@ -607,6 +609,157 @@ async function api(req, env, path, method) {
   };
 
   // 行事曆訂閱的 .ics：只列本人有報名（正取或候補）的活動，過去 30 天到未來 180 天
+  // ---- 練跑地圖 ----
+  const SPOT_KINDS = ['track', 'river', 'park', 'trail', 'road', 'other'];
+  const canEditSpots = () => !!member && !READONLY[norm(member.role)] && (teamCan(null, 'event') || Object.keys(myTeams).some((t) => teamCan(t, 'event')));
+  const readSpot = (b) => {
+    const lat = Number(b.lat), lng = Number(b.lng);
+    const info = {}; for (const k of ['surface', 'lap', 'light', 'water', 'toilet', 'parking', 'hours']) { const v = str(b.info?.[k], 60); if (v) info[k] = v; }
+    const sp = { name: str(b.name, 40), kind: SPOT_KINDS.includes(b.kind) ? b.kind : 'other', lat: Math.round(lat * 1e6) / 1e6, lng: Math.round(lng * 1e6) / 1e6, intro: str(b.intro, 600), info: Object.keys(info).length ? JSON.stringify(info) : null };
+    if (!sp.name || !Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) return null;
+    return sp;
+  };
+  if (path === '/api/spots' && method === 'GET') {
+    const g = need(); if (g) return g;
+    const editor = canEditSpots();
+    const rows = (await env.DB.prepare(`SELECT s.id, s.name, s.kind, s.lat, s.lng, s.status, s.created_by,
+        (SELECT COUNT(*) FROM spot_reports r WHERE r.spot_id = s.id AND r.created_at >= datetime('now', '-24 hours')) AS reports,
+        (SELECT r.data FROM spot_reports r WHERE r.spot_id = s.id AND r.created_at >= datetime('now', '-24 hours') ORDER BY r.created_at DESC LIMIT 1) AS latest
+      FROM spots s WHERE s.status = 'approved' OR (s.status = 'pending' AND (s.created_by = ? OR ? = 1)) ORDER BY s.name LIMIT 500`).bind(member.id, editor ? 1 : 0).all()).results;
+    return json({ spots: rows.map((r) => ({ ...r, latest: parseQ(r.latest, null), mine: r.created_by === member.id, created_by: undefined })), editor });
+  }
+  if (path === '/api/spots' && method === 'POST') {
+    const g = need(); if (g) return g;
+    if (await limited(env, `spot:${member.id}`, 20, 3600)) return fail(429, '新增太頻繁，請稍後再試');
+    const sp = readSpot(await body());
+    if (!sp) return fail(400, '請填地點名稱並在地圖上選位置');
+    const editor = canEditSpots(), id = rid(8);
+    await env.DB.prepare('INSERT INTO spots (id, name, kind, lat, lng, intro, info, status, created_by, reviewed_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .bind(id, sp.name, sp.kind, sp.lat, sp.lng, sp.intro || null, sp.info, editor ? 'approved' : 'pending', member.id, editor ? member.id : null).run();
+    await audit(env, req, member, editor ? 'spot.add' : 'spot.propose', 'spot', id, sp.name);
+    if (!editor) {
+      const mgr = (await env.DB.prepare("SELECT id FROM members WHERE role IN ('chair', 'staff', 'coach')").all()).results.map((r) => r.id);
+      await notify(env, mgr, 'system', { title: '練跑地圖：有新的地點提議', body: `${member.name} 提議「${sp.name}」，請到地圖審核`, url: `/#/map?spot=${id}` });
+    }
+    return json({ id, status: editor ? 'approved' : 'pending' });
+  }
+  const msp = path.match(/^\/api\/spots\/([\w-]{1,32})(?:\/(reports|review))?(?:\/([\w-]{1,32}))?$/);
+  if (msp) {
+    const g = need(); if (g) return g;
+    const sp = await env.DB.prepare('SELECT * FROM spots WHERE id = ?').bind(msp[1]).first();
+    const editor = canEditSpots();
+    if (!sp || (sp.status !== 'approved' && sp.created_by !== member.id && !editor)) return fail(404, '找不到這個地點');
+    const sub = msp[2];
+    if (!sub && method === 'GET') {
+      const reps = (await env.DB.prepare(`SELECT id, data, created_at, member_id FROM spot_reports WHERE spot_id = ? AND created_at >= datetime('now', '-24 hours') ORDER BY created_at DESC LIMIT 20`).bind(sp.id).all()).results;
+      const week = (await env.DB.prepare(`SELECT substr(created_at, 1, 10) AS d, COUNT(*) AS n FROM spot_reports WHERE spot_id = ? AND created_at >= datetime('now', '-7 days') GROUP BY d`).bind(sp.id).all()).results;
+      const routes = (await env.DB.prepare('SELECT id, name, distance FROM routes WHERE spot_id = ? AND (shared = 1 OR created_by = ?) ORDER BY created_at DESC LIMIT 10').bind(sp.id, member.id).all()).results;
+      const events = (await env.DB.prepare(`SELECT events.id, events.title, events.date, events.gather_time FROM events WHERE events.spot_id = ?3 AND events.date >= ?4 AND ${seeSQL} ORDER BY events.date LIMIT 5`)
+        .bind(member.id, can(member, 'event') ? 1 : 0, sp.id, today()).all()).results;
+      return json({ spot: { ...sp, info: parseQ(sp.info, {}), mine: sp.created_by === member.id, created_by: undefined, reviewed_by: undefined }, editor,
+        reports: reps.map((r) => ({ id: r.id, ...parseQ(r.data, {}), at: r.created_at, mine: r.member_id === member.id })), week, routes, events });
+    }
+    if (!sub && method === 'PUT') {
+      if (!editor && !(sp.created_by === member.id && sp.status === 'pending')) return fail(403, '只有幹部可以修改地點');
+      const v = readSpot(await body());
+      if (!v) return fail(400, '地點資料不完整');
+      await env.DB.prepare("UPDATE spots SET name = ?, kind = ?, lat = ?, lng = ?, intro = ?, info = ?, updated_at = datetime('now') WHERE id = ?").bind(v.name, v.kind, v.lat, v.lng, v.intro || null, v.info, sp.id).run();
+      await audit(env, req, member, 'spot.update', 'spot', sp.id, v.name);
+      return json({ ok: true });
+    }
+    if (!sub && method === 'DELETE') {
+      if (!editor && !(sp.created_by === member.id && sp.status === 'pending')) return fail(403, '只有幹部可以刪除地點');
+      await env.DB.prepare('DELETE FROM spots WHERE id = ?').bind(sp.id).run();
+      await env.DB.prepare('UPDATE events SET spot_id = NULL WHERE spot_id = ?').bind(sp.id).run();
+      await audit(env, req, member, 'spot.delete', 'spot', sp.id, sp.name);
+      return json({ ok: true });
+    }
+    if (sub === 'review' && method === 'POST') {
+      if (!editor) return fail(403, '只有幹部可以審核');
+      const ok = (await body()).approve === true;
+      const r = await env.DB.prepare("UPDATE spots SET status = ?, reviewed_by = ?, updated_at = datetime('now') WHERE id = ? AND status = 'pending'").bind(ok ? 'approved' : 'rejected', member.id, sp.id).run();
+      if (!r.meta.changes) return fail(409, '這個地點已經審核過了');
+      await audit(env, req, member, ok ? 'spot.approve' : 'spot.reject', 'spot', sp.id, sp.name);
+      if (sp.created_by && sp.created_by !== member.id) await notify(env, [sp.created_by], 'system', { title: ok ? `「${sp.name}」已加到練跑地圖` : `「${sp.name}」沒有通過`, body: ok ? '謝謝你的提議' : '可以補充說明後再提議一次', url: `/#/map?spot=${sp.id}` });
+      return json({ ok: true });
+    }
+    // 現場回報：一小時內同一個地點只能回報一次；24 小時後不再顯示；不顯示是誰
+    if (sub === 'reports' && method === 'POST') {
+      if (sp.status !== 'approved') return fail(400, '地點審核通過後才能回報');
+      const b = await body();
+      const pick = (v, list) => (list.includes(v) ? v : undefined);
+      const data = { crowd: pick(b.crowd, ['少', '普通', '多']), surface: pick(b.surface, ['乾燥', '濕滑', '積水', '施工', '封閉']), light: pick(b.light, ['充足', '偏暗', '沒有']),
+        weather: pick(b.weather, ['晴', '陰', '小雨', '大雨', '悶熱', '強風']), note: str(b.note, 200) || undefined };
+      if (!Object.values(data).some(Boolean)) return fail(400, '至少選一項');
+      const recent = await env.DB.prepare("SELECT 1 FROM spot_reports WHERE spot_id = ? AND member_id = ? AND created_at >= datetime('now', '-1 hours')").bind(sp.id, member.id).first();
+      if (recent) return fail(429, '一小時內已經回報過這個地點');
+      const id = rid(8);
+      await env.DB.prepare('INSERT INTO spot_reports (id, spot_id, member_id, data) VALUES (?, ?, ?, ?)').bind(id, sp.id, member.id, JSON.stringify(data)).run();
+      return json({ id });
+    }
+    if (sub === 'reports' && method === 'DELETE' && msp[3]) {
+      const r = await env.DB.prepare('SELECT member_id FROM spot_reports WHERE id = ? AND spot_id = ?').bind(msp[3], sp.id).first();
+      if (!r) return fail(404, '找不到這筆回報');
+      if (r.member_id !== member.id && !editor) return fail(403, '只能刪除自己的回報');
+      await env.DB.prepare('DELETE FROM spot_reports WHERE id = ?').bind(msp[3]).run();
+      if (r.member_id !== member.id) await audit(env, req, member, 'spot.report_delete', 'spot', sp.id, '刪除不當回報');
+      return json({ ok: true });
+    }
+  }
+  // 天氣：Open-Meteo 預報＋空氣品質，經過這裡快取（同一格 0.01 度 30 分鐘），不讓每支手機各自去打
+  if (path === '/api/weather' && method === 'GET') {
+    const g = need(); if (g) return g;
+    const u = url0(req), lat = Number(u.searchParams.get('lat')), lng = Number(u.searchParams.get('lng'));
+    if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) return fail(400, '座標不正確');
+    if (await limited(env, `wx:${member.id}`, 60, 600)) return fail(429, '查詢太頻繁，請稍後再試');
+    const k = `${lat.toFixed(2)},${lng.toFixed(2)}`, cache = caches.default, key = new Request(`https://cil-run.internal/weather/v1/${k}`);
+    const hit = await cache.match(key);
+    if (hit) return new Response(hit.body, { headers: { ...SEC_HEADERS, 'content-type': 'application/json; charset=utf-8', 'cache-control': 'private, max-age=300', 'x-weather-cache': 'hit' } });
+    const [la, lo] = k.split(',');
+    const fc = `https://api.open-meteo.com/v1/forecast?latitude=${la}&longitude=${lo}&hourly=temperature_2m,apparent_temperature,relative_humidity_2m,precipitation_probability,precipitation,weather_code,wind_speed_10m,uv_index&daily=sunrise,sunset,temperature_2m_max,temperature_2m_min,precipitation_probability_max,uv_index_max,weather_code&timezone=Asia%2FTaipei&forecast_days=7&wind_speed_unit=ms`;
+    const aq = `https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${la}&longitude=${lo}&hourly=pm2_5,us_aqi&timezone=Asia%2FTaipei&forecast_days=5`;
+    const [a, b2] = await Promise.all([fetch(fc).then((r) => (r.ok ? r.json() : null)).catch(() => null), fetch(aq).then((r) => (r.ok ? r.json() : null)).catch(() => null)]);
+    if (!a?.hourly) return fail(502, '天氣預報暫時查不到，請稍後再試');
+    const out = JSON.stringify({ at: new Date().toISOString(), hourly: a.hourly, daily: a.daily, air: b2?.hourly ? { time: b2.hourly.time, pm2_5: b2.hourly.pm2_5, us_aqi: b2.hourly.us_aqi } : null });
+    env.ctx?.waitUntil(cache.put(key, new Response(out, { headers: { 'content-type': 'application/json', 'cache-control': 'public, max-age=1800' } })));
+    return new Response(out, { headers: { ...SEC_HEADERS, 'content-type': 'application/json; charset=utf-8', 'cache-control': 'private, max-age=300', 'x-weather-cache': 'miss' } });
+  }
+  // 路線：在地圖上畫的路線，可以分享給全團、下載 GPX、拿來開揪跑
+  if (path === '/api/routes' && method === 'GET') {
+    const g = need(); if (g) return g;
+    const rows = (await env.DB.prepare(`SELECT r.id, r.name, r.distance, r.spot_id, r.shared, r.created_at, r.created_by = ? AS mine, m.nickname, m.name AS author
+      FROM routes r LEFT JOIN members m ON m.id = r.created_by WHERE r.shared = 1 OR r.created_by = ? ORDER BY r.created_at DESC LIMIT 100`).bind(member.id, member.id).all()).results;
+    return json({ routes: rows.map((r) => ({ ...r, mine: !!r.mine, author: r.nickname || r.author || '', nickname: undefined })) });
+  }
+  if (path === '/api/routes' && method === 'POST') {
+    const g = need(); if (g) return g;
+    if (await limited(env, `route:${member.id}`, 30, 3600)) return fail(429, '儲存太頻繁，請稍後再試');
+    const b = await body();
+    const pts = (Array.isArray(b.points) ? b.points : []).slice(0, 3000).map((p) => [Math.round(Number(p?.[0]) * 1e6) / 1e6, Math.round(Number(p?.[1]) * 1e6) / 1e6])
+      .filter(([la, lo]) => Number.isFinite(la) && Number.isFinite(lo) && Math.abs(la) <= 90 && Math.abs(lo) <= 180);
+    if (pts.length < 2) return fail(400, '路線至少要兩個點');
+    const R = 6371000, rad = (x) => (x * Math.PI) / 180;
+    let dist = 0;
+    for (let i = 1; i < pts.length; i++) { const [a1, o1] = pts[i - 1], [a2, o2] = pts[i]; const h = Math.sin(rad(a2 - a1) / 2) ** 2 + Math.cos(rad(a1)) * Math.cos(rad(a2)) * Math.sin(rad(o2 - o1) / 2) ** 2; dist += 2 * R * Math.asin(Math.sqrt(h)); }
+    const id = rid(8), name = str(b.name, 40) || `${(dist / 1000).toFixed(1)} 公里路線`;
+    const spot = /^[\w-]{1,32}$/.test(b.spot_id || '') ? b.spot_id : null;
+    await env.DB.prepare('INSERT INTO routes (id, name, points, distance, spot_id, shared, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .bind(id, name, JSON.stringify(pts), Math.round(dist), spot, b.shared === false ? 0 : 1, member.id).run();
+    return json({ id, distance: Math.round(dist), name });
+  }
+  const mrt = path.match(/^\/api\/routes\/([\w-]{1,32})$/);
+  if (mrt) {
+    const g = need(); if (g) return g;
+    const r = await env.DB.prepare('SELECT * FROM routes WHERE id = ?').bind(mrt[1]).first();
+    if (!r || (!r.shared && r.created_by !== member.id && !(await env.DB.prepare('SELECT 1 FROM events WHERE route_id = ? LIMIT 1').bind(r.id).first()))) return fail(404, '找不到這條路線');
+    if (method === 'GET') return json({ route: { id: r.id, name: r.name, distance: r.distance, spot_id: r.spot_id, shared: !!r.shared, points: parseQ(r.points), mine: r.created_by === member.id } });
+    if (method === 'DELETE') {
+      if (r.created_by !== member.id && !canEditSpots()) return fail(403, '只能刪除自己畫的路線');
+      await env.DB.prepare('DELETE FROM routes WHERE id = ?').bind(r.id).run();
+      await env.DB.prepare('UPDATE events SET route_id = NULL WHERE route_id = ?').bind(r.id).run();
+      return json({ ok: true });
+    }
+  }
   // ---- 行事曆 ----
   // 月曆：看得到的活動、國定假日、賽事提醒、我自己的賽事（每月一次查完）
   if (path === '/api/calendar' && method === 'GET') {
@@ -1032,9 +1185,9 @@ async function api(req, env, path, method) {
     // 報名截止：跟著每一場往後推（保持跟活動日的距離）
     const dl = (d) => { if (!e.deadline) return e.deadline; const shift = Date.parse(`${d}T00:00:00Z`) - Date.parse(`${e.date}T00:00:00Z`); const t = new Date(Date.parse(`${e.deadline}:00Z`) + shift); return t.toISOString().slice(0, 16); };
     const ids = dates.map(() => rid(8)), id = ids[0];
-    await env.DB.batch(dates.map((d, i) => env.DB.prepare(`INSERT INTO events (id, kind, title, date, gather_time, end_time, place, lead, note, week_no, plan_text, capacity, signup_open, deadline, created_by, fee, guest_max, meal_options, link_url, link_label, team_id, questions, visibility, options, group_reg, items, pricing, pay_info, min_qty, series_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .bind(ids[i], e.kind, e.title, d, e.gather_time, e.end_time, e.place, e.lead, e.note, i ? null : e.week_no, e.plan_text, e.capacity, e.signup_open, dl(d), member.id, e.fee, e.guest_max, e.meal_options, e.link_url, e.link_label, e.team_id, e.questions, e.visibility, e.options, e.group_reg, e.items, e.pricing, e.pay_info, e.min_qty, series)));
+    await env.DB.batch(dates.map((d, i) => env.DB.prepare(`INSERT INTO events (id, kind, title, date, gather_time, end_time, place, lead, note, week_no, plan_text, capacity, signup_open, deadline, created_by, fee, guest_max, meal_options, link_url, link_label, team_id, questions, visibility, options, group_reg, items, pricing, pay_info, min_qty, series_id, spot_id, route_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .bind(ids[i], e.kind, e.title, d, e.gather_time, e.end_time, e.place, e.lead, e.note, i ? null : e.week_no, e.plan_text, e.capacity, e.signup_open, dl(d), member.id, e.fee, e.guest_max, e.meal_options, e.link_url, e.link_label, e.team_id, e.questions, e.visibility, e.options, e.group_reg, e.items, e.pricing, e.pay_info, e.min_qty, series, e.spot_id, e.route_id)));
     // 複製活動：沿用原活動的座位圖（獎項每年不同，不複製）
     const from = str(b.copy_from, 32);
     if (from) {
@@ -1075,7 +1228,9 @@ async function api(req, env, path, method) {
         items: itemDefs, pricing: parseQ(ev.pricing, null), payInfo: parseQ(ev.pay_info, null), sold, myMembership: member.membership,
         options: parseQ(ev.options), regProfile: ev.group_reg ? (regRow ? (regRow.complete ? 'ok' : 'incomplete') : 'none') : null,
         team, manage, checkin: teamCan(ev.team_id, 'checkin'), invite: inv, attendToken: attendTok,
-        series: ev.series_id ? (await env.DB.prepare('SELECT id, date FROM events WHERE series_id = ? ORDER BY date LIMIT 80').bind(ev.series_id).all()).results : null });
+        series: ev.series_id ? (await env.DB.prepare('SELECT id, date FROM events WHERE series_id = ? ORDER BY date LIMIT 80').bind(ev.series_id).all()).results : null,
+        spot: ev.spot_id ? await env.DB.prepare("SELECT id, name, kind, lat, lng FROM spots WHERE id = ? AND status = 'approved'").bind(ev.spot_id).first() : null,
+        route: ev.route_id ? await env.DB.prepare('SELECT id, name, distance, points FROM routes WHERE id = ?').bind(ev.route_id).first().then((r) => (r ? { ...r, points: parseQ(r.points) } : null)) : null });
     }
     if (method === 'PUT') {
       const e = readEvent(await body());
@@ -1083,8 +1238,8 @@ async function api(req, env, path, method) {
       if (e.team_id && !(await teamIds()).includes(e.team_id)) return fail(400, '找不到這個分團');
       // 原本的分團與改過去的分團都要有權限
       if (!teamCan(cur.team_id, 'event') || !teamCan(e.team_id, 'event')) return fail(403, '沒有編輯這個活動的權限');
-      await env.DB.prepare(`UPDATE events SET kind=?, title=?, date=?, gather_time=?, end_time=?, place=?, lead=?, note=?, week_no=?, plan_text=?, capacity=?, signup_open=?, deadline=?, fee=?, guest_max=?, meal_options=?, link_url=?, link_label=?, team_id=?, questions=?, visibility=?, options=?, group_reg=?, items=?, pricing=?, pay_info=?, min_qty=? WHERE id = ?`)
-        .bind(e.kind, e.title, e.date, e.gather_time, e.end_time, e.place, e.lead, e.note, e.week_no, e.plan_text, e.capacity, e.signup_open, e.deadline, e.fee, e.guest_max, e.meal_options, e.link_url, e.link_label, e.team_id, e.questions, e.visibility, e.options, e.group_reg, e.items, e.pricing, e.pay_info, e.min_qty, id).run();
+      await env.DB.prepare(`UPDATE events SET kind=?, title=?, date=?, gather_time=?, end_time=?, place=?, lead=?, note=?, week_no=?, plan_text=?, capacity=?, signup_open=?, deadline=?, fee=?, guest_max=?, meal_options=?, link_url=?, link_label=?, team_id=?, questions=?, visibility=?, options=?, group_reg=?, items=?, pricing=?, pay_info=?, min_qty=?, spot_id=?, route_id=? WHERE id = ?`)
+        .bind(e.kind, e.title, e.date, e.gather_time, e.end_time, e.place, e.lead, e.note, e.week_no, e.plan_text, e.capacity, e.signup_open, e.deadline, e.fee, e.guest_max, e.meal_options, e.link_url, e.link_label, e.team_id, e.questions, e.visibility, e.options, e.group_reg, e.items, e.pricing, e.pay_info, e.min_qty, e.spot_id, e.route_id, id).run();
       await audit(env, req, member, 'event.update', 'event', id, `${e.title}${cur.visibility !== e.visibility ? `（改為${e.visibility === 'invite' ? '邀請制' : '公開'}）` : ''}`);
       return json({ ok: true });
     }
@@ -2489,6 +2644,7 @@ async function retention(env, now) {
   await run('notifications', "DELETE FROM notifications WHERE created_at < datetime('now', '-180 days')");
   await run('client_metrics', "DELETE FROM client_metrics WHERE day < date('now', '-90 days')");
   await run('client_errors', "DELETE FROM client_errors WHERE day < date('now', '-90 days')");
+  await run('spot_reports', "DELETE FROM spot_reports WHERE created_at < datetime('now', '-90 days')");
   const auditYears = Math.max(1, Math.min(Number(org.audit_years) || 3, 10));
   await run('audit', `DELETE FROM audit_log WHERE at < datetime('now', '-${auditYears} years')`);
   const evYears = Math.max(0, Math.min(Number(org.event_data_years) || 0, 20));
