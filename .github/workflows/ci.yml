@@ -52,7 +52,8 @@ jobs:
           path: .wrangler/lighthouse/
 
   e2e:
-    # 端到端：用真的瀏覽器（iPhone 尺寸）走過團員與幹部的主要流程，並用 axe 檢查 13 個頁面的無障礙
+    # 端到端：用真的瀏覽器（iPhone 尺寸）走過團員與幹部的主要流程，並用 axe 檢查 13 個頁面的無障礙；
+    #   再用 iPhone Safari（WebKit）淺色、深色各逐頁掃一次版面，截圖放在 test-results/sweep*
     needs: test
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -63,7 +64,7 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npx playwright install --with-deps chromium
+      - run: npx playwright install --with-deps chromium webkit
       - name: 端到端測試
         run: npm run test:e2e
       - uses: actions/upload-artifact@v4

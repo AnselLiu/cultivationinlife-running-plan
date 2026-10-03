@@ -14,7 +14,7 @@
   --rim:rgba(255,255,255,.9); --rim-2:rgba(255,255,255,.25);
   --stroke:rgba(11,27,51,.08);
   --accent:#1C4698; --on-accent:#fff; --accent-soft:rgba(28,70,152,.10);
-  --easy:#456B0F; --q:#B64400; --long:#1C4698; --rest:#55637A; --str:#6D45B0; --race:#C41E3A;
+  --easy:#456B0F; --q:#B64400; --long:#1C4698; --rest:#55637A; --str:#6D45B0; --race:#C41E3A; --ok:#34C759; --mid:#FF9F0A;
   --warn:#6B5B00; --warn-bg:rgba(253,243,109,.5);
   --shadow-s:0 1px 1px rgba(11,27,51,.04), 0 2px 8px -2px rgba(11,27,51,.10);
   --shadow-l:0 1px 2px rgba(11,27,51,.05), 0 12px 32px -14px rgba(11,27,51,.30);
@@ -30,7 +30,7 @@
   --rim:rgba(255,255,255,.22); --rim-2:rgba(255,255,255,.04);
   --stroke:rgba(255,255,255,.08);
   --accent:#FDF36D; --on-accent:#0B1B33; --accent-soft:rgba(253,243,109,.14);
-  --easy:#C9E36A; --q:#FFB347; --long:#8FB2F5; --rest:#A3B1C8; --str:#C9A8FF; --race:#FF7A85;
+  --easy:#C9E36A; --q:#FFB347; --long:#8FB2F5; --rest:#A3B1C8; --str:#C9A8FF; --race:#FF7A85; --ok:#30D158; --mid:#FF9F0A;
   --warn:#FDF36D; --warn-bg:rgba(253,243,109,.14);
   --shadow-s:0 1px 2px rgba(0,0,0,.4); --shadow-l:0 18px 44px -20px rgba(0,0,0,.85);
 }}
@@ -41,13 +41,17 @@
   --rim:rgba(255,255,255,.22); --rim-2:rgba(255,255,255,.04);
   --stroke:rgba(255,255,255,.08);
   --accent:#FDF36D; --on-accent:#0B1B33; --accent-soft:rgba(253,243,109,.14);
-  --easy:#C9E36A; --q:#FFB347; --long:#8FB2F5; --rest:#A3B1C8; --str:#C9A8FF; --race:#FF7A85;
+  --easy:#C9E36A; --q:#FFB347; --long:#8FB2F5; --rest:#A3B1C8; --str:#C9A8FF; --race:#FF7A85; --ok:#30D158; --mid:#FF9F0A;
   --warn:#FDF36D; --warn-bg:rgba(253,243,109,.14);
   --shadow-s:0 1px 2px rgba(0,0,0,.4); --shadow-l:0 18px 44px -20px rgba(0,0,0,.85);
 }
 
 *{box-sizing:border-box}
 html{background:var(--bg)}
+/* hidden 一律藏起來：用 :root 提高權重，蓋過元件的 display:grid!important（不然會變成空白色塊） */
+:root [hidden]{display:none!important}
+/* 關掉「點兩下放大」（PWA 常被誤觸），雙指縮放保留給需要放大字的人；按鈕也不會再有 300ms 延遲 */
+html,body,a,button,input,select,textarea,label{touch-action:manipulation}
 html,body{margin:0;min-height:100%}
 body{
   color:var(--ink);
@@ -161,7 +165,7 @@ a.card:active{transform:scale(.985)}
 .btn.block{width:100%;display:block;text-align:center}
 .btn.ghost{background:var(--glass-2);color:var(--ink);-webkit-backdrop-filter:var(--blur);backdrop-filter:var(--blur);
   box-shadow:var(--shadow-s),inset 0 1px 0 var(--rim)}
-.btn.danger{background:color-mix(in srgb,var(--race) 13%,transparent);color:var(--race);box-shadow:none}
+.btn.danger{background:var(--glass-hi);color:var(--race);box-shadow:var(--shadow-s),inset 0 0 0 1px var(--stroke)}
 .btn.line{background:#06C755;color:#fff;display:flex;align-items:center;justify-content:center;gap:9px}
 .btn.line svg{width:19px;height:19px;fill:currentColor;flex:none}
 .btn.sm{padding:8px 14px;font-size:14px}
@@ -221,9 +225,7 @@ button.pill{cursor:pointer}
 .day.rest .k{color:var(--rest);background:color-mix(in srgb,var(--rest) 15%,transparent)}
 .day.strength .k{color:var(--str);background:color-mix(in srgb,var(--str) 13%,transparent)}
 .day.race .k{color:#fff;background:var(--race)}
-.day.quality{box-shadow:var(--shadow-s),inset 3px 0 0 var(--q)}
-.day.long{box-shadow:var(--shadow-s),inset 3px 0 0 var(--long)}
-.day.race{box-shadow:var(--shadow-s),inset 3px 0 0 var(--race)}
+.day.race{background:color-mix(in srgb,var(--race) 7%,var(--glass-hi))}
 .hint{color:var(--accent);font-weight:650;white-space:nowrap;font-size:14px}
 
 /* 表單 */
@@ -315,7 +317,6 @@ pre.out{white-space:pre-wrap;word-break:break-word;background:var(--glass-hi);bo
 @media (max-width:400px){.day{grid-template-columns:62px 1fr;gap:10px;padding:11px 13px}.day .t{font-size:14.5px}h1{font-size:30px}}
 
 /* 通知中心 */
-.notif.unread{box-shadow:var(--shadow-l),inset 0 1px 0 var(--rim),inset 3px 0 0 var(--accent)}
 .notif.unread b::after{content:"";display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--accent);margin-left:7px;vertical-align:middle}
 .nicon{width:36px;height:36px;border-radius:11px;display:grid;place-items:center;background:var(--accent-soft);font-size:17px;flex:none}
 
@@ -476,7 +477,6 @@ details.card summary::-webkit-details-marker{display:none}
 .chipbar button:active{transform:scale(.95)}
 .teamgrid{display:grid;gap:12px;grid-template-columns:repeat(auto-fill,minmax(260px,1fr))}
 .teamcard{gap:8px;overflow:hidden}
-.teamcard .dot{position:absolute;inset:-40% -30% auto auto;width:180px;height:180px;border-radius:50%;background:radial-gradient(circle,color-mix(in srgb,var(--tc) 40%,transparent),transparent 70%);z-index:-1}
 .teamcard b{font-size:20px;letter-spacing:.02em}
 .card.teamhero{background:linear-gradient(140deg,var(--tc),color-mix(in srgb,var(--tc) 55%,#0B1B33))!important;color:#fff}
 .teamhero .muted{color:rgba(255,255,255,.82)}
@@ -513,7 +513,6 @@ fieldset.group{border:1px solid var(--stroke);border-radius:var(--r-l);padding:1
 fieldset.group legend{font-size:13px;font-weight:700;color:var(--ink-2);padding:0 6px}
 .qedit{display:grid;gap:10px}
 .qrow{display:grid;gap:8px;padding:12px;border-radius:var(--r-m);background:color-mix(in srgb,var(--ink) 4%,transparent)}
-[hidden]{display:none!important}
 
 /* 統計 */
 .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
@@ -570,8 +569,8 @@ fieldset.group legend{font-size:13px;font-weight:700;color:var(--ink-2);padding:
 .lsum{display:grid;gap:8px}
 .lstats{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:14px;color:var(--ink-2)}
 .lstats b{font-size:20px;color:var(--ink);margin-right:2px}
-.plancard{gap:4px;border-left:4px solid var(--long)}
-.plancard.quality{border-left-color:var(--q)}.plancard.easy{border-left-color:var(--easy)}.plancard.strength{border-left-color:var(--str)}.plancard.race{border-left-color:var(--race)}
+.plancard{gap:4px;--st:var(--long)}
+.plancard.quality{--st:var(--q)}.plancard.easy{--st:var(--easy)}.plancard.strength{--st:var(--str)}.plancard.race{--st:var(--race)}
 .logform{display:grid;gap:14px}
 .logform input[type=range]{padding:0;height:32px;accent-color:var(--accent);background:transparent;border:0}
 .chips.status .chip span{padding:10px 16px;font-weight:650}
@@ -873,9 +872,9 @@ label.chip{background:none;padding:0;box-shadow:none;border-radius:999px}
 .lsumact .btn{justify-content:center}
 /* 管理後台：開啟速度 */
 .vitals{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px}
-.vital{display:grid;gap:2px;padding:12px 14px;border-radius:var(--r-m);background:var(--glass-hi);border-left:4px solid var(--stroke)}
+.vital{display:grid;gap:2px;padding:12px 14px;border-radius:var(--r-m);background:var(--glass-hi)}
 .vital b{font-size:22px}
-.vital.good{border-left-color:#34C759}.vital.ok{border-left-color:#FF9F0A}.vital.poor{border-left-color:var(--race)}
+.vital.good{--st:var(--ok)}.vital.ok{--st:var(--mid)}.vital.poor{--st:var(--race)}
 
 /* ---------- 團購、加購與收費 ---------- */
 details.group{border:1px solid var(--stroke);border-radius:var(--r-l);padding:12px 14px;display:grid;gap:12px;min-width:0}
@@ -904,9 +903,9 @@ details.group[open] > summary{margin-bottom:2px}
 .acct .tiny{grid-column:1/-1}
 .acct pre{margin:0;font:inherit;font-weight:600;white-space:pre-wrap;user-select:all}
 .moneygrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px}
-.moneygrid > div{display:grid;gap:2px;padding:12px 14px;border-radius:var(--r-m);background:var(--glass-hi);border-left:4px solid var(--stroke)}
+.moneygrid > div{display:grid;gap:2px;padding:12px 14px;border-radius:var(--r-m);background:var(--glass-hi)}
 .moneygrid > div b{font-size:20px}
-.moneygrid .ok{border-left-color:#34C759}.moneygrid .wait{border-left-color:#FF9F0A}.moneygrid .due{border-left-color:var(--race)}
+.moneygrid .ok{--st:var(--ok)}.moneygrid .wait{--st:var(--mid)}.moneygrid .due{--st:var(--race)}
 .itemtable{display:grid;gap:2px}
 .itr{display:grid;grid-template-columns:1fr auto;gap:4px 12px;align-items:center;padding:10px 0;border-bottom:1px solid var(--stroke)}
 .itr:last-child{border-bottom:0}
@@ -974,13 +973,12 @@ details.group[open] > summary{margin-bottom:2px}
 .infochips > span{display:grid;padding:8px 12px;border-radius:12px;background:var(--glass-hi);border:1px solid var(--stroke);min-width:84px}
 .infochips b{font-size:14px}
 .wx{display:grid;gap:10px}
-.wxnow{display:grid;gap:8px;padding:14px;border-radius:var(--r-m);background:var(--glass-hi);border-left:5px solid var(--stroke)}
+.wxnow{display:grid;gap:8px;padding:14px;border-radius:var(--r-m);background:var(--glass-hi)}
 .wxnow > div:first-child{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
 .wxnow b{font-size:34px;letter-spacing:-.02em}
-.wxnow.good{border-left-color:#34C759}.wxnow.ok{border-left-color:#FF9F0A}.wxnow.poor{border-left-color:var(--race)}
-.wxnow.good .pill{background:color-mix(in srgb,#34C759 16%,transparent);color:#1E7E34}
-.wxnow.ok .pill{background:color-mix(in srgb,#FF9F0A 16%,transparent);color:#A15C00}
-.wxnow.poor .pill{background:color-mix(in srgb,var(--race) 14%,transparent);color:var(--race)}
+.wxnow.good .pill,.wxmini.good .pill{background:color-mix(in srgb,#34C759 16%,transparent);color:#1E7E34}
+.wxnow.ok .pill,.wxmini.ok .pill{background:color-mix(in srgb,#FF9F0A 16%,transparent);color:#A15C00}
+.wxnow.poor .pill,.wxmini.poor .pill{background:color-mix(in srgb,var(--race) 14%,transparent);color:var(--race)}
 .wxadv{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .wxhours{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(52px,1fr);gap:6px;overflow-x:auto;scrollbar-width:none;padding-bottom:2px}
 .wxhours > div{display:grid;justify-items:center;gap:2px;padding:8px 4px;border-radius:12px;background:var(--glass-hi);border-bottom:3px solid transparent}
@@ -1046,9 +1044,12 @@ body.guest .top .brand{opacity:0;pointer-events:none}
 @keyframes pop{0%{transform:scale(.4);opacity:0}70%{transform:scale(1.08)}100%{transform:scale(1);opacity:1}}
 
 /* ---------- 首頁天氣 ---------- */
-.wxmini{display:grid!important;grid-template-columns:auto 1fr auto;gap:12px;align-items:center;border-left:5px solid var(--stroke)}
+.wxmini{display:grid!important;grid-template-columns:auto 1fr auto;gap:12px;align-items:center}
 .wxmini .wxt{font-size:30px;font-weight:700;letter-spacing:-.02em}
-.wxmini.good{border-left-color:#34C759}.wxmini.ok{border-left-color:#FF9F0A}.wxmini.poor{border-left-color:var(--race)}
+/* 狀態用標題前的小圓點表示（iOS 的做法），不在圓角卡片上畫彩色邊條 */
+.vital.good,.vital.ok,.vital.poor,.moneygrid .ok,.moneygrid .wait,.moneygrid .due,.plancard{position:relative;padding-left:28px}
+.vital.good::before,.vital.ok::before,.vital.poor::before,.moneygrid .ok::before,.moneygrid .wait::before,.moneygrid .due::before,.plancard::before{content:"";position:absolute;left:13px;top:19px;width:8px;height:8px;border-radius:50%;background:var(--st)}
+.plancard::before{left:12px;top:24px}
 
 /* ---------- 會籍卡 ---------- */
 .membercard{position:relative;display:grid;gap:18px;padding:22px;border-radius:24px;color:#fff;overflow:hidden;isolation:isolate;
@@ -1123,3 +1124,25 @@ body.detail .top .brand{display:none}
 /* 很長、沒有空白的字串（配速、網址）在需要時斷行，不撐破手機畫面 */
 #view{overflow-wrap:anywhere}
 .fab:disabled{opacity:.5;cursor:default}
+
+/* ---------- iPhone Safari 修正 ---------- */
+/* 日期、時間欄位：iOS 有自己的最小寬度會撐破格子，改成跟其他欄位一樣寬、文字靠左 */
+input[type="date"],input[type="time"],input[type="datetime-local"],input[type="month"]{-webkit-appearance:none;appearance:none;min-width:0;max-width:100%;display:block;min-height:46px;text-align:left}
+input[type="date"]::-webkit-date-and-time-value,input[type="time"]::-webkit-date-and-time-value,input[type="datetime-local"]::-webkit-date-and-time-value,input[type="month"]::-webkit-date-and-time-value{text-align:left;margin:0}
+.grid2>*,.grid3>*,.grid2 label,.grid3 label{min-width:0}
+/* 可以左右滑的分段按鈕：兩端留空，第一個與最後一個不會被切到；滑動時對齊按鈕 */
+.seg{scroll-padding-inline:6px;scroll-snap-type:x proximity}
+/* 分頁太多、要左右滑的時候，兩側淡出提示還有內容 */
+.seg.scrolls{-webkit-mask-image:linear-gradient(90deg,transparent,#000 14px,#000 calc(100% - 14px),transparent);mask-image:linear-gradient(90deg,transparent,#000 14px,#000 calc(100% - 14px),transparent)}
+.seg button{scroll-snap-align:start}
+
+/* 活動頁的地址與導航（像 Apple 地圖的地點列） */
+.navlink{display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:center;padding:10px 12px;border-radius:14px;background:rgba(255,255,255,.14);color:#fff;text-decoration:none;font-size:14px;line-height:1.35}
+.navlink svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.8}
+.navlink b{font-size:13px;padding:5px 12px;border-radius:999px;background:#fff;color:var(--accent-deep,#1C4698)}
+.navlink:active{transform:scale(.98)}
+/* 活動頁的組別與價格：一個一個小膠囊，名稱跟價錢分開 */
+.pricechips{display:flex;flex-wrap:wrap;gap:8px}
+.pricechips > span{display:inline-flex;align-items:baseline;gap:8px;padding:6px 12px;border-radius:999px;background:rgba(255,255,255,.14);font-size:14px}
+.pricechips b{font-weight:600}
+.pricechips .num{font-weight:700}

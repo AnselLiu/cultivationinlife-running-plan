@@ -445,6 +445,10 @@ input[type=date],input[type=time]{min-width:0}
 body{letter-spacing:-.01em}
 .navbar{border-bottom:.5px solid var(--sep)}
 .navin .club{color:var(--label);display:flex;align-items:center;gap:8px;font-weight:700}
+/* 回到 App：跟 App 的返回鍵一樣是左上角的「‹ 課表」 */
+.navin .backapp{color:var(--accent);text-decoration:none;gap:4px;min-height:44px;margin-left:-6px;padding-right:8px}
+.navin .backapp .bchev{width:20px;height:20px;flex:none}
+.navin .backapp:active{opacity:.6}
 .navlogo{width:24px;height:26px;border-radius:6px;object-fit:cover}
 .themebtn{color:var(--accent)}
 .lanes,.top{display:none}
@@ -887,7 +891,7 @@ html.tabbed .wrap>.tab-on.tab-enter{animation:tabIn .22s ease-out}
 <body>
 <nav class="navbar" id="navbar" aria-label="頁首">
   <div class="navin">
-    <span class="club"><span class="navmark"><img class="mk-l" alt="" width="387" height="430"><img class="mk-d" alt="" width="387" height="430"></span>耕跑團</span>
+    <a class="club backapp" href="/#/plan" aria-label="回到耕跑團 App 的課表"><svg class="bchev" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg><span class="navmark"><img class="mk-l" alt="" width="387" height="430"><img class="mk-d" alt="" width="387" height="430"></span>課表</a>
     <span class="ctitle" id="navTitle">課表教練</span>
     <div class="navr"><button type="button" class="installbtn" id="installBtn" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11m0 0-4-4m4 4 4-4M5 19h14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>安裝 App</button><button type="button" class="langbtn" id="langBtn" aria-label="Switch to English">EN</button><button type="button" class="themebtn" id="themeBtn" aria-label="切換主題"></button></div>
   </div>
@@ -1798,7 +1802,7 @@ $('themeBtn').onclick=()=>{S.theme={auto:'light',light:'dark',dark:'auto'}[S.the
 
 /* ---------- 靜態文字翻譯 ---------- */
 const STATIC_EN={
-  '耕跑團':'cultivationinlife.run','課表教練':'Training Coach','安裝 App':'Install app',
+  '耕跑團':'cultivationinlife.run','課表':'Plan','課表教練':'Training Coach','安裝 App':'Install app',
   '耕跑團・cultivationinlife.run':'cultivationinlife.run · Marathon prep',
   '填好你的名字和比賽，就會用耕跑團的 20 週週期模型，排出只屬於你的每週課表。':'Enter your name and race, and cultivationinlife.run’s 20-week periodization model builds a week-by-week plan that’s all yours.',
   '目標賽事':'Target Race','跑者':'Runner','距比賽':'to race day',
@@ -2155,6 +2159,20 @@ const _applyLang=applyLang;
 applyLang=function(){_applyLang();buildTabbar();};
 
 applyLang(); applyTheme(); initFields(); update();
+
+/* ---------- 跟 App 同步：登入時，距離、組別與目標賽事以 App「我的」的設定為準（名字沒填才帶入） ---------- */
+(async()=>{
+  try{
+    const r=await fetch('/api/me',{credentials:'same-origin'});if(!r.ok)return;
+    const j=await r.json(),m=j&&j.member;if(!m)return;
+    let ch=false;const set=(k,v)=>{if(v&&S[k]!==v){S[k]=v;ch=true;}};
+    if(m.dist==='fm'||m.dist==='hm')set('dist',m.dist);
+    if(m.grp&&groups().some(g=>g[0]===m.grp))set('grp',m.grp);
+    if(!S.name)set('name',m.nickname||m.name);
+    if(j.race&&parseISO(j.race.date)&&j.race.date>=iso(today0())){set('raceDate',j.race.date);set('race',j.race.name);}
+    if(ch){S.week=null;save();initFieldsValues();update();}
+  }catch(e){}
+})();
 
 /* ---------- 整季 PDF ---------- */
 const dlP=(window.claude&&typeof window.claude.use==='function')?Promise.resolve().then(()=>window.claude.use('downloads')).catch(()=>null):Promise.resolve(null);
@@ -2517,7 +2535,7 @@ document.addEventListener('keydown',e=>{if(e.key==='Escape'){$('icsSheet').hidde
   function askUpdate(){
     if(!reg||!reg.waiting)return;
     $('updBar').hidden=false;
-    $('updBtn').onclick=()=>{$('updBar').hidden=true;reg.waiting&&reg.waiting.postMessage('skipWaiting');};
+    $('updBtn').onclick=()=>{$('updBar').hidden=true;reg.waiting&&reg.waiting.postMessage({type:'SKIP_WAITING'});};
   }
   function addLink(rel,href,extra){const l=document.createElement('link');l.rel=rel;l.href=href;Object.assign(l,extra||{});document.head.appendChild(l);}
   async function init(){

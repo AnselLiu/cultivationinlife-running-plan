@@ -1,5 +1,7 @@
 // 端到端測試的共用工具：用開發登入切換帳號、用 API 準備測試資料
+import { test } from '@playwright/test';
 export const BASE = 'http://localhost:8796';
+const base = () => { try { return test.info().project.use.baseURL || BASE; } catch { return BASE; } };
 const plus = (d) => new Date(Date.now() + 8 * 3600e3 + d * 864e5).toISOString().slice(0, 10);
 export { plus };
 export async function login(page, id) {
@@ -12,7 +14,7 @@ export async function login(page, id) {
 export async function apiAs(request, id, path, { method = 'GET', body } = {}) {
   const r = await request.get(`/api/dev/login?id=${id}`, { maxRedirects: 0 });
   const cookie = r.headers()['set-cookie'].split(';')[0];
-  const res = await request.fetch(`/api${path}`, { method, headers: { cookie, origin: BASE, 'content-type': 'application/json' }, data: body ? JSON.stringify(body) : undefined });
+  const res = await request.fetch(`/api${path}`, { method, headers: { cookie, origin: base(), 'content-type': 'application/json' }, data: body ? JSON.stringify(body) : undefined });
   return res.json();
 }
 // 第一次進來要同意隱私權政策（測試帳號的同意版本較舊）

@@ -31,10 +31,13 @@ async function formView(id) {
         <span class="tiny" id="visHint"></span></fieldset>
       <div class="grid2">
         <label><span data-when="survey">截止日期</span><span data-when="!survey">日期</span><input type="date" name="date" required value="${esc(d.date)}"></label>
-        <label data-when="!survey">集合時間<input type="time" name="gather_time" value="${esc(d.gather_time || '')}"></label>
+        <label data-when="!survey"><span data-when="!party">集合時間</span><span data-when="party">開始時間</span><input type="time" name="gather_time" value="${esc(d.gather_time || '')}"></label>
       </div>
       <div data-when="!survey">
-        <label>地點<input name="place" maxlength="60" value="${esc(d.place || '')}" placeholder="臺北田徑場 400 場"></label>
+        <div class="grid2">
+          <label>地點<input name="place" maxlength="60" value="${esc(d.place || '')}" placeholder="臺北田徑場 400 場"></label>
+          <label>地址（選填）<input name="address" maxlength="120" autocomplete="off" value="${esc(d.address || '')}" placeholder="臺北市大安區信義路四段 25 號 2 樓"></label>
+        </div>
         <div class="grid2">
           <label>練跑地圖的地點<select name="spot_id"><option value="">（不指定）</option>${spots.filter((x) => x.status === 'approved').map((x) => `<option value="${esc(x.id)}" ${d.spot_id === x.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select></label>
           <label>路線<select name="route_id"><option value="">（不指定）</option>${routes.map((r) => `<option value="${esc(r.id)}" ${d.route_id === r.id ? 'selected' : ''}>${esc(r.name)}・${(r.distance / 1000).toFixed(1)} 公里</option>`).join('')}</select></label>
@@ -46,7 +49,7 @@ async function formView(id) {
         </div>
       </div>
       <fieldset class="group" data-when="party">
-        <legend>春酒餐敘</legend>
+        <legend>餐敘（春酒、慶功宴、尾牙）</legend>
         <label>可攜伴人數<input type="number" name="guest_max" min="0" max="9" value="${d.guest_max || ''}" placeholder="不開放"></label>
         <p class="tiny" style="margin:0">攜伴每位跟報名費同價，費用在下方「費用與收款」設定。</p>
         <label>餐點選項（逗號分隔）<input name="meal_options" maxlength="60" value="${esc(d.meal_options || '')}" placeholder="葷食,素食"></label>
@@ -176,7 +179,7 @@ async function formView(id) {
     if (bad) return toast(`「${bad.label}」要有選項`);
     const body = {
       kind: f.kind.value, team_id: f.team_id.value || null, title: f.title.value, date: f.date.value, gather_time: f.gather_time.value,
-      place: f.place.value, lead: f.lead.value, note: f.note.value, plan_text: f.plan_text.value,
+      place: f.place.value, address: f.address.value.trim(), lead: f.lead.value, note: f.note.value, plan_text: f.plan_text.value,
       link_url: f.link_url.value, link_label: f.link_label.value, deadline: f.deadline.value,
       week_no: num(f.week_no), capacity: num(f.capacity), fee: num(f.fee), guest_max: num(f.guest_max), meal_options: f.meal_options.value,
       signup_open: f.signup_open.checked, questions, visibility: f.visibility.value, group_reg: f.group_reg.checked,
@@ -305,7 +308,7 @@ async function statsView(id) {
           ${(st.items || []).length && x.status === 'in' ? `<label class="inline tiny"><input type="checkbox" data-pick="${esc(x.member_id)}" ${x.picked ? 'checked' : ''}> 已領取</label>` : ''}</span>
         ${money ? `<select data-pay="${esc(x.member_id)}" aria-label="繳費狀態" class="paysel ${x.paid}">${Object.entries(PAID_NAME).map(([k, v]) => `<option value="${k}" ${x.paid === k ? 'selected' : ''}>${v}</option>`).join('')}</select>` : '<span></span>'}
       </div>`).join('')}</div>
-      <p class="tiny" style="margin:0">左邊勾選是點名出席${st.kind === 'party' ? '（春酒以入場券報到為準）' : ''}${money ? '；右邊切換繳費狀態，只做紀錄，不串金流' : ''}。</p>
+      <p class="tiny" style="margin:0">左邊勾選是點名出席${st.kind === 'party' ? '（餐敘以入場券報到為準）' : ''}${money ? '；右邊切換繳費狀態，只做紀錄，不串金流' : ''}。</p>
     </section>`}
     <section class="card">
       <h3>匯出</h3>

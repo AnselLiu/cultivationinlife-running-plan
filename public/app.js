@@ -22,6 +22,18 @@ const lazy = (file, name) => async (...a) => {
 if (location.pathname === '/privacy' && !location.hash) history.replaceState(null, '', '/#/privacy');
 const $ = (sel, root = document) => root.querySelector(sel);
 const view = $('#view');
+// 分頁按鈕（.seg）多到要左右滑時：加上 .scrolls 讓兩側淡出，並把選中的那一個捲到中間（不會被切一半）
+let segQueued = false;
+const fitSegs = () => {
+  segQueued = false;
+  for (const s of view.querySelectorAll('.seg')) {
+    const over = s.scrollWidth > s.clientWidth + 1;
+    s.classList.toggle('scrolls', over);
+    const on = over && !s.dataset.fit && s.querySelector('[aria-pressed="true"]');
+    if (on) { s.dataset.fit = '1'; s.scrollLeft += on.getBoundingClientRect().left - s.getBoundingClientRect().left - (s.clientWidth - on.offsetWidth) / 2; }
+  }
+};
+new MutationObserver(() => { if (!segQueued) { segQueued = true; requestAnimationFrame(fitSegs); } }).observe(view, { childList: true, subtree: true });
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 // 寫入中的請求數：送出表單時按鈕先停用，等所有寫入完成才恢復（避免連點送出兩次）
 let writes = 0;
@@ -161,7 +173,9 @@ const copy = async (text) => {
   catch { toast('複製失敗，請長按文字手動複製'); }
 };
 
-const KIND_NAME = { track: '田徑場團練', core: '核心日', long: '長跑團練', race: '賽事', party: '春酒餐敘', survey: '問卷調查', buy: '團購', other: '活動' };
+// 導航：Apple 裝置開 Apple 地圖，其他開 Google 地圖（只帶地點文字，不帶個人資料）
+const mapsUrl = (q) => (/iPhone|iPad|Macintosh/.test(navigator.userAgent) ? `https://maps.apple.com/?q=${encodeURIComponent(q)}` : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}`);
+const KIND_NAME = { track: '田徑場團練', core: '核心日', long: '長跑團練', race: '賽事', party: '餐敘聚會', survey: '問卷調查', buy: '團購', other: '活動' };
 const ROLE_NAME = { chair: '理事長', director: '理事', supervisor: '監事', staff: '行政人員', coach: '教練', member: '團員' };
 const allow = (p) => !!me?.can?.includes(p);
 const WD = ['日', '一', '二', '三', '四', '五', '六'];
@@ -196,7 +210,7 @@ const teamAllow = (tid, p) => allow(p) || (!!tid && teamOf(tid)?.my_status === '
 const anyTeamAllow = (p) => allow(p) || teams().some((t) => teamAllow(t.id, p));
 const teamTag = (t) => (t ? `<span class="pill team" style="--tc:${esc(t.color || '#1C4698')}">${t.icon ? `<img class="ticon xs" src="${esc(t.icon)}" alt="">` : ''}<span translate="no">${esc(t.name)}</span></span>` : '');
 // 分團小圖：有上傳就用圖，沒有就用團色＋第一個字
-const teamIcon = (t, cls = '') => (t.icon ? `<img class="ticon ${cls}" src="${esc(t.icon)}" alt="" loading="lazy">`
+const teamIcon = (t, cls = '') => (t.icon ? `<img class="ticon ${cls}" src="${esc(t.icon)}" alt="" decoding="async">`
   : `<span class="ticon ${cls}" style="background:${esc(t.color || '#1C4698')}" aria-hidden="true"><span translate="no">${esc(t.name.slice(0, 1))}</span></span>`);
 // 上傳前在手機上縮成 256px 正方形（置中裁切），WebP 不支援就用 JPEG
 async function squareIcon(file) {
@@ -233,6 +247,7 @@ const ICONS = {
 // 介面圖示：一律用同一套線條 SVG（不用 emoji），顏色跟著文字
 const ic = (d) => `<svg class="ic" viewBox="0 0 24 24" aria-hidden="true">${d}</svg>`;
 const IC = {
+  pin: ic('<path d="M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0c0 5.4-6.5 11-6.5 11Z"/><circle cx="12" cy="10" r="2.4"/>'),
   lock: ic('<rect x="5" y="10.5" width="14" height="10" rx="2.6"/><path d="M8.2 10.5V7.8a3.8 3.8 0 0 1 7.6 0v2.7"/>'),
   megaphone: ic('<path d="M4 10v4a1 1 0 0 0 1 1h2l6 4V5L7 9H5a1 1 0 0 0-1 1Z"/><path d="M16.5 9a4 4 0 0 1 0 6M19 6.5a7.5 7.5 0 0 1 0 11"/>'),
   calendar: ic('<rect x="3.2" y="4.8" width="17.6" height="15.4" rx="3.4"/><path d="M3.4 9.6h17.2M8 3.2v3.4M16 3.2v3.4"/>'),
@@ -604,7 +619,7 @@ async function todayCard(events) {
       : `<h2 class="${day.kind}">${esc(fixText(day.t))}</h2><p class="muted" style="margin:0">${P.KIND_LABEL[day.kind]}${P.paceHint(day.t, me.dist, me.grp) ? `・${P.paceHint(day.t, me.dist, me.grp)}` : ''}</p>`) : ''}
     ${todays.map((e) => `<a class="todayev" href="#/e/${e.id}">${IC.calendar}<span><b><span translate="no">${esc(e.title)}</span></b><span class="tiny" style="display:block">${e.gather_time ? `${e.gather_time} 集合` : ''}${e.place ? `・<span translate="no">${esc(e.place)}</span>` : ''}${e.mine === 'wait' ? '・候補中' : ''}</span></span><span class="tiny">›</span></a>`).join('')}
     ${day && day.kind !== 'rest' ? (done ? `<a class="btn ghost sm" href="#/log?id=${done.id}">看今天的紀錄</a>`
-      : `<div class="grid2">${feat('gps') ? `<a class="btn iconbtn" href="#/run" style="justify-content:center">${IC.runner}開始跑步</a>` : ''}<a class="btn ${feat('gps') ? 'ghost ' : ''}iconbtn" href="#/log?w=${w}&i=${idx}" style="justify-content:center${feat('gps') ? '' : ';grid-column:1/-1'}">${IC.check}練完了，記錄</a></div>`) : ''}
+      : `<div class="grid2">${feat('gps') ? `<a class="btn iconbtn" href="#/run" style="justify-content:center">${IC.runner}開始跑步</a>` : ''}<a class="btn ${feat('gps') ? 'ghost ' : ''}iconbtn" href="#/log?w=${w}&i=${idx}" style="justify-content:center${feat('gps') ? '' : ';grid-column:1/-1'}">${IC.check}記錄訓練</a></div>`) : ''}
   </section>`;
 }
 // 本週在整季的哪裡：階段、週次進度與三堂重點課
@@ -702,7 +717,8 @@ async function eventView(id) {
         <span class="tiny">${survey ? `${dstr(ev.date)} 前` : dstr(ev.date)}</span>
       </div>
       <h2><span translate="no">${esc(ev.title)}</span></h2>
-      <p class="muted" style="margin:0">${ev.gather_time ? `${ev.gather_time} 集合` : ''}${ev.end_time ? `－${ev.end_time}` : ''}${ev.place ? `　<span translate="no">${esc(ev.place)}</span>` : ''}${ev.lead ? `　帶團：<span translate="no">${esc(ev.lead)}</span>` : ''}</p>
+      <p class="muted" style="margin:0">${ev.gather_time ? `${ev.gather_time} ${party ? '開始' : '集合'}` : ''}${ev.end_time ? `－${ev.end_time}` : ''}${ev.place ? `　<span translate="no">${esc(ev.place)}</span>` : ''}${ev.lead ? `　帶團：<span translate="no">${esc(ev.lead)}</span>` : ''}</p>
+      ${ev.address || (ev.place && !ev.spot) ? `<a class="navlink" href="${mapsUrl(ev.address || ev.place)}" target="_blank" rel="noopener">${IC.pin}<span>${ev.address ? `<span translate="no">${esc(ev.address)}</span>` : '在地圖上查看'}</span><b>導航</b></a>` : ''}
       ${(ev.options || []).length || (ev.items || []).length ? `<div class="pricechips">${[...(ev.options || []), ...(ev.items || [])].map((o) => `<span><b><span translate="no">${esc(o.name)}</span></b>${o.price ? `<span class="num">${money(o.price)}</span>` : ''}</span>`).join('')}</div>`
         : ev.fee ? `<div class="pricechips"><span><b>費用</b><span class="num">${money(ev.fee)}</span></span></div>` : ''}
       ${ev.pricing?.early_off && ev.pricing.early_until >= ymd(new Date()) ? `<p class="tiny" style="margin:0;color:rgba(255,255,255,.9)">早鳥 ${esc(ev.pricing.early_until.slice(5).replace('-', '/'))} 前報名折 ${money(ev.pricing.early_off)}${ev.pricing.member_off ? `・協會會員再折 ${money(ev.pricing.member_off)}` : ''}</p>`
@@ -767,13 +783,17 @@ async function eventView(id) {
         ${ev.arrived ? '<button class="btn sm" id="pickScanEv" type="button">掃描領取</button>' : ''}
         <button class="btn danger sm" id="del">刪除</button>
       </div>
-      ${ev.cancelled ? '' : `<details id="noticeWrap"><summary class="tiny" style="cursor:pointer">發布異動（取消、改地點、改時間）</summary>
+      ${ev.cancelled ? '' : `<details id="noticeWrap"><summary class="tiny" style="cursor:pointer">發布通知或異動（改時間、改地點、取消）</summary>
         <form id="noticeForm" class="noticeform">
-          <div class="chips">${[['time', '改時間'], ['place', '改地點'], ['cancel', '取消活動'], ['other', '其他異動']].map(([k, v], i) => `<label class="chip"><input type="radio" name="type" value="${k}" ${i ? '' : 'checked'}><span>${v}</span></label>`).join('')}</div>
-          <label data-nt="time">新的集合時間<input type="time" name="gather_time" value="${esc(ev.gather_time || '')}"></label>
-          <label data-nt="place" hidden>新的地點<input name="place" maxlength="120" placeholder="例如 改到大佳河濱公園"></label>
-          <label>說明（會一起推播給報名的人）<input name="message" maxlength="300" placeholder="例如 下雨改室內，帶瑜珈墊"></label>
-          <button class="btn sm">送出並通知 ${ev.signups.filter((x) => x.status !== 'cancel').length} 人</button>
+          <div class="chips">${[['time', '改時間'], ['place', '改地點'], ['other', '提醒或通知'], ['cancel', '取消活動']].map(([k, v], i) => `<label class="chip"><input type="radio" name="type" value="${k}" ${i ? '' : 'checked'}><span>${v}</span></label>`).join('')}</div>
+          <div class="grid2" data-nt="time"><label>新的日期<input type="date" name="date" value="${esc(ev.date)}"></label><label>${party ? '新的開始時間' : '新的集合時間'}<input type="time" name="gather_time" value="${esc(ev.gather_time || '')}"></label></div>
+          <div class="grid2" data-nt="place" hidden><label>新的地點<input name="place" maxlength="120" placeholder="例如 改到大佳河濱公園"></label><label>地址（選填）<input name="address" maxlength="120" autocomplete="off"></label></div>
+          <label>說明（會一起推播）<textarea name="message" maxlength="300" placeholder="例如 下雨改室內，帶瑜珈墊"></textarea></label>
+          <fieldset class="qset"><legend>通知誰</legend><div class="chips">
+            <label class="chip"><input type="radio" name="audience" value="signed" ${ev.signups.some((x) => x.status !== 'cancel') ? 'checked' : ''}><span>已報名的人（${ev.signups.filter((x) => x.status !== 'cancel').length}）</span></label>
+            <label class="chip"><input type="radio" name="audience" value="all" ${ev.signups.some((x) => x.status !== 'cancel') ? '' : 'checked'}><span>${inviteOnly ? '所有受邀的人' : ev.team ? '整個分團' : '全協會'}</span></label></div>
+            <span class="tiny">用外部表單登記的活動（例如慶功宴）沒有人在 App 報名，要選第二個。</span></fieldset>
+          <button class="btn sm">送出並通知</button>
         </form></details>`}
       ${party || survey ? '' : `<details id="attendWrap" ${ev.attendToken ? 'open' : ''}><summary class="tiny" style="cursor:pointer">現場報到 QR（團員自己掃）</summary>
         ${ev.attendToken ? `<div class="qrbox" id="attendQR"></div><p class="tiny center" style="margin:0">請團員用手機相機掃描，登入後就完成報到；沒報名的人掃了會自動加入。只在活動當天有效。</p>
@@ -850,8 +870,11 @@ async function eventView(id) {
     nf.onsubmit = async (e) => {
       e.preventDefault();
       const t = nf.querySelector('[name=type]:checked').value;
-      if (t === 'cancel' && !confirm('確定取消這場活動？已報名的人都會收到通知。')) return;
-      try { const r = await api(`/events/${ev.id}/notice`, { method: 'POST', body: { type: t, gather_time: nf.gather_time.value, place: nf.place.value.trim(), message: nf.message.value.trim() } }); toast(`已通知 ${r.count} 人`); render(); }
+      if (t === 'cancel' && !confirm('確定取消這場活動？選的通知對象都會收到通知。')) return;
+      try {
+        const r = await api(`/events/${ev.id}/notice`, { method: 'POST', body: { type: t, date: nf.date.value, gather_time: nf.gather_time.value, place: nf.place.value.trim(), address: nf.address.value.trim(), message: nf.message.value.trim(), audience: nf.querySelector('[name=audience]:checked')?.value } });
+        toast(r.count ? `已通知 ${r.count} 人` : '已更新，沒有需要通知的人'); render();
+      }
       catch (err) { toast(err.message); }
     };
   }
@@ -1594,7 +1617,7 @@ async function planView(n) {
     ${extras.length ? `<section class="card"><h3>自主加練</h3><div class="roster">${extras.map((l) => `<a class="r" href="#/log?id=${l.id}"><span class="av">＋</span>
       <span>${esc(dstr(l.date))}${l.km ? `・${l.km} km` : ''}${l.seconds ? `・${S.fmtDuration(l.seconds)}` : ''}<span class="tiny" style="display:block"><span translate="no">${esc(l.note || '')}</span></span></span><span class="tiny">›</span></a>`).join('')}</div></section>` : ''}
     <section class="setgroup"><h3 class="sgt">工具</h3><div class="card setcard">
-      ${feat('coach') ? `<a class="setrow" href="/coach.html"><span class="sic">${IC.runner}</span><span class="st"><b>課表教練</b><span class="tiny">逐週課表、配速換算、年齡分級、補給試算</span></span><span class="chev" aria-hidden="true"></span></a>` : ''}
+      ${feat('coach') ? `<a class="setrow" href="/coach"><span class="sic">${IC.runner}</span><span class="st"><b>課表教練</b><span class="tiny">逐週課表、配速換算、年齡分級、補給試算</span></span><span class="chev" aria-hidden="true"></span></a>` : ''}
       <a class="setrow" href="#/report"><span class="sic">${MI.report}</span><span class="st"><b>訓練報表</b><span class="tiny">週里程、完成率、個人最佳</span></span><span class="chev" aria-hidden="true"></span></a>
       <a class="setrow" href="#/challenge"><span class="sic">${MI.flag}</span><span class="st"><b>每月里程挑戰</b><span class="tiny">徽章、分團對抗、排行榜</span></span><span class="chev" aria-hidden="true"></span></a>
     </div><p class="tiny center">課表來源：耕跑團記事本</p></section>`;

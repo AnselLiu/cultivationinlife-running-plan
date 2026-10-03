@@ -3,8 +3,8 @@
 import { spawn, execSync } from 'node:child_process';
 import { rmSync } from 'node:fs';
 
-const PORT = 8799, STATE = '.wrangler/test-state';
-const sh = (cmd) => execSync(cmd, { stdio: 'inherit' });
+const PORT = Number(process.env.TEST_PORT) || 8799, STATE = '.wrangler/test-state';
+const sh = (cmd) => execSync(cmd, { stdio: ['ignore', 'inherit', 'inherit'], env: { ...process.env, CI: '1', WRANGLER_SEND_METRICS: 'false' } });
 rmSync(STATE, { recursive: true, force: true });
 sh(`npx wrangler d1 migrations apply cil-run --local --persist-to ${STATE}`);
 sh(`npx wrangler d1 execute cil-run --local --persist-to ${STATE} --file tests/seed.sql`);
@@ -12,7 +12,7 @@ sh(`npx wrangler d1 execute cil-run --local --persist-to ${STATE} --file tests/s
 const vars = { DEV_LOGIN: '1', JOIN_CODE: 'test-join', CHAIR_CODE: 'test-chair', HASH_SALT: 'test-salt', AUDIT_KEY: 'test-audit-key',
   GOOGLE_CLIENT_ID: 'test-client.apps.googleusercontent.com', GOOGLE_CLIENT_SECRET: 'test-google-secret',
   RACE_KEY: 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8', BACKUP_KEY: 'HyAhIiMkJSYnKCkqKywtLi8wMTIzNDU2Nzg5Ojs8PT4' };
-const dev = spawn('npx', ['wrangler', 'dev', '--port', String(PORT), '--persist-to', STATE, ...Object.entries(vars).flatMap(([k, v]) => ['--var', `${k}:${v}`])],
+const dev = spawn('npx', ['wrangler', 'dev', '--port', String(PORT), '--inspector-port', '0', '--persist-to', STATE, ...Object.entries(vars).flatMap(([k, v]) => ['--var', `${k}:${v}`])],
   { stdio: ['ignore', 'pipe', 'inherit'], detached: process.platform !== 'win32' });
 let log = '';
 dev.stdout.on('data', (d) => { log += d; });

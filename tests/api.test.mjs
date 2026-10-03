@@ -424,6 +424,14 @@ test('活動異動、跑完接續、團購到貨領取 QR、銀行對帳、會�
   await call('t_chair', `/events/${ev.json.id}/notice`, { method: 'POST', body: { type: 'cancel', message: '颱風' } });
   assert.equal((await call('t_runner', `/events/${ev.json.id}`)).json.cancelled, true);
 
+  // 慶功宴這類用外部表單登記的餐敘：有地址；改日期與時間時通知所有看得到的人（不只已報名的人）
+  const pv = await call('t_chair', '/events', { method: 'POST', body: { kind: 'party', title: '慶功宴', date: '2027-06-01', gather_time: '18:30', place: '榮榮園', address: '臺北市大安區信義路四段25號2樓', link_url: 'https://forms.gle/x', notify: false } });
+  assert.equal((await call('t_runner', `/events/${pv.json.id}`)).json.address, '臺北市大安區信義路四段25號2樓');
+  assert.equal((await call('t_chair', `/events/${pv.json.id}/notice`, { method: 'POST', body: { type: 'time', date: '2027-06-04', gather_time: '19:00' } })).json.count, 0, '沒人報名、只通知報名的人');
+  assert.ok((await call('t_chair', `/events/${pv.json.id}/notice`, { method: 'POST', body: { type: 'other', message: '請大家登記座位', audience: 'all' } })).json.count > 1, '全協會都收到');
+  const pv2 = (await call('t_runner', `/events/${pv.json.id}`)).json;
+  assert.deepEqual([pv2.date, pv2.gather_time], ['2027-06-04', '19:00']);
+
   // 團購：到貨前看不到領取碼；到貨後掃碼領取
   const buy = await call('t_chair', '/events', { method: 'POST', body: { kind: 'buy', title: '毛巾團購', date: plus(15), notify: false, items: [{ name: '毛巾', price: 300 }], pay_info: { methods: ['transfer'] } } });
   const towel = (await call('t_runner', `/events/${buy.json.id}`)).json.items[0];

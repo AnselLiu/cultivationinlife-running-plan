@@ -9,7 +9,6 @@ async function teamsView() {
   view.innerHTML = `
     ${largeTitle('分團', '主團由管理員設定；想加入其他分團，申請後由該團幹部核准')}
     <div class="teamgrid">${list.map((t) => `<a class="card lit teamcard" href="#/t/${esc(t.id)}" style="--tc:${esc(t.color)}">
-      <span class="dot" aria-hidden="true"></span>
       <span class="row spread"><span class="row" style="gap:10px">${teamIcon(t, 'md')}<b><span translate="no">${esc(t.name)}</span></b></span>${t.id === me.main_team ? '<span class="pill solid">我的主團</span>' : t.my_status === 'active' ? `<span class="pill solid">${esc(t.my_title || TEAM_ROLE_NAME[t.my_role])}</span>` : t.my_status === 'pending' ? '<span class="pill wait">申請中</span>' : t.private ? '<span class="pill">私密</span>' : ''}</span>
       ${t.intro ? `<span class="tiny"><span translate="no">${esc(t.intro)}</span></span>` : ''}
       <span class="row spread"><span class="tiny num">${t.count} 人</span><span class="tiny">${t.leaders.filter((l) => l.role === 'lead').map((l) => `團長 <span translate="no">${esc(l.nickname || l.name)}</span>`).join('、')}</span></span>

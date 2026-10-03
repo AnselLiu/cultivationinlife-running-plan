@@ -11,7 +11,7 @@ test('建立活動並收到下一步提示，發布改時間異動', async ({ pa
   if (await page.locator('#ef [name=notify]').count()) await page.locator('#ef [name=notify]').uncheck();
   await page.getByRole('button', { name: '建立' }).click();
   await expect(page.locator('.hero')).toContainText('E2E 幹部建立的長跑');
-  await page.getByText('發布異動（取消、改地點、改時間）').click();
+  await page.getByText('發布通知或異動（改時間、改地點、取消）').click();
   await page.locator('#noticeForm [name=gather_time]').fill('06:30');
   await page.getByRole('button', { name: /送出並通知/ }).click();
   await expect(page.getByText(/已通知/)).toBeVisible();

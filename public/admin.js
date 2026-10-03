@@ -288,7 +288,7 @@ async function eventsPanel() {
         <label>下方標示<input name="foot" placeholder="IBM 產品體驗區 ×7"></label>
       </div>
       <button class="btn block">儲存座位圖</button>
-    </form>` : '<p class="muted" style="margin:0">還沒有春酒類型的活動。</p>'}
+    </form>` : '<p class="muted" style="margin:0">還沒有餐敘類型的活動（春酒、慶功宴、尾牙）。</p>'}
   </section>`;
 }
 const AUDIT_NAME = {
@@ -439,7 +439,7 @@ function bindEventsPanel() {
 
 
 // ---------- 系統設定（理事長、行政人員）----------
-const FEATURE_NAME = { gps: '跑步記錄（計時＋GPS）', studio: '拍照分享', health: 'Apple 健康匯入', file: 'GPX／TCX 檔匯入', coach: '課表教練', party: '春酒餐敘活動' };
+const FEATURE_NAME = { gps: '跑步記錄（計時＋GPS）', studio: '拍照分享', health: 'Apple 健康匯入', file: 'GPX／TCX 檔匯入', coach: '課表教練', party: '餐敘活動（春酒、慶功宴、尾牙）' };
 function settingsPanel() {
   const o = org(), f = cfg.settings?.features || {}, docs = cfg.settings?.docs || [], pv = cfg.settings?.privacy || {};
   return `
