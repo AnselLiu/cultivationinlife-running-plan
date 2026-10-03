@@ -1268,6 +1268,43 @@ body.fullmap .top .countdown{opacity:0;pointer-events:none}
 .mpin.closed .mpin-shape path{fill:#9AA3AF}
 .mpin.closed{opacity:.75}
 .spotrow.closed .ktile{filter:grayscale(1);opacity:.55}
+/* 附近即時影像：地點卡開放時間下面一段（可收合）、一列三格縮圖（4:3，360px 手機也是三格）、點開的大圖；官方直播只做外連 */
+.camsec{display:grid;gap:6px;padding-top:8px;border-top:1px solid var(--stroke)}
+.camsec .row.spread{align-items:center}
+#camBody{display:grid;gap:8px}
+.camh{margin:0;font-size:inherit}
+.camh button{display:flex;align-items:center;gap:10px;min-height:44px;padding:0;border:0;background:none;font:inherit;font-size:17px;font-weight:600;color:inherit;cursor:pointer}
+.camh .chev{transform:rotate(135deg);transition:transform .2s var(--tap)}
+.camh button[aria-expanded="false"] .chev{transform:rotate(45deg)}
+.camh button:focus-visible{outline:2.5px solid color-mix(in srgb,var(--accent) 65%,transparent);outline-offset:2px;border-radius:8px}
+.camvh{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
+.camgrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.camlinks{display:flex;flex-wrap:wrap;gap:8px}
+.camlinks .btn,.camsec .btn.sm,.camsheet .btn.sm{min-height:44px}
+.camvbar{gap:8px;align-items:center;flex-wrap:wrap}
+/* 管理後台的來源列：分隔線畫在整列（開關、同步按鈕、同意說明）下面，不要畫在開關下面 */
+.camsrc{border-bottom:1px solid var(--stroke);padding-bottom:6px}
+.camsrc .switch{border-bottom:0}
+.camtile{display:grid;gap:6px;align-content:start;min-width:0;padding:0;border:0;background:none;font:inherit;color:inherit;text-align:left;cursor:pointer}
+.camtile > a{display:grid;gap:6px;color:inherit;text-decoration:none}
+.camimg{display:grid;place-items:center;aspect-ratio:4/3;border-radius:var(--r-m);overflow:hidden;background:color-mix(in srgb,var(--ink) 7%,transparent);border:1px solid var(--stroke)}
+.camimg img{width:100%;height:100%;object-fit:cover;display:block}
+.camph{display:grid;justify-items:center;gap:4px;padding:8px;color:var(--ink-3);text-align:center}
+.camph svg.ic{width:24px;height:24px;stroke-width:1.6}
+.camgrid .camph{padding:4px;gap:2px}
+.camgrid .camph .tiny{font-size:11px;line-height:1.25}
+.camcap{display:grid;gap:0;min-width:0}
+.camcap b{font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.camcap .tiny{font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.camtile:focus-visible{outline:none}
+.camtile:focus-visible .camimg,.camtile > a:focus-visible .camimg{outline:2.5px solid color-mix(in srgb,var(--accent) 65%,transparent);outline-offset:2px}
+@media (hover:hover){.camtile:hover .camimg{border-color:color-mix(in srgb,var(--ink) 22%,transparent)}}
+.sheet.camsheet{z-index:900}   /* 練跑地圖的上方列是 800：大圖的遮罩要蓋過它 */
+.camsheet .sheet-card{display:grid;gap:10px}
+.camsheet .xbtn{width:44px;height:44px}
+.camview{display:grid;place-items:center;aspect-ratio:4/3;border-radius:var(--r-m);overflow:hidden;background:#0B1B33}
+.camview img{width:100%;height:100%;object-fit:contain;display:block}
+.camview .camph{color:rgba(255,255,255,.75)}
 .spotrow.closed b{color:var(--ink-2)}
 #spotOpen[aria-pressed="true"]{background:var(--accent);color:var(--on-accent)}
 

@@ -540,6 +540,8 @@ function loginView() {
 // 依功能開關顯示或隱藏分頁
 // 下方分頁列：管理員可以改名稱，每個人可以選只顯示圖示
 const TAB_DEFAULT = { home: '團練', plan: '課表', run: '跑步', map: '地圖', studio: '拍照', me: '我的' };
+// 附近即時影像的省流量：打開後地點卡的影像不自動載入、大圖不自動更新（只存在這支手機）
+const camLazy = { get() { try { return localStorage.getItem('cil-cam-lazy') === '1'; } catch { return false; } }, set(v) { try { v ? localStorage.setItem('cil-cam-lazy', '1') : localStorage.removeItem('cil-cam-lazy'); } catch {} } };
 const iconsOnly = { get() { try { return localStorage.getItem('cil-tab-icons') === '1'; } catch { return false; } }, set(v) { try { v ? localStorage.setItem('cil-tab-icons', '1') : localStorage.removeItem('cil-tab-icons'); } catch {} } };
 function applyTabs() {
   const names = { ...TAB_DEFAULT, ...(cfg.settings?.tabs || {}) };
@@ -657,7 +659,7 @@ function privacyView() {
       <h3>三、利用期間、地區、對象與方式</h3>
       <p>期間：${esc(PRIVACY.retention)}。<br>
          地區：台灣，以及雲端服務（Cloudflare）的資料中心所在地。<br>
-         對象：依職務最小權限開放給協會幹部；分團團長與幹部可以看自己分團的名冊（不含電話）與該分團活動的報名及問卷結果；電話完整號碼只有行政人員看得到。賽事報名資料只在你報名「代為團體報名」的活動並勾選同意後，提供給該活動的主辦幹部，用來向賽事主辦單位送出團體報名，每次下載都留有稽核紀錄。通訊地址存檔前會送到中華郵政的 3+3 郵遞區號服務核對寫法並補上郵遞區號，只傳送地址文字。不提供給第三方行銷使用。<br>
+         對象：依職務最小權限開放給協會幹部；分團團長與幹部可以看自己分團的名冊（不含電話）與該分團活動的報名及問卷結果；電話完整號碼只有行政人員看得到。賽事報名資料只在你報名「代為團體報名」的活動並勾選同意後，提供給該活動的主辦幹部，用來向賽事主辦單位送出團體報名，每次下載都留有稽核紀錄。通訊地址存檔前會送到中華郵政的 3+3 郵遞區號服務核對寫法並補上郵遞區號，只傳送地址文字。練跑地圖的「附近即時影像」由本站伺服器向政府公開攝影機取得畫面再轉給你，你的 IP 與位置不會傳給影像來源，本站也不保存影像。不提供給第三方行銷使用。<br>
          方式：以電子方式處理，全程加密傳輸。</p>
       <h3>四、您的權利</h3>
       <p>您可以隨時行使個人資料保護法第 3 條的權利：</p>
@@ -2801,6 +2803,7 @@ async function meNotify() {
     </section>
     <section class="card"><h3>顯示</h3>
       <label class="switch"><span>分頁列只顯示圖示<span class="tiny" style="display:block">隱藏下方圖示底下的文字</span></span><input type="checkbox" id="iconsOnly" ${iconsOnly.get() ? 'checked' : ''}><i></i></label>
+      ${cfg.settings?.features?.cams === true ? `<label class="switch"><span>省流量：影像不自動載入<span class="tiny" style="display:block">地點卡的附近即時影像點了才載入、不自動更新</span></span><input type="checkbox" id="camLazy" ${camLazy.get() ? 'checked' : ''}><i></i></label>` : ''}
       <div class="row spread"><span>語言<span class="tiny" style="display:block" translate="no">Language</span></span>
         <div class="seg" role="group" aria-label="Language" translate="no"><button data-lang="zh" aria-pressed="${I18N.lang === 'zh'}">中文</button><button data-lang="en" aria-pressed="${I18N.lang === 'en'}">English</button></div></div></section>`;
   $('#pushBtn')?.addEventListener('click', () => togglePush(sub));
@@ -2825,6 +2828,7 @@ async function meNotify() {
   }).catch(() => {});
   bindInstall();
   $('#iconsOnly').onchange = (e) => { iconsOnly.set(e.target.checked); applyTabs(); };
+  $('#camLazy')?.addEventListener('change', (e) => camLazy.set(e.target.checked));
   for (const b of document.querySelectorAll('[data-lang]')) b.onclick = () => { if (b.dataset.lang !== I18N.lang) I18N.setLang(b.dataset.lang); };
   $('#calNew').onclick = async () => {
     if (cfg.calendarOn && !confirm('重新產生後，已經訂閱的舊網址會失效，要在行事曆重新訂閱。確定？')) return;
@@ -3256,4 +3260,4 @@ addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvt 
 addEventListener('appinstalled', () => { installEvt = null; try { localStorage.setItem('cil-installed', '1'); } catch {} document.querySelectorAll('.installcard').forEach((c) => c.remove()); });
 
 // 拆出去的模組（admin.js、photo.js…）從這裡拿共用的工具與狀態
-export { addrField, bindAddrField, latest, $, cfg, downloadAuthed, scanSheet, FEEL, IC, KIND_NAME, LOG_STATUS_NAME, PAID_NAME, ROLE_NAME, TAB_DEFAULT, TEAM_PERMS, TEAM_ROLE_NAME, ago, allow, api, applyFeatures, avatar, barChart, bars, bindComments, bindStepup, copy, dayLabel, dstr, emptyState, esc, eventCard, feat, fixText, group, largeTitle, me, mfaBanner, money, nrow, org, pad2, paintCountdown, passkey, refreshMe, render, route, row, squareIcon, studio, teamAllow, teamIcon, teamOf, teams, toast, view, ymd };
+export { addrField, bindAddrField, camLazy, latest, $, cfg, downloadAuthed, openSheet, scanSheet, FEEL, IC, KIND_NAME, LOG_STATUS_NAME, PAID_NAME, ROLE_NAME, TAB_DEFAULT, TEAM_PERMS, TEAM_ROLE_NAME, ago, allow, api, applyFeatures, avatar, barChart, bars, bindComments, bindStepup, copy, dayLabel, dstr, emptyState, esc, eventCard, feat, fixText, group, largeTitle, me, mfaBanner, money, nrow, org, pad2, paintCountdown, passkey, refreshMe, render, route, row, squareIcon, studio, teamAllow, teamIcon, teamOf, teams, toast, view, ymd };

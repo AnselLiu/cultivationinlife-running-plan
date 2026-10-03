@@ -627,3 +627,135 @@ test('身分變更寫安全通知；入會申請不能重複；待處理摘要�
   await call('t_lead', '/teams/youth/members', { method: 'POST', body: { member_id: 't_other', action: 'approve' } });
   assert.ok((await call('t_lead', '/notifications?cat=todo')).json.items.find((n) => n.id === jn.id).read_at);
 });
+
+test('附近即時影像：功能開關預設關閉、同步與完整性檢查、最近鏡頭（3 公里備援）不回原始網址、畫面轉送與節流、來源開關要同意、手動直播連結（CAM_MOCK 不連外）', async () => {
+  const mock = (q = '') => fetch(`${BASE}/api/dev/cams-mock?${q}`).then((r) => r.json());
+  const frame = (who, id) => call(who, `/cams/${encodeURIComponent(id)}/frame`);
+  const near = async (who = 't_runner') => (await call(who, '/spots/seed07/cams')).json.cams;
+  await mock('reset=1');
+  // 權限：要登入；來源設定只有理事長、行政人員能改，監事只能看
+  assert.equal((await call(null, '/spots/seed07/cams')).status, 401);
+  assert.equal((await call(null, `/cams/${encodeURIComponent('wra:M1')}/frame`)).status, 401);
+  assert.equal((await call('t_runner', '/cams/sources')).status, 403);
+  assert.equal((await call('t_runner', '/cams/sync', { method: 'POST', body: { source: 'wra' } })).status, 403);
+  const sv = await call('t_super', '/cams/sources');
+  assert.equal(sv.status, 200); assert.equal(sv.json.editable, false);
+  assert.equal((await call('t_super', '/cams/sources', { method: 'POST', body: { source: 'wra', enabled: false } })).status, 403);
+  // 預設：水利署、公路局開啟；臺北市水利處關閉（要書面同意），關閉時不能同步、也不會連線
+  const on = async () => Object.fromEntries((await call('t_chair', '/cams/sources')).json.sources.map((s) => [s.source, s.enabled]));
+  assert.deepEqual(await on(), { wra: true, thb: true, heo: false, link: true });
+  assert.equal((await call('t_chair', '/cams/sync', { method: 'POST', body: { source: 'heo' } })).status, 400);
+  assert.equal((await call('t_chair', '/cams/sources', { method: 'POST', body: { source: '__proto__', enabled: true } })).status, 400, '來源代碼查不到原型上的東西');
+  assert.equal((await call('t_chair', '/cams/sources', { method: 'POST', body: { source: 'constructor', enabled: true } })).status, 400);
+  // 手動同步（功能開關關著也可以先測）：白名單外的主機、非 https、非預設埠、國外座標都不收
+  const w = await call('t_chair', '/cams/sync', { method: 'POST', body: { source: 'wra' } });
+  assert.equal(w.status, 200); assert.equal(w.json.count, 4);
+  assert.equal((await call('t_chair', '/cams/sources')).json.sources.find((s) => s.source === 'wra').last_error, null, '同步成功後清掉「同步中」');
+  // 功能開關預設關閉：地點卡不顯示、畫面與新增連結都 404、排程不同步
+  const cron = async (at) => (await call(null, `/dev/cron?at=${at}`)).json.cams;
+  assert.equal((await call('t_chair', '/cams/sources')).json.feature, false);
+  const off = await call('t_runner', '/spots/seed07/cams');
+  assert.equal(off.status, 200); assert.equal(off.json.enabled, false); assert.deepEqual(off.json.cams, []);
+  assert.equal((await frame('t_runner', 'wra:M1')).status, 404);
+  assert.equal((await call('t_chair', '/cams', { method: 'POST', body: { name: 'x', page_url: 'https://www.youtube.com/watch?v=x', lat: 25.07, lng: 121.54 } })).status, 404);
+  const hits0 = Object.values((await mock()).hits).reduce((n, v) => n + v, 0);
+  assert.equal(await cron('2027-06-15T20:30:00Z'), null, '功能關閉時排程不同步');
+  assert.equal(Object.values((await mock()).hits).reduce((n, v) => n + v, 0), hits0, '也不連線');
+  assert.equal((await call('t_chair', '/settings/features', { method: 'POST', body: { cams: true } })).status, 200);
+  assert.equal((await call('t_chair', '/cams/sources')).json.feature, true);
+  // 排程：每天每個來源只同步一次（台北 04:00 起），每次排程最多一個來源
+  await mock('shrink=1');
+  const c1 = await cron('2027-06-15T20:30:00Z');
+  assert.match(String(c1.wra), /^error: 筆數從 4 掉到 1/, '筆數驟減：這次不寫入');
+  assert.equal(c1.thb, undefined, '公路局 05:00 才同步');
+  assert.equal((await cron('2027-06-15T20:40:00Z')), null, '同一天不重複');
+  assert.ok((await near()).some((c) => c.id === 'wra:M1'), '完整性檢查擋下時不停用任何鏡頭');
+  assert.match((await call('t_chair', '/cams/sources')).json.sources.find((s) => s.source === 'wra').last_error, /這次不更新/);
+  await mock('shrink=0&drop=1');
+  assert.equal((await cron('2027-06-16T20:30:00Z')).wra, 3, '少一支（75%）照常更新');
+  assert.equal((await call('t_chair', '/cams/sources')).json.sources.find((s) => s.source === 'wra').active, 3, '清單不再出現的鏡頭停用');
+  await mock('drop=0');
+  assert.equal((await cron('2027-06-17T20:30:00Z')).wra, 4);
+  assert.equal((await cron('2027-06-17T21:30:00Z')).thb, 2);
+  assert.equal(await cron('2027-06-17T21:40:00Z'), null);
+  // 地點附近：1.5 公里內最多 3 支、河濱優先河川鏡頭；不回原始影像網址
+  const r = await call('t_runner', '/spots/seed07/cams');
+  assert.equal(r.status, 200);
+  assert.match(r.headers.get('cache-control'), /^private/);
+  const cams = r.json.cams;
+  assert.ok(cams.length >= 2 && cams.length <= 3, `鏡頭 ${cams.length} 支`);
+  assert.ok(cams.every((c) => c.dist <= 1500 && c.attribution && c.source_name), '都在 1.5 公里內、有顯名');
+  assert.ok(!cams.some((c) => c.id === 'wra:M4'), '太遠的不列');
+  assert.ok(cams.filter((c) => c.source === 'wra').length <= 2, '同一來源最多 2 支');
+  assert.equal(cams.find((c) => c.id === 'wra:M1').attribution, '影像來源：經濟部水利署（政府資料開放授權條款第1版）');
+  assert.ok(!/src_url|getImage|\/snapshot|cctv-ss|fmg\.wra/.test(r.text), '不回原始影像網址');
+  assert.equal(r.json.enabled, true);
+  assert.ok(cams.every((c) => c.far === false));
+  assert.equal((await call('t_runner', '/spots/nope404/cams')).status, 404);
+  // 1.5 公里內沒有：改給 3 公里內最近的 1 支，標 far
+  const fb = (await call('t_runner', '/spots/seed01/cams')).json.cams;
+  assert.equal(fb.length, 1, '備援半徑只給一支');
+  assert.ok(fb[0].far && fb[0].dist > 1500 && fb[0].dist <= 3000, `較遠 ${fb[0].dist} 公尺`);
+  // 畫面轉送：檔頭判斷格式（水利署標 jpeg 其實是 PNG）、不轉送來源的 cookie、快取、CSP
+  const f1 = await frame('t_runner', 'wra:M1');
+  assert.equal(f1.status, 200);
+  assert.equal(f1.headers.get('content-type'), 'image/png');
+  assert.equal(f1.headers.get('set-cookie'), null, '來源的 cookie 不轉送');
+  assert.match(f1.headers.get('cache-control'), /^private, max-age=\d+$/);
+  assert.equal(f1.headers.get('content-security-policy'), "default-src 'none'");
+  assert.equal(f1.headers.get('x-content-type-options'), 'nosniff');
+  assert.ok(Date.parse(f1.headers.get('x-cam-at')) > Date.now() - 120e3, '有擷取時間');
+  const f2 = await frame('t_other', 'wra:M1');
+  assert.equal(f2.status, 200);
+  assert.match(f2.headers.get('x-cam-cache'), /^(hit|mem)$/, '60 秒內不再向來源抓');
+  const hits = (await mock()).hits;
+  assert.equal(Object.entries(hits).filter(([u]) => /CCTV_SN=0xMOCKM1$/.test(u)).reduce((n, [, v]) => n + v, 0), 1, '同一支鏡頭只向來源抓一次');
+  assert.equal((await frame('t_runner', 'thb:CCTV-T1')).headers.get('content-type'), 'image/jpeg');
+  // 抓不到：502；60 秒內再要也不會再打來源，而且照實回 502（不是「更新中」的 503）
+  assert.equal((await frame('t_runner', 'wra:M3')).status, 502);
+  assert.equal((await frame('t_runner', 'wra:M3')).status, 502);
+  assert.equal(Object.entries((await mock()).hits).filter(([u]) => /0xBROKEN$/.test(u)).reduce((n, [, v]) => n + v, 0), 1, '節流期間不再向來源抓');
+  assert.equal((await frame('t_runner', 'wra:NOPE')).status, 404);
+  assert.equal((await frame('t_runner', 'wra:M5')).status, 404, '白名單外的鏡頭根本沒有收進來');
+  // 臺北市水利處：沒有勾選書面同意不能開；開啟後才同步、才出現；關掉立即消失，也不再轉送
+  assert.equal(Object.keys((await mock()).hits).filter((u) => u.includes('heopublic')).length, 0, '關閉時沒有任何連線');
+  assert.equal((await call('t_chair', '/cams/sources', { method: 'POST', body: { source: 'heo', enabled: true } })).status, 400);
+  assert.equal((await call('t_chair', '/cams/sources', { method: 'POST', body: { source: 'heo', enabled: true, consent: true } })).status, 200);
+  assert.equal((await call('t_chair', '/cams/sync', { method: 'POST', body: { source: 'heo' } })).json.count, 2, '只收 IsLive=1；iframe 類改用封面圖');
+  assert.ok((await near()).some((c) => c.source === 'heo' && c.attribution === '影像來源：臺北市政府工務局水利工程處'));
+  assert.equal((await frame('t_runner', 'heo:H2')).status, 200);
+  assert.ok(Object.keys((await mock()).hits).some((u) => u === 'https://video.nvr.taifo.com.tw/memfs/ab77d8d8-5abf-46f7-abba-9789b04e64e6.jpg'));
+  assert.equal((await call('t_chair', '/cams/sources', { method: 'POST', body: { source: 'heo', enabled: false } })).status, 200);
+  assert.ok(!(await near()).some((c) => c.source === 'heo'), '關掉立即消失');
+  assert.equal((await frame('t_runner', 'heo:H1')).status, 404);
+  await cron('2027-06-18T20:30:00Z');
+  assert.equal(Object.entries((await mock()).hits).filter(([u]) => u.includes('heopublic')).reduce((n, [, v]) => n + v, 0), 1, '關閉後排程不再連線');
+  // 手動直播連結：幹部新增、只外連（沒有畫面轉送）；直播連結的來源關掉時不能新增
+  const link = { name: '大佳河濱直播', page_url: 'https://www.youtube.com/watch?v=test123', label: '臺北市觀光傳播局', lat: 25.07358, lng: 121.54011, kind: 'park' };
+  await call('t_chair', '/cams/sources', { method: 'POST', body: { source: 'link', enabled: false } });
+  assert.equal((await call('t_runner', '/spots/seed07/cams')).json.link, false);
+  assert.equal((await call('t_chair', '/cams', { method: 'POST', body: link })).status, 400);
+  await call('t_chair', '/cams/sources', { method: 'POST', body: { source: 'link', enabled: true } });
+  assert.equal((await call('t_runner', '/spots/seed07/cams')).json.link, true);
+  assert.equal((await call('t_runner', '/cams', { method: 'POST', body: link })).status, 403);
+  assert.equal((await call('t_chair', '/cams', { method: 'POST', body: { ...link, page_url: 'http://example.com' } })).status, 400);
+  assert.equal((await call('t_chair', '/cams', { method: 'POST', body: { ...link, lat: 40 } })).status, 400);
+  const lk = await call('t_chair', '/cams', { method: 'POST', body: link });
+  assert.equal(lk.status, 200);
+  const shown = (await near()).find((c) => c.id === lk.json.id);
+  assert.equal(shown.media, 'link'); assert.equal(shown.page_url, link.page_url); assert.match(shown.attribution, /臺北市觀光傳播局/);
+  assert.equal(shown.label, '臺北市觀光傳播局'); assert.equal(shown.source_name, '官方直播');
+  assert.equal((await frame('t_runner', lk.json.id)).status, 404, '連結不轉送畫面');
+  assert.equal((await call('t_runner', `/cams/${lk.json.id}`, { method: 'DELETE' })).status, 403);
+  assert.equal((await call('t_chair', `/cams/${lk.json.id}`, { method: 'DELETE' })).status, 200);
+  assert.ok(!(await near()).some((c) => c.id === lk.json.id));
+  // 每位跑友 10 分鐘最多 120 張
+  let last = null;
+  for (let i = 0; i < 121; i++) last = await frame('t_lead', 'wra:M1');
+  assert.equal(last.status, 429);
+  // 全站緊急停用：關掉功能開關，地點卡與畫面立即消失
+  assert.equal((await call('t_chair', '/settings/features', { method: 'POST', body: { cams: false } })).status, 200);
+  assert.equal((await call('t_runner', '/spots/seed07/cams')).json.enabled, false);
+  assert.equal((await frame('t_runner', 'wra:M1')).status, 404);
+  await mock('reset=1');
+});
