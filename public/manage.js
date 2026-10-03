@@ -1,5 +1,5 @@
 // 耕跑團 PWA — manage.js：從 app.js 拆出來、用到才載入的畫面（第一次開 App 不用下載）
-import { $, apiAll, addrField, bindAddrField, ago, askReason, downloadAuthed, isOffline, nowTp, scanSheet, signupDefaults, allow, api, bars, copy, dstr, emptyState, esc, feat, group, IC, KIND_NAME, largeTitle, me, money, PAID_NAME, row, teamAllow, teams, toast, view } from './app.js';
+import { $, apiAll, addrField, bindAddrField, ago, askReason, downloadAuthed, isOffline, nowTp, scanSheet, signupDefaults, allow, api, bars, copy, dstr, emptyState, esc, feat, group, IC, KIND_NAME, largeTitle, me, money, PAID_NAME, row, teamAllow, teams, toast, rich, keep, names, view } from './app.js';
 import { defaultWindow, windowError, shiftDays, daysBetween, evStart, tpText, tpShort } from './signup-window.js';
 
 // ---------- 幹部：新增／編輯活動 ----------
@@ -526,11 +526,12 @@ function bindReview(id, st) {
     try {
       // 人多時伺服器分段處理（apiAll 會接著送剩下的人）
       const out = await apiAll(`/events/${id}/review`, { method: 'POST', body });
-      const skipped = `${out.skipped.length ? `，${out.skipped.length} 筆沒處理：${out.skipped.map((x) => `${x.name}（${x.reason}）`).join('、')}` : ''}${out.more ? `，還有 ${out.more.member_ids.length} 人沒處理完，請再按一次` : ''}`;
-      if (action === 'approve') toast(`已核准 ${out.in.length + out.wait.length} 人（正取 ${out.in.length}、候補 ${out.wait.length}）${skipped}${out.notes.length ? `。${out.notes.map((x) => `${x.name}：${x.reason}`).join('、')}` : ''}`);
-      else if (action === 'reopen') toast(`已重新審核 ${out.reopened.length} 人${skipped}`);
-      else if (body.revoke) toast(`已移出 ${out.rejected.length} 人${out.refund.length ? `，待退費：${out.refund.join('、')}` : ''}${skipped}`);
-      else toast(`已婉拒 ${out.rejected.length} 人${skipped}`);
+      // 名字用 keep() 標成不翻譯：英文模式只翻固定的字，不會因為名字是中文就整句保留中文
+      const skipped = [out.skipped.length ? [`，${out.skipped.length} 筆沒處理：`, names(out.skipped, '、', (x) => [keep(x.name), `（${x.reason}）`])] : '', out.more ? `，還有 ${out.more.member_ids.length} 人沒處理完，請再按一次` : ''];
+      if (action === 'approve') toast(rich(`已核准 ${out.in.length + out.wait.length} 人（正取 ${out.in.length}、候補 ${out.wait.length}）`, skipped, out.notes.length ? ['。', names(out.notes, '、', (x) => { const q = /^「(.+)」(.*)$/.exec(x.reason); return [keep(x.name), ...(q ? ['：「', keep(q[1]), `」${q[2]}`] : [`：${x.reason}`])]; })] : ''));
+      else if (action === 'reopen') toast(rich(`已重新審核 ${out.reopened.length} 人`, skipped));
+      else if (body.revoke) toast(rich(`已移出 ${out.rejected.length} 人`, out.refund.length ? ['，待退費：', names(out.refund)] : '', skipped));
+      else toast(rich(`已婉拒 ${out.rejected.length} 人`, skipped));
       const y = scrollY; await statsView(id); scrollTo(0, y);
     } catch (e) { all.forEach((b, i) => { if (b.isConnected) b.disabled = was[i]; }); toast(e.message); }
   };

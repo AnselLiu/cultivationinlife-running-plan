@@ -335,12 +335,27 @@ async function dropPush(server = true) {
 }
 // 提示：可以帶一個動作（例如刪除後的「復原」）；focus 把焦點移到動作按鈕
 // 時間到或被下一則提示取代時呼叫 onExpire（參數：焦點當時是否在提示裡）；滑鼠停在上面或焦點在裡面時先不關
+// 句子裡夾著使用者的名字：名字標 translate="no"，英文模式只翻固定的字，名字照原樣（toast 用 textContent，不能直接放 HTML）
+// 用法：rich('已移出 2 人，待退費：', names(['王小明', '李大華']))；相鄰的字串併成同一段，句型才比對得到
+const keep = (name) => ({ keep: String(name) });
+const names = (list, sep = '、', fmt = (x) => [keep(x)]) => list.flatMap((x, i) => [...(i ? [sep] : []), ...fmt(x)]);
+function rich(...parts) {
+  const f = document.createDocumentFragment();
+  let buf = '';
+  const flush = () => { if (buf) f.append(buf); buf = ''; };
+  for (const p of parts.flat(Infinity)) {
+    if (p == null || p === '' || p === false) continue;
+    if (typeof p === 'object' && 'keep' in p) { flush(); const b = document.createElement('bdi'); b.translate = false; b.textContent = p.keep; f.append(b); } else buf += String(p);
+  }
+  flush();
+  return f;
+}
 function toast(msg, { action, onAction, onExpire, focus = false, ms = 2600 } = {}) {
   const prev = $('.toast'); if (prev) { prev.remove(); prev.expire?.(); }
   const el = document.createElement('div');
   el.className = 'toast';
   el.role = 'status';
-  el.textContent = msg;
+  if (msg instanceof Node) el.append(msg); else el.textContent = msg;
   let done = false;
   el.expire = () => { if (done) return; done = true; const had = el.contains(document.activeElement); el.remove(); onExpire?.(had); };
   let b;
@@ -1330,7 +1345,9 @@ async function eventView(id) {
     const f = e.target;
     try {
       const r = await apiAll(`/events/${ev.id}/bulk`, { method: 'POST', body: { names: f.names.value, action: f.action.value } }, ['added']);
-      $('#bulkOut').innerHTML = `完成 ${r.added} 人。${r.more ? `<br>還有 ${r.more.names.length} 人沒處理完，請再按一次` : ''}${r.unmatched.length ? `<br>找不到：${r.unmatched.map(esc).join('、')}` : ''}${r.ambiguous.length ? `<br>同名需要手動處理：${r.ambiguous.map(esc).join('、')}` : ''}${r.failed.length ? `<br>沒報成：${r.failed.map(esc).join('、')}` : ''}`;
+      // 名字標 translate="no"：英文模式只翻固定的字，不會因為名字是中文就整句保留中文
+      const nm = (list) => list.map((x) => `<bdi translate="no">${esc(x)}</bdi>`).join('、');
+      $('#bulkOut').innerHTML = `完成 ${r.added} 人。${r.more ? `<br>還有 ${r.more.names.length} 人沒處理完，請再按一次` : ''}${r.unmatched.length ? `<br>找不到：${nm(r.unmatched)}` : ''}${r.ambiguous.length ? `<br>同名需要手動處理：${nm(r.ambiguous)}` : ''}${r.failed.length ? `<br>沒報成：${nm(r.failed)}` : ''}`;
       if (r.added) { toast(`已處理 ${r.added} 人`); setTimeout(() => eventView(id), 1200); }
     } catch (err) { toast(err.message); }
   });
@@ -3191,7 +3208,7 @@ function raceSub() {
   const r = cfg.race; if (!r?.date) return '選擇右上角倒數哪一場';
   const days = Math.round((new Date(`${r.date}T00:00:00`) - new Date().setHours(0, 0, 0, 0)) / 864e5);
   if (days < 0) return '選擇右上角倒數哪一場';
-  return `倒數：<span translate="no">${esc(r.name.replace(/^20\d\d\s*/, '').replace('馬拉松', '馬'))}・</span>${days ? `${days} 天` : '今天'}`;
+  return `倒數：<span translate="no">${esc(r.name.replace(/^20\d\d\s*/, '').replace('馬拉松', '馬'))}</span>・${days ? `${days} 天` : '今天'}`;
 }
 // 分組順序：內容類（賽事、分團、幹部）先列，設定類放最後；訓練報表與里程挑戰的上一層是課表，不放這裡（點進去分頁列會跳到課表）
 async function meHome(welcome) {
@@ -3951,4 +3968,4 @@ addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvt 
 addEventListener('appinstalled', () => { installEvt = null; try { localStorage.setItem('cil-installed', '1'); } catch {} document.querySelectorAll('.installcard').forEach((c) => c.remove()); });
 
 // 拆出去的模組（admin.js、photo.js…）從這裡拿共用的工具與狀態
-export { legacyData, removeLegacy, addrField, bindAddrField, latest, $, cfg, downloadAuthed, scanSheet, FEEL, IC, KIND_NAME, LOG_ICON, LOG_STATUS_NAME, MI, PAID_NAME, ROLE_NAME, TAB_DEFAULT, TEAM_PERMS, TEAM_ROLE_NAME, ago, allow, api, applyFeatures, avatar, barChart, bars, bindComments, bindStepup, btnRow, choose, coachPrefs, copy, countdownPicker, dayLabel, dstr, emptyState, esc, eventCard, feat, fixText, group, ic, largeTitle, me, mfaBanner, money, myCycle, nrow, org, pad2, paintCountdown, passkey, planSeg, queueLog, raceTarget, refreshMe, render, route, row, setCoachPrefs, squareIcon, startKey, studio, subTitle, teamAllow, teamIcon, teamOf, teams, toast, view, ymd, askReason, isOffline, nowTp, signupDefaults, submitLabel, camLazy, openSheet, apiAll };
+export { legacyData, removeLegacy, addrField, bindAddrField, latest, $, cfg, downloadAuthed, scanSheet, FEEL, IC, KIND_NAME, LOG_ICON, LOG_STATUS_NAME, MI, PAID_NAME, ROLE_NAME, TAB_DEFAULT, TEAM_PERMS, TEAM_ROLE_NAME, ago, allow, api, applyFeatures, avatar, barChart, bars, bindComments, bindStepup, btnRow, choose, coachPrefs, copy, countdownPicker, dayLabel, dstr, emptyState, esc, eventCard, feat, fixText, group, ic, largeTitle, me, mfaBanner, money, myCycle, nrow, org, pad2, paintCountdown, passkey, planSeg, queueLog, raceTarget, refreshMe, render, route, row, setCoachPrefs, squareIcon, startKey, studio, subTitle, teamAllow, teamIcon, teamOf, teams, toast, rich, keep, names, view, ymd, askReason, isOffline, nowTp, signupDefaults, submitLabel, camLazy, openSheet, apiAll };

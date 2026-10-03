@@ -1929,7 +1929,10 @@ details.group > .btn.sm{display:flex;width:fit-content}
 .optrow .iconx.rm,.itemrow .iconx.rm{width:44px;height:44px;color:var(--race);background:color-mix(in srgb,var(--race) 10%,transparent)}
 /* 說明文字裡的連結不要在中間斷行（「›」不會單獨掉到下一行） */
 .tiny a{white-space:nowrap}
-#signupBox > a.tiny{justify-self:start;display:inline-flex;align-items:center;min-height:44px;margin-block:-8px}
+#signupBox > a.tiny,.todaycard > a.tiny{justify-self:start;display:inline-flex;align-items:center;min-height:44px;margin-block:-8px}
+/* 休息站的資料來源連結很長：可以換行（不然整張卡被撐寬、關閉鈕跑到畫面外）；抽屜的欄寬也不會被內容撐開 */
+.restcredit a{white-space:normal;overflow-wrap:anywhere}
+.msheet #panel{grid-template-columns:minmax(0,1fr)}
 /* 地址欄標題：標題不被擠成兩行，提示文字放不下就換到下一行 */
 .addrfield legend{flex-wrap:wrap;row-gap:2px}
 .addrfield legend > :first-child{flex:none;white-space:nowrap}
@@ -2040,6 +2043,9 @@ a.footlink{display:inline-flex;align-items:center;gap:4px;min-height:44px;paddin
 /* 手機：分頁列下方的內容淡出（iOS 的 scroll edge）用抽屜本身的 --fade 遮罩（跟著 --hid 移動）；
    全開時同一個遮罩再加上頂端 12px 的淡出，不會在字中間硬切 */
 @media (max-width:819.98px){
+  /* 分頁列下方鋪一條不透明的底（抽屜本身是毛玻璃，淡出後地圖的字會透出來） */
+  .amap::after{content:"";position:absolute;left:0;right:0;bottom:0;height:calc(var(--below) + 20px);z-index:701;pointer-events:none;
+    background:linear-gradient(to bottom,transparent,var(--sheet-solid) 28px)}
   .msheet[data-detent="full"] .msheet-scroll{--fade:linear-gradient(to top,transparent calc(var(--hid) + var(--below) - 10px),#000 calc(var(--hid) + var(--below) + 18px),#000 calc(100% - 12px),transparent)}
 }
 /* iPad 以上的左側面板：高度跟著內容（路線卡、地點卡不會是一大塊空玻璃），清單長了才捲動 */

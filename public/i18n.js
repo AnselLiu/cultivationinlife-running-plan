@@ -91,6 +91,7 @@ const PATTERNS = [
   [/^天到(.+)$/, (_, r) => `days to ${r}`],
   // 「還有 N 人沒處理完」整段先換：片段「還有」單獨是 KPI 的 To go，拆開會變成「To go 3 people」
   [/還有 (\d+) 人沒處理完，請再按一次/g, '$1 people not processed yet. Tap again to continue'],
+  [/・同步到第 (\d+) 頁/g, ' · synced to page $1'],
   ['FRAG'],
   [/還有 (\d+) 天/g, '$1 days to go'],
   [/(\d+) 分鐘前/g, '$1 min ago'], [/(\d+) 小時前/g, '$1 h ago'], [/(\d+) 天前/g, '$1 d ago'],
@@ -120,9 +121,9 @@ const tr = (s) => {
     .replace(/\s{2,}/g, ' ').replace(/ ([,.;:!?)”])/g, '$1').replace(/([(“]) /g, '$1');
   // 長句子換完還剩一堆中文：整句保留中文，不要輸出中英夾雜、看不懂的句子（例如隱私權政策）
   if (core.length >= 10 && (out.match(/[㐀-鿿]/g) || []).length >= 3) return s;
-  // 句尾是轉換過的標點（・，：）而後面接著連結或不翻譯的名稱：保留一個空格，不會黏在一起
+  // 句尾是轉換過的標點（・，：）而後面接著連結或不翻譯的名稱：保留一個空格，不會黏在一起；句首是「・」或「（」（前面接著不翻譯的名稱）也一樣
   const body = out.trim();
-  return lead + (!lead && /^·/.test(body) ? ' ' : '') + body + (!tail && /[,.;:·]$/.test(body) ? ' ' : '') + tail;
+  return lead + (!lead && (/^·/.test(body) || /^（/.test(core)) ? ' ' : '') + body + (!tail && /[,.;:·]$/.test(body) ? ' ' : '') + tail;
 };
 const SKIP = 'script,style,textarea,code,[translate="no"],[contenteditable]';
 const ATTRS = ['placeholder', 'aria-label', 'title', 'alt'];
@@ -146,7 +147,8 @@ export async function init() {
   dict = mod.default; inner = mod.inner || {};
   // 句子裡的片段：至少兩個字才替換（單字只做整句對照，避免誤翻）；同一個詞在句中用小寫的說法（inner）
   const keys = [...new Set([...Object.keys(dict), ...Object.keys(inner)])].filter((k) => k.length >= 2).sort((a, b) => b.length - a.length);
-  frag = new RegExp(keys.map((k) => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'g');
+  // 數字開頭的片段（「7 天」「30 天」）不能從較大的數字中間比對：「77 天」不會變成「7 7 days」
+  frag = new RegExp(keys.map((k) => (/^\d/.test(k) ? '(?<![\\d.])' : '') + k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'g');
   document.documentElement.lang = 'en';
   walk(document.body);
   document.title = tr(document.title);
