@@ -185,7 +185,9 @@ test('關閉審核：還有待審核時要確認，確認後直接錄取', async
   await apiAs(request, 't_lead', `/events/${ev.id}/signup`, { method: 'POST', body: {} });
   await enter(page, 't_chair');
   await page.goto(`/#/edit/${ev.id}`);
-  await page.locator('#ef [name=require_approval]').uncheck({ force: true });
+  // 開關的 checkbox 是隱藏的（寬高 0），跟其他測試一樣點外層的開關
+  await page.locator('#ef label.switch', { has: page.locator('[name=require_approval]') }).click();
+  await expect(page.locator('#ef [name=require_approval]')).not.toBeChecked();
   let msg = '';
   page.once('dialog', (d) => { msg = d.message(); d.accept(); });
   await page.getByRole('button', { name: '儲存' }).click();
