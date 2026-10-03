@@ -374,3 +374,7 @@ test('執行額度紀錄：管理後台看得到排程工作、推播佇列、�
   assert.equal((await call('t_runner', '/admin/health')).status, 403);
   assert.deepEqual(await violations(), []);
 });
+
+test('staging 驗證：沒有 SELFTEST=1 的環境沒有 /api/admin/selftest', async () => {
+  assert.equal((await call('t_chair', '/admin/selftest', { method: 'POST', body: {} })).status, 404);
+});

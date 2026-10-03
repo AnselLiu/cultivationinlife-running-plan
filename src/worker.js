@@ -3439,6 +3439,22 @@ const api = (async function api(req, env, path, method) {
       growth, teamSizes,
     });
   }
+  // staging 驗證「呼叫自己會不會拿到新的額度」（只有 SELFTEST=1 的環境有這個 API，正式站沒有）：
+  //   ctx.exports.Jobs 的呼叫鏈跑 3 層，每層依序 40 句 SELECT 1、一個 60 句的 DB.batch、約 8 ms 的 CPU，回報每層成功或失敗與錯誤原文
+  //   只有理事長、要通過通行金鑰再驗證；一小時 3 次；寫稽核
+  if (path === '/api/admin/selftest' && method === 'POST' && env.SELFTEST === '1') {
+    const g = need(); if (g) return g;
+    if (norm(member.role) !== 'chair') return fail(403, '只有理事長可以執行');
+    { const su = await needStepUp(true); if (su) return su; }
+    if (await limited(env, `selftest:${member.id}`, 3, 3600)) return fail(429, '一小時最多 3 次');
+    const exp = env.ctx?.exports?.Jobs;
+    if (!exp) return fail(503, '這個環境沒有 ctx.exports');
+    env.budget.take('rpc');
+    let layers;
+    try { layers = await exp.selftest({ depth: 1 }); } catch (e) { layers = [{ layer: 1, error: String(e?.message || e).slice(0, 300) }]; }
+    await audit(env, req, member, 'admin.selftest', 'system', null, layers.map((l) => `第 ${l.layer} 層 ${l.error ? '失敗' : '成功'}`).join('、'));
+    return json({ layers });
+  }
   if (path === '/api/admin/broadcast' && method === 'POST') {
     const g = need(); if (g) return g;
     if (!can(member, 'settings') && !(can(member, 'members') && !READONLY[norm(member.role)])) return fail(403, '只有理事長與行政人員可以群發通知');
@@ -4374,6 +4390,27 @@ export class Jobs extends WorkerEntrypoint {
       await settled(e);   // defer 裡的工作也算進這次的用量
       return { done: !!r.done, result: r.result ?? null, used: b.sub - b.inherit, budget: b.summary() };
     } finally { await finishBudget(e, b); }
+  }
+  // staging 驗證用（POST /api/admin/selftest，只有 SELFTEST=1）：這一層照官方文件會超過免費方案的上限（40＋60 句），
+  //   看平台實際上是擋下還是放行，再呼叫下一層（最多 3 層）。直接用原本的 DB 綁定，不經過計數
+  async selftest({ depth = 1 } = {}) {
+    const d = Number(depth);
+    if (this.env.SELFTEST !== '1' || !Number.isInteger(d) || d < 1 || d > 3) throw new Error('bad selftest');
+    const out = { layer: d, seq: null, batch: null, cpuMs: 0, error: null };
+    try {
+      for (let i = 0; i < 40; i++) await this.env.DB.prepare('SELECT 1').first();
+      out.seq = 'ok';
+      await this.env.DB.batch(Array.from({ length: 60 }, () => this.env.DB.prepare('SELECT 1')));
+      out.batch = 'ok';
+      const t0 = Date.now(); let x = 0;
+      while (Date.now() - t0 < 8) x = (x * 31 + 7) % 1000003;
+      out.cpuMs = Date.now() - t0;
+    } catch (e) { out.error = String(e?.message || e).slice(0, 300); }
+    let next = [];
+    if (d < 3 && this.ctx.exports?.Jobs) {
+      try { next = await this.ctx.exports.Jobs.selftest({ depth: d + 1 }); } catch (e) { next = [{ layer: d + 1, error: String(e?.message || e).slice(0, 300) }]; }
+    }
+    return [out, ...next];
   }
   // 推播佇列的下一段（只在 JOB_DISPATCH=self 時由 pushJob 呼叫）：depth 必須在 1–plan.pushDepth 之間
   async drainPush({ depth = 0 } = {}) {

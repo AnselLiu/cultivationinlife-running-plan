@@ -42,7 +42,8 @@
       ],
       "triggers": { "crons": [] },
       "kv_namespaces": [{ "binding": "BACKUP_KV", "id": "f13b4414508140418e8fb9547d897aba" }],
-      "vars": { "PLAN": "free", "JOB_DISPATCH": "inline" }
+      // SELFTEST：只在 staging 開 POST /api/admin/selftest（驗證呼叫自己會不會拿到新的額度）；正式站不要設
+      "vars": { "PLAN": "free", "JOB_DISPATCH": "inline", "SELFTEST": "1" }
     }
   }
   // 設定值全部用 secrets（npx wrangler secret put 名稱 --name cil-run），不寫在這裡：
