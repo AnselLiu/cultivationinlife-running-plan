@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# 列出還沒有英文翻譯的介面字串：掃 public/*.js 的字串與樣板字面值、src/worker.js 給使用者看的訊息，
+# 列出還沒有英文翻譯的介面字串：掃 public/*.js 的字串與樣板字面值、src/*.js（worker.js、cams.js…，測試用的 *-mock.js 除外）給使用者看的訊息，
 # 跟 public/i18n-en.js 的字典比對。新增介面文字後跑一次，把列出來的字串補進字典。
 # 用法：python3 tools/i18n-missing.py
 import re,glob,json,sys
@@ -69,12 +69,13 @@ for f in sorted(glob.glob('public/*.js'))+['public/index.html']:
             if '<' in part: part=part[:part.index('<')]
             part=part.strip(' \n\t')
             if part and '="' not in part and re.search(r'[\u4e00-\u9fff]',part) and len(part)<=240: segs[part]=1
-w=open('src/worker.js').read()
-for L in literals(w):
+for f in sorted(glob.glob('src/*.js')):
+  if f.endswith('-mock.js'): continue
+  for L in literals(open(f).read()):
     if re.search(r'[一-鿿]',L):
-        for part in L.split('\u0001'):
-            part=part.strip()
-            if part and re.search(r'[一-鿿]',part) and len(part)<=240: segs[part]=1
+          for part in L.split('\u0001'):
+              part=part.strip()
+              if part and re.search(r'[一-鿿]',part) and len(part)<=240: segs[part]=1
 have=json.loads(open('public/i18n-en.js').read().split('export default ',1)[1].split(';\nexport const inner')[0])
 missing=[k for k in segs if k not in have and not re.search(r'//|\bif \(|[|]', k)]
 print(f'介面字串 {len(segs)} 個，沒有英文的 {len(missing)} 個')

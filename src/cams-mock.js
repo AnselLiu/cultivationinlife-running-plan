@@ -27,6 +27,7 @@ function wraList() {
     wraRow('M5', '不在白名單的主機', '25.0740', '121.5410', 'https://evil.example/cam.jpg'),
     wraRow('M6', '不是 https', '25.0740', '121.5410', 'http://fmg.wra.gov.tw/x'),
     wraRow('M7', '座標在國外', '35.0', '139.0'),
+    wraRow('M8', '非預設埠', '25.0740', '121.5410', 'https://fmg.wra.gov.tw:8443/x'),
   ];
   if (state.shrink) return all.slice(0, 1);
   return state.drop ? all.filter((r) => r.cameraid !== 'M4') : all;

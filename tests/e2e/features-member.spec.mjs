@@ -273,6 +273,8 @@ test('練跑地圖：搜尋、類型、縣市篩選，地圖上的針跟著篩',
 });
 
 test('附近即時影像：捲到才載縮圖、點開大圖有顯名、省流量時不自動載入（CAM_MOCK 不連外）', async ({ page, request }) => {
+  // 功能開關預設關閉：先打開
+  await apiAs(request, 't_chair', '/settings/features', { method: 'POST', body: { cams: true } });
   await apiAs(request, 't_chair', '/cams/sync', { method: 'POST', body: { source: 'wra' } });
   await enter(page);
   const frames = [];
@@ -296,4 +298,8 @@ test('附近即時影像：捲到才載縮圖、點開大圖有顯名、省流�
   await expect(page.locator('#camBox')).toContainText('點一下才載入');
   await page.waitForTimeout(500);
   expect(frames.length).toBe(before);
+  // 「我的 → 通知與裝置」的省流量開關（存在這支手機）
+  await page.evaluate(() => localStorage.setItem('cil-cam-lazy', '1'));
+  await page.goto('/#/me/notify');
+  await expect(page.locator('#camLazy')).toBeChecked();
 });

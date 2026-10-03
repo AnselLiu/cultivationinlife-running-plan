@@ -657,6 +657,7 @@ async function api(req, env, path, method) {
   const [member0, settingRows] = await Promise.all([currentMember(req, env), env.DB.prepare('SELECT key, value FROM settings').all().then((r) => r.results)]);
   let member = member0;
   const setting = (k) => settingRows.find((r) => r.key === k)?.value;
+  const camsOn = () => Cams.featureOn(setting('features'));
   // 幹部兩步驟驗證：理事長開啟後，幹部的工作階段要用通行金鑰驗證過，才有管理權限（之前一律當一般跑友）
   const security = (() => { try { return JSON.parse(setting('security') || '{}'); } catch { return {}; } })();
   if (member && security.require_mfa && (norm(member.role) !== 'member' || member.team_officer) && !member.s_mfa) {
@@ -867,10 +868,11 @@ async function api(req, env, path, method) {
     const editor = canEditSpots();
     if (!sp || (sp.status !== 'approved' && sp.created_by !== member.id && !editor)) return fail(404, '找不到這個地點');
     const sub = msp[2];
-    // 附近即時影像：1.5 公里內最多 3 支（只回名稱、距離、來源與顯名，不回原始影像網址）
+    // 附近即時影像：1.5 公里內最多 3 支，沒有就找 3 公里內最近的 1 支（只回名稱、距離、來源與顯名，不回原始影像網址）
+    //   功能開關關閉：回 enabled=false，前端整段不顯示
     if (sub === 'cams' && method === 'GET' && !msp[3]) {
-      const cams = await Cams.forSpot(env, sp);
-      return json({ cams, radius: Cams.RADIUS }, 200, { 'cache-control': 'private, max-age=300' });
+      const r = camsOn() ? await Cams.forSpot(env, sp) : { cams: [], enabled: false, link: false };
+      return json({ ...r, radius: Cams.RADIUS, fallback: Cams.FALLBACK }, 200, { 'cache-control': 'private, max-age=300' });
     }
     if (!sub && method === 'GET') {
       const reps = (await env.DB.prepare(`SELECT id, data, created_at, member_id FROM spot_reports WHERE spot_id = ? AND created_at >= datetime('now', '-24 hours') ORDER BY created_at DESC LIMIT 20`).bind(sp.id).all()).results;
@@ -940,10 +942,12 @@ async function api(req, env, path, method) {
     return new Response(w.body, { headers: { ...SEC_HEADERS, 'content-type': 'application/json; charset=utf-8', 'cache-control': 'private, max-age=300', 'x-weather-cache': w.hit ? 'hit' : 'miss' } });
   }
   // ---- 附近即時影像（政府公開攝影機；畫面經 Worker 轉送，不保存）----
+  //   整個功能由 features.cams 控制（預設關閉）：關閉時畫面與新增連結都回 404，來源設定仍可以先調好
   // 畫面：只轉送啟用中的來源與鏡頭；每位跑友 10 分鐘最多 120 張；每支鏡頭向來源抓取至少間隔 60 秒
   const mcf = path.match(/^\/api\/cams\/([\w:.-]{1,64})\/frame$/);
   if (mcf && method === 'GET') {
     const g = need(); if (g) return g;
+    if (!camsOn()) return fail(404, '找不到這支攝影機');
     if (await limited(env, `camv:${member.id}`, 120, 600)) return fail(429, '影像看得太頻繁，請稍後再試');
     const cam = await env.DB.prepare(`SELECT c.id, c.source, c.src_url, c.min_interval, c.health, c.fails, c.last_ok_at FROM cams c
       JOIN cam_sources s ON s.source = c.source AND s.enabled = 1 WHERE c.id = ? AND c.enabled = 1 AND c.media = 'snapshot'`).bind(mcf[1]).first();
@@ -954,6 +958,8 @@ async function api(req, env, path, method) {
   if (path === '/api/cams' && method === 'POST') {
     const g = need(); if (g) return g;
     if (!canEditSpots()) return fail(403, '只有幹部可以新增直播連結');
+    if (!camsOn()) return fail(404, '附近即時影像沒有開啟');
+    if (!(await env.DB.prepare("SELECT enabled FROM cam_sources WHERE source = 'link'").first())?.enabled) return fail(400, '官方直播連結的來源已關閉，請先在系統設定開啟');
     if (await limited(env, `camlink:${member.id}`, 20, 3600)) return fail(429, '新增太頻繁，請稍後再試');
     const b = await body();
     const name = str(b.name, 40), page = httpsUrl(b.page_url), label = str(b.label, 30) || null, lat = Number(b.lat), lng = Number(b.lng);
@@ -992,33 +998,37 @@ async function api(req, env, path, method) {
       env.DB.prepare("SELECT source, SUM(enabled) AS active, SUM(CASE WHEN enabled = 1 AND health = 'down' THEN 1 ELSE 0 END) AS down FROM cams GROUP BY source"),
     ])).map((r) => r.results);
     const cnt = Object.fromEntries(counts.map((r) => [r.source, r]));
+    // 「同步中」超過 2 分鐘還沒被覆蓋：那次執行被中斷了（例如超過 CPU 時間上限），照實顯示
+    const stuck = (r) => r.last_error === Cams.SYNCING && r.last_sync_at && Date.parse(`${r.last_sync_at.replace(' ', 'T')}Z`) < Date.now() - 120e3;
     return json({ sources: Object.entries(Cams.SOURCES).map(([k, S]) => {
       const r = srcs.find((x) => x.source === k) || {};
       return { source: k, name: S.name, attribution: S.attribution, manual: !!S.manual, consent: !!S.consent, enabled: !!r.enabled,
-        last_sync_at: r.last_sync_at || null, last_ok_at: r.last_ok_at || null, last_count: r.last_count ?? null, last_error: r.last_error || null,
+        last_sync_at: r.last_sync_at || null, last_ok_at: r.last_ok_at || null, last_count: r.last_count ?? null,
+        last_error: stuck(r) ? '上次同步沒有完成（可能超過執行時間上限）' : r.last_error || null,
         active: cnt[k]?.active || 0, down: cnt[k]?.down || 0 };
-    }), editable: can(member, 'settings') });
+    }), editable: can(member, 'settings'), feature: camsOn() });
   }
   if (path === '/api/cams/sources' && method === 'POST') {
     const g = need(); if (g) return g;
     if (!can(member, 'settings')) return fail(403, '只有理事長與行政人員可以修改系統設定');
-    const b = await body(), S = Cams.SOURCES[b.source], on = b.enabled === true;
+    const b = await body(), src = str(b.source, 10), S = Cams.sourceOf(src), on = b.enabled === true;
     if (!S) return fail(400, '沒有這個來源');
     // 臺北市水利處的影像沒有開放授權聲明：要確認已取得書面同意才能開啟
     if (on && S.consent && b.consent !== true) return fail(400, '開啟前請先確認已取得臺北市水利處的書面同意');
-    await env.DB.prepare('INSERT INTO cam_sources (source, enabled) VALUES (?, ?) ON CONFLICT(source) DO UPDATE SET enabled = excluded.enabled, rev = rev + 1').bind(b.source, on ? 1 : 0).run();
-    await audit(env, req, member, 'settings.cams', 'settings', `cams.${b.source}`, `${S.name}：${on ? '開啟' : '關閉'}${on && S.consent ? '（已確認取得書面同意）' : ''}`);
+    await env.DB.prepare('INSERT INTO cam_sources (source, enabled) VALUES (?, ?) ON CONFLICT(source) DO UPDATE SET enabled = excluded.enabled, rev = rev + 1').bind(src, on ? 1 : 0).run();
+    await audit(env, req, member, 'settings.cams', 'settings', `cams.${src}`, `${S.name}：${on ? '開啟' : '關閉'}${on && S.consent ? '（已確認取得書面同意）' : ''}`);
     return json({ ok: true });
   }
   // 立即同步（第一次開啟來源後不用等到隔天清晨）：每個來源一小時最多 3 次
   if (path === '/api/cams/sync' && method === 'POST') {
     const g = need(); if (g) return g;
     if (!can(member, 'settings')) return fail(403, '只有理事長與行政人員可以同步');
-    const src = str((await body()).source, 10), S = Cams.SOURCES[src];
+    const src = str((await body()).source, 10), S = Cams.sourceOf(src);
     if (!S?.list) return fail(400, '沒有這個來源');
     if (!(await env.DB.prepare('SELECT enabled FROM cam_sources WHERE source = ?').bind(src).first())?.enabled) return fail(400, '請先開啟這個來源');
     if (await limited(env, `camsync:${src}`, 3, 3600)) return fail(429, '這個來源一小時最多同步 3 次');
-    const r = await Cams.syncSource(env, src);
+    let r;
+    try { r = await Cams.syncSource(env, src); } catch (e) { r = { error: String(e?.message || e).slice(0, 120) }; await Cams.markFailed(env, src, r.error); }
     await audit(env, req, member, 'settings.cams_sync', 'settings', `cams.${src}`, r.error ? `失敗：${r.error}` : `${r.count} 支，更新 ${r.changed}、停用 ${r.disabled}`);
     if (r.error) return fail(502, r.error);
     return json(r);
@@ -2113,6 +2123,8 @@ async function api(req, env, path, method) {
     } else if (key === 'features') {
       value = {};
       for (const f of ['gps', 'studio', 'health', 'file', 'coach', 'party']) value[f] = b[f] !== false;
+      // 附近即時影像預設關閉：要明確打開（staging 實測過 Cache API、出口 IP 與解析 CPU 時間之後）
+      value.cams = b.cams === true;
     } else if (key === 'tabs') {
       // 下方分頁列的名稱（每個最多 4 個字，空白就用預設）
       value = {};
@@ -3463,17 +3475,24 @@ async function auditDigest(env, now) {
 }
 
 // 附近即時影像：每天同步一次鏡頭清單（台北 04:00 水利署與水利處、05:00 公路局；錯過整點就在下一個整點補跑）
-//   只同步開啟的來源；失敗或筆數驟減時不寫入、不停用，隔天再試（管理後台看得到錯誤，也可以手動同步）
+//   功能開關（features.cams）關閉時完全不跑；只同步開啟的來源；失敗或筆數驟減時不寫入、不停用，隔天再試
+//   每次排程最多同步一個來源（公路局 XML 約 1.7 MB，解析很吃 CPU，不跟別的來源擠在同一次執行）
+//   開始前先把來源標成「同步中」：如果執行被強制中斷（超過 CPU 時間上限，接不到例外），管理後台看得到
 async function syncCams(env, now) {
+  if (!Cams.featureOn((await env.DB.prepare("SELECT value FROM settings WHERE key = 'features'").first())?.value)) return null;
   const h = taipei(now).getUTCHours();
   const on = new Set((await env.DB.prepare('SELECT source FROM cam_sources WHERE enabled = 1').all()).results.map((r) => r.source));
-  const out = {};
   for (const [k, S] of Object.entries(Cams.SOURCES)) {
     if (!S.list || !on.has(k) || h < S.hour || !(await onceOn(env, `cams.${k}`, tpDate(now)))) continue;
-    const r = await Cams.syncSource(env, k);
-    out[k] = r.error ? `error: ${r.error}` : r.count;
+    let r;
+    try { r = await Cams.syncSource(env, k); } catch (e) {
+      const msg = String(e?.message || e).slice(0, 120);
+      await Cams.markFailed(env, k, msg);
+      r = { error: msg };
+    }
+    return { [k]: r.error ? `error: ${r.error}` : r.count };
   }
-  return Object.keys(out).length ? out : null;
+  return null;
 }
 
 async function scheduled(env, now = new Date()) {

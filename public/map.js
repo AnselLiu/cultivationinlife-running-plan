@@ -3,9 +3,9 @@
 //   現場回報：人潮、路況、照明、天氣，24 小時內顯示、不顯示是誰
 //   天氣：每個地點的 12 小時預報、空氣品質與跑步建議
 //   畫路線：在地圖上點出路線，即時算距離，可以存起來分享、下載 GPX、直接開揪跑
-//   附近即時影像：1.5 公里內的政府公開攝影機（水利署、公路局…），畫面由本站轉送、不保存；幹部可以加官方直播的外連
+//   附近即時影像：1.5 公里內（沒有就 3 公里內最近一支）的政府公開攝影機，畫面由本站轉送、不保存；幹部可以加官方直播的外連；功能開關預設關閉
 //   底圖：內政部國土測繪中心電子地圖與正射影像（政府資料開放授權）、OpenStreetMap；Leaflet 放在 /vendor（不從外部載入程式）
-import { $, allow, api, esc, IC, largeTitle, openSheet, teamAllow, teams, toast, view } from './app.js';
+import { $, allow, api, camLazy, cfg, esc, IC, largeTitle, openSheet, teamAllow, teams, toast, view } from './app.js';
 // 開揪跑要有建立活動的權限（協會或分團幹部）；團員改成在 LINE 揪人、請幹部開團
 const canCreate = () => allow('event') || teams().some((t) => teamAllow(t.id, 'event'));
 const lineShare = (text) => `https://line.me/R/share?text=${encodeURIComponent(text)}`;
@@ -457,6 +457,7 @@ async function openSpot(id, fly) {
       <div class="row spread"><div class="row" style="gap:12px;align-items:center">${kindTile(s.kind)}<div><span class="tiny">${KIND[s.kind]}${s.city ? `・${esc(s.city)}` : ''}</span>${s.status === 'pending' ? ' <span class="pill wait">審核中</span>' : ''}<h2 style="margin:2px 0 0"><span translate="no">${esc(s.name)}</span></h2></div></div>
         <button class="xbtn" id="backList" aria-label="關閉，回地點清單"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7 7 17"/></svg></button></div>
       ${(() => { const o = s.info?.hours ? hoursNow(s.info.hours) : null; return s.info?.hours ? `<p class="ohours"><span class="ostat ${o ? (o.open ? 'on' : 'off') : ''}">${o ? esc(o.label) : '開放時間'}</span><span class="tiny"><span translate="no">${esc(s.info.hours)}</span></span></p>` : ''; })()}
+      ${camSection(d.editor)}
       ${s.intro ? `<p class="muted" style="margin:0;white-space:pre-wrap"><span translate="no">${esc(s.intro)}</span></p>` : ''}
       ${Object.keys(s.info || {}).length ? `<div class="infochips">${Object.entries(INFO).filter(([k]) => s.info[k]).map(([k, v]) => `<span><span class="tiny">${v}</span><b>${esc(s.info[k])}</b></span>`).join('')}</div>` : ''}
       <div class="row" style="gap:8px"><a class="btn sm" href="${nav}" target="_blank" rel="noopener">導航 ${IC.external}</a><button class="btn ghost sm" id="offBtn">下載離線地圖</button>${s.status !== 'approved' ? '' : canCreate() ? `<a class="btn ghost sm" href="#/new?spot=${esc(s.id)}">在這裡開揪跑</a>`
@@ -465,10 +466,6 @@ async function openSpot(id, fly) {
       ${s.status === 'pending' && d.editor ? '<div class="row" style="gap:8px"><button class="btn sm" id="approve">通過</button><button class="btn danger sm" id="reject">不通過</button></div>' : ''}
     </section>
     <section class="card"><h3>天氣</h3><div id="wxBox"><p class="tiny" style="margin:0">載入中…</p></div></section>
-    <section class="card" id="camCard" aria-labelledby="camH"><div class="row spread"><h3 id="camH">附近即時影像</h3>${d.editor ? `<button class="btn ghost sm iconbtn" id="camAdd">${IC.plus}直播連結</button>` : ''}</div>
-      <div id="camAddForm"></div>
-      <div id="camBox" aria-live="polite"><p class="tiny" style="margin:0">載入中…</p></div>
-      <p class="tiny" style="margin:0">${CAM_NOTE}</p></section>
     ${s.status === 'approved' ? `<section class="card"><div class="row spread"><h3>現場回報</h3><button class="btn sm" id="repBtn">回報現場</button></div>
       <div id="repForm"></div>
       ${d.reports.length ? `<div class="reports">${d.reports.map((r) => `<div class="rep"><div>${Object.keys(REP).filter((k) => r[k]).map((k) => `<span class="pill ${['積水', '施工', '封閉', '多', '大雨', '沒有'].includes(r[k]) ? 'wait' : ''}">${REP[k][0]} ${esc(r[k])}</span>`).join('')}</div>
@@ -493,122 +490,190 @@ async function openSpot(id, fly) {
 }
 // ---- 附近即時影像 ----
 // 畫面由本站轉送（/api/cams/:id/frame）：跑友的 IP 不會送到影像來源，本站也不保存影像
-//   縮圖：卡片捲到看得見時才載入，而且只載一次、不自動更新
+//   功能開關 features.cams 預設關閉（要明確打開）；關閉或所有來源都關掉時整段不顯示
+//   位置：地點卡開放時間下面，可以收合（記在這支手機）；收合時不載入影像
+//   縮圖：一列三格，段落看得見時才載入，而且只載一次、不自動更新；別的 isolate 剛抓過（503）就照 Retry-After 再試一次
 //   大圖：點縮圖打開；每 60 秒更新，只在畫面看得見時更新，App 進背景就暫停，10 分鐘後自動停止
-//   省流量（系統的省數據模式或 2G 網路）：都不自動載入，點了才載
+//   省流量（「我的 → 通知與裝置」的開關、系統的省數據模式或 2G 網路）：都不自動載入，點了才載
 const CAM_NOTE = '影像為政府公開攝影機畫面，由本站即時轉送、不保存，你的 IP 與位置不會傳給影像來源。僅供參考天氣與路況，實際狀況以現場與官方公告為準。';
+const CAM_NOTE_SHORT = '政府公開攝影機畫面，由本站轉送、不保存；僅供參考天氣與路況，以現場與官方公告為準。';
 const CAM_SVG = '<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="2.5" y="6.5" width="13" height="11" rx="2.5"/><path d="m15.5 10.5 6-3.5v10l-6-3.5"/></svg>';
 const LIVE_SVG = '<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="2.5" y="4.5" width="19" height="15" rx="4"/><path d="M10 9v6l5-3Z"/></svg>';
-const saveData = () => { const c = navigator.connection; return !!(c && (c.saveData || /(^|-)2g$/.test(c.effectiveType || ''))); };
-let camIO = null, camUrls = [];
+const camsFeat = () => cfg.settings?.features?.cams === true;
+const saveData = () => { if (camLazy.get()) return true; const c = navigator.connection; return !!(c && (c.saveData || /(^|-)2g$/.test(c.effectiveType || ''))); };
+const camFold = { get() { try { return localStorage.getItem('cil-cam-fold') === '1'; } catch { return false; } }, set(v) { try { v ? localStorage.setItem('cil-cam-fold', '1') : localStorage.removeItem('cil-cam-fold'); } catch {} } };
+let camIO = null, camUrls = [], camClose = null, camAfter = null;
 function camReset() {
   camIO?.disconnect(); camIO = null;
+  camClose?.(); camClose = null;
   for (const u of camUrls) URL.revokeObjectURL(u);
   camUrls = [];
 }
+// 換頁（例如點上方的通知、標誌）時一定關掉大圖，不讓它蓋在下一頁上、也不再繼續抓畫面
+addEventListener('hashchange', () => { camClose?.(); camClose = null; });
 const distTxt = (m) => (m < 50 ? '就在附近' : m < 1000 ? `${Math.round(m / 10) * 10} 公尺` : `${(m / 1000).toFixed(1)} 公里`);
-const ageTxt = (iso) => {
-  const d = new Date(iso);
-  if (!iso || Number.isNaN(+d)) return '';
-  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')} 擷取${Date.now() - +d > 15 * 60e3 ? '・畫面可能延遲' : ''}`;
-};
+const hhmm = (iso) => { const d = new Date(iso); return !iso || Number.isNaN(+d) ? '' : `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
+const ageTxt = (iso) => (hhmm(iso) ? `${hhmm(iso)} 擷取${Date.now() - +new Date(iso) > 15 * 60e3 ? '・畫面可能延遲' : ''}` : '');
+const camAlt = (c, at) => (lang === 'en' ? `${c.name} live camera image${hhmm(at) ? `, captured ${hhmm(at)}` : ''}` : `${c.name} 即時影像${hhmm(at) ? `，${hhmm(at)} 擷取` : ''}`);
 // 取一張畫面：用 fetch 拿回來轉成 blob 網址（CSP 允許 blob:），才讀得到擷取時間與錯誤狀態
+//   回 { url, at, t }；別的地方剛抓過、要等一下（503）回 { wait: 秒 }；其他錯誤丟出例外
 async function camFrame(id) {
   const r = await fetch(`/api/cams/${encodeURIComponent(id)}/frame`);
-  if (!r.ok) throw new Error(r.status === 429 ? '影像看得太頻繁，請稍後再試' : r.status === 503 ? '畫面更新中，請稍後再試' : '暫時無法取得畫面');
+  if (r.status === 503) return { wait: Math.min(Math.max(Number(r.headers.get('retry-after')) || 10, 1), 120) };
+  if (!r.ok) throw new Error(r.status === 429 ? '影像看得太頻繁，請稍後再試' : '暫時無法取得畫面');
   const url = URL.createObjectURL(await r.blob());
   camUrls.push(url);
   return { url, at: r.headers.get('x-cam-at') || '', t: Date.now() };
 }
 const dropUrl = (u) => { if (!u) return; URL.revokeObjectURL(u); camUrls = camUrls.filter((x) => x !== u); };
+// 地點卡裡的段落（功能開關打開時才有）：標題列可以收合；幹部可以加官方直播的外連
+const camSection = (editor) => (camsFeat() ? `<div class="camsec" id="camCard"${editor ? '' : ' hidden'}>
+    <div class="row spread"><h3 class="camh"><button type="button" id="camTog" aria-expanded="${!camFold.get()}" aria-controls="camBody">附近即時影像<span class="chev" aria-hidden="true"></span></button></h3>
+      ${editor ? `<button type="button" class="btn ghost sm iconbtn" id="camAdd" hidden>${IC.plus}直播連結</button>` : ''}</div>
+    <div id="camBody"${camFold.get() ? ' hidden' : ''}>
+      <div id="camAddForm"></div>
+      <div id="camBox"><p class="tiny" style="margin:0">載入中…</p></div>
+      <p class="camvh" id="camStat" role="status"></p>
+    </div></div>` : '');
 function bindCams(s, editor) {
   const card = $('#camCard');
   if (!card) return;
+  let list = null;
   $('#camAdd')?.addEventListener('click', () => camLinkForm(s, editor));
-  if (!('IntersectionObserver' in window)) return loadCams(s, editor);
-  camIO = new IntersectionObserver((es) => { if (es.some((e) => e.isIntersecting)) { camIO?.disconnect(); camIO = null; loadCams(s, editor); } });
-  camIO.observe(card);
+  $('#camTog').onclick = (e) => {
+    const open = e.currentTarget.getAttribute('aria-expanded') !== 'true';
+    e.currentTarget.setAttribute('aria-expanded', String(open));
+    $('#camBody').hidden = !open; camFold.set(!open);
+    if (open && list) watch();
+  };
+  // 段落看得見而且展開時才載入縮圖
+  const watch = () => {
+    if (camIO || $('#camBody')?.hidden) return;
+    const go = () => { camIO?.disconnect(); camIO = null; if (!$('#camBody')?.hidden) thumbs(); };
+    if (!('IntersectionObserver' in window)) return go();
+    camIO = new IntersectionObserver((es) => { if (es.some((x) => x.isIntersecting)) go(); });
+    camIO.observe(card);
+  };
+  const thumbs = () => { if (saveData()) return; for (const b of document.querySelectorAll('#camBox [data-cam]')) if (!b.dataset.url && !b._p) camThumb(b, list.find((x) => x.id === b.dataset.cam)); };
+  camAfter = (cams) => { list = cams; watch(); };
+  loadCams(s, editor, false, camAfter);
 }
-async function loadCams(s, editor, fresh) {
-  const box = $('#camBox');
+async function loadCams(s, editor, fresh, done) {
+  const box = $('#camBox'), card = $('#camCard'), stat = $('#camStat');
   if (!box) return;
   let r;
   try { r = await api(`/spots/${encodeURIComponent(s.id)}/cams${fresh ? `?r=${Date.now()}` : ''}`); } catch (e) {
     if (!box.isConnected) return;
+    card.hidden = false;
     box.innerHTML = `<p class="tiny" style="margin:0">${esc(e.message)}</p><button type="button" class="btn ghost sm" id="camRetry">再試一次</button>`;
-    $('#camRetry').onclick = () => loadCams(s, editor, true);
+    $('#camRetry').onclick = () => loadCams(s, editor, true, done);
     return;
   }
   if (!box.isConnected || selected !== s.id) return;
+  // 功能或所有來源都關掉：整段不顯示
+  if (!r.enabled) { card.remove(); return; }
   const cams = r.cams || [], lazy = saveData();
-  if (!cams.length) { box.innerHTML = '<p class="muted" style="margin:0">附近 1.5 公里內沒有公開的攝影機。</p>'; return; }
+  const add = $('#camAdd'); if (add) add.hidden = !r.link;
+  // 附近沒有鏡頭：一般跑友不顯示這段，幹部看得到（可以加直播連結）
+  card.hidden = !cams.length && !editor;
+  if (!cams.length) { box.innerHTML = '<p class="muted" style="margin:0">附近 3 公里內沒有公開的攝影機。</p>'; stat.textContent = ''; done?.(cams); return; }
+  const far = cams.find((c) => c.far);
+  const attrs = [...new Set(cams.map((c) => (c.media === 'link'
+    ? (c.label ? `「<span translate="no">${esc(c.label)}</span>」官方直播` : esc(c.attribution)) : esc(c.attribution))).filter(Boolean))];
   box.innerHTML = `<div class="camgrid">${cams.map((c) => (c.media === 'link'
-    ? `<div class="camtile"><a href="${esc(c.page_url || '#')}" target="_blank" rel="noopener noreferrer"><span class="camimg"><span class="camph">${LIVE_SVG}<span class="tiny">官方直播</span></span></span>
-        <span class="camcap"><b translate="no">${esc(c.name)}</b><span class="tiny">${distTxt(c.dist)}・<span translate="no">${esc(c.source_name)}</span> ${IC.external}</span></span></a>
-        ${editor ? `<button type="button" class="linkbtn tiny" data-delcam="${esc(c.id)}">刪除連結</button>` : ''}</div>`
+    ? `<div class="camtile"><a href="${esc(c.page_url || '#')}" target="_blank" rel="noopener noreferrer"><span class="camimg"><span class="camph">${LIVE_SVG}</span></span>
+        <span class="camcap"><b translate="no">${esc(c.name)}</b><span class="tiny">${distTxt(c.dist)}</span><span class="tiny">${c.label ? `<span translate="no">${esc(c.label)}</span>` : '官方直播'} ${IC.external}</span></span></a></div>`
     : `<button type="button" class="camtile" data-cam="${esc(c.id)}"><span class="camimg"><span class="camph">${CAM_SVG}${lazy ? '<span class="tiny">點一下載入</span>' : ''}</span></span>
-        <span class="camcap"><b translate="no">${esc(c.name)}</b><span class="tiny">${distTxt(c.dist)}・${esc(c.source_name)}</span><span class="tiny camat"></span></span></button>`)).join('')}</div>
-    ${lazy ? '<p class="tiny" style="margin:0">省流量模式：點一下才載入影像（每張約 20–250 KB）。</p>' : ''}`;
+        <span class="camcap"><b translate="no">${esc(c.name)}</b><span class="tiny">${distTxt(c.dist)}</span><span class="tiny camat"></span></span></button>`)).join('')}</div>
+    ${far ? `<p class="tiny" style="margin:0">較遠（${distTxt(far.dist)}），僅供參考天氣</p>` : ''}
+    <p class="tiny camattr" style="margin:0">${attrs.join('<br>')}</p>
+    ${lazy ? '<p class="tiny" style="margin:0">省流量模式：點一下才載入影像（每張約 20–250 KB）。</p>' : ''}
+    <p class="tiny" style="margin:0">${CAM_NOTE_SHORT}</p>
+    ${editor && cams.some((c) => c.media === 'link') ? `<div class="camlinks">${cams.filter((c) => c.media === 'link').map((c) => `<button type="button" class="btn ghost sm" data-delcam="${esc(c.id)}">刪除直播連結：<span translate="no">${esc(c.name)}</span></button>`).join('')}</div>` : ''}`;
+  stat.textContent = `${cams.length} 支鏡頭`;
   for (const b of box.querySelectorAll('[data-cam]')) {
     const c = cams.find((x) => x.id === b.dataset.cam);
     b.onclick = () => camViewer(c, b);
-    if (!lazy) camThumb(b, c);
   }
   for (const b of box.querySelectorAll('[data-delcam]')) b.onclick = async () => {
     if (!confirm('刪除這個直播連結？')) return;
-    try { await api(`/cams/${encodeURIComponent(b.dataset.delcam)}`, { method: 'DELETE' }); toast('已刪除'); loadCams(s, editor, true); } catch (e) { toast(e.message); }
+    try { await api(`/cams/${encodeURIComponent(b.dataset.delcam)}`, { method: 'DELETE' }); toast('已刪除'); $('#camTog')?.focus(); loadCams(s, editor, true, done); } catch (e) { toast(e.message); }
   };
+  done?.(cams);
 }
-async function camThumb(b, c) {
+// 縮圖放進格子（大圖在省流量模式下載到的畫面也寫回來，不用再下載一次）
+function camPut(b, c, f) {
+  // alt 已經依介面語言寫好（含鏡頭名稱），標 translate="no" 不要再被翻譯一次
+  b.querySelector('.camimg').innerHTML = `<img translate="no" alt="${esc(camAlt(c, f.at))}" src="${f.url}">`;
+  b.querySelector('.camat').textContent = ageTxt(f.at);
+  Object.assign(b.dataset, { url: f.url, at: f.at, t: String(f.t) });
+}
+async function camThumb(b, c, retried) {
   const box = b.querySelector('.camimg');
+  b._p = camFrame(c.id);
   try {
-    const f = await camFrame(c.id);
-    if (!b.isConnected) return dropUrl(f.url);
-    box.innerHTML = `<img alt="" src="${f.url}">`;
-    b.querySelector('.camat').textContent = ageTxt(f.at);
-    Object.assign(b.dataset, { url: f.url, at: f.at, t: String(f.t) });
+    const f = await b._p;
+    if (!b.isConnected) return f.url && dropUrl(f.url);
+    if (f.wait) {
+      box.innerHTML = `<span class="camph"><span class="tiny">畫面更新中</span></span>`;
+      if (!retried) setTimeout(() => { if (b.isConnected && !b.dataset.url) camThumb(b, c, true); }, f.wait * 1000);
+      return;
+    }
+    camPut(b, c, f);
   } catch (e) { if (b.isConnected) box.innerHTML = `<span class="camph"><span class="tiny">${esc(e.message)}</span></span>`; }
+  finally { b._p = null; }
 }
 // 大圖：在畫面看得見時每 interval 秒（至少 60 秒）更新；隱藏時暫停、回來時補一張；10 分鐘後停止；連續失敗 3 次停止
-function camViewer(c, opener) {
+//   別的地方剛抓過（503）：繼續顯示上一張，照 Retry-After 再試，不算失敗
+async function camViewer(c, opener) {
+  camClose?.();
   const lazy = saveData(), iv = Math.max(60, c.interval || 60) * 1000, STOP = 10 * 60e3;
-  const { host } = openSheet('即時影像', `<div class="row spread"><h3 id="camvT" style="margin:0"><span translate="no">${esc(c.name)}</span></h3>
+  const { host, close } = openSheet('即時影像', `<div class="row spread"><h3 id="camvT" style="margin:0"><span translate="no">${esc(c.name)}</span></h3>
       <button type="button" class="xbtn" data-close aria-label="關閉"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7 7 17"/></svg></button></div>
-    <div class="camview"><span class="camph" id="camvPh">${CAM_SVG}<span class="tiny">載入中…</span></span><img id="camvImg" alt="" hidden></div>
-    <p class="tiny" style="margin:0"><span id="camvAt"></span>${distTxt(c.dist)}・${esc(c.source_name)}</p>
-    <p class="tiny" style="margin:0" id="camvState" aria-live="polite"></p>
+    <div class="camview"><span class="camph" id="camvPh">${CAM_SVG}<span class="tiny" id="camvPhT">載入中…</span></span><img id="camvImg" alt="" hidden></div>
+    <p class="tiny" style="margin:0">${distTxt(c.dist)}${c.far ? '（較遠，僅供參考天氣）' : ''}・${esc(c.source_name)}</p>
+    <p class="tiny" style="margin:0" id="camvAt"></p>
+    <div class="row camvbar"><p class="tiny" style="margin:0" id="camvState" role="status"></p><button type="button" class="btn ghost sm" id="camvGo" hidden></button></div>
     <p class="tiny" style="margin:0">${esc(c.attribution)}</p>
     ${c.page_url ? `<div><a class="btn ghost sm" href="${esc(c.page_url)}" target="_blank" rel="noopener noreferrer">官方頁面 ${IC.external}</a></div>` : ''}
     <p class="tiny" style="margin:0">${CAM_NOTE}</p>`, opener, 'camvT');
   host.classList.add('camsheet');
-  const img = host.querySelector('#camvImg'), ph = host.querySelector('#camvPh'), st = host.querySelector('#camvState'), atEl = host.querySelector('#camvAt');
+  camClose = close;
+  const img = host.querySelector('#camvImg'), ph = host.querySelector('#camvPh'), phT = host.querySelector('#camvPhT'), st = host.querySelector('#camvState'), atEl = host.querySelector('#camvAt'), go = host.querySelector('#camvGo');
   let timer = 0, last = 0, fails = 0, started = Date.now(), stopped = false, busy = false, cur = null;
   const alive = () => host.isConnected;
   const show = (f) => {
     const old = cur;
-    cur = f.url; img.src = f.url; img.hidden = false; ph.hidden = true;
-    atEl.textContent = f.at ? `${ageTxt(f.at)}・` : '';
+    cur = f.url; img.src = f.url; img.alt = camAlt(c, f.at); img.hidden = false; ph.hidden = true;
+    atEl.textContent = ageTxt(f.at);
     if (old && old !== opener.dataset.url) dropUrl(old);
   };
+  // 狀態文字與按鈕：按鈕只建一次、只換字（焦點不會掉）；文字有變才寫（讀螢幕軟體不會每分鐘重唸）
+  const put = (el, v) => { if (el.textContent !== v) el.textContent = v; };
   const setState = () => {
-    st.innerHTML = stopped ? (fails >= 3 ? '暫時無法取得畫面・' : '已暫停更新・') + '<button type="button" class="linkbtn tiny" id="camvGo">繼續</button>'
-      : lazy ? '省流量模式：不自動更新・<button type="button" class="linkbtn tiny" id="camvGo">更新畫面</button>'
-        : '每 60 秒自動更新，畫面隱藏時暫停';
-    host.querySelector('#camvGo')?.addEventListener('click', resume);
+    put(st, stopped ? (fails >= 3 ? '暫時無法取得畫面' : '已暫停更新') : lazy ? '省流量模式：不自動更新' : '每 60 秒自動更新，畫面隱藏時暫停');
+    put(go, lazy ? '更新畫面' : stopped ? '繼續' : '暫停更新');
+    go.hidden = false;
   };
+  // 回傳下一次要等幾毫秒
   const refresh = async () => {
-    if (busy || !alive()) return;
+    if (busy || !alive()) return iv;
     busy = true;
     try {
       const f = await camFrame(c.id);
-      if (!alive()) return dropUrl(f.url);
+      if (!alive()) { if (f.url) dropUrl(f.url); return iv; }
+      if (f.wait) { if (!cur) put(phT, '畫面更新中，稍後自動重試'); return f.wait * 1000; }
       const pre = new Image(); pre.src = f.url;
       await pre.decode().catch(() => {});   // 先在背景解碼再換，避免閃一下
       show(f); fails = 0; last = Date.now();
+      // 縮圖還沒有畫面（省流量或載入失敗）：把這張寫回縮圖，不用再下載一次
+      if (opener.isConnected && !opener.dataset.url) camPut(opener, c, f);
+      return iv;
     } catch (e) {
       fails++;
-      if (!cur) ph.innerHTML = `${CAM_SVG}<span class="tiny">${esc(e.message)}</span>`;
+      if (!cur) put(phT, e.message);
       if (fails >= 3) stopped = true;
+      return iv;
     } finally { busy = false; }
   };
   const schedule = (ms = iv) => { clearTimeout(timer); if (!lazy && !stopped && alive()) timer = setTimeout(tick, ms); };
@@ -616,12 +681,13 @@ function camViewer(c, opener) {
     if (!alive()) return cleanup();
     if (document.visibilityState !== 'visible') return;
     if (Date.now() - started >= STOP) { stopped = true; return setState(); }
-    await refresh(); setState(); schedule();
+    const next = await refresh(); setState(); schedule(next);
   }
-  async function resume() {
-    if (lazy) { await refresh(); return setState(); }
-    stopped = false; fails = 0; started = Date.now(); setState(); tick();
-  }
+  go.onclick = async () => {
+    if (lazy) { const next = await refresh(); if (next !== iv) put(st, '畫面更新中，請稍後再試'); else setState(); return; }
+    if (stopped) { stopped = false; fails = 0; started = Date.now(); setState(); tick(); return; }
+    stopped = true; clearTimeout(timer); setState();
+  };
   const onVis = () => {
     if (!alive()) return cleanup();
     if (document.visibilityState !== 'visible') { clearTimeout(timer); return; }
@@ -630,20 +696,28 @@ function camViewer(c, opener) {
     if (since >= iv) tick(); else schedule(iv - since);
   };
   const mo = new MutationObserver(() => { if (!alive()) cleanup(); });
-  function cleanup() { clearTimeout(timer); document.removeEventListener('visibilitychange', onVis); mo.disconnect(); if (cur && cur !== opener.dataset.url) dropUrl(cur); }
+  function cleanup() {
+    clearTimeout(timer); document.removeEventListener('visibilitychange', onVis); mo.disconnect();
+    if (camClose === close) camClose = null;
+    if (cur && cur !== opener.dataset.url) dropUrl(cur);
+  }
   document.addEventListener('visibilitychange', onVis);
   mo.observe(document.body, { childList: true });
   setState();
+  // 縮圖還在載入：等它（同一支鏡頭 60 秒內只會向來源抓一次，不要重複要）
+  if (opener._p) await opener._p.catch(() => {});
+  if (!alive()) return;
   // 縮圖剛載過就先用它，等滿一個間隔再更新
   const t0 = Number(opener.dataset.t || 0);
   if (opener.dataset.url && t0) { cur = opener.dataset.url; show({ url: cur, at: opener.dataset.at }); last = t0; schedule(Math.max(0, iv - (Date.now() - t0))); }
-  else if (lazy) refresh().then(setState);
+  else if (lazy) refresh().then((next) => { if (next !== iv && alive()) put(st, '畫面更新中，請稍後再試'); else setState(); });
   else tick();
 }
 // 幹部：新增官方直播連結（例如 YouTube 直播頁），位置用這個地點的座標；只顯示成外連
 function camLinkForm(s, editor) {
   const box = $('#camAddForm');
   if (!box) return;
+  if ($('#camBody')?.hidden) $('#camTog')?.click();
   if (box.innerHTML) { box.innerHTML = ''; return; }
   box.innerHTML = `<form id="camLinkF" class="grid2" style="margin:4px 0 8px">
       <label>名稱<input name="name" maxlength="40" required placeholder="例如 大佳河濱公園直播"></label>
@@ -652,14 +726,14 @@ function camLinkForm(s, editor) {
       <p class="tiny" style="grid-column:1/-1;margin:0">位置用這個地點的座標。只顯示成外連、不嵌入播放；請只加政府或場館的官方直播。</p>
       <div class="row" style="gap:8px;grid-column:1/-1"><button class="btn sm">新增</button><button type="button" class="btn ghost sm" id="camLinkX">取消</button></div>
     </form>`;
-  $('#camLinkX').onclick = () => { box.innerHTML = ''; };
+  $('#camLinkX').onclick = () => { box.innerHTML = ''; $('#camAdd')?.focus(); };
   $('#camLinkF').onsubmit = async (e) => {
     e.preventDefault();
     const f = e.target, kind = { river: 'river', road: 'road', trail: 'sky' }[s.kind] || 'park';
     try {
       await api('/cams', { method: 'POST', body: { name: f.name.value.trim(), label: f.label.value.trim(), page_url: f.page_url.value.trim(), lat: s.lat, lng: s.lng, kind } });
-      toast('已新增直播連結'); box.innerHTML = '';
-      camIO?.disconnect(); camIO = null; loadCams(s, editor, true);
+      toast('已新增直播連結'); box.innerHTML = ''; $('#camAdd')?.focus();
+      loadCams(s, editor, true, camAfter);
     } catch (err) { toast(err.message); }
   };
 }

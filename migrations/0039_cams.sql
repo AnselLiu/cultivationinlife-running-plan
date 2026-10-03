@@ -1,5 +1,6 @@
 -- 附近即時影像：政府公開攝影機的清單（每天同步一次）與來源開關
---   影像本身不存：只存鏡頭位置與來源網址，畫面由 Worker 即時轉送（/api/cams/:id/frame），最多暫存 60 秒
+--   影像本身不存：只存鏡頭位置與來源網址，畫面由 Worker 即時轉送（/api/cams/:id/frame），只在 Cache API 與記憶體短暫暫存
+--   整個功能由 settings.features 的 cams 控制，沒設就是關閉：套用這個 migration 不會讓功能上線，也不會開始同步
 --   src_url 只在伺服器端使用，不回傳給前端；來源主機白名單寫在 src/cams.js（跟資安有關，不放資料庫）
 CREATE TABLE cams (
   id TEXT PRIMARY KEY,                       -- 來源:原始代碼，例如 wra:189、thb:CCTV-14-0620-009-002、heo:PB243、link:ab12cd

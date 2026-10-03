@@ -540,6 +540,8 @@ function loginView() {
 // 依功能開關顯示或隱藏分頁
 // 下方分頁列：管理員可以改名稱，每個人可以選只顯示圖示
 const TAB_DEFAULT = { home: '團練', plan: '課表', run: '跑步', map: '地圖', studio: '拍照', me: '我的' };
+// 附近即時影像的省流量：打開後地點卡的影像不自動載入、大圖不自動更新（只存在這支手機）
+const camLazy = { get() { try { return localStorage.getItem('cil-cam-lazy') === '1'; } catch { return false; } }, set(v) { try { v ? localStorage.setItem('cil-cam-lazy', '1') : localStorage.removeItem('cil-cam-lazy'); } catch {} } };
 const iconsOnly = { get() { try { return localStorage.getItem('cil-tab-icons') === '1'; } catch { return false; } }, set(v) { try { v ? localStorage.setItem('cil-tab-icons', '1') : localStorage.removeItem('cil-tab-icons'); } catch {} } };
 function applyTabs() {
   const names = { ...TAB_DEFAULT, ...(cfg.settings?.tabs || {}) };
@@ -2801,6 +2803,7 @@ async function meNotify() {
     </section>
     <section class="card"><h3>顯示</h3>
       <label class="switch"><span>分頁列只顯示圖示<span class="tiny" style="display:block">隱藏下方圖示底下的文字</span></span><input type="checkbox" id="iconsOnly" ${iconsOnly.get() ? 'checked' : ''}><i></i></label>
+      ${cfg.settings?.features?.cams === true ? `<label class="switch"><span>省流量：影像不自動載入<span class="tiny" style="display:block">地點卡的附近即時影像點了才載入、不自動更新</span></span><input type="checkbox" id="camLazy" ${camLazy.get() ? 'checked' : ''}><i></i></label>` : ''}
       <div class="row spread"><span>語言<span class="tiny" style="display:block" translate="no">Language</span></span>
         <div class="seg" role="group" aria-label="Language" translate="no"><button data-lang="zh" aria-pressed="${I18N.lang === 'zh'}">中文</button><button data-lang="en" aria-pressed="${I18N.lang === 'en'}">English</button></div></div></section>`;
   $('#pushBtn')?.addEventListener('click', () => togglePush(sub));
@@ -2825,6 +2828,7 @@ async function meNotify() {
   }).catch(() => {});
   bindInstall();
   $('#iconsOnly').onchange = (e) => { iconsOnly.set(e.target.checked); applyTabs(); };
+  $('#camLazy')?.addEventListener('change', (e) => camLazy.set(e.target.checked));
   for (const b of document.querySelectorAll('[data-lang]')) b.onclick = () => { if (b.dataset.lang !== I18N.lang) I18N.setLang(b.dataset.lang); };
   $('#calNew').onclick = async () => {
     if (cfg.calendarOn && !confirm('重新產生後，已經訂閱的舊網址會失效，要在行事曆重新訂閱。確定？')) return;
@@ -3256,4 +3260,4 @@ addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvt 
 addEventListener('appinstalled', () => { installEvt = null; try { localStorage.setItem('cil-installed', '1'); } catch {} document.querySelectorAll('.installcard').forEach((c) => c.remove()); });
 
 // 拆出去的模組（admin.js、photo.js…）從這裡拿共用的工具與狀態
-export { addrField, bindAddrField, latest, $, cfg, downloadAuthed, openSheet, scanSheet, FEEL, IC, KIND_NAME, LOG_STATUS_NAME, PAID_NAME, ROLE_NAME, TAB_DEFAULT, TEAM_PERMS, TEAM_ROLE_NAME, ago, allow, api, applyFeatures, avatar, barChart, bars, bindComments, bindStepup, copy, dayLabel, dstr, emptyState, esc, eventCard, feat, fixText, group, largeTitle, me, mfaBanner, money, nrow, org, pad2, paintCountdown, passkey, refreshMe, render, route, row, squareIcon, studio, teamAllow, teamIcon, teamOf, teams, toast, view, ymd };
+export { addrField, bindAddrField, camLazy, latest, $, cfg, downloadAuthed, openSheet, scanSheet, FEEL, IC, KIND_NAME, LOG_STATUS_NAME, PAID_NAME, ROLE_NAME, TAB_DEFAULT, TEAM_PERMS, TEAM_ROLE_NAME, ago, allow, api, applyFeatures, avatar, barChart, bars, bindComments, bindStepup, copy, dayLabel, dstr, emptyState, esc, eventCard, feat, fixText, group, largeTitle, me, mfaBanner, money, nrow, org, pad2, paintCountdown, passkey, refreshMe, render, route, row, squareIcon, studio, teamAllow, teamIcon, teamOf, teams, toast, view, ymd };
