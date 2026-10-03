@@ -2225,7 +2225,8 @@ async function api(req, env, path, method) {
       const cats = {};
       for (const r of (await env.DB.prepare(`SELECT COALESCE(category, 'other') AS c, COUNT(*) AS n, COALESCE(SUM(read_at IS NULL), 0) AS u FROM notifications
           WHERE member_id = ? GROUP BY 1`).bind(member.id).all()).results) { const x = cats[isCat(r.c) ? r.c : 'other'] ||= { n: 0, u: 0 }; x.n += r.n; x.u += r.u; }
-      Object.assign(out, await notifCounts(), { cats, pinned, todo: f.all || q === 'todo' ? await todoSummary() : null });
+      // officer：「待辦」chip 要不要出現（不管目前篩選哪一類都要知道）
+      Object.assign(out, await notifCounts(), { cats, pinned, officer: isOfficer(), todo: f.all || q === 'todo' ? await todoSummary() : null });
     }
     return json(out);
   }

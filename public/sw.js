@@ -4,12 +4,12 @@
 //   更新：新版本裝好後先等待，畫面提示「有新版本」，使用者按下才切換（不會在填表單時突然重整）
 //   推播：顯示通知並更新主畫面圖示的未讀數字
 //   分享：從其他 App 分享 GPX／TCX 檔過來，暫存後打開拍照分享
-const CACHE = 'cil-v41';
+const CACHE = 'cil-v42';
 const API_CACHE = 'cil-api';
 const SHARE_CACHE = 'cil-share';
 // 地圖圖磚：看過的與「下載離線地圖」存的都在這裡，最多約 3000 張，先存的先清
 const TILE_CACHE = 'cil-tiles', TILE_HOSTS = ['wmts.nlsc.gov.tw', 'tile.openstreetmap.org'], TILE_MAX = 3000;
-const SHELL = ['/', '/style.css', '/app.js', '/plan.js', '/data/season-2026.json', '/data/zip3.json', '/manifest.webmanifest', '/coach', '/party.js', '/qr.js', '/vendor/qrcode.js', '/studio.js', '/run.js', '/guide.js', '/admin.js', '/photo.js', '/report.js', '/manage.js', '/teams.js', '/pricing.js', '/calendar.js', '/map.js', '/weather.js', '/wxrule.js', '/challenge.js', '/badges.js', '/vendor/leaflet.js', '/vendor/leaflet.css', '/i18n.js', '/i18n-en.js',
+const SHELL = ['/', '/style.css', '/app.js', '/plan.js', '/data/season-2026.json', '/data/zip3.json', '/manifest.webmanifest', '/coach', '/party.js', '/qr.js', '/vendor/qrcode.js', '/studio.js', '/run.js', '/guide.js', '/admin.js', '/photo.js', '/report.js', '/manage.js', '/teams.js', '/pricing.js', '/calendar.js', '/map.js', '/weather.js', '/wxrule.js', '/challenge.js', '/badges.js', '/vendor/leaflet.js', '/vendor/leaflet.css', '/i18n.js', '/i18n-en.js', '/notif-cats.js',
   '/icons/icon-192.png', '/teams/youth.webp', '/teams/kids.webp', '/teams/core.webp', '/teams/geng.webp'];
 // 斷線時可以用上次資料的 API（都是本人看得到的內容；登出時整個清掉）
 const OFFLINE_API = [/^\/api\/spots$/, /^\/api\/spots\/[\w-]+$/, /^\/api\/routes$/, /^\/api\/routes\/[\w-]+$/, /^\/api\/me$/, /^\/api\/my\/tickets$/, /^\/api\/my\/prizes$/, /^\/api\/my\/pickups$/, /^\/api\/events$/, /^\/api\/events\/[\w-]+$/, /^\/api\/events\/[\w-]+\/seats$/,
@@ -104,27 +104,47 @@ async function refreshBadge() {
   if (!self.navigator.setAppBadge) return;
   try {
     const r = await fetch('/api/notifications/count', { credentials: 'include' });
-    const { unread } = await r.json();
-    unread ? await self.navigator.setAppBadge(unread) : await self.navigator.clearAppBadge();
+    // badge＝新通知＋未讀的帳號安全通知；舊版伺服器只有 unread
+    const { badge, unread } = await r.json(); const n = badge ?? unread;
+    n ? await self.navigator.setAppBadge(n) : await self.navigator.clearAppBadge();
   } catch {}
 }
 
 self.addEventListener('push', (e) => {
   let d = {};
   try { d = e.data.json(); } catch { d = { title: '耕跑團', body: e.data?.text() || '' }; }
-  e.waitUntil(Promise.all([
-    self.registration.showNotification(d.title || '耕跑團', {
+  e.waitUntil((async () => {
+    await self.registration.showNotification(d.title || '耕跑團', {
       body: d.body || '', icon: '/icons/icon-192.png', badge: '/icons/icon-192.png',
-      data: { url: d.url || '/' }, tag: d.tag,
-    }),
-    refreshBadge(),
-  ]));
+      tag: d.tag || undefined, renotify: !!(d.tag && d.re), timestamp: d.ts || Date.now(), lang: 'zh-Hant-TW',
+      data: { url: d.url || '/', id: d.id || null },
+    });
+    await refreshBadge();
+    // 開著的 App 只拿到「去重抓」的訊號，不帶通知內容
+    for (const c of await clients.matchAll({ type: 'window', includeUncontrolled: true })) c.postMessage({ type: 'notif', cat: d.cat || null });
+  })());
 });
+// 點推播：只接受站內網址（不能被拿來做開放式轉址）；標為已讀；已開著的 App 用 postMessage 導頁（不受控制的視窗 navigate() 會失敗）
+const SAFE_URL = /^\/(#\/[\w/?=&.%-]*)?$/;
 self.addEventListener('notificationclick', (e) => {
   e.notification.close();
-  const url = e.notification.data?.url || '/';
-  e.waitUntil(clients.matchAll({ type: 'window', includeUncontrolled: true }).then((ws) => {
-    for (const w of ws) if (w.url.includes(location.origin)) return w.focus().then(() => w.navigate(url));
-    return clients.openWindow(url);
-  }));
+  const { url: raw, id } = e.notification.data || {};
+  const url = SAFE_URL.test(raw || '') ? raw : '/#/notifications';
+  e.waitUntil((async () => {
+    if (id) await fetch('/api/notifications/read', { method: 'POST', credentials: 'same-origin', keepalive: true,
+      headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id }) }).catch(() => {});
+    const w = (await clients.matchAll({ type: 'window', includeUncontrolled: true })).find((x) => new URL(x.url).origin === location.origin);
+    if (w) { await w.focus().catch(() => {}); w.postMessage({ type: 'go', url }); } else await clients.openWindow(url);
+    await refreshBadge();
+  })());
+});
+// 推播服務換了訂閱（瀏覽器更新金鑰等）：用新的訂閱重新登記，沒有就用原本的金鑰重新訂閱
+self.addEventListener('pushsubscriptionchange', (e) => {
+  e.waitUntil((async () => {
+    const sub = e.newSubscription || (e.oldSubscription?.options?.applicationServerKey
+      ? await self.registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: e.oldSubscription.options.applicationServerKey }) : null);
+    if (!sub) return;
+    const j = sub.toJSON();
+    await fetch('/api/push/subscribe', { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ endpoint: j.endpoint, keys: j.keys }) }).catch(() => {});
+  })());
 });

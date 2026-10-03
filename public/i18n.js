@@ -15,6 +15,7 @@ const MON = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'Au
 const MO3 = MON.map((m) => m.slice(0, 3));
 // 動態句型：數字、日期、倒數等（先於片段替換）
 const PATTERNS = [
+  [/^(\d+) 則未讀$/, '$1 unread'], [/^通知，(\d+) 則新通知$/, 'Notifications, $1 new'], [/^(\d{1,2}) 月$/, (_, m) => MON[m - 1]],
   [/^(\d{4}) 年 (\d{1,2}) 月$/, (_, y, m) => `${MON[m - 1]} ${y}`],
   [/^(\d{1,2}) 月 (\d{1,2}) 日・週(.)$/, (_, m, d, w) => `${WD[w]}, ${MO3[m - 1]} ${d}`],
   [/^(\d{1,2})月(\d{1,2})日 星期(.)$/, (_, m, d, w) => `${WD[w]}, ${MON[m - 1]} ${d}`],

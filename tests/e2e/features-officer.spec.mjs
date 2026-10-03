@@ -112,3 +112,13 @@ test('分團：幹部發公告、行事曆新增賽事提醒、地圖直接新�
   await page.goto(`/#/new?from=${ev.id}`);
   await expect(page.locator('#ef [name=title]')).toHaveValue(new RegExp(`E2E 匯出 ${tag}`));
 });
+
+test('通知中心：幹部看得到「待辦」chip 與待處理摘要，連到分團頁', async ({ page, request }) => {
+  await apiAs(request, 't_other', '/teams/youth/join', { method: 'POST' });
+  await enter(page, 't_lead');
+  await page.goto('/#/notifications');
+  await expect(page.getByRole('tab', { name: /待辦/ })).toBeVisible();
+  await expect(page.locator('#todoBox')).toContainText('入團申請');
+  await expect(page.locator('#todoBox a[href="#/t/youth"]')).toBeVisible();
+  await apiAs(request, 't_other', '/teams/youth/leave', { method: 'POST' });
+});

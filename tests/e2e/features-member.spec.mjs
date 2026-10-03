@@ -156,6 +156,75 @@ test('通行金鑰：用裝置的生物辨識新增，列在帳號與安全', as
   await expect(page.locator('#pkList')).toContainText(/通行金鑰|Chrome|iPhone|Mac/);
 });
 
+test('通知中心：分類 chip、單則已讀、動作選單、刪除可以復原、安全通知不能刪', async ({ page, request }) => {
+  const tag = Date.now().toString(36).slice(-4);
+  // 準備：兩則協會公告（youth 分團），兩則帳號安全（分團身分改成幹部再改回來）
+  for (const x of ['A', 'B', 'C']) await apiAs(request, 't_chair', '/admin/broadcast', { method: 'POST', body: { title: `E2E 公告 ${tag} ${x}`, body: '測試內容', teams: ['youth'] } });
+  await apiAs(request, 't_lead', '/teams/youth/members', { method: 'POST', body: { member_id: 't_runner', action: 'role', role: 'officer' } });
+  await apiAs(request, 't_lead', '/teams/youth/members', { method: 'POST', body: { member_id: 't_runner', action: 'role', role: 'member' } });
+  await enter(page);
+  try { await page.evaluate(() => localStorage.removeItem('cil-ncat')); } catch {}
+  await page.goto('/#/notifications');
+  await expect(page.locator('.chipbar[role=tablist]')).toBeVisible();
+  await expect(page.locator('#nfeed .nitem').first()).toBeVisible();
+  // 鈴鐺的 aria-label 帶數字（看過之後只剩未讀的帳號安全通知）
+  await expect(page.locator('#bell')).toHaveAttribute('aria-label', /\d/);
+  // 介面不放 emoji
+  expect(await page.locator('#view').innerText()).not.toMatch(/\p{Extended_Pictographic}/u);
+  // 進頁面不再自動全部已讀
+  const before = (await apiAs(request, 't_runner', '/notifications/count')).unread;
+  await page.waitForTimeout(2000);
+  expect((await apiAs(request, 't_runner', '/notifications/count')).unread).toBe(before);
+  // 點一列未讀：只有那一列變成已讀（公告沒有連結，開詳細內容）
+  const unreadN = await page.locator('#nfeed .nitem.unread').count();
+  const first = page.locator('#nfeed .nitem.n-announce.unread').first();
+  const id = await first.getAttribute('data-id');
+  await first.locator('a.nrow').click();
+  await expect(page.locator(`#nfeed .nitem[data-id="${id}"]`)).not.toHaveClass(/unread/);
+  await expect(page.locator('#nfeed .nitem.unread')).toHaveCount(unreadN - 1);
+  await page.keyboard.press('Escape');
+  // 動作選單：用鍵盤打開「更多動作」，已讀的列可以標為未讀；刪除後可以復原
+  await page.locator(`#nfeed .nitem[data-id="${id}"] .nmore`).focus();
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('dialog').getByText('標為未讀')).toBeVisible();
+  await page.getByRole('dialog').getByText('刪除這則通知').click();
+  await page.locator('.toast .toastbtn', { hasText: '復原' }).click();
+  await expect(page.locator(`#nfeed .nitem[data-id="${id}"]`)).toBeVisible();
+  // 帳號安全通知的選單沒有刪除
+  const sec = page.locator('#nfeed .nitem.n-security').first();
+  await sec.locator('.nmore').focus();
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('dialog').getByText('標為')).toBeVisible();
+  await expect(page.getByRole('dialog').getByText('刪除這則通知')).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  // 公告 chip：只剩公告；重新整理後記得這顆 chip
+  await page.getByRole('tab', { name: /公告/ }).click();
+  await expect(page.locator('#nfeed .nitem').first()).toBeVisible();
+  expect(await page.locator('#nfeed .nitem:not(.n-announce)').count()).toBe(0);
+  await page.reload();
+  await expect(page.getByRole('tab', { name: /公告/ })).toHaveAttribute('aria-selected', 'true');
+  // 全部已讀：只有非安全通知的未讀消失
+  await page.getByRole('tab', { name: '全部' }).click();
+  await expect(page.locator('#nfeed .nitem').first()).toBeVisible();
+  await page.locator('#readAll').click();
+  await expect(page.locator('#nfeed .nitem.unread:not(.n-security)')).toHaveCount(0);
+  expect(await page.locator('#nfeed .nitem.n-security.unread').count()).toBeGreaterThan(0);
+});
+
+test('通知中心：減少動態效果時，刪除的列馬上從畫面移除', async ({ page, request }) => {
+  await apiAs(request, 't_chair', '/admin/broadcast', { method: 'POST', body: { title: `E2E 減少動態 ${Date.now().toString(36).slice(-4)}`, teams: ['youth'] } });
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await enter(page);
+  try { await page.evaluate(() => localStorage.setItem('cil-ncat', 'announce')); } catch {}
+  await page.goto('/#/notifications');
+  const row = page.locator('#nfeed .nitem.n-announce').first();
+  const id = await row.getAttribute('data-id');
+  await row.locator('.nmore').focus();
+  await page.keyboard.press('Enter');
+  await page.getByRole('dialog').getByText('刪除這則通知').click();
+  await expect(page.locator(`#nfeed .nitem[data-id="${id}"]`)).toHaveCount(0, { timeout: 500 });
+});
+
 test('通知全部已讀、入場券與領取、每月挑戰、使用說明導覽', async ({ page }) => {
   await enter(page);
   await page.goto('/#/notifications');
