@@ -349,3 +349,28 @@ test('推播佇列：清掉測試資料', async () => {
   assert.equal((await call(null, '/dev/seed-bulk?clear=1')).json.ok, true);
   assert.equal((await mock('clear=1')).queue, 0);
 });
+
+test('執行額度紀錄：管理後台看得到排程工作、推播佇列、最常碰到上限的功能；開啟速度一句寫入、百分位在 SQL 算', async () => {
+  // 開啟速度：6 個指標＋API 時間一句寫入
+  const v = await call('t_runner', '/vitals', { method: 'POST', body: { page: '/', ready: 800, fcp: 600, lcp: 900, inp: 40, cls: 0.05, ttfb: 120, warm: true, api: [{ p: '/me', ms: 300, srv: 80 }, { p: '/events', ms: 500, srv: 200 }] } });
+  assert.equal(v.status, 200);
+  assert.ok(subOf(v) <= 6, `開啟速度寫入用了 ${subOf(v)} 個子請求`);
+  await call('t_runner', '/vitals', { method: 'POST', body: { page: '/', ready: 1600, fcp: 1200, warm: false } });
+  await call('t_runner', '/vitals', { method: 'POST', body: { page: '/', ready: 400, warm: true } });
+  const h = (await call('t_chair', '/admin/health?days=7')).json;
+  assert.ok(h.metrics.ready.n >= 3);
+  assert.ok(h.metrics.ready.p50 != null && h.metrics.ready.p75 >= h.metrics.ready.p50);
+  assert.ok(h.metrics.ready.warmP75 != null);
+  assert.ok(h.apis.some((a) => a.page === '/events' && a.p75 >= 500 && a.srv >= 200));
+  // 排程工作：備份完成；剛才連續失敗 3 次的那天之後已經恢復
+  const bk = h.jobs.find((j) => j.job === 'backup');
+  assert.ok(bk && ['done', 'pending', 'failed', 'gave_up'].includes(bk.state));
+  assert.ok(h.jobs.some((j) => j.job === 'retention'));
+  assert.equal(typeof h.pushQueue.n, 'number');
+  // 因額度停下的執行有記錄（例如分段審核、03:00 延後的資料清理），名稱不含 id
+  assert.ok(h.budget.length >= 1, JSON.stringify(h.budget));
+  assert.ok(h.budget.some((x) => x.stopped > 0));
+  assert.ok(h.budget.every((x) => !/b_\d|\/[a-z0-9]{16}(\/|$)/.test(x.name)), JSON.stringify(h.budget.map((x) => x.name)));
+  assert.equal((await call('t_runner', '/admin/health')).status, 403);
+  assert.deepEqual(await violations(), []);
+});

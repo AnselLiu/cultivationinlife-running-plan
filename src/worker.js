@@ -1492,12 +1492,14 @@ const api = (async function api(req, env, path, method) {
     const b = await body(), device = deviceLabel(req.headers.get('user-agent') || ''), page = str(b.page, 40);
     const LIM = { ready: 60000, fcp: 60000, lcp: 60000, inp: 20000, ttfb: 60000, cls: 10 };
     const rows = Object.entries(LIM).map(([k, max]) => [k, Number(b[k])]).filter(([k, v]) => Number.isFinite(v) && v >= 0 && v <= LIM[k]);
-    if (rows.length) await env.DB.batch(rows.map(([k, v]) => env.DB.prepare('INSERT INTO client_metrics (day, metric, value, page, device, standalone, warm) VALUES (?, ?, ?, ?, ?, ?, ?)')
-      .bind(today(), k, Math.round(v * (k === 'cls' ? 1000 : 1)) / (k === 'cls' ? 1000 : 1), page, device, b.standalone ? 1 : 0, b.warm ? 1 : 0)));
     // 資料讀取時間：每種 API（代碼換成 :id）的中位數，api＝總時間、apisrv＝其中伺服器處理的時間
     const apis = (Array.isArray(b.api) ? b.api : []).slice(0, 10).filter((x) => /^\/[\w/:.-]{1,48}$/.test(x?.p || '') && Number.isFinite(x.ms) && x.ms >= 0 && x.ms <= 60000);
-    if (apis.length) await env.DB.batch(apis.flatMap((x) => [['api', x.ms], ...(Number.isFinite(x.srv) && x.srv >= 0 && x.srv <= 60000 ? [['apisrv', x.srv]] : [])]
-      .map(([k, v]) => env.DB.prepare('INSERT INTO client_metrics (day, metric, value, page, device, standalone, warm) VALUES (?, ?, ?, ?, ?, ?, 0)').bind(today(), k, Math.round(v), x.p, device, b.standalone ? 1 : 0))));
+    // 全部一句寫完（json_each：[指標, 數值, 頁面, warm]），寫入的列數不變
+    const all = [...rows.map(([k, v]) => [k, Math.round(v * (k === 'cls' ? 1000 : 1)) / (k === 'cls' ? 1000 : 1), page, b.warm ? 1 : 0]),
+      ...apis.flatMap((x) => [['api', x.ms], ...(Number.isFinite(x.srv) && x.srv >= 0 && x.srv <= 60000 ? [['apisrv', x.srv]] : [])].map(([k, v]) => [k, Math.round(v), x.p, 0]))];
+    if (all.length) await env.DB.prepare(`INSERT INTO client_metrics (day, metric, value, page, device, standalone, warm)
+      SELECT ?1, json_extract(value, '$[0]'), json_extract(value, '$[1]'), json_extract(value, '$[2]'), ?2, ?3, json_extract(value, '$[3]') FROM json_each(?4)`)
+      .bind(today(), device, b.standalone ? 1 : 0, JSON.stringify(all)).run();
     return json({ ok: true });
   }
   // 速度與錯誤（管理後台總覽）：最近 N 天的 p75 與最常見的錯誤
@@ -1506,22 +1508,39 @@ const api = (async function api(req, env, path, method) {
     if (!can(member, 'settings') && !can(member, 'audit')) return fail(403, '只有理事長、行政人員與監事可以看');
     const days = [7, 30, 90].includes(Number(url0(req).searchParams.get('days'))) ? Number(url0(req).searchParams.get('days')) : 7;
     const from = new Date(Date.now() + 8 * 3600e3 - (days - 1) * 864e5).toISOString().slice(0, 10);
-    const vals = (await env.DB.prepare('SELECT metric, value, warm, standalone FROM client_metrics WHERE day >= ? ORDER BY metric, value').bind(from).all()).results;
-    const pct = (arr, p) => (arr.length ? arr[Math.min(arr.length - 1, Math.floor(arr.length * p))] : null);
+    // 百分位在 SQL 算（ROW_NUMBER＋COUNT，取第 floor(n×p)+1 名，和以前在 JS 排序的結果一樣），不再把幾萬列讀進 Worker；
+    //   同一個 batch 再帶出執行額度、排程工作、推播佇列（管理後台「執行額度」區塊）
+    const PCT = (p) => `MIN(n, CAST(n * ${p} AS INTEGER) + 1)`, MET = "('ready','fcp','lcp','inp','cls','ttfb')";
+    const [mres, eres, ares, bres, jres, qres] = await env.DB.batch([
+      env.DB.prepare(`WITH r AS (SELECT metric, value, warm, ROW_NUMBER() OVER (PARTITION BY metric ORDER BY value) AS rn, COUNT(*) OVER (PARTITION BY metric) AS n
+          FROM client_metrics WHERE day >= ?1 AND metric IN ${MET}),
+        w AS (SELECT metric, value, ROW_NUMBER() OVER (PARTITION BY metric ORDER BY value) AS rn, COUNT(*) OVER (PARTITION BY metric) AS n
+          FROM client_metrics WHERE day >= ?1 AND warm AND metric IN ${MET})
+        SELECT metric, MAX(n) AS n, MAX(CASE WHEN rn = ${PCT(0.5)} THEN value END) AS p50, MAX(CASE WHEN rn = ${PCT(0.75)} THEN value END) AS p75,
+          (SELECT value FROM w WHERE w.metric = r.metric AND w.rn = MIN(w.n, CAST(w.n * 0.75 AS INTEGER) + 1)) AS warmP75
+        FROM r GROUP BY metric`).bind(from),
+      env.DB.prepare(`SELECT message, source, line, page, device, SUM(n) AS n, MAX(last_at) AS last_at FROM client_errors WHERE day >= ?
+        GROUP BY message, source, line ORDER BY n DESC LIMIT 20`).bind(from),
+      // 最慢的資料讀取（p75）：總時間與其中伺服器處理的時間
+      env.DB.prepare(`WITH a AS (SELECT page, metric, value, ROW_NUMBER() OVER (PARTITION BY page, metric ORDER BY value) AS rn, COUNT(*) OVER (PARTITION BY page, metric) AS n
+          FROM client_metrics WHERE day >= ?1 AND metric IN ('api', 'apisrv'))
+        SELECT page, MAX(CASE WHEN metric = 'api' THEN n END) AS n, MAX(CASE WHEN metric = 'api' AND rn = ${PCT(0.75)} THEN value END) AS p75,
+          MAX(CASE WHEN metric = 'apisrv' AND rn = ${PCT(0.75)} THEN value END) AS srv
+        FROM a GROUP BY page HAVING n > 0 ORDER BY p75 DESC LIMIT 8`).bind(from),
+      env.DB.prepare(`SELECT name, kind, SUM(n) AS n, SUM(stopped) AS stopped, SUM(over) AS over, MAX(max_sub) AS max_sub, MAX(last_at) AS last_at FROM budget_log
+        WHERE day >= ? GROUP BY name ORDER BY SUM(stopped) + SUM(over) DESC, SUM(n) DESC LIMIT 20`).bind(from),
+      env.DB.prepare('SELECT job, last_run, claim_key, claim_at, attempts, last_error, done_at FROM job_runs ORDER BY job'),
+      env.DB.prepare("SELECT COUNT(*) AS n, MIN(created_at) AS oldest FROM push_queue"),
+    ]);
     const metrics = {};
     for (const k of ['ready', 'fcp', 'lcp', 'inp', 'cls', 'ttfb']) {
-      const all = vals.filter((v) => v.metric === k).map((v) => v.value);
-      const warm = vals.filter((v) => v.metric === k && v.warm).map((v) => v.value);
-      metrics[k] = { n: all.length, p50: pct(all, 0.5), p75: pct(all, 0.75), warmP75: pct(warm, 0.75) };
+      const r = mres.results.find((x) => x.metric === k);
+      metrics[k] = { n: r?.n || 0, p50: r?.p50 ?? null, p75: r?.p75 ?? null, warmP75: r?.warmP75 ?? null };
     }
-    const errors = (await env.DB.prepare(`SELECT message, source, line, page, device, SUM(n) AS n, MAX(last_at) AS last_at FROM client_errors WHERE day >= ?
-      GROUP BY message, source, line ORDER BY n DESC LIMIT 20`).bind(from).all()).results;
-    // 最慢的資料讀取（p75）：總時間與其中伺服器處理的時間
-    const apiRows = (await env.DB.prepare("SELECT metric, page, value FROM client_metrics WHERE day >= ? AND metric IN ('api', 'apisrv') ORDER BY value").bind(from).all()).results;
-    const byPage = {};
-    for (const r of apiRows) (byPage[r.page] ||= { api: [], apisrv: [] })[r.metric].push(r.value);
-    const apis = Object.entries(byPage).map(([p, v]) => ({ page: p, n: v.api.length, p75: pct(v.api, 0.75), srv: pct(v.apisrv, 0.75) })).filter((x) => x.n).sort((a, b2) => b2.p75 - a.p75).slice(0, 8);
-    return json({ days, metrics, errors, apis });
+    const errors = eres.results, apis = ares.results.map((x) => ({ page: x.page, n: x.n, p75: x.p75, srv: x.srv ?? null }));
+    // 排程工作的狀態：完成、等下個整點補做、失敗 n 次（連續 3 次就放棄）
+    const jobs = jres.results.map((j) => ({ ...j, state: j.claim_key && j.attempts >= 3 && j.last_error ? 'gave_up' : j.last_error ? 'failed' : j.claim_key ? 'pending' : 'done' }));
+    return json({ days, metrics, errors, apis, budget: bres.results, jobs, pushQueue: { n: qres.results[0].n, oldest: qres.results[0].oldest } });
   }
   // 分團小圖：網址帶版本號，可以長期快取
   const mic = path.match(/^\/api\/teams\/([\w-]{1,16})\/icon$/);
@@ -4030,6 +4049,7 @@ async function retention(env, now) {
   add('client_metrics', "DELETE FROM client_metrics WHERE day < date('now', '-90 days')");
   add('client_errors', "DELETE FROM client_errors WHERE day < date('now', '-90 days')");
   add('spot_reports', "DELETE FROM spot_reports WHERE created_at < datetime('now', '-90 days')");
+  add('budget_log', "DELETE FROM budget_log WHERE day < date('now', '-90 days')");
   const auditYears = Math.max(1, Math.min(Number(org.audit_years) || 3, 10));
   add('audit', `DELETE FROM audit_log WHERE at < datetime('now', '-${auditYears} years')`);
   const evYears = Math.max(0, Math.min(Number(org.event_data_years) || 0, 20));
@@ -4207,6 +4227,18 @@ async function pushJob(env, now, ctx) {
   return { done: !r.more, result: r.sent };
 }
 
+// 一次執行結束：寫 log（用量偏高、因額度停下、超過計數），停下或超過時另外記一列 budget_log（佔 1 個預留額度）
+async function finishBudget(e, b) {
+  logBudget(b);
+  if (!b.stopped.length && !b.over) return;
+  const name = b.kind === 'request' ? b.name : `${b.name}${b.stopped.length ? `:${b.stopped[0].split(':')[0]}` : ''}`;
+  try {
+    await e.DB.prepare(`INSERT INTO budget_log (day, name, kind, n, stopped, over, max_sub, last_at) VALUES (date('now'), ?1, ?2, 1, ?3, ?4, ?5, datetime('now'))
+      ON CONFLICT(day, name) DO UPDATE SET n = n + 1, stopped = stopped + excluded.stopped, over = over + excluded.over, max_sub = MAX(max_sub, excluded.max_sub), last_at = excluded.last_at`)
+      .bind(name.slice(0, 80), b.kind, b.stopped.length ? 1 : 0, b.over ? 1 : 0, b.sub).run();
+  } catch (err) { console.error('budget_log', err?.message || err); }
+}
+
 // ---- 排程分派 ----
 const hhmm = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
 const tparts = (now) => {
@@ -4341,7 +4373,7 @@ export class Jobs extends WorkerEntrypoint {
       if (e.wantDrain && job !== 'push') await drain(e, {}).catch((x) => console.error('drain', x));   // 這項工作排進佇列的推播，用剩下的額度先送一段
       await settled(e);   // defer 裡的工作也算進這次的用量
       return { done: !!r.done, result: r.result ?? null, used: b.sub - b.inherit, budget: b.summary() };
-    } finally { logBudget(b); }
+    } finally { await finishBudget(e, b); }
   }
   // 推播佇列的下一段（只在 JOB_DISPATCH=self 時由 pushJob 呼叫）：depth 必須在 1–plan.pushDepth 之間
   async drainPush({ depth = 0 } = {}) {
@@ -4356,12 +4388,13 @@ export class Jobs extends WorkerEntrypoint {
       }
       await settled(e);
       return { sent: r.sent, more: r.more };
-    } finally { logBudget(b); }
+    } finally { await finishBudget(e, b); }
   }
 }
 
 // 路由樣板（給執行額度紀錄用）：路徑裡像 id 的片段（6 個字元以上而且含數字或底線）一律換成 :id，紀錄裡不會出現個資或 token
-const routeName = (path) => path.split('/').map((p) => (p.length >= 6 && /[\d_]/.test(p) ? ':id' : p)).join('/').slice(0, 80);
+//   （rid() 產生的 id 是 16 個小寫英數字，全是字母的機率很小，也一併當成 id）
+const routeName = (path) => path.split('/').map((p) => (p.length >= 6 && (/[\d_A-Z]/.test(p) || /^[a-z]{16,}$/.test(p)) ? ':id' : p)).join('/').slice(0, 80);
 const LOCAL = ['localhost', '127.0.0.1'];
 
 // 開發用路由（只有 .dev.vars 設 DEV_LOGIN=1 而且在 localhost 才有效，正式環境不會有這個設定）
@@ -4374,8 +4407,9 @@ async function devRoute(req, env, ctx, url, path) {
     if (opt.fail) e.failAfterClaim = opt.fail;
     const { res, jobs } = await cronTick(e, q.get('at') ? new Date(q.get('at')) : new Date(), ctx, opt);
     await settled(e);
-    logBudget(b);
-    return json({ ...res, _budget: { root: b.summary(), jobs } });
+    const summary = b.summary();
+    await finishBudget(e, b);
+    return json({ ...res, _budget: { root: summary, jobs } });
   }
   // 嚴格模式的違規紀錄（BUDGET_STRICT=1）：?clear=1 清空
   if (path === '/api/dev/budget-violations') {
@@ -4511,7 +4545,7 @@ export default {
     const b = new Budget(env, { kind: 'cron', name: 'hourly' }), e = invocationEnv(env, ctx, b);
     ctx.waitUntil(cronTick(e, new Date(event.scheduledTime), ctx)
       .then((r) => console.log('cron', JSON.stringify(r.res)), (err) => console.error('cron', err))
-      .then(() => settled(e)).finally(() => logBudget(b)));
+      .then(() => settled(e)).finally(() => finishBudget(e, b)));
   },
   async fetch(req, env, ctx) {
     const url = new URL(req.url);
@@ -4528,7 +4562,7 @@ export default {
       const plan = planOf(env);
       if (e.wantDrain) e.defer(drain(e, { max: plan.pushPerHop }));
       else if (e.pushKick && b.room(4 + plan.pushKick)) e.defer(drain(e, { max: plan.pushKick }));
-    } finally { ctx.waitUntil(settled(e).then(() => logBudget(b))); }
+    } finally { ctx.waitUntil(settled(e).then(() => finishBudget(e, b))); }
     // 測試用：回應帶這次請求到目前為止用掉的額度（只有 DEV_LOGIN=1 的本機）
     if (env.DEV_LOGIN === '1' && LOCAL.includes(url.hostname)) {
       try { const x = b.summary(); res.headers.set('x-budget', `d1=${x.d1};kv=${x.kv};fetch=${x.fetch};rpc=${x.rpc};sub=${x.sub}`); } catch {}

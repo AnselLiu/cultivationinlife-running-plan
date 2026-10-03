@@ -99,8 +99,27 @@ async function loadHealth(days = 7) {
     <h3>前端錯誤</h3>
     ${h.errors.length ? `<div class="roster">${h.errors.map((e) => `<div class="r"><span class="av num" style="font-size:12px">${e.n}</span><span><b style="word-break:break-word">${esc(e.message)}</b>
       <span class="tiny" style="display:block">${esc(e.page || '')}${e.source ? `・${esc(e.source)}:${e.line}` : ''}・${esc(e.device || '')}・${ago(e.last_at)}</span></span></div>`).join('')}</div>`
-      : '<p class="tiny" style="margin:0">這段期間沒有錯誤。</p>'}`;
+      : '<p class="tiny" style="margin:0">這段期間沒有錯誤。</p>'}
+    ${budgetHtml(h)}`;
   for (const b of box.querySelectorAll('[data-hd]')) b.onclick = () => loadHealth(Number(b.dataset.hd));
+}
+// 執行額度（免費方案一次執行 50 個子請求）：排程工作的狀態、推播佇列、最常碰到上限的功能。狀態一律用文字
+const JOB_NAME = { backup: '每日備份', retention: '資料清理', month_summary: '每月總結', quarterly_review: '每季權限檢視', fatigue: '疲勞提醒',
+  signup_review_digest: '待審核整理', 'cams.wra': '鏡頭清單（水利署）', 'cams.heo': '鏡頭清單（水利處）', 'cams.thb': '鏡頭清單（公路局）' };
+function budgetHtml(h) {
+  if (!h.jobs) return '';
+  const bad = (t) => `<b style="color:var(--race)">${t}</b>`;
+  const state = (j) => (j.state === 'gave_up' ? bad(`失敗 ${j.attempts} 次，已停止重試`) : j.state === 'failed' ? bad(`失敗 ${j.attempts} 次`)
+    : j.state === 'pending' ? '等下個整點補做' : `完成${j.last_run ? `（${esc(j.last_run)}）` : ''}`);
+  const q = h.pushQueue || { n: 0 };
+  return `<h3>執行額度</h3>
+    <p class="tiny" style="margin:0">免費方案一次執行最多 50 個子請求；做不完的工作會在下個整點接著做。</p>
+    ${h.jobs.length ? `<div class="itemtable">${h.jobs.map((j) => `<div class="itr"><span><b style="font-weight:600">${esc(JOB_NAME[j.job] || j.job)}</b>
+      ${j.last_error ? `<span class="tiny" style="display:block;word-break:break-word">${esc(j.last_error)}</span>` : ''}</span><span class="tiny">${state(j)}</span></div>`).join('')}</div>` : ''}
+    <div class="itemtable"><div class="itr"><span><b style="font-weight:600">推播佇列</b></span><span class="tiny">${q.n ? `待送 ${q.n} 則・最早一則 ${ago(q.oldest)}` : '沒有待送的推播'}</span></div></div>
+    ${(h.budget || []).length ? `<div class="itemtable">${h.budget.map((x) => `<div class="itr"><span><b class="num" style="font-weight:600;word-break:break-word">${esc(x.name)}</b>
+      <span class="tiny" style="display:block">停下 ${x.stopped} 次${x.over ? `・超過上限 ${x.over} 次` : ''}・單次最高 ${x.max_sub}</span></span><span class="tiny">${ago(x.last_at)}</span></div>`).join('')}</div>
+      <p class="tiny" style="margin:0">最常碰到額度上限的功能：停下表示做到一半留到下次，超過上限要檢查。</p>` : '<p class="tiny" style="margin:0">這段期間沒有功能碰到額度上限。</p>'}`;
 }
 function bindOverview() {
   loadHealth();
