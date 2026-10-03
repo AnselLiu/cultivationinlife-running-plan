@@ -1,0 +1,2983 @@
+{
+ "grid": {
+  "fmS-6-T": {
+   "planDays": "30084880e66502df",
+   "paceNotes": "c39254a594e6e60d",
+   "explain": "6ffda2d812308262",
+   "weekText": "9f4f28bb4fd57a60"
+  },
+  "fmS-6-F": {
+   "planDays": "741c1d125f469a94",
+   "paceNotes": "c39254a594e6e60d",
+   "explain": "6ffda2d812308262",
+   "weekText": "6d4a4012efcbbfd4"
+  },
+  "fmS-5-T": {
+   "planDays": "e9823f1887f0c9d6",
+   "paceNotes": "c39254a594e6e60d",
+   "explain": "6ffda2d812308262",
+   "weekText": "dcc12d47771963af"
+  },
+  "fmS-5-F": {
+   "planDays": "0f0c0229927e0b11",
+   "paceNotes": "c39254a594e6e60d",
+   "explain": "6ffda2d812308262",
+   "weekText": "2e25eb1b9de15631"
+  },
+  "fmS-4-T": {
+   "planDays": "cdca79f2415bdcf8",
+   "paceNotes": "c39254a594e6e60d",
+   "explain": "6ffda2d812308262",
+   "weekText": "be41a750efb1e77e"
+  },
+  "fmS-4-F": {
+   "planDays": "adac9682323bb099",
+   "paceNotes": "c39254a594e6e60d",
+   "explain": "6ffda2d812308262",
+   "weekText": "2b4905de2a9122f1"
+  },
+  "fmS-3-T": {
+   "planDays": "163926aaf07e5901",
+   "paceNotes": "c39254a594e6e60d",
+   "explain": "6ffda2d812308262",
+   "weekText": "a01e68c8ea99cc22"
+  },
+  "fmS-3-F": {
+   "planDays": "88bc55e4c63a2a26",
+   "paceNotes": "c39254a594e6e60d",
+   "explain": "6ffda2d812308262",
+   "weekText": "09f7fe642d9dea14"
+  },
+  "fmA-6-T": {
+   "planDays": "30084880e66502df",
+   "paceNotes": "a0b53eb2a841e230",
+   "explain": "644136c82099cc4b",
+   "weekText": "95f1a57830f9ecbf"
+  },
+  "fmA-6-F": {
+   "planDays": "15191af92d1bdf1c",
+   "paceNotes": "a0b53eb2a841e230",
+   "explain": "644136c82099cc4b",
+   "weekText": "805d0641c93a69f5"
+  },
+  "fmA-5-T": {
+   "planDays": "e9823f1887f0c9d6",
+   "paceNotes": "a0b53eb2a841e230",
+   "explain": "644136c82099cc4b",
+   "weekText": "797e87622c056410"
+  },
+  "fmA-5-F": {
+   "planDays": "473a2ad60d6d0bd2",
+   "paceNotes": "a0b53eb2a841e230",
+   "explain": "644136c82099cc4b",
+   "weekText": "2e163185df67ad5b"
+  },
+  "fmA-4-T": {
+   "planDays": "cdca79f2415bdcf8",
+   "paceNotes": "a0b53eb2a841e230",
+   "explain": "644136c82099cc4b",
+   "weekText": "d74e925871b30452"
+  },
+  "fmA-4-F": {
+   "planDays": "08c467d5ba28c565",
+   "paceNotes": "a0b53eb2a841e230",
+   "explain": "644136c82099cc4b",
+   "weekText": "5d54e48a6c6a27d5"
+  },
+  "fmA-3-T": {
+   "planDays": "163926aaf07e5901",
+   "paceNotes": "a0b53eb2a841e230",
+   "explain": "644136c82099cc4b",
+   "weekText": "4b376f8ea61eb030"
+  },
+  "fmA-3-F": {
+   "planDays": "34c03ed9e5aeddcc",
+   "paceNotes": "a0b53eb2a841e230",
+   "explain": "644136c82099cc4b",
+   "weekText": "b061851585befb50"
+  },
+  "fmB-6-T": {
+   "planDays": "30084880e66502df",
+   "paceNotes": "980611f2d1a11c4b",
+   "explain": "d5708a60a8d4b6d4",
+   "weekText": "eb327d277c21bc3a"
+  },
+  "fmB-6-F": {
+   "planDays": "741c1d125f469a94",
+   "paceNotes": "980611f2d1a11c4b",
+   "explain": "d5708a60a8d4b6d4",
+   "weekText": "749387ebceb0b0f4"
+  },
+  "fmB-5-T": {
+   "planDays": "e9823f1887f0c9d6",
+   "paceNotes": "980611f2d1a11c4b",
+   "explain": "d5708a60a8d4b6d4",
+   "weekText": "8f78f3596019863f"
+  },
+  "fmB-5-F": {
+   "planDays": "0f0c0229927e0b11",
+   "paceNotes": "980611f2d1a11c4b",
+   "explain": "d5708a60a8d4b6d4",
+   "weekText": "ba067550c1a53ec9"
+  },
+  "fmB-4-T": {
+   "planDays": "cdca79f2415bdcf8",
+   "paceNotes": "980611f2d1a11c4b",
+   "explain": "d5708a60a8d4b6d4",
+   "weekText": "9e55c22f2090b5e4"
+  },
+  "fmB-4-F": {
+   "planDays": "adac9682323bb099",
+   "paceNotes": "980611f2d1a11c4b",
+   "explain": "d5708a60a8d4b6d4",
+   "weekText": "f634d86c9e2cf581"
+  },
+  "fmB-3-T": {
+   "planDays": "163926aaf07e5901",
+   "paceNotes": "980611f2d1a11c4b",
+   "explain": "d5708a60a8d4b6d4",
+   "weekText": "45cb3a5423f4ac06"
+  },
+  "fmB-3-F": {
+   "planDays": "88bc55e4c63a2a26",
+   "paceNotes": "980611f2d1a11c4b",
+   "explain": "d5708a60a8d4b6d4",
+   "weekText": "b817d839403a5b8c"
+  },
+  "fmC-6-T": {
+   "planDays": "30084880e66502df",
+   "paceNotes": "b5f343439757e6eb",
+   "explain": "289830d0ee987644",
+   "weekText": "e928be16e7baa9a3"
+  },
+  "fmC-6-F": {
+   "planDays": "741c1d125f469a94",
+   "paceNotes": "b5f343439757e6eb",
+   "explain": "289830d0ee987644",
+   "weekText": "ddc6399ad6e2f0ca"
+  },
+  "fmC-5-T": {
+   "planDays": "e9823f1887f0c9d6",
+   "paceNotes": "b5f343439757e6eb",
+   "explain": "289830d0ee987644",
+   "weekText": "13b3f67d4b0ca5bf"
+  },
+  "fmC-5-F": {
+   "planDays": "0f0c0229927e0b11",
+   "paceNotes": "b5f343439757e6eb",
+   "explain": "289830d0ee987644",
+   "weekText": "3d141c0bc5104492"
+  },
+  "fmC-4-T": {
+   "planDays": "cdca79f2415bdcf8",
+   "paceNotes": "b5f343439757e6eb",
+   "explain": "289830d0ee987644",
+   "weekText": "fcc7e808034a4496"
+  },
+  "fmC-4-F": {
+   "planDays": "adac9682323bb099",
+   "paceNotes": "b5f343439757e6eb",
+   "explain": "289830d0ee987644",
+   "weekText": "61478c4a7c91125f"
+  },
+  "fmC-3-T": {
+   "planDays": "163926aaf07e5901",
+   "paceNotes": "b5f343439757e6eb",
+   "explain": "289830d0ee987644",
+   "weekText": "2496d225fae75a4f"
+  },
+  "fmC-3-F": {
+   "planDays": "88bc55e4c63a2a26",
+   "paceNotes": "b5f343439757e6eb",
+   "explain": "289830d0ee987644",
+   "weekText": "6b45b41eb294a71d"
+  },
+  "fmD-6-T": {
+   "planDays": "30084880e66502df",
+   "paceNotes": "ef893317ce33548c",
+   "explain": "c1ba5c0d0c926ff3",
+   "weekText": "de9b293fa1edc5af"
+  },
+  "fmD-6-F": {
+   "planDays": "741c1d125f469a94",
+   "paceNotes": "ef893317ce33548c",
+   "explain": "c1ba5c0d0c926ff3",
+   "weekText": "6ff146af6cbdd143"
+  },
+  "fmD-5-T": {
+   "planDays": "e9823f1887f0c9d6",
+   "paceNotes": "ef893317ce33548c",
+   "explain": "c1ba5c0d0c926ff3",
+   "weekText": "c7a4181233cd294f"
+  },
+  "fmD-5-F": {
+   "planDays": "0f0c0229927e0b11",
+   "paceNotes": "ef893317ce33548c",
+   "explain": "c1ba5c0d0c926ff3",
+   "weekText": "b4a5cde3390da51d"
+  },
+  "fmD-4-T": {
+   "planDays": "cdca79f2415bdcf8",
+   "paceNotes": "ef893317ce33548c",
+   "explain": "c1ba5c0d0c926ff3",
+   "weekText": "64b4cc71ea09aa24"
+  },
+  "fmD-4-F": {
+   "planDays": "adac9682323bb099",
+   "paceNotes": "ef893317ce33548c",
+   "explain": "c1ba5c0d0c926ff3",
+   "weekText": "13715c4e360480fa"
+  },
+  "fmD-3-T": {
+   "planDays": "163926aaf07e5901",
+   "paceNotes": "ef893317ce33548c",
+   "explain": "c1ba5c0d0c926ff3",
+   "weekText": "99a01a2568c23b54"
+  },
+  "fmD-3-F": {
+   "planDays": "88bc55e4c63a2a26",
+   "paceNotes": "ef893317ce33548c",
+   "explain": "c1ba5c0d0c926ff3",
+   "weekText": "70611661290f23e5"
+  },
+  "fmE-6-T": {
+   "planDays": "30084880e66502df",
+   "paceNotes": "be649b88721d428d",
+   "explain": "0ccc4f0f1ef252db",
+   "weekText": "60f82816b85e4680"
+  },
+  "fmE-6-F": {
+   "planDays": "741c1d125f469a94",
+   "paceNotes": "be649b88721d428d",
+   "explain": "0ccc4f0f1ef252db",
+   "weekText": "3fef10c712a0e8a5"
+  },
+  "fmE-5-T": {
+   "planDays": "e9823f1887f0c9d6",
+   "paceNotes": "be649b88721d428d",
+   "explain": "0ccc4f0f1ef252db",
+   "weekText": "238d69fc54e0e948"
+  },
+  "fmE-5-F": {
+   "planDays": "0f0c0229927e0b11",
+   "paceNotes": "be649b88721d428d",
+   "explain": "0ccc4f0f1ef252db",
+   "weekText": "309acc04ab722591"
+  },
+  "fmE-4-T": {
+   "planDays": "cdca79f2415bdcf8",
+   "paceNotes": "be649b88721d428d",
+   "explain": "0ccc4f0f1ef252db",
+   "weekText": "5eafe582aa39b63b"
+  },
+  "fmE-4-F": {
+   "planDays": "adac9682323bb099",
+   "paceNotes": "be649b88721d428d",
+   "explain": "0ccc4f0f1ef252db",
+   "weekText": "3b717e1df3e52cc3"
+  },
+  "fmE-3-T": {
+   "planDays": "163926aaf07e5901",
+   "paceNotes": "be649b88721d428d",
+   "explain": "0ccc4f0f1ef252db",
+   "weekText": "46ba8aae33310ad0"
+  },
+  "fmE-3-F": {
+   "planDays": "88bc55e4c63a2a26",
+   "paceNotes": "be649b88721d428d",
+   "explain": "0ccc4f0f1ef252db",
+   "weekText": "243ca9b9a9818b93"
+  },
+  "fmF-6-T": {
+   "planDays": "30084880e66502df",
+   "paceNotes": "bf39ab48737824ef",
+   "explain": "b1fcf4bab43eb6f1",
+   "weekText": "74f01b680a1f6c88"
+  },
+  "fmF-6-F": {
+   "planDays": "741c1d125f469a94",
+   "paceNotes": "bf39ab48737824ef",
+   "explain": "b1fcf4bab43eb6f1",
+   "weekText": "561307e4684d87a4"
+  },
+  "fmF-5-T": {
+   "planDays": "e9823f1887f0c9d6",
+   "paceNotes": "bf39ab48737824ef",
+   "explain": "b1fcf4bab43eb6f1",
+   "weekText": "04c9a877e1c5eb36"
+  },
+  "fmF-5-F": {
+   "planDays": "0f0c0229927e0b11",
+   "paceNotes": "bf39ab48737824ef",
+   "explain": "b1fcf4bab43eb6f1",
+   "weekText": "7836bdbe04e38e7b"
+  },
+  "fmF-4-T": {
+   "planDays": "cdca79f2415bdcf8",
+   "paceNotes": "bf39ab48737824ef",
+   "explain": "b1fcf4bab43eb6f1",
+   "weekText": "ccc65942142029fc"
+  },
+  "fmF-4-F": {
+   "planDays": "adac9682323bb099",
+   "paceNotes": "bf39ab48737824ef",
+   "explain": "b1fcf4bab43eb6f1",
+   "weekText": "48cd74a2169034c9"
+  },
+  "fmF-3-T": {
+   "planDays": "163926aaf07e5901",
+   "paceNotes": "bf39ab48737824ef",
+   "explain": "b1fcf4bab43eb6f1",
+   "weekText": "829d2ade5618c494"
+  },
+  "fmF-3-F": {
+   "planDays": "88bc55e4c63a2a26",
+   "paceNotes": "bf39ab48737824ef",
+   "explain": "b1fcf4bab43eb6f1",
+   "weekText": "ef255f7f83272247"
+  },
+  "fmG-6-T": {
+   "planDays": "2a04566bcdf3b4d1",
+   "paceNotes": "82bdcf99c00174b9",
+   "explain": "a540b642eb9e06bc",
+   "weekText": "f86b1051bb17a0a6"
+  },
+  "fmG-6-F": {
+   "planDays": "a9a22730e2800368",
+   "paceNotes": "82bdcf99c00174b9",
+   "explain": "a540b642eb9e06bc",
+   "weekText": "9ecc437475cead70"
+  },
+  "fmG-5-T": {
+   "planDays": "b90f6eb1e3cdda1e",
+   "paceNotes": "82bdcf99c00174b9",
+   "explain": "a540b642eb9e06bc",
+   "weekText": "a91eecad636193ac"
+  },
+  "fmG-5-F": {
+   "planDays": "4a8739959d6f1805",
+   "paceNotes": "82bdcf99c00174b9",
+   "explain": "a540b642eb9e06bc",
+   "weekText": "c3f11b748333ba4b"
+  },
+  "fmG-4-T": {
+   "planDays": "9e5a2091e930024f",
+   "paceNotes": "82bdcf99c00174b9",
+   "explain": "a540b642eb9e06bc",
+   "weekText": "f76916781e2d1b64"
+  },
+  "fmG-4-F": {
+   "planDays": "e9ed561738b34050",
+   "paceNotes": "82bdcf99c00174b9",
+   "explain": "a540b642eb9e06bc",
+   "weekText": "b8819a653480ab65"
+  },
+  "fmG-3-T": {
+   "planDays": "7a1b74d3987844f1",
+   "paceNotes": "82bdcf99c00174b9",
+   "explain": "a540b642eb9e06bc",
+   "weekText": "c7ef1ce5317be000"
+  },
+  "fmG-3-F": {
+   "planDays": "fa9a4986364f1767",
+   "paceNotes": "82bdcf99c00174b9",
+   "explain": "a540b642eb9e06bc",
+   "weekText": "1670113405cb38bd"
+  },
+  "fmH-6-T": {
+   "planDays": "2a04566bcdf3b4d1",
+   "paceNotes": "b67de59bf5a5d4ee",
+   "explain": "a24614152855046a",
+   "weekText": "6c7985e353a97f1e"
+  },
+  "fmH-6-F": {
+   "planDays": "a9a22730e2800368",
+   "paceNotes": "b67de59bf5a5d4ee",
+   "explain": "a24614152855046a",
+   "weekText": "19dae044369fd425"
+  },
+  "fmH-5-T": {
+   "planDays": "b90f6eb1e3cdda1e",
+   "paceNotes": "b67de59bf5a5d4ee",
+   "explain": "a24614152855046a",
+   "weekText": "285d2a0023dc160d"
+  },
+  "fmH-5-F": {
+   "planDays": "4a8739959d6f1805",
+   "paceNotes": "b67de59bf5a5d4ee",
+   "explain": "a24614152855046a",
+   "weekText": "86548e5533eda2b4"
+  },
+  "fmH-4-T": {
+   "planDays": "9e5a2091e930024f",
+   "paceNotes": "b67de59bf5a5d4ee",
+   "explain": "a24614152855046a",
+   "weekText": "ae3cbb1cdf26cca1"
+  },
+  "fmH-4-F": {
+   "planDays": "e9ed561738b34050",
+   "paceNotes": "b67de59bf5a5d4ee",
+   "explain": "a24614152855046a",
+   "weekText": "231329e366de66a6"
+  },
+  "fmH-3-T": {
+   "planDays": "7a1b74d3987844f1",
+   "paceNotes": "b67de59bf5a5d4ee",
+   "explain": "a24614152855046a",
+   "weekText": "0e2f5f799d199e06"
+  },
+  "fmH-3-F": {
+   "planDays": "fa9a4986364f1767",
+   "paceNotes": "b67de59bf5a5d4ee",
+   "explain": "a24614152855046a",
+   "weekText": "368b406a1f23f4fd"
+  },
+  "fmI-6-T": {
+   "planDays": "2a04566bcdf3b4d1",
+   "paceNotes": "8f6d49daa6a95a6d",
+   "explain": "dc0a96b31224e93b",
+   "weekText": "855350d2439f6dde"
+  },
+  "fmI-6-F": {
+   "planDays": "a9a22730e2800368",
+   "paceNotes": "8f6d49daa6a95a6d",
+   "explain": "dc0a96b31224e93b",
+   "weekText": "f5c37a046d6ff445"
+  },
+  "fmI-5-T": {
+   "planDays": "b90f6eb1e3cdda1e",
+   "paceNotes": "8f6d49daa6a95a6d",
+   "explain": "dc0a96b31224e93b",
+   "weekText": "77c6404f26366f0b"
+  },
+  "fmI-5-F": {
+   "planDays": "4a8739959d6f1805",
+   "paceNotes": "8f6d49daa6a95a6d",
+   "explain": "dc0a96b31224e93b",
+   "weekText": "2daf9326ea4671bc"
+  },
+  "fmI-4-T": {
+   "planDays": "9e5a2091e930024f",
+   "paceNotes": "8f6d49daa6a95a6d",
+   "explain": "dc0a96b31224e93b",
+   "weekText": "8f130e85a04242f1"
+  },
+  "fmI-4-F": {
+   "planDays": "e9ed561738b34050",
+   "paceNotes": "8f6d49daa6a95a6d",
+   "explain": "dc0a96b31224e93b",
+   "weekText": "662de660d2575d03"
+  },
+  "fmI-3-T": {
+   "planDays": "7a1b74d3987844f1",
+   "paceNotes": "8f6d49daa6a95a6d",
+   "explain": "dc0a96b31224e93b",
+   "weekText": "c93a2258a638348d"
+  },
+  "fmI-3-F": {
+   "planDays": "fa9a4986364f1767",
+   "paceNotes": "8f6d49daa6a95a6d",
+   "explain": "dc0a96b31224e93b",
+   "weekText": "cca48c2908a45243"
+  },
+  "hmA-6-T": {
+   "planDays": "616dc2bd540d33bc",
+   "paceNotes": "2c4f7a6d916ff5d6",
+   "explain": "b6cbb7a27975fd43",
+   "weekText": "6d422a1c2601c9c6"
+  },
+  "hmA-6-F": {
+   "planDays": "cc68374fe2160a9b",
+   "paceNotes": "2c4f7a6d916ff5d6",
+   "explain": "b6cbb7a27975fd43",
+   "weekText": "a30b6641c255936f"
+  },
+  "hmA-5-T": {
+   "planDays": "88acb6a73b525bed",
+   "paceNotes": "2c4f7a6d916ff5d6",
+   "explain": "b6cbb7a27975fd43",
+   "weekText": "3576810827ec611a"
+  },
+  "hmA-5-F": {
+   "planDays": "e73e4484de8ead1c",
+   "paceNotes": "2c4f7a6d916ff5d6",
+   "explain": "b6cbb7a27975fd43",
+   "weekText": "3165243b432a7235"
+  },
+  "hmA-4-T": {
+   "planDays": "c9ed7b906085c19e",
+   "paceNotes": "2c4f7a6d916ff5d6",
+   "explain": "b6cbb7a27975fd43",
+   "weekText": "ed114490289eecb3"
+  },
+  "hmA-4-F": {
+   "planDays": "dd12708395bd6ae4",
+   "paceNotes": "2c4f7a6d916ff5d6",
+   "explain": "b6cbb7a27975fd43",
+   "weekText": "15d81614c3d67b32"
+  },
+  "hmA-3-T": {
+   "planDays": "36eb9b6dc9e051b2",
+   "paceNotes": "2c4f7a6d916ff5d6",
+   "explain": "b6cbb7a27975fd43",
+   "weekText": "3a7ed69882e754f3"
+  },
+  "hmA-3-F": {
+   "planDays": "608a42d1ebeceb9f",
+   "paceNotes": "2c4f7a6d916ff5d6",
+   "explain": "b6cbb7a27975fd43",
+   "weekText": "5daeb38bc825d604"
+  },
+  "hmB-6-T": {
+   "planDays": "616dc2bd540d33bc",
+   "paceNotes": "a39428e00f60b052",
+   "explain": "b4d9ef32103bc411",
+   "weekText": "91340ccc45c00344"
+  },
+  "hmB-6-F": {
+   "planDays": "cc68374fe2160a9b",
+   "paceNotes": "a39428e00f60b052",
+   "explain": "b4d9ef32103bc411",
+   "weekText": "fa855c7dd1947e1e"
+  },
+  "hmB-5-T": {
+   "planDays": "88acb6a73b525bed",
+   "paceNotes": "a39428e00f60b052",
+   "explain": "b4d9ef32103bc411",
+   "weekText": "3157ce7638bcbd85"
+  },
+  "hmB-5-F": {
+   "planDays": "e73e4484de8ead1c",
+   "paceNotes": "a39428e00f60b052",
+   "explain": "b4d9ef32103bc411",
+   "weekText": "9c4efc5ac70f66e1"
+  },
+  "hmB-4-T": {
+   "planDays": "c9ed7b906085c19e",
+   "paceNotes": "a39428e00f60b052",
+   "explain": "b4d9ef32103bc411",
+   "weekText": "f25317057df02a32"
+  },
+  "hmB-4-F": {
+   "planDays": "dd12708395bd6ae4",
+   "paceNotes": "a39428e00f60b052",
+   "explain": "b4d9ef32103bc411",
+   "weekText": "a52d53d2e4fc761b"
+  },
+  "hmB-3-T": {
+   "planDays": "36eb9b6dc9e051b2",
+   "paceNotes": "a39428e00f60b052",
+   "explain": "b4d9ef32103bc411",
+   "weekText": "dee19b8912cefb87"
+  },
+  "hmB-3-F": {
+   "planDays": "608a42d1ebeceb9f",
+   "paceNotes": "a39428e00f60b052",
+   "explain": "b4d9ef32103bc411",
+   "weekText": "0f16a00e0fd17393"
+  },
+  "hmC-6-T": {
+   "planDays": "616dc2bd540d33bc",
+   "paceNotes": "61e6df3605570333",
+   "explain": "01b245847ae7a34c",
+   "weekText": "7cb3edfd6858d3ff"
+  },
+  "hmC-6-F": {
+   "planDays": "cc68374fe2160a9b",
+   "paceNotes": "61e6df3605570333",
+   "explain": "01b245847ae7a34c",
+   "weekText": "9a9748d96c087076"
+  },
+  "hmC-5-T": {
+   "planDays": "88acb6a73b525bed",
+   "paceNotes": "61e6df3605570333",
+   "explain": "01b245847ae7a34c",
+   "weekText": "51920c681e904b1c"
+  },
+  "hmC-5-F": {
+   "planDays": "e73e4484de8ead1c",
+   "paceNotes": "61e6df3605570333",
+   "explain": "01b245847ae7a34c",
+   "weekText": "dd3d810a102c51d3"
+  },
+  "hmC-4-T": {
+   "planDays": "c9ed7b906085c19e",
+   "paceNotes": "61e6df3605570333",
+   "explain": "01b245847ae7a34c",
+   "weekText": "92fc50393316f8d9"
+  },
+  "hmC-4-F": {
+   "planDays": "dd12708395bd6ae4",
+   "paceNotes": "61e6df3605570333",
+   "explain": "01b245847ae7a34c",
+   "weekText": "75349916d10cdead"
+  },
+  "hmC-3-T": {
+   "planDays": "36eb9b6dc9e051b2",
+   "paceNotes": "61e6df3605570333",
+   "explain": "01b245847ae7a34c",
+   "weekText": "86d9728c328f6113"
+  },
+  "hmC-3-F": {
+   "planDays": "608a42d1ebeceb9f",
+   "paceNotes": "61e6df3605570333",
+   "explain": "01b245847ae7a34c",
+   "weekText": "50625c5c410f78da"
+  },
+  "hmD-6-T": {
+   "planDays": "616dc2bd540d33bc",
+   "paceNotes": "6acc01f8dbb19e0a",
+   "explain": "66c814a656dd3488",
+   "weekText": "62ae7ead59a23d4e"
+  },
+  "hmD-6-F": {
+   "planDays": "3b5c02cfc54460ae",
+   "paceNotes": "6acc01f8dbb19e0a",
+   "explain": "66c814a656dd3488",
+   "weekText": "2d5a6fccb8cc41c7"
+  },
+  "hmD-5-T": {
+   "planDays": "88acb6a73b525bed",
+   "paceNotes": "6acc01f8dbb19e0a",
+   "explain": "66c814a656dd3488",
+   "weekText": "6d8aee22ef802aa4"
+  },
+  "hmD-5-F": {
+   "planDays": "ecb603a6663f790c",
+   "paceNotes": "6acc01f8dbb19e0a",
+   "explain": "66c814a656dd3488",
+   "weekText": "e203728bed2b0172"
+  },
+  "hmD-4-T": {
+   "planDays": "c9ed7b906085c19e",
+   "paceNotes": "6acc01f8dbb19e0a",
+   "explain": "66c814a656dd3488",
+   "weekText": "3915d5973175c7db"
+  },
+  "hmD-4-F": {
+   "planDays": "f40d637cfa80aac7",
+   "paceNotes": "6acc01f8dbb19e0a",
+   "explain": "66c814a656dd3488",
+   "weekText": "cbdb29c22c58d3aa"
+  },
+  "hmD-3-T": {
+   "planDays": "36eb9b6dc9e051b2",
+   "paceNotes": "6acc01f8dbb19e0a",
+   "explain": "66c814a656dd3488",
+   "weekText": "f9e4156a9295104a"
+  },
+  "hmD-3-F": {
+   "planDays": "09e0cb04d16c3a75",
+   "paceNotes": "6acc01f8dbb19e0a",
+   "explain": "66c814a656dd3488",
+   "weekText": "1d4ac8b5bb891c17"
+  },
+  "hmE-6-T": {
+   "planDays": "616dc2bd540d33bc",
+   "paceNotes": "6b69ddc394d544ab",
+   "explain": "0082d4d4219c0d97",
+   "weekText": "d1d921af04e2d613"
+  },
+  "hmE-6-F": {
+   "planDays": "3b5c02cfc54460ae",
+   "paceNotes": "6b69ddc394d544ab",
+   "explain": "0082d4d4219c0d97",
+   "weekText": "9bc52598a0b19235"
+  },
+  "hmE-5-T": {
+   "planDays": "88acb6a73b525bed",
+   "paceNotes": "6b69ddc394d544ab",
+   "explain": "0082d4d4219c0d97",
+   "weekText": "82ab61bea32f7124"
+  },
+  "hmE-5-F": {
+   "planDays": "ecb603a6663f790c",
+   "paceNotes": "6b69ddc394d544ab",
+   "explain": "0082d4d4219c0d97",
+   "weekText": "e1643be2e1c62551"
+  },
+  "hmE-4-T": {
+   "planDays": "c9ed7b906085c19e",
+   "paceNotes": "6b69ddc394d544ab",
+   "explain": "0082d4d4219c0d97",
+   "weekText": "36060e58e02983d2"
+  },
+  "hmE-4-F": {
+   "planDays": "f40d637cfa80aac7",
+   "paceNotes": "6b69ddc394d544ab",
+   "explain": "0082d4d4219c0d97",
+   "weekText": "163ce280b7047822"
+  },
+  "hmE-3-T": {
+   "planDays": "36eb9b6dc9e051b2",
+   "paceNotes": "6b69ddc394d544ab",
+   "explain": "0082d4d4219c0d97",
+   "weekText": "ef7c0c160ef2dca6"
+  },
+  "hmE-3-F": {
+   "planDays": "09e0cb04d16c3a75",
+   "paceNotes": "6b69ddc394d544ab",
+   "explain": "0082d4d4219c0d97",
+   "weekText": "c0ee356169097d92"
+  }
+ },
+ "gridNoAge": {
+  "fmD": {
+   "explain": "6df887beefd8ec46",
+   "bpm": false
+  },
+  "hmC": {
+   "explain": "bca583b8bf91f93b",
+   "bpm": false
+  }
+ },
+ "text": {
+  "fmD": {
+   "copyAll": "【測試跑者@臺北馬拉松課表】\n比賽日 12/20（日） 06:30 起跑｜耕跑團 20 週週期\n全馬 D 組（SUB 3:35–3:40）｜MP 5:09/km｜每週 6 天｜參加週四團練\n\n■ W1 準備期（8/3（一）–8/9（日））\n週一｜輕鬆｜60' easyjog@MP+1'40''~1'10''（≈ 6:49–6:19/km）\n週二｜質量｜30mins freejog+(5'MP+0''~10'') x 5~6@2'jogging/Rpe3（≈ 5:19–5:09/km）\n週三｜輕鬆｜40' easyjog@Rpe 4~5\n週四｜質量｜5K@04:45~04:40/km〔週四團練・臺北田徑場〕\n週五或週六｜輕鬆｜60' easyjog@Rpe 4~5\n週末｜長跑｜110'LR@zone2\n\n■ W2 基礎期（8/10（一）–8/16（日））\n週一｜輕鬆｜60'easyjog/rpe3\n週二｜質量｜13K@06:15~06:00/km\n週三｜輕鬆｜40' easyjog\n週四｜質量｜2~3K warm up jog+團體動態熱身/1K x 6@04:45/km R:1'45''〔週四團練・臺北田徑場〕\n週五或週六｜肌力｜核心/肌力/活動度/交叉訓練\n週末｜長跑｜18K~20K@05:45~05:40/km\n\n■ W3 基礎期（8/17（一）–8/23（日））\n週一｜輕鬆｜60' freejog+100M ST x 5 R:75''\n週二｜質量｜15' warm up jog+動態熱身/10K@05:30/km\n週三｜輕鬆｜6K @easyjog\n週四｜質量｜2K x 3@04:45/km R:3'〔週四團練・臺北田徑場〕\n週五或週六｜輕鬆｜40'E\n週末｜長跑｜100'LR @06:00~05:40/km or HLSD\n\n■ W4 基礎期・恢復週（8/24（一）–8/30（日））\n週一｜輕鬆｜60'E/rpe2~3\n週二｜質量｜9K@06:15~06:00/km\n週三｜輕鬆｜40' easyjog\n週四｜質量｜800 x 7~8@04:45/km R:2'〔週四團練・臺北田徑場〕\n週五或週六｜輕鬆｜40'E\n週末｜長跑｜18K~20K@05:45~05:40/km\n\n■ W5 基礎期（8/31（一）–9/6（日））\n週一｜輕鬆｜70' E\n週二｜質量｜75'pace@MP+40''~30''（≈ 5:49–5:39/km）\n週三｜輕鬆｜50' E\n週四｜質量｜(1.2Kx3)+(1.2Kx3)@04:45/05:05/km r:3'/1'〔週四團練・臺北田徑場〕\n週五或週六｜輕鬆｜10K E@low HR\n週末｜長跑｜22K@06:10~06:00/km\n\n■ W6 基礎期（9/7（一）–9/13（日））\n週一｜輕鬆｜60' E@rpe3\n週二｜質量｜70'pace@MP+50''~40''（≈ 5:59–5:49/km）\n週三｜輕鬆｜60' E@low HR\n週四｜質量｜10K MP（≈ 5:09/km）〔週四團練・臺北田徑場〕\n週五或週六｜輕鬆｜10K E@low HR\n週末｜長跑｜25K MP+50''~40''（≈ 5:59–5:49/km）\n\n■ W7 基礎期（9/14（一）–9/20（日））\n週一｜輕鬆｜70' E@rpe3\n週二｜質量｜15K pace@MP+35''~30''（≈ 5:44–5:39/km）\n週三｜輕鬆｜8K E@low HR\n週四｜質量｜600 x 10~12@MP-25''~-20'' r:1'30''（≈ 4:49–4:44/km）〔週四團練・臺北田徑場〕\n週五或週六｜輕鬆｜12K E@low HR\n週末｜長跑｜100' LR@zone 2+ 8K MP（≈ 5:09/km）\n\n■ W8 基礎期・恢復週（9/21（一）–9/27（日））\n週一｜輕鬆｜60' E@rpe3\n週二｜質量｜8K pace@MP+20''~10''（≈ 5:29–5:19/km）\n週三｜輕鬆｜10K E@low HR\n週四｜質量｜4Kx3@MP r:4'（≈ 5:09/km）〔週四團練・臺北田徑場〕\n週五或週六｜輕鬆｜10K E@low HR\n週末｜長跑｜2H30M LR@zone 2\n\n■ W9 基礎期（9/28（一）–10/4（日））\n週一｜輕鬆｜75' easyjog@rpe3\n週二｜質量｜40'tempo@05:05~05:00/km\n週三｜輕鬆｜11K jog@06:30~06:20/km\n週四｜質量｜3200 x 3@04:40~04:35/km R:3'30''〔週四團練・臺北田徑場〕\n週五或週六｜輕鬆｜60' easyjog@rpe3\n週末｜長跑｜27~28K LR@05:50~05:45/km\n\n■ W10 強化期（10/5（一）–10/11（日））\n週一｜質量｜60' freejog@MP+80''~50''(體感漸進)（≈ 6:29–5:59/km）\n週二｜質量｜14K@05:25~05:15/km\n週三｜輕鬆｜60' jog@HR130\n週四｜質量｜800 x 8~10@04:45~04:40/km R:2'〔週四團練・臺北田徑場〕\n週五或週六｜輕鬆｜60' easyjog@rpe3\n週末｜長跑｜22K LR@05:40~05:30/km\n\n■ W11 強化期（10/12（一）–10/18（日））\n週一｜輕鬆｜45' freejog@rpe4~5\n週二｜質量｜12K@05:00~04:55/km\n週三｜輕鬆｜60' jog@HR130\n週四｜質量｜2000 x 5~6@04:45~04:40/km R:1'50''〔週四團練・臺北田徑場〕\n週五或週六｜輕鬆｜60' easyjog@rpe3\n週末｜長跑｜24~25K LR@05:35~05:30/km\n\n■ W12 強化期（10/19（一）–10/25（日））\n週一｜輕鬆｜60' freejog@rpe4~5\n週二｜質量｜10K@05:15-05:10/km\n週三｜輕鬆｜60' jog@HR130\n週四｜質量｜1000 x 6-7@04:45~04:40/km R:1'〔週四團練・臺北田徑場〕\n週五或週六｜輕鬆｜30' easyjog@rpe3+20'' ST x 4 r:60\"\n週末｜比賽｜21K LR@05:30~05:25/km or 賽事\n\n■ W13 強化期（10/26（一）–11/1（日））\n週一｜輕鬆｜70' freejog@rpe4~5\n週二｜質量｜10K@05:05-05:00/km\n週三｜輕鬆｜60' jog@HR130\n週四｜質量｜1200 x 6~7@04:55~04:50/km R:2'〔週四團練・臺北田徑場〕\n週五或週六｜輕鬆｜12K easyjog@rpe3\n週末｜長跑｜9K+16K LR@05:35/05:30~05:20/km\n\n■ W14 強化期（11/2（一）–11/8（日））\n週一｜輕鬆｜70' freejog@rpe4~5\n週二｜質量｜6K+12K@05:20/05:15~05:10/km\n週三｜輕鬆｜60' jog@HR130\n週四｜質量｜400 x 18@04:30-04:25/km R:60''〔週四團練・臺北田徑場〕\n週五或週六｜輕鬆｜12K easyjog@rpe3\n週末｜長跑｜14K+16K LR@05:35/05:25-05:15//km\n\n■ W15 強化期（11/9（一）–11/15（日））\n週一｜輕鬆｜70' freejog/rpe4~5\n週二｜質量｜15' warm up jog+動態熱身/2800 x 3@05:05~04:55/km R:3'30''\n週三｜輕鬆｜60'easyjog/rpe3\n週四｜質量｜14K@05:15~05:10/km〔週四團練・臺北田徑場〕\n週五或週六｜輕鬆｜50'easyjog/rpe3\n週末｜長跑｜14K+10K@05:30/05:20~05:10/km\n\n■ W16 巔峰期（11/16（一）–11/22（日））\n週一｜輕鬆｜60' freejog@rpe4~5\n週二｜質量｜13K@05:10-05:00/km\n週三｜輕鬆｜60' jog@HR130\n週四｜質量｜900 x 8@04:45~04:40/km R:2'〔週四團練・臺北田徑場〕\n週五或週六｜輕鬆｜60' easyjog@rpe3+20'' ST x 4 r:60\"\n週末｜長跑｜(7K @5:40/km+7K @5:20/km)x2\n\n■ W17 巔峰期（11/23（一）–11/29（日））\n週一｜輕鬆｜60' freejog\n週二｜質量｜60' pace@05:15~05:10/km\n週三｜輕鬆｜10K @easyjog\n週四｜質量｜2~2.4K warm up jog+團體動態熱身/3600 x 3 @05:00~04:55/km R:3'30''〔週四團練・臺北田徑場〕\n週五或週六｜肌力｜核心/肌力/活動度/交叉訓練\n週末｜長跑｜30~32K@05:25~05:15/km\n\n■ W18 巔峰期（11/30（一）–12/6（日））\n週一｜輕鬆｜50' freejog\n週二｜質量｜15' warm up jog+動態熱身/1600 x 5 @04:30/km R:2'\n週三｜輕鬆｜8K @easyjog\n週四｜質量｜12K Tempo@04:55~04:45/km〔週四團練・臺北田徑場〕\n週五或週六｜肌力｜核心/肌力/活動度/交叉訓練\n週末｜長跑｜6K+16K@05:15/05:10~05:00/km\n\n■ W19 比賽期（12/7（一）–12/13（日））\n週一｜輕鬆｜40' freejog+100M ST x 5 R:75''\n週二｜質量｜15' warm up jog+動態熱身/10K@05:00~04:55/km\n週三｜輕鬆｜6K @easyjog\n週四｜質量｜2.4K warm up jog+團體動態熱身/(3000)+(900x3) @04:50/04:40~04:35/km R:3'/2'〔週四團練・臺北田徑場〕\n週五或週六｜肌力｜核心/肌力/活動度/交叉訓練\n週末｜長跑｜15~16K @05:15~05:05/km\n\n■ W20 賽事週（12/14（一）–12/20（日））\n週一｜休息｜休息日/主動恢復\n週二｜質量｜2K warm up jog+動態熱身/2K x 2@05:00-04:50/km r:2'\n週三｜輕鬆｜30' @easy jog\n週四｜質量｜15' warm up jog+動態熱身/4K@05:10-05:00/km〔週四團練・臺北田徑場〕\n週五或週六｜輕鬆｜15'~20'easyjog+自主放鬆 (或視個人賽前習慣完全休息)\n週末｜比賽｜比賽日：臺北馬拉松〔當天流程、配速分段、補給時間表見「比賽日建議」〕\n\n■ R 賽後恢復週（12/21（一）–12/27（日））\n週一｜休息｜主動恢復日\n週二｜休息｜主動恢復日\n週三｜輕鬆｜30' easyjog@low HR\n週四或週五｜輕鬆｜45'freejog/rpe3~4+自主放鬆\n週末｜長跑｜90'jog@zone1~2/rpe4~5\n\n※ 課表模型整理自耕跑團教練課表，實際以教練每週發布為準；「可省略」是每週天數不夠時優先省略的輕鬆跑。",
+   "ics": {
+    "text": "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Gengpao//Coach//ZH-TW\r\nCALSCALE:GREGORIAN\r\nMETHOD:PUBLISH\r\nX-WR-CALNAME:測試跑者@臺北馬拉松課表\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w1-0@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260803\r\nDTEND;VALUE=DATE:20260804\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 60' easyjog@MP+1'40''~1'10'' (≈6:49–6:19)\r\nDESCRIPTION:W1 準備期 | 全馬 D 組\\n週一 | 輕鬆\\n60' easyjog@MP+1'\r\n 40''~1'10''\\n配速 ≈ 6:49–6:19/km\\n課表以教練每週發布的為\r\n 準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w1-1@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260804\r\nDTEND;VALUE=DATE:20260805\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 30mins freejog+(5'MP+0''~10'') x 5~6@2'jogging/Rpe3 (≈5:\r\n 19–5:09)\r\nDESCRIPTION:W1 準備期 | 全馬 D 組\\n週二 | 質量\\n30mins freejog+(5\r\n 'MP+0''~10'') x 5~6@2'jogging/Rpe3\\n配速 ≈ 5:19–5:09/km\\n課表以\r\n 教練每週發布的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w1-2@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260805\r\nDTEND;VALUE=DATE:20260806\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 40' easyjog@Rpe 4~5\r\nDESCRIPTION:W1 準備期 | 全馬 D 組\\n週三 | 輕鬆\\n40' easyjog@Rpe 4\r\n ~5\\n課表以教練每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w1-3@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260806\r\nDTEND;VALUE=DATE:20260807\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 5K@04:45~04:40/km\r\nDESCRIPTION:W1 準備期 | 全馬 D 組\\n週四 | 質量\\n5K@04:45~04:40/km\r\n \\n週四團練・臺北田徑場\\n課表以教練每週發布的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w1-4@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260807\r\nDTEND;VALUE=DATE:20260808\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 60' easyjog@Rpe 4~5\r\nDESCRIPTION:W1 準備期 | 全馬 D 組\\n週五或週六 | 輕鬆\\n60' easy\r\n jog@Rpe 4~5\\n可在週五或週六擇一天執行\\n課表以教練每週\r\n 發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w1-5@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260809\r\nDTEND;VALUE=DATE:20260810\r\nTRANSP:TRANSPARENT\r\nSUMMARY:長跑 | 110'LR@zone2\r\nDESCRIPTION:W1 準備期 | 全馬 D 組\\n週末 | 長跑\\n110'LR@zone2\\n課\r\n 表以教練每週發布的為準\r\nCATEGORIES:長跑\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w2-0@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260810\r\nDTEND;VALUE=DATE:20260811\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 60'easyjog/rpe3\r\nDESCRIPTION:W2 基礎期 | 全馬 D 組\\n週一 | 輕鬆\\n60'easyjog/rpe3\\n\r\n 課表以教練每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w2-1@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260811\r\nDTEND;VALUE=DATE:20260812\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 13K@06:15~06:00/km\r\nDESCRIPTION:W2 基礎期 | 全馬 D 組\\n週二 | 質量\\n13K@06:15~06:00/k\r\n m\\n課表以教練每週發布的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w2-2@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260812\r\nDTEND;VALUE=DATE:20260813\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 40' easyjog\r\nDESCRIPTION:W2 基礎期 | 全馬 D 組\\n週三 | 輕鬆\\n40' easyjog\\n課\r\n 表以教練每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w2-3@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260813\r\nDTEND;VALUE=DATE:20260814\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 2~3K warm up jog+團體動態熱身/1K x 6@04:45/km R:1'45\r\n ''\r\nDESCRIPTION:W2 基礎期 | 全馬 D 組\\n週四 | 質量\\n2~3K warm up jog+\r\n 團體動態熱身/1K x 6@04:45/km R:1'45''\\n週四團練・臺北田徑\r\n 場\\n課表以教練每週發布的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w2-4@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260814\r\nDTEND;VALUE=DATE:20260815\r\nTRANSP:TRANSPARENT\r\nSUMMARY:肌力 | 核心/肌力/活動度/交叉訓練\r\nDESCRIPTION:W2 基礎期 | 全馬 D 組\\n週五或週六 | 肌力\\n核心/\r\n 肌力/活動度/交叉訓練\\n可在週五或週六擇一天執行\\n課\r\n 表以教練每週發布的為準\r\nCATEGORIES:肌力\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w2-5@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260816\r\nDTEND;VALUE=DATE:20260817\r\nTRANSP:TRANSPARENT\r\nSUMMARY:長跑 | 18K~20K@05:45~05:40/km\r\nDESCRIPTION:W2 基礎期 | 全馬 D 組\\n週末 | 長跑\\n18K~20K@05:45~05:\r\n 40/km\\n課表以教練每週發布的為準\r\nCATEGORIES:長跑\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w3-0@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260817\r\nDTEND;VALUE=DATE:20260818\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 60' freejog+100M ST x 5 R:75''\r\nDESCRIPTION:W3 基礎期 | 全馬 D 組\\n週一 | 輕鬆\\n60' freejog+100M \r\n ST x 5 R:75''\\n課表以教練每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w3-1@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260818\r\nDTEND;VALUE=DATE:20260819\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 15' warm up jog+動態熱身/10K@05:30/km\r\nDESCRIPTION:W3 基礎期 | 全馬 D 組\\n週二 | 質量\\n15' warm up jog+\r\n 動態熱身/10K@05:30/km\\n課表以教練每週發布的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w3-2@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260819\r\nDTEND;VALUE=DATE:20260820\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 6K @easyjog\r\nDESCRIPTION:W3 基礎期 | 全馬 D 組\\n週三 | 輕鬆\\n6K @easyjog\\n課\r\n 表以教練每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w3-3@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260820\r\nDTEND;VALUE=DATE:20260821\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 2K x 3@04:45/km R:3'\r\nDESCRIPTION:W3 基礎期 | 全馬 D 組\\n週四 | 質量\\n2K x 3@04:45/km R\r\n :3'\\n週四團練・臺北田徑場\\n課表以教練每週發布的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w3-4@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260821\r\nDTEND;VALUE=DATE:20260822\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 40'E\r\nDESCRIPTION:W3 基礎期 | 全馬 D 組\\n週五或週六 | 輕鬆\\n40'E\\n\r\n 可在週五或週六擇一天執行\\n課表以教練每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w3-5@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260823\r\nDTEND;VALUE=DATE:20260824\r\nTRANSP:TRANSPARENT\r\nSUMMARY:長跑 | 100'LR @06:00~05:40/km or HLSD\r\nDESCRIPTION:W3 基礎期 | 全馬 D 組\\n週末 | 長跑\\n100'LR @06:00~05:\r\n 40/km or HLSD\\n課表以教練每週發布的為準\r\nCATEGORIES:長跑\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w4-0@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260824\r\nDTEND;VALUE=DATE:20260825\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 60'E/rpe2~3\r\nDESCRIPTION:W4 基礎期・恢復週 | 全馬 D 組\\n週一 | 輕鬆\\n60'E/\r\n rpe2~3\\n課表以教練每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w4-1@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260825\r\nDTEND;VALUE=DATE:20260826\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 9K@06:15~06:00/km\r\nDESCRIPTION:W4 基礎期・恢復週 | 全馬 D 組\\n週二 | 質量\\n9K@06\r\n :15~06:00/km\\n課表以教練每週發布的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w4-2@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260826\r\nDTEND;VALUE=DATE:20260827\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 40' easyjog\r\nDESCRIPTION:W4 基礎期・恢復週 | 全馬 D 組\\n週三 | 輕鬆\\n40' e\r\n asyjog\\n課表以教練每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w4-3@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260827\r\nDTEND;VALUE=DATE:20260828\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 800 x 7~8@04:45/km R:2'\r\nDESCRIPTION:W4 基礎期・恢復週 | 全馬 D 組\\n週四 | 質量\\n800 x\r\n  7~8@04:45/km R:2'\\n週四團練・臺北田徑場\\n課表以教練每週\r\n 發布的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w4-4@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260828\r\nDTEND;VALUE=DATE:20260829\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 40'E\r\nDESCRIPTION:W4 基礎期・恢復週 | 全馬 D 組\\n週五或週六 | 輕\r\n 鬆\\n40'E\\n可在週五或週六擇一天執行\\n課表以教練每週發\r\n 布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w4-5@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260830\r\nDTEND;VALUE=DATE:20260831\r\nTRANSP:TRANSPARENT\r\nSUMMARY:長跑 | 18K~20K@05:45~05:40/km\r\nDESCRIPTION:W4 基礎期・恢復週 | 全馬 D 組\\n週末 | 長跑\\n18K~2\r\n 0K@05:45~05:40/km\\n課表以教練每週發布的為準\r\nCATEGORIES:長跑\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w5-0@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260831\r\nDTEND;VALUE=DATE:20260901\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 70' E\r\nDESCRIPTION:W5 基礎期 | 全馬 D 組\\n週一 | 輕鬆\\n70' E\\n課表以\r\n 教練每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w5-1@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260901\r\nDTEND;VALUE=DATE:20260902\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 75'pace@MP+40''~30'' (≈5:49–5:39)\r\nDESCRIPTION:W5 基礎期 | 全馬 D 組\\n週二 | 質量\\n75'pace@MP+40''~3\r\n 0''\\n配速 ≈ 5:49–5:39/km\\n課表以教練每週發布的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w5-2@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260902\r\nDTEND;VALUE=DATE:20260903\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 50' E\r\nDESCRIPTION:W5 基礎期 | 全馬 D 組\\n週三 | 輕鬆\\n50' E\\n課表以\r\n 教練每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w5-3@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260903\r\nDTEND;VALUE=DATE:20260904\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | (1.2Kx3)+(1.2Kx3)@04:45/05:05/km r:3'/1'\r\nDESCRIPTION:W5 基礎期 | 全馬 D 組\\n週四 | 質量\\n(1.2Kx3)+(1.2Kx3)\r\n @04:45/05:05/km r:3'/1'\\n週四團練・臺北田徑場\\n課表以教練\r\n 每週發布的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w5-4@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260904\r\nDTEND;VALUE=DATE:20260905\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 10K E@low HR\r\nDESCRIPTION:W5 基礎期 | 全馬 D 組\\n週五或週六 | 輕鬆\\n10K E@lo\r\n w HR\\n可在週五或週六擇一天執行\\n課表以教練每週發布的\r\n 為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w5-5@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260906\r\nDTEND;VALUE=DATE:20260907\r\nTRANSP:TRANSPARENT\r\nSUMMARY:長跑 | 22K@06:10~06:00/km\r\nDESCRIPTION:W5 基礎期 | 全馬 D 組\\n週末 | 長跑\\n22K@06:10~06:00/k\r\n m\\n課表以教練每週發布的為準\r\nCATEGORIES:長跑\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w6-0@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260907\r\nDTEND;VALUE=DATE:20260908\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 60' E@rpe3\r\nDESCRIPTION:W6 基礎期 | 全馬 D 組\\n週一 | 輕鬆\\n60' E@rpe3\\n課\r\n 表以教練每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w6-1@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260908\r\nDTEND;VALUE=DATE:20260909\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 70'pace@MP+50''~40'' (≈5:59–5:49)\r\nDESCRIPTION:W6 基礎期 | 全馬 D 組\\n週二 | 質量\\n70'pace@MP+50''~4\r\n 0''\\n配速 ≈ 5:59–5:49/km\\n課表以教練每週發布的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w6-2@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260909\r\nDTEND;VALUE=DATE:20260910\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 60' E@low HR\r\nDESCRIPTION:W6 基礎期 | 全馬 D 組\\n週三 | 輕鬆\\n60' E@low HR\\n課\r\n 表以教練每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w6-3@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260910\r\nDTEND;VALUE=DATE:20260911\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 10K MP (≈5:09)\r\nDESCRIPTION:W6 基礎期 | 全馬 D 組\\n週四 | 質量\\n10K MP\\n配速 \r\n ≈ 5:09/km\\n週四團練・臺北田徑場\\n課表以教練每週發布\r\n 的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w6-4@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260911\r\nDTEND;VALUE=DATE:20260912\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 10K E@low HR\r\nDESCRIPTION:W6 基礎期 | 全馬 D 組\\n週五或週六 | 輕鬆\\n10K E@lo\r\n w HR\\n可在週五或週六擇一天執行\\n課表以教練每週發布的\r\n 為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w6-5@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260913\r\nDTEND;VALUE=DATE:20260914\r\nTRANSP:TRANSPARENT\r\nSUMMARY:長跑 | 25K MP+50''~40'' (≈5:59–5:49)\r\nDESCRIPTION:W6 基礎期 | 全馬 D 組\\n週末 | 長跑\\n25K MP+50''~40''\\\r\n n配速 ≈ 5:59–5:49/km\\n課表以教練每週發布的為準\r\nCATEGORIES:長跑\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w7-0@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260914\r\nDTEND;VALUE=DATE:20260915\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 70' E@rpe3\r\nDESCRIPTION:W7 基礎期 | 全馬 D 組\\n週一 | 輕鬆\\n70' E@rpe3\\n課\r\n 表以教練每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w7-1@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260915\r\nDTEND;VALUE=DATE:20260916\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 15K pace@MP+35''~30'' (≈5:44–5:39)\r\nDESCRIPTION:W7 基礎期 | 全馬 D 組\\n週二 | 質量\\n15K pace@MP+35''~\r\n 30''\\n配速 ≈ 5:44–5:39/km\\n課表以教練每週發布的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w7-2@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260916\r\nDTEND;VALUE=DATE:20260917\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 8K E@low HR\r\nDESCRIPTION:W7 基礎期 | 全馬 D 組\\n週三 | 輕鬆\\n8K E@low HR\\n課\r\n 表以教練每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w7-3@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260917\r\nDTEND;VALUE=DATE:20260918\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 600 x 10~12@MP-25''~-20'' r:1'30'' (≈4:49–4:44)\r\nDESCRIPTION:W7 基礎期 | 全馬 D 組\\n週四 | 質量\\n600 x 10~12@MP-25\r\n ''~-20'' r:1'30''\\n配速 ≈ 4:49–4:44/km\\n週四團練・臺北田徑\r\n 場\\n課表以教練每週發布的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w7-4@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260918\r\nDTEND;VALUE=DATE:20260919\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 12K E@low HR\r\nDESCRIPTION:W7 基礎期 | 全馬 D 組\\n週五或週六 | 輕鬆\\n12K E@lo\r\n w HR\\n可在週五或週六擇一天執行\\n課表以教練每週發布的\r\n 為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w7-5@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260920\r\nDTEND;VALUE=DATE:20260921\r\nTRANSP:TRANSPARENT\r\nSUMMARY:長跑 | 100' LR@zone 2+ 8K MP (≈5:09)\r\nDESCRIPTION:W7 基礎期 | 全馬 D 組\\n週末 | 長跑\\n100' LR@zone 2+ 8\r\n K MP\\n配速 ≈ 5:09/km\\n課表以教練每週發布的為準\r\nCATEGORIES:長跑\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w8-0@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260921\r\nDTEND;VALUE=DATE:20260922\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 60' E@rpe3\r\nDESCRIPTION:W8 基礎期・恢復週 | 全馬 D 組\\n週一 | 輕鬆\\n60' E\r\n @rpe3\\n課表以教練每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w8-1@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260922\r\nDTEND;VALUE=DATE:20260923\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 8K pace@MP+20''~10'' (≈5:29–5:19)\r\nDESCRIPTION:W8 基礎期・恢復週 | 全馬 D 組\\n週二 | 質量\\n8K pa\r\n ce@MP+20''~10''\\n配速 ≈ 5:29–5:19/km\\n課表以教練每週發布的\r\n 為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w8-2@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260923\r\nDTEND;VALUE=DATE:20260924\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 10K E@low HR\r\nDESCRIPTION:W8 基礎期・恢復週 | 全馬 D 組\\n週三 | 輕鬆\\n10K E\r\n @low HR\\n課表以教練每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w8-3@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260924\r\nDTEND;VALUE=DATE:20260925\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 4Kx3@MP r:4' (≈5:09)\r\nDESCRIPTION:W8 基礎期・恢復週 | 全馬 D 組\\n週四 | 質量\\n4Kx3@\r\n MP r:4'\\n配速 ≈ 5:09/km\\n週四團練・臺北田徑場\\n課表以教\r\n 練每週發布的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w8-4@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260925\r\nDTEND;VALUE=DATE:20260926\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 10K E@low HR\r\nDESCRIPTION:W8 基礎期・恢復週 | 全馬 D 組\\n週五或週六 | 輕\r\n 鬆\\n10K E@low HR\\n可在週五或週六擇一天執行\\n課表以教練\r\n 每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w8-5@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260927\r\nDTEND;VALUE=DATE:20260928\r\nTRANSP:TRANSPARENT\r\nSUMMARY:長跑 | 2H30M LR@zone 2\r\nDESCRIPTION:W8 基礎期・恢復週 | 全馬 D 組\\n週末 | 長跑\\n2H30M\r\n  LR@zone 2\\n課表以教練每週發布的為準\r\nCATEGORIES:長跑\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w9-0@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260928\r\nDTEND;VALUE=DATE:20260929\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 75' easyjog@rpe3\r\nDESCRIPTION:W9 基礎期 | 全馬 D 組\\n週一 | 輕鬆\\n75' easyjog@rpe3\\\r\n n課表以教練每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w9-1@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260929\r\nDTEND;VALUE=DATE:20260930\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 40'tempo@05:05~05:00/km\r\nDESCRIPTION:W9 基礎期 | 全馬 D 組\\n週二 | 質量\\n40'tempo@05:05~05\r\n :00/km\\n課表以教練每週發布的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w9-2@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260930\r\nDTEND;VALUE=DATE:20261001\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 11K jog@06:30~06:20/km\r\nDESCRIPTION:W9 基礎期 | 全馬 D 組\\n週三 | 輕鬆\\n11K jog@06:30~06:\r\n 20/km\\n課表以教練每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w9-3@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261001\r\nDTEND;VALUE=DATE:20261002\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 3200 x 3@04:40~04:35/km R:3'30''\r\nDESCRIPTION:W9 基礎期 | 全馬 D 組\\n週四 | 質量\\n3200 x 3@04:40~04\r\n :35/km R:3'30''\\n週四團練・臺北田徑場\\n課表以教練每週發\r\n 布的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w9-4@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261002\r\nDTEND;VALUE=DATE:20261003\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 60' easyjog@rpe3\r\nDESCRIPTION:W9 基礎期 | 全馬 D 組\\n週五或週六 | 輕鬆\\n60' easy\r\n jog@rpe3\\n可在週五或週六擇一天執行\\n課表以教練每週發\r\n 布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w9-5@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261004\r\nDTEND;VALUE=DATE:20261005\r\nTRANSP:TRANSPARENT\r\nSUMMARY:長跑 | 27~28K LR@05:50~05:45/km\r\nDESCRIPTION:W9 基礎期 | 全馬 D 組\\n週末 | 長跑\\n27~28K LR@05:50~0\r\n 5:45/km\\n課表以教練每週發布的為準\r\nCATEGORIES:長跑\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w10-0@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261005\r\nDTEND;VALUE=DATE:20261006\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 60' freejog@MP+80''~50''(體感漸進) (≈6:29–5:59)\r\nDESCRIPTION:W10 強化期 | 全馬 D 組\\n週一 | 質量\\n60' freejog@MP+8\r\n 0''~50''(體感漸進)\\n配速 ≈ 6:29–5:59/km\\n課表以教練每週\r\n 發布的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w10-1@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261006\r\nDTEND;VALUE=DATE:20261007\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 14K@05:25~05:15/km\r\nDESCRIPTION:W10 強化期 | 全馬 D 組\\n週二 | 質量\\n14K@05:25~05:15/\r\n km\\n課表以教練每週發布的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w10-2@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261007\r\nDTEND;VALUE=DATE:20261008\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 60' jog@HR130\r\nDESCRIPTION:W10 強化期 | 全馬 D 組\\n週三 | 輕鬆\\n60' jog@HR130\\n\r\n 課表以教練每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w10-3@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261008\r\nDTEND;VALUE=DATE:20261009\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 800 x 8~10@04:45~04:40/km R:2'\r\nDESCRIPTION:W10 強化期 | 全馬 D 組\\n週四 | 質量\\n800 x 8~10@04:45\r\n ~04:40/km R:2'\\n週四團練・臺北田徑場\\n課表以教練每週發\r\n 布的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w10-4@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261009\r\nDTEND;VALUE=DATE:20261010\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 60' easyjog@rpe3\r\nDESCRIPTION:W10 強化期 | 全馬 D 組\\n週五或週六 | 輕鬆\\n60' eas\r\n yjog@rpe3\\n可在週五或週六擇一天執行\\n課表以教練每週發\r\n 布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w10-5@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261011\r\nDTEND;VALUE=DATE:20261012\r\nTRANSP:TRANSPARENT\r\nSUMMARY:長跑 | 22K LR@05:40~05:30/km\r\nDESCRIPTION:W10 強化期 | 全馬 D 組\\n週末 | 長跑\\n22K LR@05:40~05:\r\n 30/km\\n課表以教練每週發布的為準\r\nCATEGORIES:長跑\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w11-0@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261012\r\nDTEND;VALUE=DATE:20261013\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 45' freejog@rpe4~5\r\nDESCRIPTION:W11 強化期 | 全馬 D 組\\n週一 | 輕鬆\\n45' freejog@rpe4\r\n ~5\\n課表以教練每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w11-1@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261013\r\nDTEND;VALUE=DATE:20261014\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 12K@05:00~04:55/km\r\nDESCRIPTION:W11 強化期 | 全馬 D 組\\n週二 | 質量\\n12K@05:00~04:55/\r\n km\\n課表以教練每週發布的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w11-2@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261014\r\nDTEND;VALUE=DATE:20261015\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 60' jog@HR130\r\nDESCRIPTION:W11 強化期 | 全馬 D 組\\n週三 | 輕鬆\\n60' jog@HR130\\n\r\n 課表以教練每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w11-3@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261015\r\nDTEND;VALUE=DATE:20261016\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 2000 x 5~6@04:45~04:40/km R:1'50''\r\nDESCRIPTION:W11 強化期 | 全馬 D 組\\n週四 | 質量\\n2000 x 5~6@04:45\r\n ~04:40/km R:1'50''\\n週四團練・臺北田徑場\\n課表以教練每週\r\n 發布的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w11-4@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261016\r\nDTEND;VALUE=DATE:20261017\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 60' easyjog@rpe3\r\nDESCRIPTION:W11 強化期 | 全馬 D 組\\n週五或週六 | 輕鬆\\n60' eas\r\n yjog@rpe3\\n可在週五或週六擇一天執行\\n課表以教練每週發\r\n 布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w11-5@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261018\r\nDTEND;VALUE=DATE:20261019\r\nTRANSP:TRANSPARENT\r\nSUMMARY:長跑 | 24~25K LR@05:35~05:30/km\r\nDESCRIPTION:W11 強化期 | 全馬 D 組\\n週末 | 長跑\\n24~25K LR@05:35~\r\n 05:30/km\\n課表以教練每週發布的為準\r\nCATEGORIES:長跑\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w12-0@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261019\r\nDTEND;VALUE=DATE:20261020\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 60' freejog@rpe4~5\r\nDESCRIPTION:W12 強化期 | 全馬 D 組\\n週一 | 輕鬆\\n60' freejog@rpe4\r\n ~5\\n課表以教練每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w12-1@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261020\r\nDTEND;VALUE=DATE:20261021\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 10K@05:15-05:10/km\r\nDESCRIPTION:W12 強化期 | 全馬 D 組\\n週二 | 質量\\n10K@05:15-05:10/\r\n km\\n課表以教練每週發布的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w12-2@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261021\r\nDTEND;VALUE=DATE:20261022\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 60' jog@HR130\r\nDESCRIPTION:W12 強化期 | 全馬 D 組\\n週三 | 輕鬆\\n60' jog@HR130\\n\r\n 課表以教練每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w12-3@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261022\r\nDTEND;VALUE=DATE:20261023\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 1000 x 6-7@04:45~04:40/km R:1'\r\nDESCRIPTION:W12 強化期 | 全馬 D 組\\n週四 | 質量\\n1000 x 6-7@04:45\r\n ~04:40/km R:1'\\n週四團練・臺北田徑場\\n課表以教練每週發\r\n 布的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w12-4@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261023\r\nDTEND;VALUE=DATE:20261024\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 30' easyjog@rpe3+20'' ST x 4 r:60\"\r\nDESCRIPTION:W12 強化期 | 全馬 D 組\\n週五或週六 | 輕鬆\\n30' eas\r\n yjog@rpe3+20'' ST x 4 r:60\"\\n可在週五或週六擇一天執行\\n課表\r\n 以教練每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w12-5@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261025\r\nDTEND;VALUE=DATE:20261026\r\nTRANSP:TRANSPARENT\r\nSUMMARY:比賽 | 21K LR@05:30~05:25/km or 賽事\r\nDESCRIPTION:W12 強化期 | 全馬 D 組\\n週末 | 比賽\\n21K LR@05:30~05:\r\n 25/km or 賽事\\n課表以教練每週發布的為準\r\nCATEGORIES:比賽\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w13-0@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261026\r\nDTEND;VALUE=DATE:20261027\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 70' freejog@rpe4~5\r\nDESCRIPTION:W13 強化期 | 全馬 D 組\\n週一 | 輕鬆\\n70' freejog@rpe4\r\n ~5\\n課表以教練每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w13-1@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261027\r\nDTEND;VALUE=DATE:20261028\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 10K@05:05-05:00/km\r\nDESCRIPTION:W13 強化期 | 全馬 D 組\\n週二 | 質量\\n10K@05:05-05:00/\r\n km\\n課表以教練每週發布的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w13-2@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261028\r\nDTEND;VALUE=DATE:20261029\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 60' jog@HR130\r\nDESCRIPTION:W13 強化期 | 全馬 D 組\\n週三 | 輕鬆\\n60' jog@HR130\\n\r\n 課表以教練每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w13-3@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261029\r\nDTEND;VALUE=DATE:20261030\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 1200 x 6~7@04:55~04:50/km R:2'\r\nDESCRIPTION:W13 強化期 | 全馬 D 組\\n週四 | 質量\\n1200 x 6~7@04:55\r\n ~04:50/km R:2'\\n週四團練・臺北田徑場\\n課表以教練每週發\r\n 布的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w13-4@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261030\r\nDTEND;VALUE=DATE:20261031\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 12K easyjog@rpe3\r\nDESCRIPTION:W13 強化期 | 全馬 D 組\\n週五或週六 | 輕鬆\\n12K eas\r\n yjog@rpe3\\n可在週五或週六擇一天執行\\n課表以教練每週發\r\n 布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w13-5@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261101\r\nDTEND;VALUE=DATE:20261102\r\nTRANSP:TRANSPARENT\r\nSUMMARY:長跑 | 9K+16K LR@05:35/05:30~05:20/km\r\nDESCRIPTION:W13 強化期 | 全馬 D 組\\n週末 | 長跑\\n9K+16K LR@05:35/\r\n 05:30~05:20/km\\n課表以教練每週發布的為準\r\nCATEGORIES:長跑\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w14-0@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261102\r\nDTEND;VALUE=DATE:20261103\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 70' freejog@rpe4~5\r\nDESCRIPTION:W14 強化期 | 全馬 D 組\\n週一 | 輕鬆\\n70' freejog@rpe4\r\n ~5\\n課表以教練每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w14-1@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261103\r\nDTEND;VALUE=DATE:20261104\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 6K+12K@05:20/05:15~05:10/km\r\nDESCRIPTION:W14 強化期 | 全馬 D 組\\n週二 | 質量\\n6K+12K@05:20/05:\r\n 15~05:10/km\\n課表以教練每週發布的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w14-2@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261104\r\nDTEND;VALUE=DATE:20261105\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 60' jog@HR130\r\nDESCRIPTION:W14 強化期 | 全馬 D 組\\n週三 | 輕鬆\\n60' jog@HR130\\n\r\n 課表以教練每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w14-3@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261105\r\nDTEND;VALUE=DATE:20261106\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 400 x 18@04:30-04:25/km R:60''\r\nDESCRIPTION:W14 強化期 | 全馬 D 組\\n週四 | 質量\\n400 x 18@04:30-0\r\n 4:25/km R:60''\\n週四團練・臺北田徑場\\n課表以教練每週發\r\n 布的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w14-4@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261106\r\nDTEND;VALUE=DATE:20261107\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 12K easyjog@rpe3\r\nDESCRIPTION:W14 強化期 | 全馬 D 組\\n週五或週六 | 輕鬆\\n12K eas\r\n yjog@rpe3\\n可在週五或週六擇一天執行\\n課表以教練每週發\r\n 布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w14-5@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261108\r\nDTEND;VALUE=DATE:20261109\r\nTRANSP:TRANSPARENT\r\nSUMMARY:長跑 | 14K+16K LR@05:35/05:25-05:15//km\r\nDESCRIPTION:W14 強化期 | 全馬 D 組\\n週末 | 長跑\\n14K+16K LR@05:35\r\n /05:25-05:15//km\\n課表以教練每週發布的為準\r\nCATEGORIES:長跑\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w15-0@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261109\r\nDTEND;VALUE=DATE:20261110\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 70' freejog/rpe4~5\r\nDESCRIPTION:W15 強化期 | 全馬 D 組\\n週一 | 輕鬆\\n70' freejog/rpe4\r\n ~5\\n課表以教練每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w15-1@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261110\r\nDTEND;VALUE=DATE:20261111\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 15' warm up jog+動態熱身/2800 x 3@05:05~04:55/km R:3'3\r\n 0''\r\nDESCRIPTION:W15 強化期 | 全馬 D 組\\n週二 | 質量\\n15' warm up jog+\r\n 動態熱身/2800 x 3@05:05~04:55/km R:3'30''\\n課表以教練每週發布\r\n 的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w15-2@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261111\r\nDTEND;VALUE=DATE:20261112\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 60'easyjog/rpe3\r\nDESCRIPTION:W15 強化期 | 全馬 D 組\\n週三 | 輕鬆\\n60'easyjog/rpe3\\\r\n n課表以教練每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w15-3@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261112\r\nDTEND;VALUE=DATE:20261113\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 14K@05:15~05:10/km\r\nDESCRIPTION:W15 強化期 | 全馬 D 組\\n週四 | 質量\\n14K@05:15~05:10/\r\n km\\n週四團練・臺北田徑場\\n課表以教練每週發布的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w15-4@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261113\r\nDTEND;VALUE=DATE:20261114\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 50'easyjog/rpe3\r\nDESCRIPTION:W15 強化期 | 全馬 D 組\\n週五或週六 | 輕鬆\\n50'easy\r\n jog/rpe3\\n可在週五或週六擇一天執行\\n課表以教練每週發\r\n 布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w15-5@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261115\r\nDTEND;VALUE=DATE:20261116\r\nTRANSP:TRANSPARENT\r\nSUMMARY:長跑 | 14K+10K@05:30/05:20~05:10/km\r\nDESCRIPTION:W15 強化期 | 全馬 D 組\\n週末 | 長跑\\n14K+10K@05:30/05\r\n :20~05:10/km\\n課表以教練每週發布的為準\r\nCATEGORIES:長跑\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w16-0@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261116\r\nDTEND;VALUE=DATE:20261117\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 60' freejog@rpe4~5\r\nDESCRIPTION:W16 巔峰期 | 全馬 D 組\\n週一 | 輕鬆\\n60' freejog@rpe4\r\n ~5\\n課表以教練每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w16-1@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261117\r\nDTEND;VALUE=DATE:20261118\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 13K@05:10-05:00/km\r\nDESCRIPTION:W16 巔峰期 | 全馬 D 組\\n週二 | 質量\\n13K@05:10-05:00/\r\n km\\n課表以教練每週發布的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w16-2@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261118\r\nDTEND;VALUE=DATE:20261119\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 60' jog@HR130\r\nDESCRIPTION:W16 巔峰期 | 全馬 D 組\\n週三 | 輕鬆\\n60' jog@HR130\\n\r\n 課表以教練每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w16-3@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261119\r\nDTEND;VALUE=DATE:20261120\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 900 x 8@04:45~04:40/km R:2'\r\nDESCRIPTION:W16 巔峰期 | 全馬 D 組\\n週四 | 質量\\n900 x 8@04:45~04\r\n :40/km R:2'\\n週四團練・臺北田徑場\\n課表以教練每週發布\r\n 的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w16-4@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261120\r\nDTEND;VALUE=DATE:20261121\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 60' easyjog@rpe3+20'' ST x 4 r:60\"\r\nDESCRIPTION:W16 巔峰期 | 全馬 D 組\\n週五或週六 | 輕鬆\\n60' eas\r\n yjog@rpe3+20'' ST x 4 r:60\"\\n可在週五或週六擇一天執行\\n課表\r\n 以教練每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w16-5@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261122\r\nDTEND;VALUE=DATE:20261123\r\nTRANSP:TRANSPARENT\r\nSUMMARY:長跑 | (7K @5:40/km+7K @5:20/km)x2\r\nDESCRIPTION:W16 巔峰期 | 全馬 D 組\\n週末 | 長跑\\n(7K @5:40/km+7K \r\n @5:20/km)x2\\n課表以教練每週發布的為準\r\nCATEGORIES:長跑\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w17-0@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261123\r\nDTEND;VALUE=DATE:20261124\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 60' freejog\r\nDESCRIPTION:W17 巔峰期 | 全馬 D 組\\n週一 | 輕鬆\\n60' freejog\\n課\r\n 表以教練每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w17-1@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261124\r\nDTEND;VALUE=DATE:20261125\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 60' pace@05:15~05:10/km\r\nDESCRIPTION:W17 巔峰期 | 全馬 D 組\\n週二 | 質量\\n60' pace@05:15~0\r\n 5:10/km\\n課表以教練每週發布的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w17-2@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261125\r\nDTEND;VALUE=DATE:20261126\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 10K @easyjog\r\nDESCRIPTION:W17 巔峰期 | 全馬 D 組\\n週三 | 輕鬆\\n10K @easyjog\\n\r\n 課表以教練每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w17-3@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261126\r\nDTEND;VALUE=DATE:20261127\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 2~2.4K warm up jog+團體動態熱身/3600 x 3 @05:00~04:5\r\n 5/km R:3'30''\r\nDESCRIPTION:W17 巔峰期 | 全馬 D 組\\n週四 | 質量\\n2~2.4K warm up j\r\n og+團體動態熱身/3600 x 3 @05:00~04:55/km R:3'30''\\n週四團練・\r\n 臺北田徑場\\n課表以教練每週發布的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w17-4@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261127\r\nDTEND;VALUE=DATE:20261128\r\nTRANSP:TRANSPARENT\r\nSUMMARY:肌力 | 核心/肌力/活動度/交叉訓練\r\nDESCRIPTION:W17 巔峰期 | 全馬 D 組\\n週五或週六 | 肌力\\n核心/\r\n 肌力/活動度/交叉訓練\\n可在週五或週六擇一天執行\\n課\r\n 表以教練每週發布的為準\r\nCATEGORIES:肌力\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w17-5@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261129\r\nDTEND;VALUE=DATE:20261130\r\nTRANSP:TRANSPARENT\r\nSUMMARY:長跑 | 30~32K@05:25~05:15/km\r\nDESCRIPTION:W17 巔峰期 | 全馬 D 組\\n週末 | 長跑\\n30~32K@05:25~05:\r\n 15/km\\n課表以教練每週發布的為準\r\nCATEGORIES:長跑\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w18-0@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261130\r\nDTEND;VALUE=DATE:20261201\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 50' freejog\r\nDESCRIPTION:W18 巔峰期 | 全馬 D 組\\n週一 | 輕鬆\\n50' freejog\\n課\r\n 表以教練每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w18-1@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261201\r\nDTEND;VALUE=DATE:20261202\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 15' warm up jog+動態熱身/1600 x 5 @04:30/km R:2'\r\nDESCRIPTION:W18 巔峰期 | 全馬 D 組\\n週二 | 質量\\n15' warm up jog+\r\n 動態熱身/1600 x 5 @04:30/km R:2'\\n課表以教練每週發布的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w18-2@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261202\r\nDTEND;VALUE=DATE:20261203\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 8K @easyjog\r\nDESCRIPTION:W18 巔峰期 | 全馬 D 組\\n週三 | 輕鬆\\n8K @easyjog\\n課\r\n 表以教練每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w18-3@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261203\r\nDTEND;VALUE=DATE:20261204\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 12K Tempo@04:55~04:45/km\r\nDESCRIPTION:W18 巔峰期 | 全馬 D 組\\n週四 | 質量\\n12K Tempo@04:55~\r\n 04:45/km\\n週四團練・臺北田徑場\\n課表以教練每週發布的\r\n 為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w18-4@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261204\r\nDTEND;VALUE=DATE:20261205\r\nTRANSP:TRANSPARENT\r\nSUMMARY:肌力 | 核心/肌力/活動度/交叉訓練\r\nDESCRIPTION:W18 巔峰期 | 全馬 D 組\\n週五或週六 | 肌力\\n核心/\r\n 肌力/活動度/交叉訓練\\n可在週五或週六擇一天執行\\n課\r\n 表以教練每週發布的為準\r\nCATEGORIES:肌力\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w18-5@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261206\r\nDTEND;VALUE=DATE:20261207\r\nTRANSP:TRANSPARENT\r\nSUMMARY:長跑 | 6K+16K@05:15/05:10~05:00/km\r\nDESCRIPTION:W18 巔峰期 | 全馬 D 組\\n週末 | 長跑\\n6K+16K@05:15/05:\r\n 10~05:00/km\\n課表以教練每週發布的為準\r\nCATEGORIES:長跑\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w19-0@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261207\r\nDTEND;VALUE=DATE:20261208\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 40' freejog+100M ST x 5 R:75''\r\nDESCRIPTION:W19 比賽期 | 全馬 D 組\\n週一 | 輕鬆\\n40' freejog+100M\r\n  ST x 5 R:75''\\n課表以教練每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w19-1@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261208\r\nDTEND;VALUE=DATE:20261209\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 15' warm up jog+動態熱身/10K@05:00~04:55/km\r\nDESCRIPTION:W19 比賽期 | 全馬 D 組\\n週二 | 質量\\n15' warm up jog+\r\n 動態熱身/10K@05:00~04:55/km\\n課表以教練每週發布的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w19-2@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261209\r\nDTEND;VALUE=DATE:20261210\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 6K @easyjog\r\nDESCRIPTION:W19 比賽期 | 全馬 D 組\\n週三 | 輕鬆\\n6K @easyjog\\n課\r\n 表以教練每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w19-3@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261210\r\nDTEND;VALUE=DATE:20261211\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 2.4K warm up jog+團體動態熱身/(3000)+(900x3) @04:50/\r\n 04:40~04:35/km R:3'/2'\r\nDESCRIPTION:W19 比賽期 | 全馬 D 組\\n週四 | 質量\\n2.4K warm up jog\r\n +團體動態熱身/(3000)+(900x3) @04:50/04:40~04:35/km R:3'/2'\\n週四\r\n 團練・臺北田徑場\\n課表以教練每週發布的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w19-4@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261211\r\nDTEND;VALUE=DATE:20261212\r\nTRANSP:TRANSPARENT\r\nSUMMARY:肌力 | 核心/肌力/活動度/交叉訓練\r\nDESCRIPTION:W19 比賽期 | 全馬 D 組\\n週五或週六 | 肌力\\n核心/\r\n 肌力/活動度/交叉訓練\\n可在週五或週六擇一天執行\\n課\r\n 表以教練每週發布的為準\r\nCATEGORIES:肌力\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w19-5@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261213\r\nDTEND;VALUE=DATE:20261214\r\nTRANSP:TRANSPARENT\r\nSUMMARY:長跑 | 15~16K @05:15~05:05/km\r\nDESCRIPTION:W19 比賽期 | 全馬 D 組\\n週末 | 長跑\\n15~16K @05:15~05\r\n :05/km\\n課表以教練每週發布的為準\r\nCATEGORIES:長跑\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w20-1@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261215\r\nDTEND;VALUE=DATE:20261216\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 2K warm up jog+動態熱身/2K x 2@05:00-04:50/km r:2'\r\nDESCRIPTION:W20 賽事週 | 全馬 D 組\\n週二 | 質量\\n2K warm up jog+\r\n 動態熱身/2K x 2@05:00-04:50/km r:2'\\n課表以教練每週發布的為\r\n 準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w20-2@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261216\r\nDTEND;VALUE=DATE:20261217\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 30' @easy jog\r\nDESCRIPTION:W20 賽事週 | 全馬 D 組\\n週三 | 輕鬆\\n30' @easy jog\\n\r\n 課表以教練每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w20-3@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261217\r\nDTEND;VALUE=DATE:20261218\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 15' warm up jog+動態熱身/4K@05:10-05:00/km\r\nDESCRIPTION:W20 賽事週 | 全馬 D 組\\n週四 | 質量\\n15' warm up jog+\r\n 動態熱身/4K@05:10-05:00/km\\n週四團練・臺北田徑場\\n課表以\r\n 教練每週發布的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w20-4@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261218\r\nDTEND;VALUE=DATE:20261219\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 15'~20'easyjog+自主放鬆 (或視個人賽前習慣完\r\n 全休息)\r\nDESCRIPTION:W20 賽事週 | 全馬 D 組\\n週五或週六 | 輕鬆\\n15'~20'\r\n easyjog+自主放鬆 (或視個人賽前習慣完全休息)\\n可在週五\r\n 或週六擇一天執行\\n課表以教練每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w20-5@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART:20261220T063000\r\nDTEND:20261220T103800\r\nTRANSP:OPAQUE\r\nBEGIN:VALARM\r\nACTION:DISPLAY\r\nDESCRIPTION:臺北馬拉松 明天起跑\r\nTRIGGER:-PT12H\r\nEND:VALARM\r\nSUMMARY:臺北馬拉松\r\nDESCRIPTION:W20 賽事週 | 全馬 D 組\\n週末 | 比賽\\n比賽日：臺\r\n 北馬拉松\\n當天流程、配速分段、補給時間表見「比賽日\r\n 建議」\\n\\n— 比賽日流程 —\\n02:30 起床：喝一杯水，上廁\r\n 所，確認天氣與交通\\n03:30 比賽早餐：碳水 124–186 g、水\r\n  310–434 ml；選熟悉、低纖低脂的食物\\n05:00 咖啡因（選\r\n 用）：186–372 mg，起跑前 30–90 分鐘；練習時試過才用\\n\r\n 05:30 抵達會場：寄物、上廁所、別號碼布與晶片；小口\r\n 喝水 150–250 ml\\n06:05 熱身：快走或慢跑 5–10 分鐘＋動態\r\n 伸展，保留體力\\n06:15 進起跑區：按目標成績站位；可含\r\n 一小口能量膠或運動飲料\\n06:30 起跑：前 5K 比目標配速\r\n 慢 5–10 秒/km，之後穩定在 5:09/km\\n能量膠：第 35 分鐘第\r\n 一包，之後約每 20 分鐘一包（每小時 60–90 g 碳水）\\n\\n\r\n 課表以教練每週發布的為準\r\nCATEGORIES:比賽\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w21-2@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261223\r\nDTEND;VALUE=DATE:20261224\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 30' easyjog@low HR\r\nDESCRIPTION:R 賽後恢復週 | 全馬 D 組\\n週三 | 輕鬆\\n30' easyjog@\r\n low HR\\n課表以教練每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w21-3@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261224\r\nDTEND;VALUE=DATE:20261225\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 45'freejog/rpe3~4+自主放鬆\r\nDESCRIPTION:R 賽後恢復週 | 全馬 D 組\\n週四或週五 | 輕鬆\\n45'\r\n freejog/rpe3~4+自主放鬆\\n可在週四或週五擇一天執行\\n課表\r\n 以教練每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-fmD-w21-4@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261227\r\nDTEND;VALUE=DATE:20261228\r\nTRANSP:TRANSPARENT\r\nSUMMARY:長跑 | 90'jog@zone1~2/rpe4~5\r\nDESCRIPTION:R 賽後恢復週 | 全馬 D 組\\n週末 | 長跑\\n90'jog@zone1\r\n ~2/rpe4~5\\n課表以教練每週發布的為準\r\nCATEGORIES:長跑\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n",
+    "count": 122
+   }
+  },
+  "hmC": {
+   "copyAll": "【測試跑者@臺北馬拉松課表】\n比賽日 12/20（日） 06:30 起跑｜耕跑團 20 週週期\n半馬 C 組（SUB 1:50）｜HMP 5:06/km｜每週 6 天｜參加週四團練\n\n■ W1 準備期（8/3（一）–8/9（日））\n週一或週三｜輕鬆｜5Keasyjog@Rpe 4~5\n週二｜質量｜20mins freejog+(1'30'' HMP) x 8~10 R:60''（≈ 5:06/km）\n週四｜質量｜3K@05:00~04:55/km〔週四團練・臺北田徑場〕\n週五或週六｜輕鬆｜5K easyjog@zone1\n週末｜長跑｜70'LR@zone2\n\n■ W2 基礎期（8/10（一）–8/16（日））\n週一｜輕鬆｜40' easyjog/Rpe3+20''ST x 5 R:80''\n週二或週三｜輕鬆｜60'freejog/Rpe4~5\n週四｜質量｜2K warm up jog+團體動態熱身/1K x 4@05:00/km R:1'45''〔週四團練・臺北田徑場〕\n週五或週六｜肌力｜核心/肌力/活動度/交叉訓練\n週末｜長跑｜11~12K@05:50~05:40/km\n\n■ W3 基礎期（8/17（一）–8/23（日））\n週一｜輕鬆｜30' freejog+20'' ST x 5~6 R:80''\n週二｜質量｜2K warm up jog+動態熱身/4.5K @05:05~05:00/km\n週三｜輕鬆｜30' @easyjog\n週四｜質量｜800 * 5~6 @04:40~04:35/km R:2'30''〔週四團練・臺北田徑場〕\n週五或週六｜肌力｜核心/肌力/活動度/交叉訓練\n週末｜長跑｜9K@05:40~05:30/km\n\n■ W4 基礎期・恢復週（8/24（一）–8/30（日））\n週一｜輕鬆｜30' easyjog/Rpe3+20''ST x 5 R:80''\n週二或週三｜輕鬆｜45'freejog/Rpe4~5\n週四｜質量｜800 x 5@05:00/km R:2'〔週四團練・臺北田徑場〕\n週五或週六｜肌力｜核心/肌力/活動度/交叉訓練\n週末｜長跑｜10K@05:50~05:40/km\n\n■ W5 基礎期（8/31（一）–9/6（日））\n週一｜輕鬆｜40' freejog\n週二｜質量｜7.5K@05:30/km\n週三｜輕鬆｜30'easyjog\n週四｜質量｜2K x 3@05:00/km r:4'〔週四團練・臺北田徑場〕\n週五或週六｜肌力｜核心/肌力/活動度/交叉訓練\n週末｜長跑｜11~12K@05:50~05:40/km\n\n■ W6 基礎期（9/7（一）–9/13（日））\n週一｜輕鬆｜40' freejog\n週二｜質量｜8K@05:30/km\n週三｜輕鬆｜40'easyjog\n週四｜質量｜7K~8K HMP（≈ 5:06/km）〔週四團練・臺北田徑場〕\n週五或週六｜肌力｜核心/肌力/活動度/交叉訓練\n週末｜長跑｜13~14K HMP+30''~20''（≈ 5:36–5:26/km）\n\n■ W7 基礎期（9/14（一）–9/20（日））\n週一｜輕鬆｜7K freejog\n週二｜質量｜5K HMP（≈ 5:06/km）\n週三｜輕鬆｜40'easyjog\n週四｜質量｜800 x 5~6@HMP-15'' r:2'15''（≈ 4:51/km）〔週四團練・臺北田徑場〕\n週五或週六｜肌力｜核心/肌力/活動度/交叉訓練\n週末｜長跑｜14K HMP+30''（≈ 5:36/km）\n\n■ W8 基礎期・恢復週（9/21（一）–9/27（日））\n週一｜輕鬆｜6K freejog\n週二｜質量｜8K@05:45~05:40/km\n週三｜輕鬆｜30'easyjog\n週四｜質量｜1.6Kx4@HMP-10''~15'' r:4'（≈ 4:56–4:51/km）〔週四團練・臺北田徑場〕\n週五或週六｜肌力｜核心/肌力/活動度/交叉訓練\n週末｜長跑｜12K HMP+20''（≈ 5:26/km）\n\n■ W9 基礎期（9/28（一）–10/4（日））\n週一｜輕鬆｜8K easyjog@07:15~07:00~06:45/km(2/2/4K漸進)\n週二或週三｜質量｜20'tempo@05:20~05:10/km\n週四｜質量｜2K warm up jog+團體動態熱身/2800 x 2@05:00~04:55/km R:3'30''〔週四團練・臺北田徑場〕\n週五或週六｜肌力｜核心/肌力/活動度/交叉訓練\n週末｜長跑｜14K@05:40~05:30/km\n\n■ W10 強化期（10/5（一）–10/11（日））\n週一｜質量｜50' freejog@HMP+60''~30''(體感漸進)（≈ 6:06–5:36/km）\n週二｜質量｜10K@05:20/km\n週三或週六｜輕鬆｜40' jog@HR130\n週四｜質量｜800 x 6~7@04:45~04:40/km R:2'〔週四團練・臺北田徑場〕\n週末｜長跑｜13K LR@05:40~05:30/km\n\n■ W11 強化期（10/12（一）–10/18（日））\n週一｜輕鬆｜6K freejog@Rpe5~6+ 20''ST X5~6 R:60''~70''\n週二｜質量｜5K@05:15~05:05/km\n週三或週六｜輕鬆｜40' jog@HR130\n週四｜質量｜300 x 11~13@04:15~04:10/km R:1'30''〔週四團練・臺北田徑場〕\n週末｜長跑｜13K LR@05:40~05:30/km\n\n■ W12 強化期（10/19（一）–10/25（日））\n週一｜輕鬆｜5K freejog@Rpe5~6\n週二｜質量｜3K@04:55~04:50/km\n週三｜輕鬆｜30' jog@HR130\n週四｜質量｜1000 x 4-5@05:00~04:55/km R:1'〔週四團練・臺北田徑場〕\n週五或週六｜質量｜20'jog+1k@5:00/km\n週末｜比賽｜10K LR@05:20~05:10/km or 賽事\n\n■ W13 強化期（10/26（一）–11/1（日））\n週一或週三｜輕鬆｜45' freejog@Rpe5~6\n週二｜質量｜7K@05:20~05:15/km\n週四｜質量｜600 x 7~8@04:55~04:50/km R:2'〔週四團練・臺北田徑場〕\n週五或週六｜輕鬆｜40'jog\n週末｜長跑｜4K+10K LR@05:40/05:30/km\n\n■ W14 強化期（11/2（一）–11/8（日））\n週一或週三｜輕鬆｜45' freejog@Rpe5~6\n週二｜質量｜8K@05:15~05:10/km\n週四｜質量｜800 x 5~6@05:00~04:55/km R:2'〔週四團練・臺北田徑場〕\n週五或週六｜輕鬆｜40'jog\n週末｜長跑｜11K+5K LR@05:30/05:20/km\n\n■ W15 強化期（11/9（一）–11/15（日））\n週一｜輕鬆｜50' freejog/Rpe4~5\n週二｜質量｜15' warm up jog+動態熱身/2000 x 3@05:15~05:10/km R:2'30''\n週三｜輕鬆｜40'easyjog/Rpe3\n週四｜質量｜1000 x 5~6@05:05~05:00/km R:2'〔週四團練・臺北田徑場〕\n週末｜長跑｜10K+6K@05:40/05:30~05:20/km\n\n■ W16 巔峰期（11/16（一）–11/22（日））\n週一｜輕鬆｜7K freejog@Rpe5~6\n週二｜質量｜1K x 4~5@05:00~04:55/km R:1'50''\n週三｜輕鬆｜45' jog@HR130\n週四｜質量｜3000 x 2+900@05:15~05:10/04:45/km R:3'〔週四團練・臺北田徑場〕\n週五或週六｜輕鬆｜40'easyjog@HR130\n週末｜長跑｜3K+13K LR@05:40/05:30~05:10/km\n\n■ W17 巔峰期（11/23（一）–11/29（日））\n週一｜輕鬆｜40' freejog\n週二｜質量｜10K@05:10~05:00/km\n週三｜輕鬆｜40' @easyjog\n週四｜質量｜2K warm up jog+團體動態熱身/1600 x 3~4 @04:50~04:45/km R:2'40''〔週四團練・臺北田徑場〕\n週五或週六｜肌力｜核心/肌力/活動度/交叉訓練\n週末｜長跑｜16K@05:20/05:10/km(10/6K)\n\n■ W18 巔峰期（11/30（一）–12/6（日））\n週一｜輕鬆｜30' freejog+200M ST x 5~6 R:90''\n週二｜質量｜2.4K warm up jog+動態熱身/400 x 11~12 @04:20~04:15/km R:1'20''\n週三｜輕鬆｜40' @easyjog\n週四｜質量｜10K@05:00~04:55/km〔週四團練・臺北田徑場〕\n週五或週六｜肌力｜核心/肌力/活動度/交叉訓練\n週末｜長跑｜14~15K@05:20~05:10/km\n\n■ W19 比賽期（12/7（一）–12/13（日））\n週一｜輕鬆｜25' freejog+800M @04:50~04:45/km\n週二｜質量｜2K warm up jog+動態熱身/6K @05:10~05:00/km\n週三｜輕鬆｜30' @easyjog\n週四｜質量｜1200x4 @04:50~04:45/km R:2'〔週四團練・臺北田徑場〕\n週五或週六｜肌力｜核心/肌力/活動度/交叉訓練\n週末｜長跑｜10K@05:15~05:10/km\n\n■ W20 賽事週（12/14（一）–12/20（日））\n週一或週三｜輕鬆｜30' freejog\n週二或週三｜質量｜2.4K+(0.8Kx2) @05:00~04:55/04:45~04:40/km R:3'/2'\n週四或週五｜輕鬆｜20'easyjog+120M ST x 4~5 R:80''\n週末｜比賽｜比賽日：臺北馬拉松〔當天流程、配速分段、補給時間表見「比賽日建議」〕\n\n■ R 賽後恢復週（12/21（一）–12/27（日））\n週一｜休息｜主動恢復日\n週二或週三｜輕鬆｜30' easyjog@low HR\n週四｜輕鬆｜團體熱身+40'~45'freejog\n週五或週六｜輕鬆｜40'easyjog+自主放鬆\n週末｜長跑｜60'~75'jog@zone1~2\n\n※ 課表模型整理自耕跑團教練課表，實際以教練每週發布為準；「可省略」是每週天數不夠時優先省略的輕鬆跑。",
+   "ics": {
+    "text": "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Gengpao//Coach//ZH-TW\r\nCALSCALE:GREGORIAN\r\nMETHOD:PUBLISH\r\nX-WR-CALNAME:測試跑者@臺北馬拉松課表\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w1-0@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260803\r\nDTEND;VALUE=DATE:20260804\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 5Keasyjog@Rpe 4~5\r\nDESCRIPTION:W1 準備期 | 半馬 C 組\\n週一或週三 | 輕鬆\\n5Keasyjo\r\n g@Rpe 4~5\\n可在週一或週三擇一天執行\\n課表以教練每週發\r\n 布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w1-1@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260804\r\nDTEND;VALUE=DATE:20260805\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 20mins freejog+(1'30'' HMP) x 8~10 R:60'' (≈5:06)\r\nDESCRIPTION:W1 準備期 | 半馬 C 組\\n週二 | 質量\\n20mins freejog+(1\r\n '30'' HMP) x 8~10 R:60''\\n配速 ≈ 5:06/km\\n課表以教練每週發布\r\n 的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w1-2@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260806\r\nDTEND;VALUE=DATE:20260807\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 3K@05:00~04:55/km\r\nDESCRIPTION:W1 準備期 | 半馬 C 組\\n週四 | 質量\\n3K@05:00~04:55/km\r\n \\n週四團練・臺北田徑場\\n課表以教練每週發布的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w1-3@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260807\r\nDTEND;VALUE=DATE:20260808\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 5K easyjog@zone1\r\nDESCRIPTION:W1 準備期 | 半馬 C 組\\n週五或週六 | 輕鬆\\n5K easyj\r\n og@zone1\\n可在週五或週六擇一天執行\\n課表以教練每週發\r\n 布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w1-4@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260809\r\nDTEND;VALUE=DATE:20260810\r\nTRANSP:TRANSPARENT\r\nSUMMARY:長跑 | 70'LR@zone2\r\nDESCRIPTION:W1 準備期 | 半馬 C 組\\n週末 | 長跑\\n70'LR@zone2\\n課\r\n 表以教練每週發布的為準\r\nCATEGORIES:長跑\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w2-0@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260810\r\nDTEND;VALUE=DATE:20260811\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 40' easyjog/Rpe3+20''ST x 5 R:80''\r\nDESCRIPTION:W2 基礎期 | 半馬 C 組\\n週一 | 輕鬆\\n40' easyjog/Rpe3+\r\n 20''ST x 5 R:80''\\n課表以教練每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w2-1@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260811\r\nDTEND;VALUE=DATE:20260812\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 60'freejog/Rpe4~5\r\nDESCRIPTION:W2 基礎期 | 半馬 C 組\\n週二或週三 | 輕鬆\\n60'freej\r\n og/Rpe4~5\\n可在週二或週三擇一天執行\\n課表以教練每週發\r\n 布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w2-2@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260813\r\nDTEND;VALUE=DATE:20260814\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 2K warm up jog+團體動態熱身/1K x 4@05:00/km R:1'45''\r\nDESCRIPTION:W2 基礎期 | 半馬 C 組\\n週四 | 質量\\n2K warm up jog+\r\n 團體動態熱身/1K x 4@05:00/km R:1'45''\\n週四團練・臺北田徑\r\n 場\\n課表以教練每週發布的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w2-3@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260814\r\nDTEND;VALUE=DATE:20260815\r\nTRANSP:TRANSPARENT\r\nSUMMARY:肌力 | 核心/肌力/活動度/交叉訓練\r\nDESCRIPTION:W2 基礎期 | 半馬 C 組\\n週五或週六 | 肌力\\n核心/\r\n 肌力/活動度/交叉訓練\\n可在週五或週六擇一天執行\\n課\r\n 表以教練每週發布的為準\r\nCATEGORIES:肌力\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w2-4@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260816\r\nDTEND;VALUE=DATE:20260817\r\nTRANSP:TRANSPARENT\r\nSUMMARY:長跑 | 11~12K@05:50~05:40/km\r\nDESCRIPTION:W2 基礎期 | 半馬 C 組\\n週末 | 長跑\\n11~12K@05:50~05:4\r\n 0/km\\n課表以教練每週發布的為準\r\nCATEGORIES:長跑\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w3-0@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260817\r\nDTEND;VALUE=DATE:20260818\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 30' freejog+20'' ST x 5~6 R:80''\r\nDESCRIPTION:W3 基礎期 | 半馬 C 組\\n週一 | 輕鬆\\n30' freejog+20'' \r\n ST x 5~6 R:80''\\n課表以教練每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w3-1@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260818\r\nDTEND;VALUE=DATE:20260819\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 2K warm up jog+動態熱身/4.5K @05:05~05:00/km\r\nDESCRIPTION:W3 基礎期 | 半馬 C 組\\n週二 | 質量\\n2K warm up jog+\r\n 動態熱身/4.5K @05:05~05:00/km\\n課表以教練每週發布的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w3-2@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260819\r\nDTEND;VALUE=DATE:20260820\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 30' @easyjog\r\nDESCRIPTION:W3 基礎期 | 半馬 C 組\\n週三 | 輕鬆\\n30' @easyjog\\n課\r\n 表以教練每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w3-3@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260820\r\nDTEND;VALUE=DATE:20260821\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 800 * 5~6 @04:40~04:35/km R:2'30''\r\nDESCRIPTION:W3 基礎期 | 半馬 C 組\\n週四 | 質量\\n800 * 5~6 @04:40~\r\n 04:35/km R:2'30''\\n週四團練・臺北田徑場\\n課表以教練每週\r\n 發布的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w3-4@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260821\r\nDTEND;VALUE=DATE:20260822\r\nTRANSP:TRANSPARENT\r\nSUMMARY:肌力 | 核心/肌力/活動度/交叉訓練\r\nDESCRIPTION:W3 基礎期 | 半馬 C 組\\n週五或週六 | 肌力\\n核心/\r\n 肌力/活動度/交叉訓練\\n可在週五或週六擇一天執行\\n課\r\n 表以教練每週發布的為準\r\nCATEGORIES:肌力\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w3-5@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260823\r\nDTEND;VALUE=DATE:20260824\r\nTRANSP:TRANSPARENT\r\nSUMMARY:長跑 | 9K@05:40~05:30/km\r\nDESCRIPTION:W3 基礎期 | 半馬 C 組\\n週末 | 長跑\\n9K@05:40~05:30/km\r\n \\n課表以教練每週發布的為準\r\nCATEGORIES:長跑\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w4-0@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260824\r\nDTEND;VALUE=DATE:20260825\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 30' easyjog/Rpe3+20''ST x 5 R:80''\r\nDESCRIPTION:W4 基礎期・恢復週 | 半馬 C 組\\n週一 | 輕鬆\\n30' e\r\n asyjog/Rpe3+20''ST x 5 R:80''\\n課表以教練每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w4-1@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260825\r\nDTEND;VALUE=DATE:20260826\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 45'freejog/Rpe4~5\r\nDESCRIPTION:W4 基礎期・恢復週 | 半馬 C 組\\n週二或週三 | 輕\r\n 鬆\\n45'freejog/Rpe4~5\\n可在週二或週三擇一天執行\\n課表以教\r\n 練每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w4-2@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260827\r\nDTEND;VALUE=DATE:20260828\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 800 x 5@05:00/km R:2'\r\nDESCRIPTION:W4 基礎期・恢復週 | 半馬 C 組\\n週四 | 質量\\n800 x\r\n  5@05:00/km R:2'\\n週四團練・臺北田徑場\\n課表以教練每週發\r\n 布的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w4-3@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260828\r\nDTEND;VALUE=DATE:20260829\r\nTRANSP:TRANSPARENT\r\nSUMMARY:肌力 | 核心/肌力/活動度/交叉訓練\r\nDESCRIPTION:W4 基礎期・恢復週 | 半馬 C 組\\n週五或週六 | 肌\r\n 力\\n核心/肌力/活動度/交叉訓練\\n可在週五或週六擇一天\r\n 執行\\n課表以教練每週發布的為準\r\nCATEGORIES:肌力\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w4-4@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260830\r\nDTEND;VALUE=DATE:20260831\r\nTRANSP:TRANSPARENT\r\nSUMMARY:長跑 | 10K@05:50~05:40/km\r\nDESCRIPTION:W4 基礎期・恢復週 | 半馬 C 組\\n週末 | 長跑\\n10K@0\r\n 5:50~05:40/km\\n課表以教練每週發布的為準\r\nCATEGORIES:長跑\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w5-0@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260831\r\nDTEND;VALUE=DATE:20260901\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 40' freejog\r\nDESCRIPTION:W5 基礎期 | 半馬 C 組\\n週一 | 輕鬆\\n40' freejog\\n課\r\n 表以教練每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w5-1@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260901\r\nDTEND;VALUE=DATE:20260902\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 7.5K@05:30/km\r\nDESCRIPTION:W5 基礎期 | 半馬 C 組\\n週二 | 質量\\n7.5K@05:30/km\\n\r\n 課表以教練每週發布的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w5-2@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260902\r\nDTEND;VALUE=DATE:20260903\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 30'easyjog\r\nDESCRIPTION:W5 基礎期 | 半馬 C 組\\n週三 | 輕鬆\\n30'easyjog\\n課\r\n 表以教練每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w5-3@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260903\r\nDTEND;VALUE=DATE:20260904\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 2K x 3@05:00/km r:4'\r\nDESCRIPTION:W5 基礎期 | 半馬 C 組\\n週四 | 質量\\n2K x 3@05:00/km r\r\n :4'\\n週四團練・臺北田徑場\\n課表以教練每週發布的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w5-4@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260904\r\nDTEND;VALUE=DATE:20260905\r\nTRANSP:TRANSPARENT\r\nSUMMARY:肌力 | 核心/肌力/活動度/交叉訓練\r\nDESCRIPTION:W5 基礎期 | 半馬 C 組\\n週五或週六 | 肌力\\n核心/\r\n 肌力/活動度/交叉訓練\\n可在週五或週六擇一天執行\\n課\r\n 表以教練每週發布的為準\r\nCATEGORIES:肌力\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w5-5@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260906\r\nDTEND;VALUE=DATE:20260907\r\nTRANSP:TRANSPARENT\r\nSUMMARY:長跑 | 11~12K@05:50~05:40/km\r\nDESCRIPTION:W5 基礎期 | 半馬 C 組\\n週末 | 長跑\\n11~12K@05:50~05:4\r\n 0/km\\n課表以教練每週發布的為準\r\nCATEGORIES:長跑\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w6-0@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260907\r\nDTEND;VALUE=DATE:20260908\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 40' freejog\r\nDESCRIPTION:W6 基礎期 | 半馬 C 組\\n週一 | 輕鬆\\n40' freejog\\n課\r\n 表以教練每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w6-1@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260908\r\nDTEND;VALUE=DATE:20260909\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 8K@05:30/km\r\nDESCRIPTION:W6 基礎期 | 半馬 C 組\\n週二 | 質量\\n8K@05:30/km\\n課\r\n 表以教練每週發布的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w6-2@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260909\r\nDTEND;VALUE=DATE:20260910\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 40'easyjog\r\nDESCRIPTION:W6 基礎期 | 半馬 C 組\\n週三 | 輕鬆\\n40'easyjog\\n課\r\n 表以教練每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w6-3@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260910\r\nDTEND;VALUE=DATE:20260911\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 7K~8K HMP (≈5:06)\r\nDESCRIPTION:W6 基礎期 | 半馬 C 組\\n週四 | 質量\\n7K~8K HMP\\n配速\r\n  ≈ 5:06/km\\n週四團練・臺北田徑場\\n課表以教練每週發布\r\n 的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w6-4@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260911\r\nDTEND;VALUE=DATE:20260912\r\nTRANSP:TRANSPARENT\r\nSUMMARY:肌力 | 核心/肌力/活動度/交叉訓練\r\nDESCRIPTION:W6 基礎期 | 半馬 C 組\\n週五或週六 | 肌力\\n核心/\r\n 肌力/活動度/交叉訓練\\n可在週五或週六擇一天執行\\n課\r\n 表以教練每週發布的為準\r\nCATEGORIES:肌力\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w6-5@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260913\r\nDTEND;VALUE=DATE:20260914\r\nTRANSP:TRANSPARENT\r\nSUMMARY:長跑 | 13~14K HMP+30''~20'' (≈5:36–5:26)\r\nDESCRIPTION:W6 基礎期 | 半馬 C 組\\n週末 | 長跑\\n13~14K HMP+30''~2\r\n 0''\\n配速 ≈ 5:36–5:26/km\\n課表以教練每週發布的為準\r\nCATEGORIES:長跑\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w7-0@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260914\r\nDTEND;VALUE=DATE:20260915\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 7K freejog\r\nDESCRIPTION:W7 基礎期 | 半馬 C 組\\n週一 | 輕鬆\\n7K freejog\\n課\r\n 表以教練每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w7-1@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260915\r\nDTEND;VALUE=DATE:20260916\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 5K HMP (≈5:06)\r\nDESCRIPTION:W7 基礎期 | 半馬 C 組\\n週二 | 質量\\n5K HMP\\n配速 \r\n ≈ 5:06/km\\n課表以教練每週發布的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w7-2@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260916\r\nDTEND;VALUE=DATE:20260917\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 40'easyjog\r\nDESCRIPTION:W7 基礎期 | 半馬 C 組\\n週三 | 輕鬆\\n40'easyjog\\n課\r\n 表以教練每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w7-3@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260917\r\nDTEND;VALUE=DATE:20260918\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 800 x 5~6@HMP-15'' r:2'15'' (≈4:51)\r\nDESCRIPTION:W7 基礎期 | 半馬 C 組\\n週四 | 質量\\n800 x 5~6@HMP-15'\r\n ' r:2'15''\\n配速 ≈ 4:51/km\\n週四團練・臺北田徑場\\n課表以\r\n 教練每週發布的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w7-4@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260918\r\nDTEND;VALUE=DATE:20260919\r\nTRANSP:TRANSPARENT\r\nSUMMARY:肌力 | 核心/肌力/活動度/交叉訓練\r\nDESCRIPTION:W7 基礎期 | 半馬 C 組\\n週五或週六 | 肌力\\n核心/\r\n 肌力/活動度/交叉訓練\\n可在週五或週六擇一天執行\\n課\r\n 表以教練每週發布的為準\r\nCATEGORIES:肌力\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w7-5@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260920\r\nDTEND;VALUE=DATE:20260921\r\nTRANSP:TRANSPARENT\r\nSUMMARY:長跑 | 14K HMP+30'' (≈5:36)\r\nDESCRIPTION:W7 基礎期 | 半馬 C 組\\n週末 | 長跑\\n14K HMP+30''\\n配\r\n 速 ≈ 5:36/km\\n課表以教練每週發布的為準\r\nCATEGORIES:長跑\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w8-0@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260921\r\nDTEND;VALUE=DATE:20260922\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 6K freejog\r\nDESCRIPTION:W8 基礎期・恢復週 | 半馬 C 組\\n週一 | 輕鬆\\n6K fr\r\n eejog\\n課表以教練每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w8-1@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260922\r\nDTEND;VALUE=DATE:20260923\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 8K@05:45~05:40/km\r\nDESCRIPTION:W8 基礎期・恢復週 | 半馬 C 組\\n週二 | 質量\\n8K@05\r\n :45~05:40/km\\n課表以教練每週發布的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w8-2@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260923\r\nDTEND;VALUE=DATE:20260924\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 30'easyjog\r\nDESCRIPTION:W8 基礎期・恢復週 | 半馬 C 組\\n週三 | 輕鬆\\n30'ea\r\n syjog\\n課表以教練每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w8-3@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260924\r\nDTEND;VALUE=DATE:20260925\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 1.6Kx4@HMP-10''~15'' r:4' (≈4:56–4:51)\r\nDESCRIPTION:W8 基礎期・恢復週 | 半馬 C 組\\n週四 | 質量\\n1.6Kx\r\n 4@HMP-10''~15'' r:4'\\n配速 ≈ 4:56–4:51/km\\n週四團練・臺北田\r\n 徑場\\n課表以教練每週發布的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w8-4@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260925\r\nDTEND;VALUE=DATE:20260926\r\nTRANSP:TRANSPARENT\r\nSUMMARY:肌力 | 核心/肌力/活動度/交叉訓練\r\nDESCRIPTION:W8 基礎期・恢復週 | 半馬 C 組\\n週五或週六 | 肌\r\n 力\\n核心/肌力/活動度/交叉訓練\\n可在週五或週六擇一天\r\n 執行\\n課表以教練每週發布的為準\r\nCATEGORIES:肌力\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w8-5@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260927\r\nDTEND;VALUE=DATE:20260928\r\nTRANSP:TRANSPARENT\r\nSUMMARY:長跑 | 12K HMP+20'' (≈5:26)\r\nDESCRIPTION:W8 基礎期・恢復週 | 半馬 C 組\\n週末 | 長跑\\n12K H\r\n MP+20''\\n配速 ≈ 5:26/km\\n課表以教練每週發布的為準\r\nCATEGORIES:長跑\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w9-0@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260928\r\nDTEND;VALUE=DATE:20260929\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 8K easyjog@07:15~07:00~06:45/km(2/2/4K漸進)\r\nDESCRIPTION:W9 基礎期 | 半馬 C 組\\n週一 | 輕鬆\\n8K easyjog@07:15~\r\n 07:00~06:45/km(2/2/4K漸進)\\n課表以教練每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w9-1@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20260929\r\nDTEND;VALUE=DATE:20260930\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 20'tempo@05:20~05:10/km\r\nDESCRIPTION:W9 基礎期 | 半馬 C 組\\n週二或週三 | 質量\\n20'tempo\r\n @05:20~05:10/km\\n可在週二或週三擇一天執行\\n課表以教練每\r\n 週發布的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w9-2@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261001\r\nDTEND;VALUE=DATE:20261002\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 2K warm up jog+團體動態熱身/2800 x 2@05:00~04:55/km \r\n R:3'30''\r\nDESCRIPTION:W9 基礎期 | 半馬 C 組\\n週四 | 質量\\n2K warm up jog+\r\n 團體動態熱身/2800 x 2@05:00~04:55/km R:3'30''\\n週四團練・臺北\r\n 田徑場\\n課表以教練每週發布的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w9-3@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261002\r\nDTEND;VALUE=DATE:20261003\r\nTRANSP:TRANSPARENT\r\nSUMMARY:肌力 | 核心/肌力/活動度/交叉訓練\r\nDESCRIPTION:W9 基礎期 | 半馬 C 組\\n週五或週六 | 肌力\\n核心/\r\n 肌力/活動度/交叉訓練\\n可在週五或週六擇一天執行\\n課\r\n 表以教練每週發布的為準\r\nCATEGORIES:肌力\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w9-4@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261004\r\nDTEND;VALUE=DATE:20261005\r\nTRANSP:TRANSPARENT\r\nSUMMARY:長跑 | 14K@05:40~05:30/km\r\nDESCRIPTION:W9 基礎期 | 半馬 C 組\\n週末 | 長跑\\n14K@05:40~05:30/k\r\n m\\n課表以教練每週發布的為準\r\nCATEGORIES:長跑\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w10-0@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261005\r\nDTEND;VALUE=DATE:20261006\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 50' freejog@HMP+60''~30''(體感漸進) (≈6:06–5:36)\r\nDESCRIPTION:W10 強化期 | 半馬 C 組\\n週一 | 質量\\n50' freejog@HMP+\r\n 60''~30''(體感漸進)\\n配速 ≈ 6:06–5:36/km\\n課表以教練每週\r\n 發布的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w10-1@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261006\r\nDTEND;VALUE=DATE:20261007\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 10K@05:20/km\r\nDESCRIPTION:W10 強化期 | 半馬 C 組\\n週二 | 質量\\n10K@05:20/km\\n\r\n 課表以教練每週發布的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w10-2@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261007\r\nDTEND;VALUE=DATE:20261008\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 40' jog@HR130\r\nDESCRIPTION:W10 強化期 | 半馬 C 組\\n週三或週六 | 輕鬆\\n40' jog\r\n @HR130\\n可在週三或週六擇一天執行\\n課表以教練每週發布\r\n 的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w10-3@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261008\r\nDTEND;VALUE=DATE:20261009\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 800 x 6~7@04:45~04:40/km R:2'\r\nDESCRIPTION:W10 強化期 | 半馬 C 組\\n週四 | 質量\\n800 x 6~7@04:45~\r\n 04:40/km R:2'\\n週四團練・臺北田徑場\\n課表以教練每週發布\r\n 的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w10-4@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261011\r\nDTEND;VALUE=DATE:20261012\r\nTRANSP:TRANSPARENT\r\nSUMMARY:長跑 | 13K LR@05:40~05:30/km\r\nDESCRIPTION:W10 強化期 | 半馬 C 組\\n週末 | 長跑\\n13K LR@05:40~05:\r\n 30/km\\n課表以教練每週發布的為準\r\nCATEGORIES:長跑\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w11-0@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261012\r\nDTEND;VALUE=DATE:20261013\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 6K freejog@Rpe5~6+ 20''ST X5~6 R:60''~70''\r\nDESCRIPTION:W11 強化期 | 半馬 C 組\\n週一 | 輕鬆\\n6K freejog@Rpe5~\r\n 6+ 20''ST X5~6 R:60''~70''\\n課表以教練每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w11-1@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261013\r\nDTEND;VALUE=DATE:20261014\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 5K@05:15~05:05/km\r\nDESCRIPTION:W11 強化期 | 半馬 C 組\\n週二 | 質量\\n5K@05:15~05:05/k\r\n m\\n課表以教練每週發布的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w11-2@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261014\r\nDTEND;VALUE=DATE:20261015\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 40' jog@HR130\r\nDESCRIPTION:W11 強化期 | 半馬 C 組\\n週三或週六 | 輕鬆\\n40' jog\r\n @HR130\\n可在週三或週六擇一天執行\\n課表以教練每週發布\r\n 的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w11-3@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261015\r\nDTEND;VALUE=DATE:20261016\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 300 x 11~13@04:15~04:10/km R:1'30''\r\nDESCRIPTION:W11 強化期 | 半馬 C 組\\n週四 | 質量\\n300 x 11~13@04:1\r\n 5~04:10/km R:1'30''\\n週四團練・臺北田徑場\\n課表以教練每週\r\n 發布的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w11-4@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261018\r\nDTEND;VALUE=DATE:20261019\r\nTRANSP:TRANSPARENT\r\nSUMMARY:長跑 | 13K LR@05:40~05:30/km\r\nDESCRIPTION:W11 強化期 | 半馬 C 組\\n週末 | 長跑\\n13K LR@05:40~05:\r\n 30/km\\n課表以教練每週發布的為準\r\nCATEGORIES:長跑\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w12-0@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261019\r\nDTEND;VALUE=DATE:20261020\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 5K freejog@Rpe5~6\r\nDESCRIPTION:W12 強化期 | 半馬 C 組\\n週一 | 輕鬆\\n5K freejog@Rpe5~\r\n 6\\n課表以教練每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w12-1@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261020\r\nDTEND;VALUE=DATE:20261021\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 3K@04:55~04:50/km\r\nDESCRIPTION:W12 強化期 | 半馬 C 組\\n週二 | 質量\\n3K@04:55~04:50/k\r\n m\\n課表以教練每週發布的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w12-2@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261021\r\nDTEND;VALUE=DATE:20261022\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 30' jog@HR130\r\nDESCRIPTION:W12 強化期 | 半馬 C 組\\n週三 | 輕鬆\\n30' jog@HR130\\n\r\n 課表以教練每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w12-3@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261022\r\nDTEND;VALUE=DATE:20261023\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 1000 x 4-5@05:00~04:55/km R:1'\r\nDESCRIPTION:W12 強化期 | 半馬 C 組\\n週四 | 質量\\n1000 x 4-5@05:00\r\n ~04:55/km R:1'\\n週四團練・臺北田徑場\\n課表以教練每週發\r\n 布的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w12-4@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261023\r\nDTEND;VALUE=DATE:20261024\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 20'jog+1k@5:00/km\r\nDESCRIPTION:W12 強化期 | 半馬 C 組\\n週五或週六 | 質量\\n20'jog+\r\n 1k@5:00/km\\n可在週五或週六擇一天執行\\n課表以教練每週發\r\n 布的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w12-5@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261025\r\nDTEND;VALUE=DATE:20261026\r\nTRANSP:TRANSPARENT\r\nSUMMARY:比賽 | 10K LR@05:20~05:10/km or 賽事\r\nDESCRIPTION:W12 強化期 | 半馬 C 組\\n週末 | 比賽\\n10K LR@05:20~05:\r\n 10/km or 賽事\\n課表以教練每週發布的為準\r\nCATEGORIES:比賽\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w13-0@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261026\r\nDTEND;VALUE=DATE:20261027\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 45' freejog@Rpe5~6\r\nDESCRIPTION:W13 強化期 | 半馬 C 組\\n週一或週三 | 輕鬆\\n45' fre\r\n ejog@Rpe5~6\\n可在週一或週三擇一天執行\\n課表以教練每週\r\n 發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w13-1@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261027\r\nDTEND;VALUE=DATE:20261028\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 7K@05:20~05:15/km\r\nDESCRIPTION:W13 強化期 | 半馬 C 組\\n週二 | 質量\\n7K@05:20~05:15/k\r\n m\\n課表以教練每週發布的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w13-2@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261029\r\nDTEND;VALUE=DATE:20261030\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 600 x 7~8@04:55~04:50/km R:2'\r\nDESCRIPTION:W13 強化期 | 半馬 C 組\\n週四 | 質量\\n600 x 7~8@04:55~\r\n 04:50/km R:2'\\n週四團練・臺北田徑場\\n課表以教練每週發布\r\n 的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w13-3@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261030\r\nDTEND;VALUE=DATE:20261031\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 40'jog\r\nDESCRIPTION:W13 強化期 | 半馬 C 組\\n週五或週六 | 輕鬆\\n40'jog\\\r\n n可在週五或週六擇一天執行\\n課表以教練每週發布的為\r\n 準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w13-4@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261101\r\nDTEND;VALUE=DATE:20261102\r\nTRANSP:TRANSPARENT\r\nSUMMARY:長跑 | 4K+10K LR@05:40/05:30/km\r\nDESCRIPTION:W13 強化期 | 半馬 C 組\\n週末 | 長跑\\n4K+10K LR@05:40/\r\n 05:30/km\\n課表以教練每週發布的為準\r\nCATEGORIES:長跑\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w14-0@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261102\r\nDTEND;VALUE=DATE:20261103\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 45' freejog@Rpe5~6\r\nDESCRIPTION:W14 強化期 | 半馬 C 組\\n週一或週三 | 輕鬆\\n45' fre\r\n ejog@Rpe5~6\\n可在週一或週三擇一天執行\\n課表以教練每週\r\n 發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w14-1@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261103\r\nDTEND;VALUE=DATE:20261104\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 8K@05:15~05:10/km\r\nDESCRIPTION:W14 強化期 | 半馬 C 組\\n週二 | 質量\\n8K@05:15~05:10/k\r\n m\\n課表以教練每週發布的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w14-2@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261105\r\nDTEND;VALUE=DATE:20261106\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 800 x 5~6@05:00~04:55/km R:2'\r\nDESCRIPTION:W14 強化期 | 半馬 C 組\\n週四 | 質量\\n800 x 5~6@05:00~\r\n 04:55/km R:2'\\n週四團練・臺北田徑場\\n課表以教練每週發布\r\n 的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w14-3@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261106\r\nDTEND;VALUE=DATE:20261107\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 40'jog\r\nDESCRIPTION:W14 強化期 | 半馬 C 組\\n週五或週六 | 輕鬆\\n40'jog\\\r\n n可在週五或週六擇一天執行\\n課表以教練每週發布的為\r\n 準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w14-4@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261108\r\nDTEND;VALUE=DATE:20261109\r\nTRANSP:TRANSPARENT\r\nSUMMARY:長跑 | 11K+5K LR@05:30/05:20/km\r\nDESCRIPTION:W14 強化期 | 半馬 C 組\\n週末 | 長跑\\n11K+5K LR@05:30/\r\n 05:20/km\\n課表以教練每週發布的為準\r\nCATEGORIES:長跑\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w15-0@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261109\r\nDTEND;VALUE=DATE:20261110\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 50' freejog/Rpe4~5\r\nDESCRIPTION:W15 強化期 | 半馬 C 組\\n週一 | 輕鬆\\n50' freejog/Rpe4\r\n ~5\\n課表以教練每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w15-1@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261110\r\nDTEND;VALUE=DATE:20261111\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 15' warm up jog+動態熱身/2000 x 3@05:15~05:10/km R:2'3\r\n 0''\r\nDESCRIPTION:W15 強化期 | 半馬 C 組\\n週二 | 質量\\n15' warm up jog+\r\n 動態熱身/2000 x 3@05:15~05:10/km R:2'30''\\n課表以教練每週發布\r\n 的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w15-2@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261111\r\nDTEND;VALUE=DATE:20261112\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 40'easyjog/Rpe3\r\nDESCRIPTION:W15 強化期 | 半馬 C 組\\n週三 | 輕鬆\\n40'easyjog/Rpe3\\\r\n n課表以教練每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w15-3@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261112\r\nDTEND;VALUE=DATE:20261113\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 1000 x 5~6@05:05~05:00/km R:2'\r\nDESCRIPTION:W15 強化期 | 半馬 C 組\\n週四 | 質量\\n1000 x 5~6@05:05\r\n ~05:00/km R:2'\\n週四團練・臺北田徑場\\n課表以教練每週發\r\n 布的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w15-4@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261115\r\nDTEND;VALUE=DATE:20261116\r\nTRANSP:TRANSPARENT\r\nSUMMARY:長跑 | 10K+6K@05:40/05:30~05:20/km\r\nDESCRIPTION:W15 強化期 | 半馬 C 組\\n週末 | 長跑\\n10K+6K@05:40/05:\r\n 30~05:20/km\\n課表以教練每週發布的為準\r\nCATEGORIES:長跑\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w16-0@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261116\r\nDTEND;VALUE=DATE:20261117\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 7K freejog@Rpe5~6\r\nDESCRIPTION:W16 巔峰期 | 半馬 C 組\\n週一 | 輕鬆\\n7K freejog@Rpe5~\r\n 6\\n課表以教練每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w16-1@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261117\r\nDTEND;VALUE=DATE:20261118\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 1K x 4~5@05:00~04:55/km R:1'50''\r\nDESCRIPTION:W16 巔峰期 | 半馬 C 組\\n週二 | 質量\\n1K x 4~5@05:00~0\r\n 4:55/km R:1'50''\\n課表以教練每週發布的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w16-2@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261118\r\nDTEND;VALUE=DATE:20261119\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 45' jog@HR130\r\nDESCRIPTION:W16 巔峰期 | 半馬 C 組\\n週三 | 輕鬆\\n45' jog@HR130\\n\r\n 課表以教練每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w16-3@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261119\r\nDTEND;VALUE=DATE:20261120\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 3000 x 2+900@05:15~05:10/04:45/km R:3'\r\nDESCRIPTION:W16 巔峰期 | 半馬 C 組\\n週四 | 質量\\n3000 x 2+900@05:\r\n 15~05:10/04:45/km R:3'\\n週四團練・臺北田徑場\\n課表以教練每\r\n 週發布的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w16-4@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261120\r\nDTEND;VALUE=DATE:20261121\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 40'easyjog@HR130\r\nDESCRIPTION:W16 巔峰期 | 半馬 C 組\\n週五或週六 | 輕鬆\\n40'easy\r\n jog@HR130\\n可在週五或週六擇一天執行\\n課表以教練每週發\r\n 布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w16-5@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261122\r\nDTEND;VALUE=DATE:20261123\r\nTRANSP:TRANSPARENT\r\nSUMMARY:長跑 | 3K+13K LR@05:40/05:30~05:10/km\r\nDESCRIPTION:W16 巔峰期 | 半馬 C 組\\n週末 | 長跑\\n3K+13K LR@05:40/\r\n 05:30~05:10/km\\n課表以教練每週發布的為準\r\nCATEGORIES:長跑\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w17-0@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261123\r\nDTEND;VALUE=DATE:20261124\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 40' freejog\r\nDESCRIPTION:W17 巔峰期 | 半馬 C 組\\n週一 | 輕鬆\\n40' freejog\\n課\r\n 表以教練每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w17-1@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261124\r\nDTEND;VALUE=DATE:20261125\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 10K@05:10~05:00/km\r\nDESCRIPTION:W17 巔峰期 | 半馬 C 組\\n週二 | 質量\\n10K@05:10~05:00/\r\n km\\n課表以教練每週發布的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w17-2@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261125\r\nDTEND;VALUE=DATE:20261126\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 40' @easyjog\r\nDESCRIPTION:W17 巔峰期 | 半馬 C 組\\n週三 | 輕鬆\\n40' @easyjog\\n\r\n 課表以教練每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w17-3@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261126\r\nDTEND;VALUE=DATE:20261127\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 2K warm up jog+團體動態熱身/1600 x 3~4 @04:50~04:45/\r\n km R:2'40''\r\nDESCRIPTION:W17 巔峰期 | 半馬 C 組\\n週四 | 質量\\n2K warm up jog+\r\n 團體動態熱身/1600 x 3~4 @04:50~04:45/km R:2'40''\\n週四團練・臺\r\n 北田徑場\\n課表以教練每週發布的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w17-4@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261127\r\nDTEND;VALUE=DATE:20261128\r\nTRANSP:TRANSPARENT\r\nSUMMARY:肌力 | 核心/肌力/活動度/交叉訓練\r\nDESCRIPTION:W17 巔峰期 | 半馬 C 組\\n週五或週六 | 肌力\\n核心/\r\n 肌力/活動度/交叉訓練\\n可在週五或週六擇一天執行\\n課\r\n 表以教練每週發布的為準\r\nCATEGORIES:肌力\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w17-5@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261129\r\nDTEND;VALUE=DATE:20261130\r\nTRANSP:TRANSPARENT\r\nSUMMARY:長跑 | 16K@05:20/05:10/km(10/6K)\r\nDESCRIPTION:W17 巔峰期 | 半馬 C 組\\n週末 | 長跑\\n16K@05:20/05:10/\r\n km(10/6K)\\n課表以教練每週發布的為準\r\nCATEGORIES:長跑\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w18-0@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261130\r\nDTEND;VALUE=DATE:20261201\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 30' freejog+200M ST x 5~6 R:90''\r\nDESCRIPTION:W18 巔峰期 | 半馬 C 組\\n週一 | 輕鬆\\n30' freejog+200M\r\n  ST x 5~6 R:90''\\n課表以教練每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w18-1@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261201\r\nDTEND;VALUE=DATE:20261202\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 2.4K warm up jog+動態熱身/400 x 11~12 @04:20~04:15/km \r\n R:1'20''\r\nDESCRIPTION:W18 巔峰期 | 半馬 C 組\\n週二 | 質量\\n2.4K warm up jog\r\n +動態熱身/400 x 11~12 @04:20~04:15/km R:1'20''\\n課表以教練每週\r\n 發布的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w18-2@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261202\r\nDTEND;VALUE=DATE:20261203\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 40' @easyjog\r\nDESCRIPTION:W18 巔峰期 | 半馬 C 組\\n週三 | 輕鬆\\n40' @easyjog\\n\r\n 課表以教練每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w18-3@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261203\r\nDTEND;VALUE=DATE:20261204\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 10K@05:00~04:55/km\r\nDESCRIPTION:W18 巔峰期 | 半馬 C 組\\n週四 | 質量\\n10K@05:00~04:55/\r\n km\\n週四團練・臺北田徑場\\n課表以教練每週發布的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w18-4@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261204\r\nDTEND;VALUE=DATE:20261205\r\nTRANSP:TRANSPARENT\r\nSUMMARY:肌力 | 核心/肌力/活動度/交叉訓練\r\nDESCRIPTION:W18 巔峰期 | 半馬 C 組\\n週五或週六 | 肌力\\n核心/\r\n 肌力/活動度/交叉訓練\\n可在週五或週六擇一天執行\\n課\r\n 表以教練每週發布的為準\r\nCATEGORIES:肌力\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w18-5@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261206\r\nDTEND;VALUE=DATE:20261207\r\nTRANSP:TRANSPARENT\r\nSUMMARY:長跑 | 14~15K@05:20~05:10/km\r\nDESCRIPTION:W18 巔峰期 | 半馬 C 組\\n週末 | 長跑\\n14~15K@05:20~05:\r\n 10/km\\n課表以教練每週發布的為準\r\nCATEGORIES:長跑\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w19-0@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261207\r\nDTEND;VALUE=DATE:20261208\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 25' freejog+800M @04:50~04:45/km\r\nDESCRIPTION:W19 比賽期 | 半馬 C 組\\n週一 | 輕鬆\\n25' freejog+800M\r\n  @04:50~04:45/km\\n課表以教練每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w19-1@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261208\r\nDTEND;VALUE=DATE:20261209\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 2K warm up jog+動態熱身/6K @05:10~05:00/km\r\nDESCRIPTION:W19 比賽期 | 半馬 C 組\\n週二 | 質量\\n2K warm up jog+\r\n 動態熱身/6K @05:10~05:00/km\\n課表以教練每週發布的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w19-2@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261209\r\nDTEND;VALUE=DATE:20261210\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 30' @easyjog\r\nDESCRIPTION:W19 比賽期 | 半馬 C 組\\n週三 | 輕鬆\\n30' @easyjog\\n\r\n 課表以教練每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w19-3@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261210\r\nDTEND;VALUE=DATE:20261211\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 1200x4 @04:50~04:45/km R:2'\r\nDESCRIPTION:W19 比賽期 | 半馬 C 組\\n週四 | 質量\\n1200x4 @04:50~04\r\n :45/km R:2'\\n週四團練・臺北田徑場\\n課表以教練每週發布\r\n 的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w19-4@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261211\r\nDTEND;VALUE=DATE:20261212\r\nTRANSP:TRANSPARENT\r\nSUMMARY:肌力 | 核心/肌力/活動度/交叉訓練\r\nDESCRIPTION:W19 比賽期 | 半馬 C 組\\n週五或週六 | 肌力\\n核心/\r\n 肌力/活動度/交叉訓練\\n可在週五或週六擇一天執行\\n課\r\n 表以教練每週發布的為準\r\nCATEGORIES:肌力\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w19-5@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261213\r\nDTEND;VALUE=DATE:20261214\r\nTRANSP:TRANSPARENT\r\nSUMMARY:長跑 | 10K@05:15~05:10/km\r\nDESCRIPTION:W19 比賽期 | 半馬 C 組\\n週末 | 長跑\\n10K@05:15~05:10/\r\n km\\n課表以教練每週發布的為準\r\nCATEGORIES:長跑\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w20-0@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261214\r\nDTEND;VALUE=DATE:20261215\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 30' freejog\r\nDESCRIPTION:W20 賽事週 | 半馬 C 組\\n週一或週三 | 輕鬆\\n30' fre\r\n ejog\\n可在週一或週三擇一天執行\\n課表以教練每週發布的\r\n 為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w20-1@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261215\r\nDTEND;VALUE=DATE:20261216\r\nTRANSP:TRANSPARENT\r\nSUMMARY:質量 | 2.4K+(0.8Kx2) @05:00~04:55/04:45~04:40/km R:3'/2'\r\nDESCRIPTION:W20 賽事週 | 半馬 C 組\\n週二或週三 | 質量\\n2.4K+(0\r\n .8Kx2) @05:00~04:55/04:45~04:40/km R:3'/2'\\n可在週二或週三擇一天\r\n 執行\\n課表以教練每週發布的為準\r\nCATEGORIES:質量\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w20-2@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261217\r\nDTEND;VALUE=DATE:20261218\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 20'easyjog+120M ST x 4~5 R:80''\r\nDESCRIPTION:W20 賽事週 | 半馬 C 組\\n週四或週五 | 輕鬆\\n20'easy\r\n jog+120M ST x 4~5 R:80''\\n可在週四或週五擇一天執行\\n課表以\r\n 教練每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w20-3@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART:20261220T063000\r\nDTEND:20261220T084800\r\nTRANSP:OPAQUE\r\nBEGIN:VALARM\r\nACTION:DISPLAY\r\nDESCRIPTION:臺北馬拉松 明天起跑\r\nTRIGGER:-PT12H\r\nEND:VALARM\r\nSUMMARY:臺北馬拉松\r\nDESCRIPTION:W20 賽事週 | 半馬 C 組\\n週末 | 比賽\\n比賽日：臺\r\n 北馬拉松\\n當天流程、配速分段、補給時間表見「比賽日\r\n 建議」\\n\\n— 比賽日流程 —\\n02:30 起床：喝一杯水，上廁\r\n 所，確認天氣與交通\\n03:30 比賽早餐：碳水 124–186 g、水\r\n  310–434 ml；選熟悉、低纖低脂的食物\\n05:00 咖啡因（選\r\n 用）：186–372 mg，起跑前 30–90 分鐘；練習時試過才用\\n\r\n 05:30 抵達會場：寄物、上廁所、別號碼布與晶片；小口\r\n 喝水 150–250 ml\\n06:05 熱身：快走或慢跑 5–10 分鐘＋動態\r\n 伸展，保留體力\\n06:15 進起跑區：按目標成績站位；可含\r\n 一小口能量膠或運動飲料\\n06:30 起跑：前 5K 比目標配速\r\n 慢 5–10 秒/km，之後穩定在 5:06/km\\n能量膠：第 35 分鐘第\r\n 一包，之後約每 30 分鐘一包（每小時 30–60 g 碳水）\\n\\n\r\n 課表以教練每週發布的為準\r\nCATEGORIES:比賽\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w21-1@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261222\r\nDTEND;VALUE=DATE:20261223\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 30' easyjog@low HR\r\nDESCRIPTION:R 賽後恢復週 | 半馬 C 組\\n週二或週三 | 輕鬆\\n30'\r\n  easyjog@low HR\\n可在週二或週三擇一天執行\\n課表以教練每\r\n 週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w21-2@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261224\r\nDTEND;VALUE=DATE:20261225\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 團體熱身+40'~45'freejog\r\nDESCRIPTION:R 賽後恢復週 | 半馬 C 組\\n週四 | 輕鬆\\n團體熱身\r\n +40'~45'freejog\\n課表以教練每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w21-3@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261225\r\nDTEND;VALUE=DATE:20261226\r\nTRANSP:TRANSPARENT\r\nSUMMARY:輕鬆 | 40'easyjog+自主放鬆\r\nDESCRIPTION:R 賽後恢復週 | 半馬 C 組\\n週五或週六 | 輕鬆\\n40'\r\n easyjog+自主放鬆\\n可在週五或週六擇一天執行\\n課表以教\r\n 練每週發布的為準\r\nCATEGORIES:輕鬆\r\nEND:VEVENT\r\nBEGIN:VEVENT\r\nUID:gengpao-2026-12-20-hmC-w21-4@gengpao-coach\r\nDTSTAMP:20261003T000000Z\r\nDTSTART;VALUE=DATE:20261227\r\nDTEND;VALUE=DATE:20261228\r\nTRANSP:TRANSPARENT\r\nSUMMARY:長跑 | 60'~75'jog@zone1~2\r\nDESCRIPTION:R 賽後恢復週 | 半馬 C 組\\n週末 | 長跑\\n60'~75'jog@z\r\n one1~2\\n課表以教練每週發布的為準\r\nCATEGORIES:長跑\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n",
+    "count": 113
+   }
+  }
+ },
+ "profiles": {
+  "fmD45M": {
+   "2026-07-20": {
+    "weekIndex": -1,
+    "warnings": [
+     "目前每週跑量偏低，D 組的課表大約需要每週 45K 以上的基礎。可以考慮先選慢一組，練幾週再調整。"
+    ],
+    "todayItems": null
+   },
+   "2026-10-03": {
+    "weekIndex": 9,
+    "warnings": [
+     "離比賽只剩 12 週左右，課表從 W9 接著跑；前面的週次可以參考，不用回頭補。",
+     "目前每週跑量偏低，D 組的課表大約需要每週 45K 以上的基礎。可以考慮先選慢一組，練幾週再調整。"
+    ],
+    "todayItems": {
+     "n": 9,
+     "items": [
+      "週五或週六"
+     ]
+    }
+   },
+   "targetMin": 217.5,
+   "goalPace": 309.2783505154639,
+   "raceDayPlan": {
+    "timeline": [
+     [
+      "02:30",
+      "起床",
+      "喝一杯水，上廁所，確認天氣與交通"
+     ],
+     [
+      "03:30",
+      "比賽早餐",
+      "碳水 124–186 g、水 310–434 ml；選熟悉、低纖低脂的食物"
+     ],
+     [
+      "05:00",
+      "咖啡因（選用）",
+      "186–372 mg，起跑前 30–90 分鐘；練習時試過才用"
+     ],
+     [
+      "05:30",
+      "抵達會場",
+      "寄物、上廁所、別號碼布與晶片；小口喝水 150–250 ml"
+     ],
+     [
+      "06:05",
+      "熱身",
+      "快走或慢跑 5–10 分鐘＋動態伸展，保留體力"
+     ],
+     [
+      "06:15",
+      "進起跑區",
+      "按目標成績站位；可含一小口能量膠或運動飲料"
+     ],
+     [
+      "06:30",
+      "起跑",
+      "前 5K 比目標配速慢 5–10 秒/km，之後穩定在 5:09/km"
+     ]
+    ],
+    "splits": [
+     [
+      "5K",
+      "0:25:46",
+      "06:56"
+     ],
+     [
+      "10K",
+      "0:51:33",
+      "07:22"
+     ],
+     [
+      "15K",
+      "1:17:19",
+      "07:47"
+     ],
+     [
+      "半程",
+      "1:48:45",
+      "08:19"
+     ],
+     [
+      "25K",
+      "2:08:52",
+      "08:39"
+     ],
+     [
+      "30K",
+      "2:34:38",
+      "09:05"
+     ],
+     [
+      "35K",
+      "3:00:25",
+      "09:30"
+     ],
+     [
+      "40K",
+      "3:26:11",
+      "09:56"
+     ],
+     [
+      "終點",
+      "3:37:30",
+      "10:08"
+     ]
+    ],
+    "gels": [
+     [
+      35,
+      6.8,
+      "07:05"
+     ],
+     [
+      55,
+      10.7,
+      "07:25"
+     ],
+     [
+      75,
+      14.6,
+      "07:45"
+     ],
+     [
+      95,
+      18.4,
+      "08:05"
+     ],
+     [
+      115,
+      22.3,
+      "08:25"
+     ],
+     [
+      135,
+      26.2,
+      "08:45"
+     ],
+     [
+      155,
+      30.1,
+      "09:05"
+     ],
+     [
+      175,
+      34,
+      "09:25"
+     ],
+     [
+      195,
+      37.8,
+      "09:45"
+     ]
+    ],
+    "gelNote": "能量膠：第 35 分鐘第一包，之後約每 20 分鐘一包（每小時 60–90 g 碳水）",
+    "tips": [
+     "補水：每小時約 500–650 ml，每個補給站喝幾口，不要喝到體重比賽前還重",
+     "鈉：每小時約 450 mg（運動飲料、鹽錠、含鈉能量膠）",
+     "天氣熱（>25°C）或濕度高：每公里放慢 10–20 秒、多補水，別硬追目標",
+     "不要在比賽日嘗試新鞋、新衣、新補給；凡士林或防磨膏先擦好",
+     "頭暈、胸悶、抽筋到無法跑：立即減速或停下，找醫護站",
+     "賽後 4 小時：每小時碳水 62–74 g＋蛋白質 19 g；喝回流失體重的 125–150%"
+    ],
+    "night": [
+     "前一晚：準備號碼布、晶片、衣物、能量膠、別針，設好兩個鬧鐘",
+     "前 36–48 小時：肝醣超補，每天碳水 620–744 g"
+    ],
+    "needKg": false
+   },
+   "fuel": {
+    "h": 3.625,
+    "lo": 60,
+    "hi": 90,
+    "totLo": 217.5,
+    "totHi": 326.25,
+    "gLo": 9,
+    "gHi": 13,
+    "gap": 15,
+    "ml": [
+     500,
+     650
+    ],
+    "na": 450,
+    "load": [
+     620,
+     744
+    ]
+   },
+   "hr": {
+    "tan": 176.5,
+    "fox": 175,
+    "zones": [
+     [
+      "Z1",
+      88,
+      106,
+      0.5,
+      0.6
+     ],
+     [
+      "Z2",
+      106,
+      124,
+      0.6,
+      0.7
+     ],
+     [
+      "Z3",
+      124,
+      141,
+      0.7,
+      0.8
+     ],
+     [
+      "Z4",
+      141,
+      159,
+      0.8,
+      0.9
+     ],
+     [
+      "Z5",
+      159,
+      177,
+      0.9,
+      1
+     ]
+    ],
+    "p130": 73.65439093484419,
+    "karvonen": false
+   },
+   "std100": 128.89485,
+   "ageGrade": 59.26199999999999,
+   "predictedMin": 223.10966766294442,
+   "suggestGroup": [
+    "E",
+    "3:45–3:50",
+    225,
+    230
+   ],
+   "verdict": [
+    "ok",
+    "目標和現在的能力相近，照課表完整練一季，有機會達成。"
+   ],
+   "2026-12-19": {
+    "weekIndex": 20,
+    "warnings": [
+     "離比賽只剩 1 週左右，課表從 W20 接著跑；前面的週次可以參考，不用回頭補。",
+     "目前每週跑量偏低，D 組的課表大約需要每週 45K 以上的基礎。可以考慮先選慢一組，練幾週再調整。"
+    ],
+    "todayItems": {
+     "n": 20,
+     "items": [
+      "週五或週六"
+     ]
+    }
+   },
+   "2026-12-20": {
+    "weekIndex": 20,
+    "warnings": [
+     "離比賽只剩 1 週左右，課表從 W20 接著跑；前面的週次可以參考，不用回頭補。",
+     "目前每週跑量偏低，D 組的課表大約需要每週 45K 以上的基礎。可以考慮先選慢一組，練幾週再調整。"
+    ],
+    "todayItems": {
+     "n": 20,
+     "items": [
+      "週末"
+     ]
+    }
+   },
+   "2027-01-20": {
+    "weekIndex": 25,
+    "warnings": [
+     "目前每週跑量偏低，D 組的課表大約需要每週 45K 以上的基礎。可以考慮先選慢一組，練幾週再調整。"
+    ],
+    "todayItems": null
+   }
+  },
+  "fmB38F": {
+   "2026-07-20": {
+    "weekIndex": -1,
+    "warnings": [
+     "目前每週跑量偏低，B 組的課表大約需要每週 60K 以上的基礎。可以考慮先選慢一組，練幾週再調整。"
+    ],
+    "todayItems": null
+   },
+   "2026-10-03": {
+    "weekIndex": 9,
+    "warnings": [
+     "離比賽只剩 12 週左右，課表從 W9 接著跑；前面的週次可以參考，不用回頭補。",
+     "目前每週跑量偏低，B 組的課表大約需要每週 60K 以上的基礎。可以考慮先選慢一組，練幾週再調整。"
+    ],
+    "todayItems": {
+     "n": 9,
+     "items": [
+      "週五或週六"
+     ]
+    }
+   },
+   "targetMin": 197.5,
+   "goalPace": 280.8389619623178,
+   "raceDayPlan": {
+    "timeline": [
+     [
+      "03:00",
+      "起床",
+      "喝一杯水，上廁所，確認天氣與交通"
+     ],
+     [
+      "04:00",
+      "比賽早餐",
+      "碳水 100–150 g、水 250–350 ml；選熟悉、低纖低脂的食物"
+     ],
+     [
+      "05:30",
+      "咖啡因（選用）",
+      "150–300 mg，起跑前 30–90 分鐘；練習時試過才用"
+     ],
+     [
+      "06:00",
+      "抵達會場",
+      "寄物、上廁所、別號碼布與晶片；小口喝水 150–250 ml"
+     ],
+     [
+      "06:35",
+      "熱身",
+      "慢跑 10 分鐘＋動態伸展＋3–4 趟加速跑"
+     ],
+     [
+      "06:45",
+      "進起跑區",
+      "按目標成績站位；可含一小口能量膠或運動飲料"
+     ],
+     [
+      "07:00",
+      "起跑",
+      "前 5K 比目標配速慢 5–10 秒/km，之後穩定在 4:41/km"
+     ]
+    ],
+    "splits": [
+     [
+      "5K",
+      "0:23:24",
+      "07:23"
+     ],
+     [
+      "10K",
+      "0:46:48",
+      "07:47"
+     ],
+     [
+      "15K",
+      "1:10:13",
+      "08:10"
+     ],
+     [
+      "半程",
+      "1:38:45",
+      "08:39"
+     ],
+     [
+      "25K",
+      "1:57:01",
+      "08:57"
+     ],
+     [
+      "30K",
+      "2:20:25",
+      "09:20"
+     ],
+     [
+      "35K",
+      "2:43:49",
+      "09:44"
+     ],
+     [
+      "40K",
+      "3:07:14",
+      "10:07"
+     ],
+     [
+      "終點",
+      "3:17:30",
+      "10:18"
+     ]
+    ],
+    "gels": [
+     [
+      35,
+      7.5,
+      "07:35"
+     ],
+     [
+      55,
+      11.8,
+      "07:55"
+     ],
+     [
+      75,
+      16,
+      "08:15"
+     ],
+     [
+      95,
+      20.3,
+      "08:35"
+     ],
+     [
+      115,
+      24.6,
+      "08:55"
+     ],
+     [
+      135,
+      28.8,
+      "09:15"
+     ],
+     [
+      155,
+      33.1,
+      "09:35"
+     ],
+     [
+      175,
+      37.4,
+      "09:55"
+     ]
+    ],
+    "gelNote": "能量膠：第 35 分鐘第一包，之後約每 20 分鐘一包（每小時 60–90 g 碳水）",
+    "tips": [
+     "補水：每小時約 400–500 ml，每個補給站喝幾口，不要喝到體重比賽前還重",
+     "鈉：每小時約 300 mg（運動飲料、鹽錠、含鈉能量膠）",
+     "天氣熱（>25°C）或濕度高：每公里放慢 10–20 秒、多補水，別硬追目標",
+     "不要在比賽日嘗試新鞋、新衣、新補給；凡士林或防磨膏先擦好",
+     "頭暈、胸悶、抽筋到無法跑：立即減速或停下，找醫護站",
+     "賽後 4 小時：每小時碳水 50–60 g＋蛋白質 15 g；喝回流失體重的 125–150%"
+    ],
+    "night": [
+     "前一晚：準備號碼布、晶片、衣物、能量膠、別針，設好兩個鬧鐘",
+     "前 36–48 小時：肝醣超補，每天碳水 500–600 g"
+    ],
+    "needKg": false
+   },
+   "fuel": {
+    "h": 3.2916666666666665,
+    "lo": 60,
+    "hi": 90,
+    "totLo": 197.5,
+    "totHi": 296.25,
+    "gLo": 8,
+    "gHi": 12,
+    "gap": 15,
+    "ml": [
+     400,
+     500
+    ],
+    "na": 300,
+    "load": [
+     500,
+     600
+    ]
+   },
+   "hr": {
+    "tan": 181.4,
+    "fox": 182,
+    "zones": [
+     [
+      "Z1",
+      118,
+      131,
+      0.5,
+      0.6
+     ],
+     [
+      "Z2",
+      131,
+      143,
+      0.6,
+      0.7
+     ],
+     [
+      "Z3",
+      143,
+      156,
+      0.7,
+      0.8
+     ],
+     [
+      "Z4",
+      156,
+      169,
+      0.8,
+      0.9
+     ],
+     [
+      "Z5",
+      169,
+      181,
+      0.9,
+      1
+     ]
+    ],
+    "p130": 59.33544303797468,
+    "karvonen": true
+   },
+   "std100": 133.41906,
+   "ageGrade": 67.55395443037975,
+   "predictedMin": 191.81369999476635,
+   "suggestGroup": [
+    "B",
+    "3:15–3:20",
+    195,
+    200
+   ],
+   "verdict": [
+    "ok",
+    "目標比你現在推算的能力還保守，可以考慮往上一組。"
+   ],
+   "2026-12-19": {
+    "weekIndex": 20,
+    "warnings": [
+     "離比賽只剩 1 週左右，課表從 W20 接著跑；前面的週次可以參考，不用回頭補。",
+     "目前每週跑量偏低，B 組的課表大約需要每週 60K 以上的基礎。可以考慮先選慢一組，練幾週再調整。"
+    ],
+    "todayItems": {
+     "n": 20,
+     "items": [
+      "週五或週六"
+     ]
+    }
+   },
+   "2026-12-20": {
+    "weekIndex": 20,
+    "warnings": [
+     "離比賽只剩 1 週左右，課表從 W20 接著跑；前面的週次可以參考，不用回頭補。",
+     "目前每週跑量偏低，B 組的課表大約需要每週 60K 以上的基礎。可以考慮先選慢一組，練幾週再調整。"
+    ],
+    "todayItems": {
+     "n": 20,
+     "items": [
+      "週末"
+     ]
+    }
+   },
+   "2027-01-20": {
+    "weekIndex": 25,
+    "warnings": [
+     "目前每週跑量偏低，B 組的課表大約需要每週 60K 以上的基礎。可以考慮先選慢一組，練幾週再調整。"
+    ],
+    "todayItems": null
+   }
+  },
+  "fmG52M": {
+   "2026-07-20": {
+    "weekIndex": -1,
+    "warnings": [
+     "目前每週跑量偏低，G 組的課表大約需要每週 30K 以上的基礎。可以考慮先選慢一組，練幾週再調整。"
+    ],
+    "todayItems": null
+   },
+   "2026-10-03": {
+    "weekIndex": 9,
+    "warnings": [
+     "離比賽只剩 12 週左右，課表從 W9 接著跑；前面的週次可以參考，不用回頭補。",
+     "目前每週跑量偏低，G 組的課表大約需要每週 30K 以上的基礎。可以考慮先選慢一組，練幾週再調整。"
+    ],
+    "todayItems": {
+     "n": 9,
+     "items": [
+      "週五或週六"
+     ]
+    }
+   },
+   "targetMin": 252.5,
+   "goalPace": 359.0472804834696,
+   "raceDayPlan": {
+    "timeline": [
+     [
+      "02:30",
+      "起床",
+      "喝一杯水，上廁所，確認天氣與交通"
+     ],
+     [
+      "03:30",
+      "比賽早餐",
+      "碳水 150–225 g、水 375–525 ml；選熟悉、低纖低脂的食物"
+     ],
+     [
+      "05:00",
+      "咖啡因（選用）",
+      "225–450 mg，起跑前 30–90 分鐘；練習時試過才用"
+     ],
+     [
+      "05:30",
+      "抵達會場",
+      "寄物、上廁所、別號碼布與晶片；小口喝水 150–250 ml"
+     ],
+     [
+      "06:05",
+      "熱身",
+      "快走或慢跑 5–10 分鐘＋動態伸展，保留體力"
+     ],
+     [
+      "06:15",
+      "進起跑區",
+      "按目標成績站位；可含一小口能量膠或運動飲料"
+     ],
+     [
+      "06:30",
+      "起跑",
+      "前 5K 比目標配速慢 5–10 秒/km，之後穩定在 5:59/km"
+     ]
+    ],
+    "splits": [
+     [
+      "5K",
+      "0:29:55",
+      "07:00"
+     ],
+     [
+      "10K",
+      "0:59:50",
+      "07:30"
+     ],
+     [
+      "15K",
+      "1:29:46",
+      "08:00"
+     ],
+     [
+      "半程",
+      "2:06:15",
+      "08:36"
+     ],
+     [
+      "25K",
+      "2:29:36",
+      "09:00"
+     ],
+     [
+      "30K",
+      "2:59:31",
+      "09:30"
+     ],
+     [
+      "35K",
+      "3:29:27",
+      "09:59"
+     ],
+     [
+      "40K",
+      "3:59:22",
+      "10:29"
+     ],
+     [
+      "終點",
+      "4:12:30",
+      "10:43"
+     ]
+    ],
+    "gels": [
+     [
+      35,
+      5.8,
+      "07:05"
+     ],
+     [
+      55,
+      9.2,
+      "07:25"
+     ],
+     [
+      75,
+      12.5,
+      "07:45"
+     ],
+     [
+      95,
+      15.9,
+      "08:05"
+     ],
+     [
+      115,
+      19.2,
+      "08:25"
+     ],
+     [
+      135,
+      22.6,
+      "08:45"
+     ],
+     [
+      155,
+      25.9,
+      "09:05"
+     ],
+     [
+      175,
+      29.2,
+      "09:25"
+     ],
+     [
+      195,
+      32.6,
+      "09:45"
+     ],
+     [
+      215,
+      35.9,
+      "10:05"
+     ],
+     [
+      235,
+      39.3,
+      "10:25"
+     ]
+    ],
+    "gelNote": "能量膠：第 35 分鐘第一包，之後約每 20 分鐘一包（每小時 60–90 g 碳水）",
+    "tips": [
+     "補水：每小時約 650–800 ml，每個補給站喝幾口，不要喝到體重比賽前還重",
+     "鈉：每小時約 600 mg（運動飲料、鹽錠、含鈉能量膠）",
+     "天氣熱（>25°C）或濕度高：每公里放慢 10–20 秒、多補水，別硬追目標",
+     "不要在比賽日嘗試新鞋、新衣、新補給；凡士林或防磨膏先擦好",
+     "頭暈、胸悶、抽筋到無法跑：立即減速或停下，找醫護站",
+     "賽後 4 小時：每小時碳水 75–90 g＋蛋白質 23 g；喝回流失體重的 125–150%"
+    ],
+    "night": [
+     "前一晚：準備號碼布、晶片、衣物、能量膠、別針，設好兩個鬧鐘",
+     "前 36–48 小時：肝醣超補，每天碳水 750–900 g"
+    ],
+    "needKg": false
+   },
+   "fuel": {
+    "h": 4.208333333333333,
+    "lo": 60,
+    "hi": 90,
+    "totLo": 252.49999999999997,
+    "totHi": 378.75,
+    "gLo": 10,
+    "gHi": 15,
+    "gap": 15,
+    "ml": [
+     650,
+     800
+    ],
+    "na": 600,
+    "load": [
+     750,
+     900
+    ]
+   },
+   "hr": {
+    "tan": 171.6,
+    "fox": 168,
+    "zones": [
+     [
+      "Z1",
+      86,
+      103,
+      0.5,
+      0.6
+     ],
+     [
+      "Z2",
+      103,
+      120,
+      0.6,
+      0.7
+     ],
+     [
+      "Z3",
+      120,
+      137,
+      0.7,
+      0.8
+     ],
+     [
+      "Z4",
+      137,
+      154,
+      0.8,
+      0.9
+     ],
+     [
+      "Z5",
+      154,
+      172,
+      0.9,
+      1
+     ]
+    ],
+    "p130": 75.75757575757575,
+    "karvonen": false
+   },
+   "std100": 137.2437,
+   "ageGrade": 54.3539405940594,
+   "predictedMin": 223.10966766294442,
+   "suggestGroup": [
+    "E",
+    "3:45–3:50",
+    225,
+    230
+   ],
+   "verdict": [
+    "ok",
+    "目標比你現在推算的能力還保守，可以考慮往上一組。"
+   ],
+   "2026-12-19": {
+    "weekIndex": 20,
+    "warnings": [
+     "離比賽只剩 1 週左右，課表從 W20 接著跑；前面的週次可以參考，不用回頭補。",
+     "目前每週跑量偏低，G 組的課表大約需要每週 30K 以上的基礎。可以考慮先選慢一組，練幾週再調整。"
+    ],
+    "todayItems": {
+     "n": 20,
+     "items": [
+      "週五或週六"
+     ]
+    }
+   },
+   "2026-12-20": {
+    "weekIndex": 20,
+    "warnings": [
+     "離比賽只剩 1 週左右，課表從 W20 接著跑；前面的週次可以參考，不用回頭補。",
+     "目前每週跑量偏低，G 組的課表大約需要每週 30K 以上的基礎。可以考慮先選慢一組，練幾週再調整。"
+    ],
+    "todayItems": {
+     "n": 20,
+     "items": [
+      "週末"
+     ]
+    }
+   },
+   "2027-01-20": {
+    "weekIndex": 25,
+    "warnings": [
+     "目前每週跑量偏低，G 組的課表大約需要每週 30K 以上的基礎。可以考慮先選慢一組，練幾週再調整。"
+    ],
+    "todayItems": null
+   }
+  },
+  "fmS38M": {
+   "2026-07-20": {
+    "weekIndex": -1,
+    "warnings": [
+     "目前每週跑量偏低，S 組的課表大約需要每週 60K 以上的基礎。可以考慮先選慢一組，練幾週再調整。",
+     "S 組的跑量較大，每週 4 天以下比較難完成，建議至少 5 天。"
+    ],
+    "todayItems": null
+   },
+   "2026-10-03": {
+    "weekIndex": 9,
+    "warnings": [
+     "離比賽只剩 12 週左右，課表從 W9 接著跑；前面的週次可以參考，不用回頭補。",
+     "目前每週跑量偏低，S 組的課表大約需要每週 60K 以上的基礎。可以考慮先選慢一組，練幾週再調整。",
+     "S 組的跑量較大，每週 4 天以下比較難完成，建議至少 5 天。"
+    ],
+    "todayItems": {
+     "n": 9,
+     "items": [
+      "週五或週六"
+     ]
+    }
+   },
+   "targetMin": 177.5,
+   "goalPace": 252.3995734091717,
+   "raceDayPlan": {
+    "timeline": [
+     [
+      "03:00",
+      "起床",
+      "喝一杯水，上廁所，確認天氣與交通"
+     ],
+     [
+      "04:00",
+      "比賽早餐",
+      "碳水 126–189 g、水 315–441 ml；選熟悉、低纖低脂的食物"
+     ],
+     [
+      "05:30",
+      "咖啡因（選用）",
+      "189–378 mg，起跑前 30–90 分鐘；練習時試過才用"
+     ],
+     [
+      "06:00",
+      "抵達會場",
+      "寄物、上廁所、別號碼布與晶片；小口喝水 150–250 ml"
+     ],
+     [
+      "06:35",
+      "熱身",
+      "慢跑 10 分鐘＋動態伸展＋3–4 趟加速跑"
+     ],
+     [
+      "06:45",
+      "進起跑區",
+      "按目標成績站位；可含一小口能量膠或運動飲料"
+     ],
+     [
+      "07:00",
+      "起跑",
+      "前 5K 比目標配速慢 5–10 秒/km，之後穩定在 4:12/km"
+     ]
+    ],
+    "splits": [
+     [
+      "5K",
+      "0:21:02",
+      "07:21"
+     ],
+     [
+      "10K",
+      "0:42:04",
+      "07:42"
+     ],
+     [
+      "15K",
+      "1:03:06",
+      "08:03"
+     ],
+     [
+      "半程",
+      "1:28:45",
+      "08:29"
+     ],
+     [
+      "25K",
+      "1:45:10",
+      "08:45"
+     ],
+     [
+      "30K",
+      "2:06:12",
+      "09:06"
+     ],
+     [
+      "35K",
+      "2:27:14",
+      "09:27"
+     ],
+     [
+      "40K",
+      "2:48:16",
+      "09:48"
+     ],
+     [
+      "終點",
+      "2:57:30",
+      "09:58"
+     ]
+    ],
+    "gels": [
+     [
+      35,
+      8.3,
+      "07:35"
+     ],
+     [
+      55,
+      13.1,
+      "07:55"
+     ],
+     [
+      75,
+      17.8,
+      "08:15"
+     ],
+     [
+      95,
+      22.6,
+      "08:35"
+     ],
+     [
+      115,
+      27.3,
+      "08:55"
+     ],
+     [
+      135,
+      32.1,
+      "09:15"
+     ],
+     [
+      155,
+      36.8,
+      "09:35"
+     ]
+    ],
+    "gelNote": "能量膠：第 35 分鐘第一包，之後約每 20 分鐘一包（每小時 60–90 g 碳水）",
+    "tips": [
+     "補水：每小時約 500–650 ml，每個補給站喝幾口，不要喝到體重比賽前還重",
+     "鈉：每小時約 450 mg（運動飲料、鹽錠、含鈉能量膠）",
+     "天氣熱（>25°C）或濕度高：每公里放慢 10–20 秒、多補水，別硬追目標",
+     "不要在比賽日嘗試新鞋、新衣、新補給；凡士林或防磨膏先擦好",
+     "頭暈、胸悶、抽筋到無法跑：立即減速或停下，找醫護站",
+     "賽後 4 小時：每小時碳水 63–76 g＋蛋白質 19 g；喝回流失體重的 125–150%"
+    ],
+    "night": [
+     "前一晚：準備號碼布、晶片、衣物、能量膠、別針，設好兩個鬧鐘",
+     "前 36–48 小時：肝醣超補，每天碳水 630–756 g"
+    ],
+    "needKg": false
+   },
+   "fuel": {
+    "h": 2.9583333333333335,
+    "lo": 60,
+    "hi": 90,
+    "totLo": 177.5,
+    "totHi": 266.25,
+    "gLo": 7,
+    "gHi": 11,
+    "gap": 15,
+    "ml": [
+     500,
+     650
+    ],
+    "na": 450,
+    "load": [
+     630,
+     756
+    ]
+   },
+   "hr": {
+    "tan": 181.4,
+    "fox": 182,
+    "zones": [
+     [
+      "Z1",
+      117,
+      130,
+      0.5,
+      0.6
+     ],
+     [
+      "Z2",
+      130,
+      143,
+      0.6,
+      0.7
+     ],
+     [
+      "Z3",
+      143,
+      156,
+      0.7,
+      0.8
+     ],
+     [
+      "Z4",
+      156,
+      168,
+      0.8,
+      0.9
+     ],
+     [
+      "Z5",
+      168,
+      181,
+      0.9,
+      1
+     ]
+    ],
+    "p130": 60.278207109737245,
+    "karvonen": true
+   },
+   "std100": 122.72093999999998,
+   "ageGrade": 69.13855774647887,
+   "predictedMin": 165.60717599723708,
+   "suggestGroup": [
+    "S",
+    "2:55–3:00",
+    175,
+    180
+   ],
+   "verdict": [
+    "ok",
+    "目標比你現在推算的能力還保守，可以考慮往上一組。"
+   ],
+   "2026-12-19": {
+    "weekIndex": 20,
+    "warnings": [
+     "離比賽只剩 1 週左右，課表從 W20 接著跑；前面的週次可以參考，不用回頭補。",
+     "目前每週跑量偏低，S 組的課表大約需要每週 60K 以上的基礎。可以考慮先選慢一組，練幾週再調整。",
+     "S 組的跑量較大，每週 4 天以下比較難完成，建議至少 5 天。"
+    ],
+    "todayItems": {
+     "n": 20,
+     "items": [
+      "週五或週六"
+     ]
+    }
+   },
+   "2026-12-20": {
+    "weekIndex": 20,
+    "warnings": [
+     "離比賽只剩 1 週左右，課表從 W20 接著跑；前面的週次可以參考，不用回頭補。",
+     "目前每週跑量偏低，S 組的課表大約需要每週 60K 以上的基礎。可以考慮先選慢一組，練幾週再調整。",
+     "S 組的跑量較大，每週 4 天以下比較難完成，建議至少 5 天。"
+    ],
+    "todayItems": {
+     "n": 20,
+     "items": [
+      "週末"
+     ]
+    }
+   },
+   "2027-01-20": {
+    "weekIndex": 25,
+    "warnings": [
+     "目前每週跑量偏低，S 組的課表大約需要每週 60K 以上的基礎。可以考慮先選慢一組，練幾週再調整。",
+     "S 組的跑量較大，每週 4 天以下比較難完成，建議至少 5 天。"
+    ],
+    "todayItems": null
+   }
+  },
+  "fmI52F": {
+   "2026-07-20": {
+    "weekIndex": -1,
+    "warnings": [
+     "只保留週二、週四和週末三堂重點課。長跑前後請確實休息，不要把省略的課擠到同一天補。"
+    ],
+    "todayItems": null
+   },
+   "2026-10-03": {
+    "weekIndex": 9,
+    "warnings": [
+     "離比賽只剩 12 週左右，課表從 W9 接著跑；前面的週次可以參考，不用回頭補。",
+     "只保留週二、週四和週末三堂重點課。長跑前後請確實休息，不要把省略的課擠到同一天補。"
+    ],
+    "todayItems": {
+     "n": 9,
+     "items": [
+      "週五或週六"
+     ]
+    }
+   },
+   "targetMin": 282.5,
+   "goalPace": 401.7063633131888,
+   "raceDayPlan": {
+    "timeline": [
+     [
+      "起跑前 4 小時",
+      "起床",
+      "喝一杯水，上廁所，確認天氣與交通"
+     ],
+     [
+      "起跑前 3 小時",
+      "比賽早餐",
+      "碳水 116–174 g、水 290–406 ml；選熟悉、低纖低脂的食物"
+     ],
+     [
+      "起跑前 90 分",
+      "咖啡因（選用）",
+      "174–348 mg，起跑前 30–90 分鐘；練習時試過才用"
+     ],
+     [
+      "起跑前 60 分",
+      "抵達會場",
+      "寄物、上廁所、別號碼布與晶片；小口喝水 150–250 ml"
+     ],
+     [
+      "起跑前 25 分",
+      "熱身",
+      "快走或慢跑 5–10 分鐘＋動態伸展，保留體力"
+     ],
+     [
+      "起跑前 15 分",
+      "進起跑區",
+      "按目標成績站位；可含一小口能量膠或運動飲料"
+     ],
+     [
+      "起跑",
+      "起跑",
+      "前 5K 比目標配速慢 5–10 秒/km，之後穩定在 6:42/km"
+     ]
+    ],
+    "splits": [
+     [
+      "5K",
+      "0:33:29",
+      null
+     ],
+     [
+      "10K",
+      "1:06:57",
+      null
+     ],
+     [
+      "15K",
+      "1:40:26",
+      null
+     ],
+     [
+      "半程",
+      "2:21:15",
+      null
+     ],
+     [
+      "25K",
+      "2:47:23",
+      null
+     ],
+     [
+      "30K",
+      "3:20:51",
+      null
+     ],
+     [
+      "35K",
+      "3:54:20",
+      null
+     ],
+     [
+      "40K",
+      "4:27:48",
+      null
+     ],
+     [
+      "終點",
+      "4:42:30",
+      null
+     ]
+    ],
+    "gels": [
+     [
+      35,
+      5.2,
+      null
+     ],
+     [
+      55,
+      8.2,
+      null
+     ],
+     [
+      75,
+      11.2,
+      null
+     ],
+     [
+      95,
+      14.2,
+      null
+     ],
+     [
+      115,
+      17.2,
+      null
+     ],
+     [
+      135,
+      20.2,
+      null
+     ],
+     [
+      155,
+      23.2,
+      null
+     ],
+     [
+      175,
+      26.1,
+      null
+     ],
+     [
+      195,
+      29.1,
+      null
+     ],
+     [
+      215,
+      32.1,
+      null
+     ],
+     [
+      235,
+      35.1,
+      null
+     ],
+     [
+      255,
+      38.1,
+      null
+     ]
+    ],
+    "gelNote": "能量膠：第 35 分鐘第一包，之後約每 20 分鐘一包（每小時 60–90 g 碳水）",
+    "tips": [
+     "補水：每小時約 500–650 ml，每個補給站喝幾口，不要喝到體重比賽前還重",
+     "鈉：每小時約 450 mg（運動飲料、鹽錠、含鈉能量膠）",
+     "天氣熱（>25°C）或濕度高：每公里放慢 10–20 秒、多補水，別硬追目標",
+     "不要在比賽日嘗試新鞋、新衣、新補給；凡士林或防磨膏先擦好",
+     "頭暈、胸悶、抽筋到無法跑：立即減速或停下，找醫護站",
+     "賽後 4 小時：每小時碳水 58–70 g＋蛋白質 17 g；喝回流失體重的 125–150%"
+    ],
+    "night": [
+     "前一晚：準備號碼布、晶片、衣物、能量膠、別針，設好兩個鬧鐘",
+     "前 36–48 小時：肝醣超補，每天碳水 580–696 g"
+    ],
+    "needKg": false
+   },
+   "fuel": {
+    "h": 4.708333333333333,
+    "lo": 60,
+    "hi": 90,
+    "totLo": 282.5,
+    "totHi": 423.75,
+    "gLo": 11,
+    "gHi": 17,
+    "gap": 15,
+    "ml": [
+     500,
+     650
+    ],
+    "na": 450,
+    "load": [
+     580,
+     696
+    ]
+   },
+   "hr": {
+    "tan": 171.6,
+    "fox": 168,
+    "zones": [
+     [
+      "Z1",
+      116,
+      127,
+      0.5,
+      0.6
+     ],
+     [
+      "Z2",
+      127,
+      138,
+      0.6,
+      0.7
+     ],
+     [
+      "Z3",
+      138,
+      149,
+      0.7,
+      0.8
+     ],
+     [
+      "Z4",
+      149,
+      160,
+      0.8,
+      0.9
+     ],
+     [
+      "Z5",
+      160,
+      172,
+      0.9,
+      1
+     ]
+    ],
+    "p130": 62.72401433691756,
+    "karvonen": true
+   },
+   "std100": 148.149,
+   "ageGrade": 52.44212389380532,
+   "predictedMin": 223.10966766294442,
+   "suggestGroup": [
+    "E",
+    "3:45–3:50",
+    225,
+    230
+   ],
+   "verdict": [
+    "ok",
+    "目標比你現在推算的能力還保守，可以考慮往上一組。"
+   ],
+   "2026-12-19": {
+    "weekIndex": 20,
+    "warnings": [
+     "離比賽只剩 1 週左右，課表從 W20 接著跑；前面的週次可以參考，不用回頭補。",
+     "只保留週二、週四和週末三堂重點課。長跑前後請確實休息，不要把省略的課擠到同一天補。"
+    ],
+    "todayItems": {
+     "n": 20,
+     "items": [
+      "週五或週六"
+     ]
+    }
+   },
+   "2026-12-20": {
+    "weekIndex": 20,
+    "warnings": [
+     "離比賽只剩 1 週左右，課表從 W20 接著跑；前面的週次可以參考，不用回頭補。",
+     "只保留週二、週四和週末三堂重點課。長跑前後請確實休息，不要把省略的課擠到同一天補。"
+    ],
+    "todayItems": {
+     "n": 20,
+     "items": [
+      "週末"
+     ]
+    }
+   },
+   "2027-01-20": {
+    "weekIndex": 25,
+    "warnings": [
+     "只保留週二、週四和週末三堂重點課。長跑前後請確實休息，不要把省略的課擠到同一天補。"
+    ],
+    "todayItems": null
+   }
+  },
+  "hmC45M": {
+   "2026-07-20": {
+    "weekIndex": -1,
+    "warnings": [],
+    "todayItems": null
+   },
+   "2026-10-03": {
+    "weekIndex": 9,
+    "warnings": [
+     "離比賽只剩 12 週左右，課表從 W9 接著跑；前面的週次可以參考，不用回頭補。"
+    ],
+    "todayItems": {
+     "n": 9,
+     "items": [
+      "週五或週六"
+     ]
+    }
+   },
+   "targetMin": 107.5,
+   "goalPace": 305.72342694632067,
+   "raceDayPlan": {
+    "timeline": [
+     [
+      "02:30",
+      "起床",
+      "喝一杯水，上廁所，確認天氣與交通"
+     ],
+     [
+      "03:30",
+      "比賽早餐",
+      "碳水 124–186 g、水 310–434 ml；選熟悉、低纖低脂的食物"
+     ],
+     [
+      "05:00",
+      "咖啡因（選用）",
+      "186–372 mg，起跑前 30–90 分鐘；練習時試過才用"
+     ],
+     [
+      "05:30",
+      "抵達會場",
+      "寄物、上廁所、別號碼布與晶片；小口喝水 150–250 ml"
+     ],
+     [
+      "06:05",
+      "熱身",
+      "快走或慢跑 5–10 分鐘＋動態伸展，保留體力"
+     ],
+     [
+      "06:15",
+      "進起跑區",
+      "按目標成績站位；可含一小口能量膠或運動飲料"
+     ],
+     [
+      "06:30",
+      "起跑",
+      "前 5K 比目標配速慢 5–10 秒/km，之後穩定在 5:06/km"
+     ]
+    ],
+    "splits": [
+     [
+      "5K",
+      "0:25:29",
+      "06:55"
+     ],
+     [
+      "10K",
+      "0:50:57",
+      "07:21"
+     ],
+     [
+      "15K",
+      "1:16:26",
+      "07:46"
+     ],
+     [
+      "20K",
+      "1:41:54",
+      "08:12"
+     ],
+     [
+      "半程",
+      "1:47:30",
+      "08:18"
+     ]
+    ],
+    "gels": [
+     [
+      35,
+      6.9,
+      "07:05"
+     ],
+     [
+      65,
+      12.8,
+      "07:35"
+     ]
+    ],
+    "gelNote": "能量膠：第 35 分鐘第一包，之後約每 30 分鐘一包（每小時 30–60 g 碳水）",
+    "tips": [
+     "補水：每小時約 500–650 ml，每個補給站喝幾口，不要喝到體重比賽前還重",
+     "鈉：每小時約 450 mg（運動飲料、鹽錠、含鈉能量膠）",
+     "天氣熱（>25°C）或濕度高：每公里放慢 10–20 秒、多補水，別硬追目標",
+     "不要在比賽日嘗試新鞋、新衣、新補給；凡士林或防磨膏先擦好",
+     "頭暈、胸悶、抽筋到無法跑：立即減速或停下，找醫護站",
+     "賽後 4 小時：每小時碳水 62–74 g＋蛋白質 19 g；喝回流失體重的 125–150%"
+    ],
+    "night": [
+     "前一晚：準備號碼布、晶片、衣物、能量膠、別針，設好兩個鬧鐘",
+     "前 24–36 小時：輕度超補，每天碳水 434–620 g"
+    ],
+    "needKg": false
+   },
+   "fuel": {
+    "h": 1.7916666666666667,
+    "lo": 30,
+    "hi": 60,
+    "totLo": 53.75,
+    "totHi": 107.5,
+    "gLo": 2,
+    "gHi": 4,
+    "gap": 25,
+    "ml": [
+     500,
+     650
+    ],
+    "na": 450,
+    "load": [
+     434,
+     620
+    ]
+   },
+   "hr": {
+    "tan": 176.5,
+    "fox": 175,
+    "zones": [
+     [
+      "Z1",
+      88,
+      106,
+      0.5,
+      0.6
+     ],
+     [
+      "Z2",
+      106,
+      124,
+      0.6,
+      0.7
+     ],
+     [
+      "Z3",
+      124,
+      141,
+      0.7,
+      0.8
+     ],
+     [
+      "Z4",
+      141,
+      159,
+      0.8,
+      0.9
+     ],
+     [
+      "Z5",
+      159,
+      177,
+      0.9,
+      1
+     ]
+    ],
+    "p130": 73.65439093484419,
+    "karvonen": false
+   },
+   "std100": 128.89485,
+   "ageGrade": 119.90218604651162,
+   "predictedMin": 107.01054943182338,
+   "suggestGroup": [
+    "C",
+    "1:50",
+    105,
+    110
+   ],
+   "verdict": [
+    "ok",
+    "目標比你現在推算的能力還保守，可以考慮往上一組。"
+   ],
+   "2026-12-19": {
+    "weekIndex": 20,
+    "warnings": [
+     "離比賽只剩 1 週左右，課表從 W20 接著跑；前面的週次可以參考，不用回頭補。"
+    ],
+    "todayItems": {
+     "n": 20,
+     "items": []
+    }
+   },
+   "2026-12-20": {
+    "weekIndex": 20,
+    "warnings": [
+     "離比賽只剩 1 週左右，課表從 W20 接著跑；前面的週次可以參考，不用回頭補。"
+    ],
+    "todayItems": {
+     "n": 20,
+     "items": [
+      "週末"
+     ]
+    }
+   },
+   "2027-01-20": {
+    "weekIndex": 25,
+    "warnings": [],
+    "todayItems": null
+   }
+  },
+  "hmA38F": {
+   "2026-07-20": {
+    "weekIndex": -1,
+    "warnings": [
+     "目前每週跑量偏低，A 組的課表大約需要每週 40K 以上的基礎。可以考慮先選慢一組，練幾週再調整。"
+    ],
+    "todayItems": null
+   },
+   "2026-10-03": {
+    "weekIndex": 9,
+    "warnings": [
+     "離比賽只剩 12 週左右，課表從 W9 接著跑；前面的週次可以參考，不用回頭補。",
+     "目前每週跑量偏低，A 組的課表大約需要每週 40K 以上的基礎。可以考慮先選慢一組，練幾週再調整。"
+    ],
+    "todayItems": {
+     "n": 9,
+     "items": [
+      "週五或週六"
+     ]
+    }
+   },
+   "targetMin": 87.5,
+   "goalPace": 248.84464984002844,
+   "raceDayPlan": {
+    "timeline": [
+     [
+      "03:00",
+      "起床",
+      "喝一杯水，上廁所，確認天氣與交通"
+     ],
+     [
+      "04:00",
+      "比賽早餐",
+      "碳水 100–150 g、水 250–350 ml；選熟悉、低纖低脂的食物"
+     ],
+     [
+      "05:30",
+      "咖啡因（選用）",
+      "150–300 mg，起跑前 30–90 分鐘；練習時試過才用"
+     ],
+     [
+      "06:00",
+      "抵達會場",
+      "寄物、上廁所、別號碼布與晶片；小口喝水 150–250 ml"
+     ],
+     [
+      "06:35",
+      "熱身",
+      "慢跑 10 分鐘＋動態伸展＋3–4 趟加速跑"
+     ],
+     [
+      "06:45",
+      "進起跑區",
+      "按目標成績站位；可含一小口能量膠或運動飲料"
+     ],
+     [
+      "07:00",
+      "起跑",
+      "前 5K 比目標配速慢 5–10 秒/km，之後穩定在 4:09/km"
+     ]
+    ],
+    "splits": [
+     [
+      "5K",
+      "0:20:44",
+      "07:21"
+     ],
+     [
+      "10K",
+      "0:41:28",
+      "07:41"
+     ],
+     [
+      "15K",
+      "1:02:13",
+      "08:02"
+     ],
+     [
+      "20K",
+      "1:22:57",
+      "08:23"
+     ],
+     [
+      "半程",
+      "1:27:30",
+      "08:28"
+     ]
+    ],
+    "gels": [
+     [
+      35,
+      8.4,
+      "07:35"
+     ],
+     [
+      65,
+      15.7,
+      "08:05"
+     ]
+    ],
+    "gelNote": "能量膠：第 35 分鐘第一包，之後約每 30 分鐘一包（每小時 30–60 g 碳水）",
+    "tips": [
+     "補水：每小時約 400–500 ml，每個補給站喝幾口，不要喝到體重比賽前還重",
+     "鈉：每小時約 300 mg（運動飲料、鹽錠、含鈉能量膠）",
+     "天氣熱（>25°C）或濕度高：每公里放慢 10–20 秒、多補水，別硬追目標",
+     "不要在比賽日嘗試新鞋、新衣、新補給；凡士林或防磨膏先擦好",
+     "頭暈、胸悶、抽筋到無法跑：立即減速或停下，找醫護站",
+     "賽後 4 小時：每小時碳水 50–60 g＋蛋白質 15 g；喝回流失體重的 125–150%"
+    ],
+    "night": [
+     "前一晚：準備號碼布、晶片、衣物、能量膠、別針，設好兩個鬧鐘",
+     "前 24–36 小時：輕度超補，每天碳水 350–500 g"
+    ],
+    "needKg": false
+   },
+   "fuel": {
+    "h": 1.4583333333333333,
+    "lo": 30,
+    "hi": 60,
+    "totLo": 43.75,
+    "totHi": 87.5,
+    "gLo": 2,
+    "gHi": 4,
+    "gap": 25,
+    "ml": [
+     400,
+     500
+    ],
+    "na": 300,
+    "load": [
+     350,
+     500
+    ]
+   },
+   "hr": {
+    "tan": 181.4,
+    "fox": 182,
+    "zones": [
+     [
+      "Z1",
+      118,
+      131,
+      0.5,
+      0.6
+     ],
+     [
+      "Z2",
+      131,
+      143,
+      0.6,
+      0.7
+     ],
+     [
+      "Z3",
+      143,
+      156,
+      0.7,
+      0.8
+     ],
+     [
+      "Z4",
+      156,
+      169,
+      0.8,
+      0.9
+     ],
+     [
+      "Z5",
+      169,
+      181,
+      0.9,
+      1
+     ]
+    ],
+    "p130": 59.33544303797468,
+    "karvonen": true
+   },
+   "std100": 133.41906,
+   "ageGrade": 152.4789257142857,
+   "predictedMin": 88.25612324274093,
+   "suggestGroup": [
+    "A",
+    "1:30",
+    85,
+    90
+   ],
+   "verdict": [
+    "ok",
+    "目標和現在的能力相近，照課表完整練一季，有機會達成。"
+   ],
+   "2026-12-19": {
+    "weekIndex": 20,
+    "warnings": [
+     "離比賽只剩 1 週左右，課表從 W20 接著跑；前面的週次可以參考，不用回頭補。",
+     "目前每週跑量偏低，A 組的課表大約需要每週 40K 以上的基礎。可以考慮先選慢一組，練幾週再調整。"
+    ],
+    "todayItems": {
+     "n": 20,
+     "items": []
+    }
+   },
+   "2026-12-20": {
+    "weekIndex": 20,
+    "warnings": [
+     "離比賽只剩 1 週左右，課表從 W20 接著跑；前面的週次可以參考，不用回頭補。",
+     "目前每週跑量偏低，A 組的課表大約需要每週 40K 以上的基礎。可以考慮先選慢一組，練幾週再調整。"
+    ],
+    "todayItems": {
+     "n": 20,
+     "items": [
+      "週末"
+     ]
+    }
+   },
+   "2027-01-20": {
+    "weekIndex": 25,
+    "warnings": [
+     "目前每週跑量偏低，A 組的課表大約需要每週 40K 以上的基礎。可以考慮先選慢一組，練幾週再調整。"
+    ],
+    "todayItems": null
+   }
+  },
+  "hmE52M": {
+   "2026-07-20": {
+    "weekIndex": -1,
+    "warnings": [
+     "目前每週跑量偏低，E 組的課表大約需要每週 25K 以上的基礎。可以考慮先選慢一組，練幾週再調整。",
+     "只保留週二、週四和週末三堂重點課。長跑前後請確實休息，不要把省略的課擠到同一天補。"
+    ],
+    "todayItems": null
+   },
+   "2026-10-03": {
+    "weekIndex": 9,
+    "warnings": [
+     "離比賽只剩 12 週左右，課表從 W9 接著跑；前面的週次可以參考，不用回頭補。",
+     "目前每週跑量偏低，E 組的課表大約需要每週 25K 以上的基礎。可以考慮先選慢一組，練幾週再調整。",
+     "只保留週二、週四和週末三堂重點課。長跑前後請確實休息，不要把省略的課擠到同一天補。"
+    ],
+    "todayItems": {
+     "n": 9,
+     "items": [
+      "週五或週六"
+     ]
+    }
+   },
+   "targetMin": 127.5,
+   "goalPace": 362.6022040526129,
+   "raceDayPlan": {
+    "timeline": [
+     [
+      "起跑前 4 小時",
+      "起床",
+      "喝一杯水，上廁所，確認天氣與交通"
+     ],
+     [
+      "起跑前 3 小時",
+      "比賽早餐",
+      "碳水 150–225 g、水 375–525 ml；選熟悉、低纖低脂的食物"
+     ],
+     [
+      "起跑前 90 分",
+      "咖啡因（選用）",
+      "225–450 mg，起跑前 30–90 分鐘；練習時試過才用"
+     ],
+     [
+      "起跑前 60 分",
+      "抵達會場",
+      "寄物、上廁所、別號碼布與晶片；小口喝水 150–250 ml"
+     ],
+     [
+      "起跑前 25 分",
+      "熱身",
+      "快走或慢跑 5–10 分鐘＋動態伸展，保留體力"
+     ],
+     [
+      "起跑前 15 分",
+      "進起跑區",
+      "按目標成績站位；可含一小口能量膠或運動飲料"
+     ],
+     [
+      "起跑",
+      "起跑",
+      "前 5K 比目標配速慢 5–10 秒/km，之後穩定在 6:03/km"
+     ]
+    ],
+    "splits": [
+     [
+      "5K",
+      "0:30:13",
+      null
+     ],
+     [
+      "10K",
+      "1:00:26",
+      null
+     ],
+     [
+      "15K",
+      "1:30:39",
+      null
+     ],
+     [
+      "20K",
+      "2:00:52",
+      null
+     ],
+     [
+      "半程",
+      "2:07:30",
+      null
+     ]
+    ],
+    "gels": [
+     [
+      35,
+      5.8,
+      null
+     ],
+     [
+      65,
+      10.8,
+      null
+     ],
+     [
+      95,
+      15.7,
+      null
+     ]
+    ],
+    "gelNote": "能量膠：第 35 分鐘第一包，之後約每 30 分鐘一包（每小時 30–60 g 碳水）",
+    "tips": [
+     "補水：每小時約 650–800 ml，每個補給站喝幾口，不要喝到體重比賽前還重",
+     "鈉：每小時約 600 mg（運動飲料、鹽錠、含鈉能量膠）",
+     "天氣熱（>25°C）或濕度高：每公里放慢 10–20 秒、多補水，別硬追目標",
+     "不要在比賽日嘗試新鞋、新衣、新補給；凡士林或防磨膏先擦好",
+     "頭暈、胸悶、抽筋到無法跑：立即減速或停下，找醫護站",
+     "賽後 4 小時：每小時碳水 75–90 g＋蛋白質 23 g；喝回流失體重的 125–150%"
+    ],
+    "night": [
+     "前一晚：準備號碼布、晶片、衣物、能量膠、別針，設好兩個鬧鐘",
+     "前 24–36 小時：輕度超補，每天碳水 525–750 g"
+    ],
+    "needKg": false
+   },
+   "fuel": {
+    "h": 2.125,
+    "lo": 30,
+    "hi": 60,
+    "totLo": 63.75,
+    "totHi": 127.5,
+    "gLo": 3,
+    "gHi": 5,
+    "gap": 25,
+    "ml": [
+     650,
+     800
+    ],
+    "na": 600,
+    "load": [
+     525,
+     750
+    ]
+   },
+   "hr": {
+    "tan": 171.6,
+    "fox": 168,
+    "zones": [
+     [
+      "Z1",
+      86,
+      103,
+      0.5,
+      0.6
+     ],
+     [
+      "Z2",
+      103,
+      120,
+      0.6,
+      0.7
+     ],
+     [
+      "Z3",
+      120,
+      137,
+      0.7,
+      0.8
+     ],
+     [
+      "Z4",
+      137,
+      154,
+      0.8,
+      0.9
+     ],
+     [
+      "Z5",
+      154,
+      172,
+      0.9,
+      1
+     ]
+    ],
+    "p130": 75.75757575757575,
+    "karvonen": false
+   },
+   "std100": 137.2437,
+   "ageGrade": 107.64211764705883,
+   "predictedMin": 107.01054943182338,
+   "suggestGroup": [
+    "C",
+    "1:50",
+    105,
+    110
+   ],
+   "verdict": [
+    "ok",
+    "目標比你現在推算的能力還保守，可以考慮往上一組。"
+   ],
+   "2026-12-19": {
+    "weekIndex": 20,
+    "warnings": [
+     "離比賽只剩 1 週左右，課表從 W20 接著跑；前面的週次可以參考，不用回頭補。",
+     "目前每週跑量偏低，E 組的課表大約需要每週 25K 以上的基礎。可以考慮先選慢一組，練幾週再調整。",
+     "只保留週二、週四和週末三堂重點課。長跑前後請確實休息，不要把省略的課擠到同一天補。"
+    ],
+    "todayItems": {
+     "n": 20,
+     "items": []
+    }
+   },
+   "2026-12-20": {
+    "weekIndex": 20,
+    "warnings": [
+     "離比賽只剩 1 週左右，課表從 W20 接著跑；前面的週次可以參考，不用回頭補。",
+     "目前每週跑量偏低，E 組的課表大約需要每週 25K 以上的基礎。可以考慮先選慢一組，練幾週再調整。",
+     "只保留週二、週四和週末三堂重點課。長跑前後請確實休息，不要把省略的課擠到同一天補。"
+    ],
+    "todayItems": {
+     "n": 20,
+     "items": [
+      "週末"
+     ]
+    }
+   },
+   "2027-01-20": {
+    "weekIndex": 25,
+    "warnings": [
+     "目前每週跑量偏低，E 組的課表大約需要每週 25K 以上的基礎。可以考慮先選慢一組，練幾週再調整。",
+     "只保留週二、週四和週末三堂重點課。長跑前後請確實休息，不要把省略的課擠到同一天補。"
+    ],
+    "todayItems": null
+   }
+  }
+ },
+ "personal": {
+  "2027-03-21": {
+   "2026-10-03": {
+    "weekIndex": -4,
+    "w1": "2026-11-02",
+    "todayItems": null
+   },
+   "2026-11-02": {
+    "weekIndex": 1,
+    "w1": "2026-11-02",
+    "todayItems": {
+     "n": 1,
+     "items": [
+      "週一"
+     ]
+    }
+   },
+   "2027-02-13": {
+    "weekIndex": 15,
+    "w1": "2026-11-02",
+    "todayItems": {
+     "n": 15,
+     "items": [
+      "週五或週六"
+     ]
+    }
+   },
+   "2027-03-21": {
+    "weekIndex": 20,
+    "w1": "2026-11-02",
+    "todayItems": {
+     "n": 20,
+     "items": [
+      "週末"
+     ]
+    }
+   },
+   "copyAll": "60d08fb149ae9bb1",
+   "ics": "40d8611d64521ef4"
+  },
+  "2027-02-13": {
+   "2026-10-03": {
+    "weekIndex": 1,
+    "w1": "2026-09-28",
+    "todayItems": {
+     "n": 1,
+     "items": [
+      "週五或週六"
+     ]
+    }
+   },
+   "2026-11-02": {
+    "weekIndex": 6,
+    "w1": "2026-09-28",
+    "todayItems": {
+     "n": 6,
+     "items": [
+      "週一"
+     ]
+    }
+   },
+   "2027-02-13": {
+    "weekIndex": 20,
+    "w1": "2026-09-28",
+    "todayItems": {
+     "n": 20,
+     "items": [
+      "週五或週六",
+      "週末"
+     ]
+    }
+   },
+   "2027-03-21": {
+    "weekIndex": 25,
+    "w1": "2026-09-28",
+    "todayItems": null
+   },
+   "copyAll": "26aed4f0fc809419",
+   "ics": "9418e656d8c3dca8"
+  },
+  "2026-11-15": {
+   "2026-10-03": {
+    "weekIndex": 14,
+    "w1": "2026-06-29",
+    "todayItems": {
+     "n": 14,
+     "items": [
+      "週五或週六"
+     ]
+    }
+   },
+   "2026-11-02": {
+    "weekIndex": 19,
+    "w1": "2026-06-29",
+    "todayItems": {
+     "n": 19,
+     "items": [
+      "週一"
+     ]
+    }
+   },
+   "2027-02-13": {
+    "weekIndex": 33,
+    "w1": "2026-06-29",
+    "todayItems": null
+   },
+   "2027-03-21": {
+    "weekIndex": 38,
+    "w1": "2026-06-29",
+    "todayItems": null
+   },
+   "copyAll": "0690498209e9c032",
+   "ics": "2c74c3f1420053ed"
+  }
+ },
+ "seasonStat": {
+  "log": [
+   "2026-12-20|2|0",
+   "2026-12-20|2|1",
+   "2026-12-20|2|3",
+   "2026-12-20|3|0",
+   "2026-12-20|3|1",
+   "2026-12-20|3|3",
+   "2026-12-20|4|0",
+   "2026-12-20|4|1",
+   "2026-12-20|4|3",
+   "2026-12-20|5|0",
+   "2026-12-20|5|1",
+   "2026-12-20|5|3",
+   "2026-12-20|6|0",
+   "2026-12-20|6|1",
+   "2026-12-20|6|3",
+   "2026-12-20|7|0",
+   "2026-12-20|7|1",
+   "2026-12-20|7|3",
+   "2026-12-20|8|0",
+   "2026-12-20|8|1",
+   "2026-12-20|8|3",
+   "2026-12-20|9|0",
+   "2026-12-20|9|1",
+   "2026-12-20|9|3"
+  ],
+  "stat": {
+   "req": 54,
+   "done": 24,
+   "total": 24,
+   "all": 122,
+   "rate": 44,
+   "streak": 0,
+   "left": 98
+  }
+ }
+}

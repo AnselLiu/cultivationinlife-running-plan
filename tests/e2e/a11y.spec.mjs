@@ -3,7 +3,7 @@ import { test, expect } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
 import { login, apiAs, acceptPrivacyIfAsked, plus } from './helpers.mjs';
 
-const PAGES = ['#/', '#/plan', '#/run', '#/calendar', '#/challenge', '#/me', '#/me/profile', '#/me/notify', '#/me/reg', '#/map', '#/tickets', '#/notifications'];
+const PAGES = ['#/', '#/plan', '#/plan/race', '#/plan/setup', '#/plan/season', '#/plan/guide', '#/run', '#/calendar', '#/challenge', '#/me', '#/me/profile', '#/me/notify', '#/me/reg', '#/map', '#/tickets', '#/notifications'];
 test('登入頁沒有嚴重的無障礙問題', async ({ page }) => {
   await page.goto('/');
   await page.waitForSelector('.welcome');

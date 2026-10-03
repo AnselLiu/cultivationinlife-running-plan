@@ -480,7 +480,13 @@ function bindEventsPanel() {
 
 
 // ---------- 系統設定（理事長、行政人員）----------
-const FEATURE_NAME = { gps: '跑步記錄（計時＋GPS）', studio: '拍照分享', health: 'Apple 健康匯入', file: 'GPX／TCX 檔匯入', coach: '課表教練', party: '餐敘活動（春酒、慶功宴、尾牙）', cams: '附近即時影像（政府公開攝影機）', rest: '跑者休息站（飲水、廁所、淋浴置物、補給）' };
+const FEATURE_NAME = { gps: '跑步記錄（計時＋GPS）', studio: '拍照分享', health: 'Apple 健康匯入', file: 'GPX／TCX 檔匯入', coach: '課表教練（全季、賽事準備、配速與用語）',
+  plan_cycle: '個人課表週期（跟自己的比賽排 20 週）', plan_export: '分享與匯出課表（複製、PDF、行事曆）', party: '餐敘活動（春酒、慶功宴、尾牙）', cams: '附近即時影像（政府公開攝影機）',
+  rest: '跑者休息站（飲水、廁所、淋浴置物、補給）' };
+// 功能開關的說明：關掉會影響什麼（課表教練與教練身分容易搞混，寫清楚）
+const FEATURE_HELP = { coach: '關閉後所有人都看不到這些頁面；不影響每週課表與訓練紀錄',
+  plan_cycle: '關閉後所有人都照協會賽季排課；已選的週期會保留，打開後恢復',
+  plan_export: '教練已同意分享，預設開啟；關閉後所有人都看不到分享按鈕' };
 // 預設關閉的功能（要明確打開才有）
 const FEATURE_OFF = new Set(['cams', 'rest']);
 function settingsPanel() {
@@ -502,6 +508,7 @@ function settingsPanel() {
       <label>企業說明（登入頁與「我的」會顯示）<input name="parent_note" maxlength="80" value="${esc(o.parent_note || '')}" placeholder="耕建築企業支持的跑團"></label>
       <label>入會表單連結<input name="join_form" type="url" value="${esc(o.join_form || '')}" placeholder="https://docs.google.com/forms/…"></label>
       <label>聯絡方式<input name="contact" maxlength="200" value="${esc(o.contact || '')}" placeholder="Email 或 LINE 官方帳號"></label>
+      <label>週四團練地點（課表的週四備註會顯示）<input name="thu_venue" maxlength="20" value="${esc(o.thu_venue || '')}" placeholder="例如：大佳河濱公園"></label>
       <label>個資保存期限（寫進隱私權政策的文字）<input name="retention" maxlength="200" value="${esc(o.retention || '')}"></label>
       <fieldset class="group"><legend>自動清理（每天 03:00 執行）</legend>
         <div class="grid3">
@@ -524,7 +531,7 @@ function settingsPanel() {
   <section class="card">
     <h3>功能開關</h3>
     <form id="featForm" class="toggles">
-      ${Object.entries(FEATURE_NAME).map(([k, v]) => `<label class="switch"><span>${v}</span><input type="checkbox" name="${k}" ${(FEATURE_OFF.has(k) ? f[k] === true : f[k] !== false) ? 'checked' : ''}><i></i></label>`).join('')}
+      ${Object.entries(FEATURE_NAME).map(([k, v]) => `<label class="switch"><span>${v}${FEATURE_HELP[k] ? `<span class="tiny" style="display:block">${FEATURE_HELP[k]}</span>` : ''}</span><input type="checkbox" name="${k}" ${(FEATURE_OFF.has(k) ? f[k] === true : f[k] !== false) ? 'checked' : ''}><i></i></label>`).join('')}
       <button class="btn sm">儲存功能開關</button>
     </form>
     <p class="tiny" style="margin:0">關掉後，跑友的畫面上就看不到這個功能；已存的資料不會刪除。</p>
@@ -698,7 +705,7 @@ function bindSettings() {
   const reload = async (msg) => { await refreshMe(); toast(msg); applyFeatures(); paintCountdown(); adminView('settings'); };
   const save = async (key, body, msg) => { try { await api(`/settings/${key}`, { method: 'POST', body }); await reload(msg); } catch (e) { toast(e.message); } };
   $('#orgForm').onsubmit = (e) => { e.preventDefault(); const f = e.target;
-    save('org', { name: f.name.value, short: f.short.value, join_form: f.join_form.value.trim(), contact: f.contact.value, retention: f.retention.value,
+    save('org', { name: f.name.value, short: f.short.value, join_form: f.join_form.value.trim(), contact: f.contact.value, retention: f.retention.value, thu_venue: f.thu_venue.value.trim(),
       parent: f.parent.value, parent_url: f.parent_url.value.trim(), parent_note: f.parent_note.value,
       event_data_years: Number(f.event_data_years.value), log_years: Number(f.log_years.value), audit_years: Number(f.audit_years.value) }, '已儲存協會資訊'); };
   $('#mfaToggle')?.addEventListener('change', async (e) => {
@@ -715,7 +722,8 @@ function bindSettings() {
     const preview = () => {
       const v = readSd(), now = nowTp(), wd = new Date(`${now.slice(0, 10)}T00:00:00Z`).getUTCDay();
       const sat = new Date(Date.parse(`${now.slice(0, 10)}T00:00:00Z`) + ((6 - wd + 7) % 7 || 7) * 864e5).toISOString().slice(0, 10);
-      const ev = { date: sat, gather_time: '07:00', kind: 'track' }, w = defaultWindow(ev, v, now);
+      // 預覽規則本身：拿範例活動 40 天前當「現在」，不會因為今天已經過了那個時間就顯示成立即開放（例如週六晚上設「活動前 7 天」）
+      const ev = { date: sat, gather_time: '07:00', kind: 'track' }, w = defaultWindow(ev, v, new Date(Date.parse(`${sat}T00:00:00Z`) - 40 * 864e5).toISOString().slice(0, 16));
       sdf.open_time.disabled = v.open_days == null; sdf.close_time.disabled = v.close_days == null;
       $('#sdPreview').textContent = `例：${tpText(`${sat}T07:00`)} 的團練 → ${w.start ? `${tpText(w.start)} 開放` : '建立後立即開放'}、${w.end ? `${tpText(w.end)} 截止` : '集合時截止'}${v.approval ? '，需要審核' : ''}`;
     };
