@@ -3430,6 +3430,7 @@ export default {
 "附近即時影像來源開關": "Nearby live cameras: source switch",
 "同步攝影機清單": "Synced camera list",
 "新增直播連結": "Added live stream link",
+"逐時天氣，可以左右捲動": "Hourly weather, scroll sideways",
 "刪除直播連結": "Deleted live stream link",
 "附近即時影像": "Nearby live cameras",
 "地點卡會列出 1.5 公里內的政府公開攝影機，畫面由本站轉送、不保存，跑友的 IP 不會送到影像來源。鏡頭清單每天清晨自動同步（水利署與水利處 04:00、公路局 05:00）。關掉來源後立即不再顯示，也不再連線。": "Spot cards list public government cameras within 1.5 km. Images are relayed by this site and never stored, and runners' IP addresses are not sent to the camera sources. Camera lists sync automatically every morning (Water Resources Agency and Taipei Hydraulic Engineering Office at 04:00, Highway Bureau at 05:00). Turning a source off hides it immediately and stops all connections to it.",
