@@ -14,6 +14,7 @@ import { BADGES, earned, weeksOf } from '../public/badges.js';
 import { CATS, isCat, MUTABLE } from '../public/notif-cats.js';
 import { tpNow, shiftDays, daysBetween, evStart, signupEnd, signupState, STATE_TEXT, tpText, SIGNUP_DEFAULTS, windowError, isStamp } from '../public/signup-window.js';
 import * as Cams from './cams.js';
+import { fold, b64bytes } from './ics.js';
 import { WorkerEntrypoint } from 'cloudflare:workers';
 import { Budget, invocationEnv, logBudget, settled, strictViolations, xfetch, planOf } from './budget.js';
 
@@ -134,9 +135,21 @@ async function limited(env, key, limit, windowSec) {
 
 // 稽核紀錄：特權操作一律記下（detail 只放摘要，不放個資原文）
 // 防竄改：每筆用 AUDIT_KEY（只有 Worker 知道）算 HMAC，改動任何欄位都驗得出來；刪除則由每日摘要鏈檢查
+// 匯入過的金鑰存在模組層級（key 是 secret 的 SHA-256，存的是不可匯出的 CryptoKey），不用每次 importKey
+const keyCache = new Map();
+async function cachedKey(tag, secret, make) {
+  const h = `${tag}:${await sha(secret)}`;
+  let p = keyCache.get(h);
+  if (!p) {
+    p = make().catch((e) => { keyCache.delete(h); throw e; });
+    keyCache.set(h, p);
+    if (keyCache.size > 16) keyCache.delete(keyCache.keys().next().value);
+  }
+  return p;
+}
 async function hmac(env, text) {
   if (!env.AUDIT_KEY) return null;
-  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(env.AUDIT_KEY), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const key = await cachedKey('hmac', env.AUDIT_KEY, () => crypto.subtle.importKey('raw', new TextEncoder().encode(env.AUDIT_KEY), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']));
   return [...new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(text)))].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 const auditFields = (r) => [r.id, r.at, r.actor_id, r.actor_name, r.actor_role, r.action, r.target_type, r.target_id, r.detail, r.ip_hash].map((v) => v ?? '').join('\u001f');
@@ -366,7 +379,7 @@ const RACE_FIELDS = {
 };
 async function raceKey(env) {
   if (!env.RACE_KEY) throw new Error('尚未設定 RACE_KEY');
-  return crypto.subtle.importKey('raw', WebAuthn.unb64u(env.RACE_KEY.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')), 'AES-GCM', false, ['encrypt', 'decrypt']);
+  return cachedKey('race', env.RACE_KEY, () => crypto.subtle.importKey('raw', WebAuthn.unb64u(env.RACE_KEY.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')), 'AES-GCM', false, ['encrypt', 'decrypt']));
 }
 // 格式 v1.<iv>.<密文>：把會員代碼當附加驗證資料（AAD），密文搬到別人名下就解不開；開頭的版本號留給日後換金鑰
 async function sealPrivate(env, obj, memberId) {
@@ -853,7 +866,8 @@ async function getWeather(env, lat, lng) {
 }
 
 // ---- 路由 ----
-async function api(req, env, path, method) {
+// 路由：寫成括號包住的函式運算式，V8 在載入模組時就先編譯（冷啟動的第一個 /api 請求從 13–22 ms 降到約 2 ms）
+const api = (async function api(req, env, path, method) {
   // 登入狀態（含我在各分團的身分）與系統設定同時查，一次往返就好
   const [member0, settingRows] = await Promise.all([currentMember(req, env), env.DB.prepare('SELECT key, value FROM settings').all().then((r) => r.results)]);
   let member = member0;
@@ -1379,7 +1393,6 @@ async function api(req, env, path, method) {
       WHERE date BETWEEN date('now', '-30 days') AND date('now', '+400 days') AND (team_id IS NULL OR team_id IN (SELECT team_id FROM team_members WHERE member_id = ? AND status = 'active'))
       ORDER BY date LIMIT 200`).bind(who.id).all()).results;
     const icsEsc = (t) => String(t || '').replace(/\\/g, '\\\\').replace(/\r\n?|\n/g, '\\n').replace(/[,;]/g, (c) => `\\${c}`);
-    const fold = (line) => { const out = []; let cur = ''; for (const ch of line) { if (new TextEncoder().encode(cur + ch).length > 73) { out.push(cur); cur = ` ${ch}`; } else cur += ch; } out.push(cur); return out.join('\r\n'); };
     const d8 = (d) => d.replace(/-/g, ''), t6 = (t) => `${t.replace(':', '')}00`;
     const origin = new URL(req.url).origin, stamp = new Date().toISOString().replace(/[-:]/g, '').slice(0, 15) + 'Z';
     const plus1 = (d) => new Date(Date.parse(`${d}T00:00:00Z`) + 864e5).toISOString().slice(0, 10);
@@ -1460,7 +1473,7 @@ async function api(req, env, path, method) {
     const r = await env.DB.prepare('SELECT icon FROM teams WHERE id = ?').bind(mic[1]).first();
     const m = r?.icon?.match(/^data:(image\/(?:webp|png|jpeg));base64,([A-Za-z0-9+/=]+)$/);
     if (!m) return fail(404, '沒有圖示');
-    return new Response(Uint8Array.from(atob(m[2]), (c) => c.charCodeAt(0)), { headers: { ...SEC_HEADERS,
+    return new Response(b64bytes(m[2]), { headers: { ...SEC_HEADERS,
       'content-type': m[1], 'cache-control': 'public, max-age=31536000, immutable' } });
   }
   if (mic && method === 'PUT') {
@@ -3649,7 +3662,7 @@ async function api(req, env, path, method) {
   }
 
   return fail(404, '沒有這個 API');
-}
+});
 
 // ---- 排程工作（wrangler.jsonc 的 cron：每小時整點）----
 // 時間一律用台北時間判斷；每項工作都有防重複的標記，重跑也不會重複通知
