@@ -320,7 +320,7 @@ function loginView() {
       <details ${cfg.googleLogin ? '' : 'open'}>
         <summary class="muted" style="cursor:pointer">用邀請碼加入</summary>
         <form id="joinForm" style="margin-top:12px">
-          <label>邀請碼<input name="code" required autocomplete="one-time-code" placeholder="LINE 群公告的代碼"></label>
+          <label>邀請碼<input name="code" required autocomplete="one-time-code" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="LINE 群公告的代碼"></label>
           <label>姓名<input name="name" required maxlength="20" autocomplete="name" placeholder="報名時顯示的名字"></label>
           <div class="grid2">
             <label>項目<select name="dist"><option value="fm">全馬</option><option value="hm">半馬</option></select></label>
@@ -2185,7 +2185,7 @@ async function meSecurity(googleMsg) {
     </section>
     ${me.role !== 'member' ? '' : `<details class="card tight"><summary class="tiny">系統初始設定（只限第一位理事長）</summary>
       <p class="tiny">幹部身分一律由理事長在後台指派。這裡只用在系統剛建立、還沒有理事長的時候。</p>
-      <form id="af" class="row" style="gap:8px"><input name="code" placeholder="初始設定碼" aria-label="初始設定碼" style="flex:1;min-width:140px" autocomplete="off"><button class="btn sm">設定</button></form></details>`}
+      <form id="af" class="row" style="gap:8px"><input name="code" placeholder="初始設定碼" autocapitalize="none" autocorrect="off" spellcheck="false" type="password" aria-label="初始設定碼" style="flex:1;min-width:140px" autocomplete="off"><button class="btn sm">設定</button></form></details>`}
     ${group('', [btnRow('logout', MI.out, '登出'), btnRow('logoutAll', MI.lock, '登出所有裝置', '手機掉了或懷疑被別人登入時')])}`;
   bindStepup();
   const loadPk = async () => {

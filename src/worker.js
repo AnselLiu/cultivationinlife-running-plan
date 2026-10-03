@@ -1214,7 +1214,8 @@ async function api(req, env, path, method) {
     if (await limited(env, `bootstrap:${await ipHash(req, env)}`, 5, 900)) return fail(429, '嘗試太多次，請 15 分鐘後再試');
     const code = str((await body()).code, 80);
     const hasChair = await env.DB.prepare("SELECT 1 FROM members WHERE role = 'chair' LIMIT 1").first();
-    if (hasChair || !env.CHAIR_CODE || code !== env.CHAIR_CODE) {
+    // 設定碼比對：兩邊都去掉前後空白與換行（用 wrangler secret put 設定時可能多了換行）
+    if (hasChair || !env.CHAIR_CODE || code !== env.CHAIR_CODE.trim()) {
       await audit(env, req, member, 'bootstrap.denied', 'member', member.id, hasChair ? '已有理事長' : '代碼錯誤');
       return fail(403, '幹部身分由理事長在後台指派');
     }
@@ -1230,7 +1231,7 @@ async function api(req, env, path, method) {
     const b = await body();
     const code = str(b.code, 80);
     // 邀請碼只能加入成為跑友；任何特權身分都要由理事長指派
-    if (!env.JOIN_CODE || code !== env.JOIN_CODE) {
+    if (!env.JOIN_CODE || code !== env.JOIN_CODE.trim()) {
       await audit(env, req, null, 'join.denied', null, null, '邀請碼錯誤');
       return fail(403, '邀請碼不正確');
     }
