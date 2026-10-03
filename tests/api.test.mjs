@@ -2,6 +2,7 @@
 // 需要：測試用伺服器（npm run test:ci 會自動啟動），帳號見 tests/seed.sql
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import * as P from '../public/plan.js';
 
 const BASE = process.env.BASE || 'http://localhost:8799';
 const cookies = {};
@@ -490,6 +491,156 @@ test('活動異動、跑完接續、團購到貨領取 QR、銀行對帳、會�
   assert.ok((await call('t_super', '/backups')).json.list.some((x) => x.key.includes('manual')));
 });
 
+test('課表設定 PUT /me/plan：只改項目與組別，不動暱稱、電話；身體資料不收', async () => {
+  await call('t_lead', '/me', { method: 'PUT', body: { name: '測試團長', dist: 'fm', grp: 'D', nickname: '團長', meal_pref: '素', phone: '0912345678', home_spot: null } });
+  const r = await call('t_lead', '/me/plan', { method: 'PUT', body: { dist: 'hm', grp: 'c' } });
+  assert.equal(r.status, 200);
+  assert.deepEqual([r.json.member.dist, r.json.member.grp], ['hm', 'C']);
+  const me = (await call('t_lead', '/me')).json.member;
+  assert.deepEqual([me.dist, me.grp, me.nickname, me.phone, me.meal_pref], ['hm', 'C', '團長', '0912345678', '素']);
+  assert.equal((await call('t_lead', '/me/plan', { method: 'PUT', body: { dist: 'hm', grp: 'S' } })).status, 400, '半馬沒有 S 組');
+  assert.equal((await call('t_lead', '/me/plan', { method: 'PUT', body: { dist: '10k', grp: 'A' } })).status, 400);
+  assert.equal((await call('t_lead', '/me/plan', { method: 'PUT', body: { grp: 'Z' } })).status, 400);
+  // PUT /me 只送部分欄位：其他欄位保留，半馬不會被改成全馬；年齡、體重、安靜心率一律不收
+  const p2 = await call('t_lead', '/me', { method: 'PUT', body: { age: 47, kg: 63.5, rest: 52 } });
+  assert.equal(p2.status, 200);
+  const me2 = await call('t_lead', '/me');
+  assert.deepEqual([me2.json.member.dist, me2.json.member.grp, me2.json.member.nickname, me2.json.member.phone], ['hm', 'C', '團長', '0912345678']);
+  assert.ok(!/"(age|kg|rest)"|63\.5/.test(me2.text), '身體資料不會存也不會回傳');
+  await call('t_lead', '/me/plan', { method: 'PUT', body: { dist: 'fm', grp: 'D' } });
+});
+
+test('照課表記錄：不填距離也能存；if_absent 不重複新增', async () => {
+  const wk = P.clubWeekOf(today) || 5;
+  const a = await call('t_lead', '/logs', { method: 'POST', body: { date: today, status: 'done', week_no: wk, plan_day: '週一', kind: 'easy', if_absent: true } });
+  assert.equal(a.status, 200);
+  assert.ok(!a.json.existed);
+  const b = await call('t_lead', '/logs', { method: 'POST', body: { date: today, status: 'done', week_no: wk, plan_day: '週一', if_absent: true } });
+  assert.deepEqual(b.json, { id: a.json.id, existed: true });
+  const logs = (await call('t_lead', `/logs?from=${today}&to=${today}`)).json.logs;
+  assert.equal(logs.filter((l) => l.plan_day === '週一' && l.week_no === wk).length, 1, '筆數不變');
+  const mine = logs.find((l) => l.id === a.json.id);
+  assert.equal(mine.km, null);
+  assert.equal(mine.cycle_anchor, null);
+});
+
+// 前面的測試可能讓舊的工作階段失效：這裡用新的（通行金鑰驗證過的）理事長工作階段
+const CHAIR = 't_chair:mfa:plan';
+test('功能開關：分享匯出與個人週期預設開，只有明確關掉才是 false；週四團練地點', async () => {
+  const f0 = (await call('t_runner', '/me')).json.settings.features;
+  assert.notEqual(f0.plan_export, false);
+  const s1 = await call(CHAIR, '/settings/features', { method: 'POST', body: { gps: true, studio: true, health: true, file: true, coach: true, party: true } });
+  assert.equal(s1.status, 200, s1.text);
+  assert.equal(s1.json.value.plan_export, true, '沒送就是開');
+  assert.equal(s1.json.value.plan_cycle, true);
+  const s2 = await call(CHAIR, '/settings/features', { method: 'POST', body: { plan_export: false } });
+  assert.equal(s2.json.value.plan_export, false);
+  assert.equal(s2.json.value.gps, true, '沒送的開關保留原值');
+  const s3 = await call(CHAIR, '/settings/features', { method: 'POST', body: { plan_export: 'no' } });
+  assert.equal(s3.json.value.plan_export, true, '不是 false 就是開');
+  const org = (await call('t_runner', '/me')).json.settings.org;
+  const o1 = await call(CHAIR, '/settings/org', { method: 'POST', body: { ...org, name: org.name || '耕跑團', thu_venue: '臺北田徑場' } });
+  assert.equal(o1.json.value.thu_venue, '臺北田徑場');
+  const { thu_venue, ...noVenue } = o1.json.value;
+  const o2 = await call(CHAIR, '/settings/org', { method: 'POST', body: noVenue });
+  assert.equal(o2.json.value.thu_venue, '臺北田徑場', '舊版後台沒送地點時保留');
+});
+
+test('個人課表週期：儲存、記錄、去重、修改保留週期、教練看不到比賽', async () => {
+  // 讓今天落在個人週期第 12 週左右
+  const anchor = plus(60), raceName = '測試春季馬';
+  const c = P.cycleOf(anchor), cw = P.weekIndexOf(today, c);
+  assert.ok(cw >= 1 && cw <= 21);
+  const race = await call('t_lead', '/races', { method: 'POST', body: { name: raceName, date: anchor, dist: '全馬' } });
+  const other = await call('t_other', '/races', { method: 'POST', body: { name: '別人的', date: plus(90) } });
+  const past = await call('t_lead', '/races', { method: 'POST', body: { name: '去年', date: plus(-3) } });
+  const far = await call('t_lead', '/races', { method: 'POST', body: { name: '太遠', date: plus(500) } });
+  assert.equal((await call('t_lead', '/me/plan', { method: 'PUT', body: { cycle: 'race', race_id: other.json.id } })).status, 404, '別人的比賽');
+  assert.equal((await call('t_lead', '/me/plan', { method: 'PUT', body: { cycle: 'race', race_id: past.json.id } })).status, 400, '過去的比賽');
+  assert.equal((await call('t_lead', '/me/plan', { method: 'PUT', body: { cycle: 'race', race_id: far.json.id } })).status, 400, '一年以上');
+  assert.equal((await call('t_lead', '/me/plan', { method: 'PUT', body: { cycle: 'weird' } })).status, 400);
+  if (today <= P.RACE_ISO) {
+    const same = await call('t_lead', '/races', { method: 'POST', body: { name: '臺北馬', date: P.RACE_ISO } });
+    const s = await call('t_lead', '/me/plan', { method: 'PUT', body: { cycle: 'race', race_id: same.json.id } });
+    assert.equal(s.json.note, 'same_as_club');
+    assert.equal(s.json.planCycle.kind, 'club');
+    await call('t_lead', `/races/${same.json.id}`, { method: 'DELETE' });
+  }
+  const set = await call('t_lead', '/me/plan', { method: 'PUT', body: { cycle: 'race', race_id: race.json.id } });
+  assert.equal(set.status, 200);
+  assert.equal(set.json.planCycle.kind, 'race');
+  assert.equal(set.json.planCycle.race.date, anchor);
+  assert.equal(set.json.member.dist, 'fm', '只改週期，不動項目');
+  // 同樣的週期重送不再寫稽核
+  const auditN = async () => (await call(CHAIR, `/audit?action=plan.cycle&target=t_lead&from=${plus(-1)}&to=${plus(1)}`)).json.items.length;
+  const n1 = await auditN();
+  assert.ok(n1 >= 1);
+  assert.equal((await call('t_lead', '/me/plan', { method: 'PUT', body: { cycle: 'race', race_id: race.json.id } })).status, 200);
+  assert.equal(await auditN(), n1, '沒變不寫稽核');
+  assert.equal((await call('t_lead', '/me')).json.planCycle.race.name, raceName);
+  assert.equal((await call('t_lead', '/me')).json.member.plan_cycle, 'race');
+
+  // 個人週期的紀錄：存 cycle_anchor／cycle_week；week_no 由伺服器算協會週次
+  const p1 = await call('t_lead', '/logs', { method: 'POST', body: { date: today, status: 'done', plan_day: '週二', plan_text: '比賽日', cycle_anchor: anchor, cycle_week: cw, week_no: 3, if_absent: true } });
+  assert.equal(p1.status, 200);
+  const dup = await call('t_lead', '/logs', { method: 'POST', body: { date: today, status: 'done', plan_day: '週二', cycle_anchor: anchor, cycle_week: cw, if_absent: true } });
+  assert.deepEqual(dup.json, { id: p1.json.id, existed: true }, '同一週期同一天不重複');
+  const club = await call('t_lead', '/logs', { method: 'POST', body: { date: today, status: 'done', plan_day: '週二', week_no: P.clubWeekOf(today) || 5, if_absent: true } });
+  assert.ok(club.json.id && !club.json.existed, '協會週次的同一天另外算');
+  let row = (await call('t_lead', `/logs?from=${today}&to=${today}`)).json.logs.find((l) => l.id === p1.json.id);
+  assert.deepEqual([row.cycle_anchor, row.cycle_week, row.week_no], [anchor, cw, P.clubWeekOf(today)]);
+  // 開 App（boot）一起帶回這週一到今天的紀錄：首頁擇一天的課不用再多等一輪
+  const boot = (await call('t_lead', '/me?boot=1')).json.boot;
+  const mon = P.iso(P.mondayOf(P.parseISO(today)));
+  assert.equal(boot.weekLogs.from, mon);
+  assert.ok(boot.weekLogs.logs.some((l) => l.id === p1.json.id) && boot.weekLogs.logs.every((l) => l.date >= mon && l.date <= today));
+  assert.ok(boot.todayLogs.length && boot.todayLogs.every((l) => l.date === today));
+  assert.equal((await call('t_lead', '/logs', { method: 'POST', body: { date: today, status: 'done', plan_day: '週三', cycle_anchor: anchor, cycle_week: cw + 5 } })).status, 400, '週次跟日期對不上');
+  assert.equal((await call('t_lead', '/logs', { method: 'POST', body: { date: today, status: 'done', plan_day: '週三', cycle_anchor: anchor, cycle_week: 0 } })).status, 400);
+  // 舊版 App 修改時沒送 cycle_anchor：週期欄位與 week_no 保留
+  const up = await call('t_lead', '/logs', { method: 'POST', body: { id: p1.json.id, date: today, status: 'partial', week_no: 7, plan_day: '週二', km: 6 } });
+  assert.equal(up.status, 200);
+  row = (await call('t_lead', `/logs?from=${today}&to=${today}`)).json.logs.find((l) => l.id === p1.json.id);
+  assert.deepEqual([row.cycle_anchor, row.cycle_week, row.week_no, row.status, row.km], [anchor, cw, P.clubWeekOf(today), 'partial', 6]);
+  assert.equal((await call('t_lead', '/logs', { method: 'POST', body: { id: 'nope', date: today, status: 'done' } })).status, 404);
+
+  // 教練：只看得到「個人」標記與週次，看不到比賽日與比賽名稱
+  await call('t_lead', '/me/share-logs', { method: 'POST', body: { share: true } });
+  const seen = await call('t_coach', `/logs/member/t_lead?from=${today}&to=${today}`);
+  assert.equal(seen.status, 200);
+  assert.equal(seen.json.member.plan_cycle, 'race');
+  const pl = seen.json.logs.find((l) => l.id === p1.json.id);
+  assert.equal(pl.personal, 1);
+  assert.equal(pl.cycle_week, cw);
+  assert.ok(!seen.text.includes('cycle_anchor') && !seen.text.includes(anchor) && !seen.text.includes(raceName), '比賽日與名稱不給教練');
+  const team = await call('t_coach', `/logs/team?from=${today}&to=${today}`);
+  assert.equal(team.json.members.find((m) => m.id === 't_lead').plan_cycle, 'race');
+  assert.ok(!team.text.includes(raceName));
+  // 匯出自己的資料：有週期欄位
+  const ex = await call('t_lead', '/me/export');
+  assert.ok(ex.json.training_logs.some((l) => l.cycle_anchor === anchor && l.cycle_week === cw));
+  assert.equal(ex.json.plan_cycle.race.name, raceName);
+
+  // 後台關掉個人週期：PUT 403，/me 顯示暫停（設定保留）
+  await call(CHAIR, '/settings/features', { method: 'POST', body: { plan_cycle: false } });
+  assert.equal((await call('t_lead', '/me/plan', { method: 'PUT', body: { cycle: 'race', race_id: race.json.id } })).status, 403);
+  assert.deepEqual((await call('t_lead', '/me')).json.planCycle, { kind: 'club', suspended: true });
+  await call(CHAIR, '/settings/features', { method: 'POST', body: { plan_cycle: true } });
+  assert.equal((await call('t_lead', '/me')).json.planCycle.kind, 'race', '打開後恢復');
+
+  // 刪掉週期跟著的比賽：課表改回協會賽季，紀錄保留當時的週期
+  const del = await call('t_lead', `/races/${race.json.id}`, { method: 'DELETE' });
+  assert.deepEqual(del.json, { ok: true, cycleReset: true });
+  const me = (await call('t_lead', '/me')).json;
+  assert.deepEqual(me.planCycle, { kind: 'club' });
+  assert.equal(me.member.plan_cycle, 'club');
+  assert.ok((await call('t_lead', `/logs?from=${today}&to=${today}`)).json.logs.some((l) => l.cycle_anchor === anchor));
+  assert.deepEqual((await call('t_lead', `/races/${past.json.id}`, { method: 'DELETE' })).json, { ok: true });
+  await call('t_lead', `/races/${far.json.id}`, { method: 'DELETE' });
+  await call('t_other', `/races/${other.json.id}`, { method: 'DELETE' });
+  await call('t_lead', '/me/plan', { method: 'PUT', body: { cycle: 'club' } });
+});
+
 // ---- 通知中心：分類、游標、已讀模型、隱私 ----
 test('通知分類登記表：8 類，chip 只用合法分類；worker 不再用舊的 kind 當分類', async () => {
   const { CATS, CHIPS, isCat, MUTABLE } = await import('../public/notif-cats.js');
@@ -627,6 +778,15 @@ test('身分變更寫安全通知；入會申請不能重複；待處理摘要�
   // 核准後，同一則待辦一起結束
   await call('t_lead', '/teams/youth/members', { method: 'POST', body: { member_id: 't_other', action: 'approve' } });
   assert.ok((await call('t_lead', '/notifications?cat=todo')).json.items.find((n) => n.id === jn.id).read_at);
+});
+
+test('教練公告新課表：推播連到協會賽季的週次（?c=club），個人週期的會員點進來不會跑到自己的同號週', async () => {
+  const r = await call('t_coach', '/plans', { method: 'POST', body: { title: '測試推播課表', body: '週二 輕鬆跑 8K', week_no: 5 } });
+  assert.equal(r.status, 200, r.text);
+  const n = (await call('t_runner', '/notifications?cat=training')).json.items.find((x) => x.title === '新課表：測試推播課表');
+  assert.ok(n, '有收到通知');
+  assert.equal(n.url, '/#/plan/5?c=club');
+  assert.equal((await call('t_coach', `/plans/${r.json.id}`, { method: 'DELETE' })).status, 200);
 });
 
 // ---- 活動報名：報名期間、審核、通知、候補遞補、系統預設、排程 ----

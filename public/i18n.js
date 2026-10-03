@@ -13,8 +13,45 @@ const CJK = /[㐀-鿿（-？、-】]/;
 const WD = { 日: 'Sun', 一: 'Mon', 二: 'Tue', 三: 'Wed', 四: 'Thu', 五: 'Fri', 六: 'Sat' };
 const MON = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const MO3 = MON.map((m) => m.slice(0, 3));
+const DN = { 全馬: 'marathon', 半馬: 'half' };
 // 動態句型：數字、日期、倒數等（先於片段替換）
 const PATTERNS = [
+  // 課表與課表週期（整句，要在日期句型之前）
+  [/^你的 W1 從 (\d{1,2})\/(\d{1,2})（([日一二三四五六])）開始，還有 (\d+) 天$/, (_, m, d, w, n) => `Your W1 starts ${WD[w]} ${m}/${d} — ${n} days to go`],
+  [/^W1 (\d{1,2})\/(\d{1,2})（([日一二三四五六])）開始，還有 (\d+) 天$/, (_, m, d, w, n) => `W1 starts ${WD[w]} ${m}/${d} — ${n} days to go`],
+  [/^這是協會賽季 W(\d+)，只能看$/, 'This is club season W$1 — view only'],
+  [/^協會 W(\d+) 公告（你的課表照個人週期排，內容可能不同）$/, 'Club W$1 posts (your plan follows your personal cycle, so the content may differ)'],
+  [/^賽前 (\d+) 天$/, '$1 days to race'],
+  [/^每週 (\d+) 天$/, '$1 days/week'],
+  [/^(\d+) 分鐘$/, '$1 min'],
+  [/^離比賽只剩 (\d+) 週左右，課表從 W(\d+) 接著跑；前面的週次可以參考，不用回頭補。$/, 'About $1 weeks to go — pick up the plan at W$2. Earlier weeks are for reference; don’t try to make them up.'],
+  [/^目前每週跑量偏低，([A-Z]) 組的課表大約需要每週 (\d+)K 以上的基礎。可以考慮先選慢一組，練幾週再調整。$/, 'Your weekly mileage is on the low side — Group $1 assumes a base of about $2K/week. Consider starting one group slower and moving up after a few weeks.'],
+  [/^([A-Z]) 組的跑量較大，每週 4 天以下比較難完成，建議至少 5 天。$/, 'Group $1 carries high volume — 4 days or fewer a week makes it hard to complete. At least 5 days is recommended.'],
+  [/^現在是 W(\d+)，從這週接著跑$/, 'You are in W$1 now — pick up the plan from this week'],
+  [/^已改成跟 (.+) 排課$/, 'Your plan now follows $1'],
+  [/^本週 (\d+) 堂用到 ›$/, '$1 sessions this week ›'],
+  [/^已選 ([A-Z]) 組，按儲存才會生效$/, 'Group $1 selected — tap Save to apply'],
+  [/^本週 (\d+) 堂用到$/, '$1 sessions this week use it'],
+  [/^W(\d+) 課表還沒公告$/, 'W$1 plan not posted yet'],
+  [/^年齡分級：目標 ([\d.]+)%(?:，目前 ([\d.]+)%)?$/, (_, a, b) => `Age grade: goal ${a}%${b ? `, current ${b}%` : ''}`],
+  [/^已上傳 (\d+) 筆離線時的訓練紀錄$/, 'Uploaded $1 training logs saved while offline'],
+  // 舊版課表教練資料搬移
+  [/^已上傳 (\d+) 筆・已存在 (\d+) 筆・其他週期 (\d+) 筆・對不到 (\d+) 筆$/, 'Uploaded $1 · already there $2 · other cycles $3 · no match $4'],
+  [/^・略過 (\d+) 筆（每天最多 5 筆）$/, ' · skipped $1 (at most 5 a day)'],
+  [/^另外 (\d+) 筆是跟「(\d{1,2})\/(\d{1,2})（([日一二三四五六])） 的比賽」排的課表，也一起上傳$/, (_, n, m, d, w) => `Also upload ${n} check-ins planned for the ${WD[w]} ${m}/${d} race`],
+  [/^上傳 (\d+) 筆完成紀錄到我的訓練紀錄$/, 'Upload $1 check-ins to my training log'], [/^正在上傳 (\d+)\/(\d+)$/, 'Uploading $1/$2'],
+  [/^已上傳 (\d+) 筆完成紀錄$/, 'Uploaded $1 check-ins'], [/^網路中斷，已上傳 (\d+) 筆$/, 'Connection lost — $1 uploaded'],
+  [/^已套用 (\d+) 項設定$/, 'Applied $1 settings'], [/^已加入 (\d+) 個倒數$/, 'Added $1 countdowns'],
+  [/^還有 (\d+) 筆完成紀錄沒有上傳$/, '$1 check-ins not uploaded yet'], [/^我的賽事最多 30 場，還能加 (\d+) 場$/, 'My races holds up to 30 — you can add $1 more'],
+  [/^舊版是(全馬|半馬) ([A-Z]) 組，現在是(全馬|半馬) ([A-Z]) 組$/, (_, a, b, c, d) => `The old version had ${DN[a]} group ${b}; now it's ${DN[c]} group ${d}`],
+  [/^(已?)改成(全馬|半馬)? ?([A-Z]) 組$/, (_, done, a, b) => `${done ? 'Changed' : 'Switch'} to ${a ? `${DN[a]} ` : ''}group ${b}`],
+  // 分享與匯出、全季
+  [/^複製 (W\d+|R) 課表$/, 'Copy $1 plan'], [/^已複製 (W\d+|R) 課表$/, '$1 plan copied'],
+  [/^已產生 (\d+) 個行程$/, '$1 events created'], [/^(W\d+|R) 完成 (\d+)%$/, '$1 $2% done'],
+  // 詳細內容的主課：「2 km × 3 趟，再 400 m × 4 趟」
+  [/ × ([\d–~-]+) 趟/g, ' × $1'], [/，再 /g, ', then '],
+  [/\+(\d+) 加練/g, '+$1 extra'],
+  [/個人 ?W(\d+)/g, 'Personal W$1'], [/協會 W(\d+)/g, 'Club W$1'],
   // 整句的確認訊息要排在最前面：後面的通用句型（N 筆待審核、剩 N 名額）會把句子拆碎
   [/^還有 (\d+) 筆待審核，關閉審核會依報名順序直接錄取（額滿排候補）並通知他們。確定嗎？$/, '$1 pending requests. Turning off approval admits them in signup order (waitlisted when full) and notifies them. Continue?'],
   [/^只剩 (\d+) 個名額，核准後依報名先後排正取，其餘 (\d+) 人排候補。確定？$/, 'Only $1 spots left. Approved people are confirmed in signup order and the other $2 go to the waitlist. Continue?'],

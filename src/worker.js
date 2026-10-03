@@ -11,6 +11,7 @@ import * as WebAuthn from './webauthn.js';
 import { quote } from '../public/pricing.js';
 import { hourOf } from '../public/wxrule.js';
 import { BADGES, earned, weeksOf } from '../public/badges.js';
+import { clubWeekOf, cycleOf, weekIndexOf, RACE_ISO } from '../public/plan.js';
 import { CATS, isCat, MUTABLE } from '../public/notif-cats.js';
 import { tpNow, shiftDays, daysBetween, evStart, signupEnd, signupState, STATE_TEXT, tpText, SIGNUP_DEFAULTS, windowError, isStamp } from '../public/signup-window.js';
 import * as Cams from './cams.js';
@@ -201,7 +202,7 @@ const pub = (m) => ({
   nickname: m.nickname || '', club: m.club || '', meal_pref: m.meal_pref || '', phone: m.phone || '',
   membership: m.membership || 'none', membershipName: MEMBERSHIP[m.membership || 'none'],
   member_type: m.member_type || null, member_no: m.member_no || null, paid_until: m.paid_until || null,
-  share_logs: !!m.share_logs, show_rank: !!m.show_rank, main_team: m.main_team || null, home_spot: m.home_spot || null, can: PERMS[norm(m.role)],
+  share_logs: !!m.share_logs, show_rank: !!m.show_rank, main_team: m.main_team || null, home_spot: m.home_spot || null, plan_cycle: m.plan_cycle === 'race' ? 'race' : 'club', can: PERMS[norm(m.role)],
   mfaPending: !!m.mfa_pending, realRole: m.real_role ? norm(m.real_role) : null, realRoleName: m.real_role ? ROLES[norm(m.real_role)] : null, mfa: !!m.s_mfa,
 });
 
@@ -871,6 +872,16 @@ async function api(req, env, path, method) {
     return null;
   };
   const need = () => (member ? null : fail(401, '請先加入'));
+  // 功能開關（預設開；後台關掉才是 false）
+  const featOnServer = (k) => { try { return JSON.parse(setting('features') || '{}')[k] !== false; } catch { return true; } };
+  // 我現在的課表週期：協會賽季，或跟自己的一場比賽（比賽被刪掉、功能關閉時回到協會賽季）
+  const planCycleOf = async (m) => {
+    if (!m) return null;
+    if (!featOnServer('plan_cycle')) return { kind: 'club', ...(m.plan_cycle === 'race' ? { suspended: true } : {}) };
+    if (m.plan_cycle !== 'race') return { kind: 'club' };
+    const r = m.plan_race_id ? await env.DB.prepare('SELECT id, name, date, dist, goal FROM races WHERE id = ? AND member_id = ?').bind(m.plan_race_id, m.id).first() : null;
+    return r ? { kind: 'race', race: r } : { kind: 'club', lost: true };
+  };
   const needPerm = (p) => (can(member, p) ? null : fail(403, '沒有這個權限'));
   const needAdmin = () => needPerm('event');
   const body = async () => { try { return await req.json(); } catch { return {}; } };
@@ -1605,17 +1616,20 @@ async function api(req, env, path, method) {
   if (path === '/api/me' && method === 'GET') {
     const st = await getSettings(env, settingRows.filter((r) => ['org', 'features', 'docs', 'privacy', 'tabs', 'signup'].includes(r.key)));
     const boot = !!member && url0(req).searchParams.get('boot') === '1';
-    const [race, teamList, events, todayLogs] = await Promise.all([
+    // 這週一（臺北時間）到今天的紀錄：首頁「今天」卡片的擇一天課（週五或週六、週末）要看前幾天記過沒，不用再多等一輪
+    const t0 = today(), monday = new Date(Date.parse(`${t0}T00:00:00Z`) - ((new Date(`${t0}T00:00:00Z`).getUTCDay() + 6) % 7) * 864e5).toISOString().slice(0, 10);
+    const [race, teamList, events, weekLogs, planCycle] = await Promise.all([
       countdownTarget(env, member, settingRows), member ? listTeams() : [],
       boot ? listEvents(false, [today(), new Date(Date.now() + 180 * 864e5).toISOString().slice(0, 10)]) : null,
-      boot ? env.DB.prepare(`SELECT id, date, week_no, plan_day, kind, plan_text, status, km, seconds, hr, rpe, feel, note, source, 0 AS comments, 0 AS unread
-        FROM training_logs WHERE member_id = ? AND date = ? ORDER BY created_at`).bind(member.id, today()).all().then((r) => r.results) : null,
+      boot ? env.DB.prepare(`SELECT id, date, week_no, plan_day, cycle_anchor, cycle_week, kind, plan_text, status, km, seconds, hr, rpe, feel, note, source, 0 AS comments, 0 AS unread
+        FROM training_logs WHERE member_id = ? AND date BETWEEN ? AND ? ORDER BY created_at`).bind(member.id, monday, t0).all().then((r) => r.results) : null,
+      planCycleOf(member),
     ]);
     return json({ member: member ? pub(member) : null, vapid: env.VAPID_PUBLIC_KEY || null, googleLogin: !!(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET),
       settings: st, privacyVersion: st.privacy.version, needConsent: !!member && member.consent_version !== st.privacy.version,
-      race, teams: teamList, calendarOn: !!member?.cal_token_hash, calScope: member?.cal_scope || 'all', requireMfa: !!security.require_mfa, shortcut: setting('health_shortcut') || null,
+      race, planCycle, teams: teamList, calendarOn: !!member?.cal_token_hash, calScope: member?.cal_scope || 'all', requireMfa: !!security.require_mfa, shortcut: setting('health_shortcut') || null,
       homeSpot: member?.home_spot ? await env.DB.prepare("SELECT id, name, lat, lng FROM spots WHERE id = ? AND status = 'approved'").bind(member.home_spot).first() : null,
-      ...(boot ? { boot: { events, todayLogs, today: today() } } : {}), serverNow: Date.now() });
+      ...(boot ? { boot: { events, todayLogs: weekLogs.filter((l) => l.date === t0), weekLogs: { from: monday, logs: weekLogs }, today: t0 } } : {}), serverNow: Date.now() });
   }
 
   // 已登入的人輸入幹部碼或理事長碼升級
@@ -1666,16 +1680,49 @@ async function api(req, env, path, method) {
   if (path === '/api/me' && method === 'PUT') {
     const g = need(); if (g) return g;
     const b = await body();
+    // 只改有送來的欄位：沒送的維持原值（不會把暱稱、電話清掉，也不會把半馬改成全馬）；其他欄位（年齡、體重…）一律不收
+    const has = (k) => Object.prototype.hasOwnProperty.call(b, k);
     const name = str(b.name, 40) || member.name;
-    const dist = b.dist === 'hm' ? 'hm' : 'fm';
+    const dist = has('dist') ? (b.dist === 'hm' ? 'hm' : 'fm') : member.dist;
     const grp = (str(b.grp, 2) || member.grp).toUpperCase();
     if (!validGroup(dist, grp)) return fail(400, '組別不正確');
     // 所屬跑團跟著主團（由管理員設定），本人不能改
-    const extra = { nickname: str(b.nickname, 20), meal_pref: str(b.meal_pref, 10), phone: str(b.phone, 20),
-      home_spot: /^[\w-]{1,32}$/.test(b.home_spot || '') && await env.DB.prepare("SELECT 1 FROM spots WHERE id = ? AND status = 'approved'").bind(b.home_spot).first() ? b.home_spot : null };
+    const extra = { nickname: has('nickname') ? str(b.nickname, 20) : member.nickname, meal_pref: has('meal_pref') ? str(b.meal_pref, 10) : member.meal_pref,
+      phone: has('phone') ? str(b.phone, 20) : member.phone,
+      home_spot: !has('home_spot') ? member.home_spot : /^[\w-]{1,32}$/.test(b.home_spot || '') && await env.DB.prepare("SELECT 1 FROM spots WHERE id = ? AND status = 'approved'").bind(b.home_spot).first() ? b.home_spot : null };
     await env.DB.prepare('UPDATE members SET name = ?, dist = ?, grp = ?, nickname = ?, meal_pref = ?, phone = ?, home_spot = ? WHERE id = ?')
       .bind(name, dist, grp, extra.nickname, extra.meal_pref, extra.phone, extra.home_spot, member.id).run();
     return json({ member: pub({ ...member, name, dist, grp, ...extra }) });
+  }
+
+  // 課表設定：項目、組別、課表週期（只改有送來的欄位；不碰暱稱、電話等個人資料）
+  if (path === '/api/me/plan' && method === 'PUT') {
+    const g = need(); if (g) return g;
+    if (await limited(env, `plan:${member.id}`, 60, 3600)) return fail(429, '改太頻繁，請稍後再試');
+    const b = await body(), has = (k) => Object.prototype.hasOwnProperty.call(b, k);
+    let dist = member.dist, grp = member.grp;
+    if (has('dist')) { if (b.dist !== 'fm' && b.dist !== 'hm') return fail(400, '項目只能是全馬或半馬'); dist = b.dist; }
+    if (has('grp')) grp = str(b.grp, 2).toUpperCase();
+    else if (dist !== member.dist && !validGroup(dist, grp)) grp = dist === 'hm' ? 'C' : 'D';
+    if (!validGroup(dist, grp)) return fail(400, '組別不正確');
+    let cycle = member.plan_cycle === 'race' ? 'race' : 'club', raceId = member.plan_race_id || null, note;
+    if (has('cycle')) {
+      if (b.cycle === 'club') { cycle = 'club'; raceId = null; }
+      else if (b.cycle === 'race') {
+        if (!featOnServer('plan_cycle')) return fail(403, '目前沒有開放個人週期');
+        const r = await env.DB.prepare('SELECT id, date FROM races WHERE id = ? AND member_id = ?').bind(str(b.race_id, 32), member.id).first();
+        if (!r) return fail(404, '找不到這場比賽');
+        const max = new Date(Date.parse(today()) + 400 * 864e5).toISOString().slice(0, 10);
+        if (!isDate(r.date) || r.date < today() || r.date > max) return fail(400, '請選今天以後、一年內的比賽');
+        if (r.date === RACE_ISO) { cycle = 'club'; raceId = null; note = 'same_as_club'; }
+        else { cycle = 'race'; raceId = r.id; }
+      } else return fail(400, '課表週期不正確');
+    }
+    await env.DB.prepare('UPDATE members SET dist = ?, grp = ?, plan_cycle = ?, plan_race_id = ? WHERE id = ?').bind(dist, grp, cycle, raceId, member.id).run();
+    const m2 = { ...member, dist, grp, plan_cycle: cycle, plan_race_id: raceId };
+    // 稽核只記週期真的有變（同樣的值重送不寫）
+    if (has('cycle') && (cycle !== (member.plan_cycle === 'race' ? 'race' : 'club') || raceId !== (member.plan_race_id || null))) await audit(env, req, member, 'plan.cycle', 'member', member.id, cycle);
+    return json({ member: pub(m2), planCycle: await planCycleOf(m2), ...(note ? { note } : {}) });
   }
 
   if (path === '/api/logout' && method === 'POST') {
@@ -2369,7 +2416,8 @@ async function api(req, env, path, method) {
       notifications: await q('SELECT kind, category, title, body, created_at, read_at FROM notifications WHERE member_id = ?'),   // ref 含其他會員的 id，不匯出
       sessions: await q('SELECT created_at, last_seen_at, ua FROM sessions WHERE member_id = ?'),
       races: await q('SELECT name, date, dist, goal, is_primary FROM races WHERE member_id = ?'),
-      training_logs: await q('SELECT date, week_no, plan_day, plan_text, status, km, seconds, hr, rpe, feel, note, source FROM training_logs WHERE member_id = ? ORDER BY date'),
+      training_logs: await q('SELECT date, week_no, plan_day, cycle_anchor, cycle_week, plan_text, status, km, seconds, hr, rpe, feel, note, source FROM training_logs WHERE member_id = ? ORDER BY date'),
+      plan_cycle: await (async () => { const c = await planCycleOf(member); return { setting: member.plan_cycle || 'club', ...(c?.race ? { race: { name: c.race.name, date: c.race.date } } : {}) }; })(),
       log_comments: await q('SELECT l.date, c.author_name, c.body, c.created_at FROM log_comments c JOIN training_logs l ON l.id = c.log_id WHERE l.member_id = ? ORDER BY c.created_at'),
       spots_proposed: await q('SELECT name, kind, lat, lng, status, created_at FROM spots WHERE created_by = ?'),
       spot_reports: await q('SELECT s.name AS spot, r.data, r.created_at FROM spot_reports r JOIN spots s ON s.id = r.spot_id WHERE r.member_id = ?'),
@@ -2455,6 +2503,14 @@ async function api(req, env, path, method) {
   if (mrc) {
     const g = need(); if (g) return g;
     if (method === 'DELETE') {
+      // 刪掉的是課表週期跟著的那場：課表改回協會賽季（以前的紀錄保留當時的週期）
+      if (member.plan_cycle === 'race' && member.plan_race_id === mrc[1]) {
+        await env.DB.batch([
+          env.DB.prepare('DELETE FROM races WHERE id = ? AND member_id = ?').bind(mrc[1], member.id),
+          env.DB.prepare("UPDATE members SET plan_cycle = 'club', plan_race_id = NULL WHERE id = ?").bind(member.id),
+        ]);
+        return json({ ok: true, cycleReset: true });
+      }
       await env.DB.prepare('DELETE FROM races WHERE id = ? AND member_id = ?').bind(mrc[1], member.id).run();
       return json({ ok: true });
     }
@@ -2500,10 +2556,13 @@ async function api(req, env, path, method) {
     const g = need(); if (g) return g;
     if (!can(member, 'settings')) return fail(403, '只有理事長與行政人員可以修改系統設定');
     const key = mset[1], b = await body();
+    const cur = (() => { try { return JSON.parse(setting(key) || '{}') || {}; } catch { return {}; } })();
+    const has = (k) => Object.prototype.hasOwnProperty.call(b, k);
     let value;
     if (key === 'org') {
       value = { name: str(b.name, 40), short: str(b.short, 12), contact: str(b.contact, 200), retention: str(b.retention, 200), join_form: httpsUrl(b.join_form),
         parent: str(b.parent, 30), parent_url: httpsUrl(b.parent_url), parent_note: str(b.parent_note, 80),
+        thu_venue: has('thu_venue') ? str(b.thu_venue, 20) : str(cur.thu_venue, 20),   // 週四團練地點（課表備註用；沒送就保留）
         event_data_years: Math.max(0, Math.min(Math.round(Number(b.event_data_years) || 0), 20)),
         log_years: Math.max(0, Math.min(Math.round(Number(b.log_years) || 0), 20)),
         audit_years: Math.max(1, Math.min(Math.round(Number(b.audit_years) || 3), 10)) };
@@ -2512,9 +2571,10 @@ async function api(req, env, path, method) {
       if (b.parent_url && !value.parent_url) return fail(400, '企業網站要是 https:// 開頭的網址');
     } else if (key === 'features') {
       value = {};
-      for (const f of ['gps', 'studio', 'health', 'file', 'coach', 'party']) value[f] = b[f] !== false;
-      // 附近即時影像預設關閉：要明確打開（staging 實測過 Cache API、出口 IP 與解析 CPU 時間之後）
-      value.cams = b.cams === true;
+      // 預設開；後台關掉才是 false。沒送的開關保留原值（舊版後台不認得的新開關不會被改掉）
+      for (const f of ['gps', 'studio', 'health', 'file', 'coach', 'party', 'plan_export', 'plan_cycle']) value[f] = has(f) ? b[f] !== false : cur[f] !== false;
+      // 附近即時影像（main 的 cams）是預設關：明確送 true 才開，沒送保留原值；不能併進上面預設開的迴圈
+      value.cams = has('cams') ? b.cams === true : cur.cams === true;
     } else if (key === 'tabs') {
       // 下方分頁列的名稱（每個最多 4 個字，空白就用預設）
       value = {};
@@ -2571,7 +2631,7 @@ async function api(req, env, path, method) {
     const r = rangeOf(new URL(req.url), 370, 6);
     if (!r) return fail(400, '查詢區間最長一年');
     const rows = (await env.DB.prepare(
-      `SELECT id, date, week_no, plan_day, kind, plan_text, status, km, seconds, hr, rpe, feel, note, source,
+      `SELECT id, date, week_no, plan_day, cycle_anchor, cycle_week, kind, plan_text, status, km, seconds, hr, rpe, feel, note, source,
               (SELECT COUNT(*) FROM log_comments c WHERE c.log_id = training_logs.id) AS comments,
               (SELECT COUNT(*) FROM log_comments c WHERE c.log_id = training_logs.id AND c.read_at IS NULL) AS unread
        FROM training_logs WHERE member_id = ? AND date BETWEEN ? AND ? ORDER BY date, created_at LIMIT 1000`).bind(member.id, ...r).all()).results;
@@ -2584,18 +2644,40 @@ async function api(req, env, path, method) {
     const date = str(b.date, 10);
     if (!isDate(date) || date > new Date(Date.now() + 864e5).toISOString().slice(0, 10)) return fail(400, '日期不正確（不能記未來的訓練）');
     const status = LOG_STATUS.includes(b.status) ? b.status : 'done';
+    // 個人週期：記下比賽日與第幾週；week_no 由伺服器算成這一天在協會賽季的週次（賽季外是空的）
+    const anchor = isDate(str(b.cycle_anchor, 10)) ? str(b.cycle_anchor, 10) : null;
+    const cweek = anchor ? n(b.cycle_week, 1, 21, true) : null;
+    if (anchor && !cweek) return fail(400, '週期週次不正確');
+    if (anchor && Math.abs(weekIndexOf(date, cycleOf(anchor)) - cweek) > 1) return fail(400, '週期週次跟日期對不上');
     const log = {
-      date, status, week_no: n(b.week_no, 1, 21, true), plan_day: str(b.plan_day, 12) || null,
+      date, status, week_no: anchor ? clubWeekOf(date) : n(b.week_no, 1, 21, true), plan_day: str(b.plan_day, 12) || null,
       kind: LOG_KINDS.includes(b.kind) ? b.kind : null, plan_text: str(b.plan_text, 300) || null,
       km: status === 'skip' ? null : n(b.km, 0.01, 400), seconds: status === 'skip' ? null : n(b.seconds, 1, 200000, true),
       hr: n(b.hr, 30, 230, true), rpe: n(b.rpe, 1, 10, true), feel: n(b.feel, 1, 5, true),
       note: str(b.note, 300) || null, source: LOG_SOURCES.includes(b.source) ? b.source : 'manual',
     };
-    const cols = Object.keys(log);
     if (id) {
-      const r = await env.DB.prepare(`UPDATE training_logs SET ${cols.map((c) => `${c} = ?`).join(', ')}, updated_at = datetime('now') WHERE id = ? AND member_id = ?`)
-        .bind(...Object.values(log), id, member.id).run();
+      // 修改：有送 cycle_anchor 才改週期欄位；舊版 App 沒送時保留原本的週期（個人週期的 week_no 也不動）
+      const upd = { ...log };
+      if ('cycle_anchor' in b) Object.assign(upd, { cycle_anchor: anchor, cycle_week: cweek });
+      else {
+        const cur = await env.DB.prepare('SELECT cycle_anchor FROM training_logs WHERE id = ? AND member_id = ?').bind(id, member.id).first();
+        if (!cur) return fail(404, '找不到這筆紀錄');
+        if (cur.cycle_anchor) delete upd.week_no;
+      }
+      const ucols = Object.keys(upd);
+      const r = await env.DB.prepare(`UPDATE training_logs SET ${ucols.map((c) => `${c} = ?`).join(', ')}, updated_at = datetime('now') WHERE id = ? AND member_id = ?`)
+        .bind(...Object.values(upd), id, member.id).run();
       return r.meta.changes ? json({ id }) : fail(404, '找不到這筆紀錄');
+    }
+    log.cycle_anchor = anchor; log.cycle_week = cweek;
+    const cols = Object.keys(log);
+    // 照課表記錄（快速打勾、離線補傳、舊資料搬移）：同一個週期、同一週、同一天已經有紀錄就不再新增
+    if (b.if_absent === true && log.plan_day && (anchor ? cweek : log.week_no)) {
+      const hit = await env.DB.prepare(`SELECT id FROM training_logs WHERE member_id = ?1 AND plan_day = ?2 AND
+        ((?3 IS NULL AND cycle_anchor IS NULL AND week_no = ?4) OR (cycle_anchor = ?3 AND cycle_week = ?5)) LIMIT 1`)
+        .bind(member.id, log.plan_day, anchor, log.week_no, cweek).first();
+      if (hit) return json({ id: hit.id, existed: true });
     }
     const cnt = (await env.DB.prepare('SELECT COUNT(*) AS n FROM training_logs WHERE member_id = ? AND date = ?').bind(member.id, date).first()).n;
     if (cnt >= 5) return fail(400, '同一天最多 5 筆紀錄');
@@ -2612,7 +2694,7 @@ async function api(req, env, path, method) {
   }
   // 教練看某位團員的紀錄（本人要有打開分享；不含備註）；以及教練留言
   const canCoach = async (mid) => {
-    const m = await env.DB.prepare('SELECT id, name, nickname, share_logs, dist, grp FROM members WHERE id = ?').bind(mid).first();
+    const m = await env.DB.prepare('SELECT id, name, nickname, share_logs, dist, grp, plan_cycle FROM members WHERE id = ?').bind(mid).first();
     if (!m || !m.share_logs) return null;
     if (can(member, 'plan')) return m;
     const shared = (await env.DB.prepare("SELECT team_id FROM team_members WHERE member_id = ? AND status = 'active'").bind(mid).all()).results;
@@ -2626,10 +2708,11 @@ async function api(req, env, path, method) {
     const r = rangeOf(new URL(req.url), 62, 6);
     if (!r) return fail(400, '查詢區間最長兩個月');
     const rows = (await env.DB.prepare(
-      `SELECT id, date, week_no, plan_day, kind, plan_text, status, km, seconds, hr, rpe, feel,
+      `SELECT id, date, week_no, plan_day, cycle_week, (cycle_anchor IS NOT NULL) AS personal, kind, plan_text, status, km, seconds, hr, rpe, feel,
               (SELECT COUNT(*) FROM log_comments c WHERE c.log_id = training_logs.id) AS comments
        FROM training_logs WHERE member_id = ? AND date BETWEEN ? AND ? ORDER BY date DESC LIMIT 200`).bind(who.id, ...r).all()).results;
-    return json({ member: { id: who.id, name: who.name, nickname: who.nickname, dist: who.dist, grp: who.grp }, logs: rows, from: r[0], to: r[1] });
+    // 個人週期只給週次與「個人」標記，不給比賽日與比賽名稱
+    return json({ member: { id: who.id, name: who.name, nickname: who.nickname, dist: who.dist, grp: who.grp, plan_cycle: who.plan_cycle === 'race' ? 'race' : 'club' }, logs: rows, from: r[0], to: r[1] });
   }
   const mlc = path.match(/^\/api\/logs\/([\w-]{1,32})\/comments$/);
   if (mlc) {
@@ -2671,7 +2754,7 @@ async function api(req, env, path, method) {
     const r = rangeOf(u, 31, 6);
     if (!r) return fail(400, '查詢區間最長 31 天');
     const rows = (await env.DB.prepare(
-      `SELECT m.id, m.name, m.nickname, m.avatar, m.dist, m.grp,
+      `SELECT m.id, m.name, m.nickname, m.avatar, m.dist, m.grp, m.plan_cycle,
               SUM(l.status = 'done') AS done, SUM(l.status = 'partial') AS partial, SUM(l.status = 'skip') AS skip, SUM(l.status = 'extra') AS extra,
               ROUND(SUM(COALESCE(l.km, 0)), 1) AS km, ROUND(AVG(l.rpe), 1) AS rpe, MAX(l.date) AS last
        FROM members m LEFT JOIN training_logs l ON l.member_id = m.id AND l.date BETWEEN ? AND ?
@@ -2859,8 +2942,9 @@ async function api(req, env, path, method) {
     await env.DB.prepare('INSERT INTO plan_posts (id, week_no, title, phase, body, author_id, team_id) VALUES (?, ?, ?, ?, ?, ?, ?)')
       .bind(id, week, title, str(b.phase, 20), bodyText, member.id, teamId).run();
     await audit(env, req, member, 'plan.publish', 'plan', id, title);
+    // 連結指定協會賽季（?c=club）：教練公告是協會週次，個人週期的會員點進來才不會跑到自己的同號週
     if (b.notify !== false) await notify(env, teamId ? await teamMemberIds(teamId, member.id) : await allMemberIds(env, member.id), 'training',
-      { kind: 'plan', title: `新課表：${title}`, body: `${member.title || member.nickname || '教練'} 發布了${week ? ` W${week}` : ''}課表`, url: week ? `/#/plan/${week}` : '/#/plan' });
+      { kind: 'plan', title: `新課表：${title}`, body: `${member.title || member.nickname || '教練'} 發布了${week ? ` W${week}` : ''}課表`, url: week ? `/#/plan/${week}?c=club` : '/#/plan' });
     return json({ id });
   }
   const pdel = path.match(/^\/api\/plans\/([\w-]{1,32})$/);

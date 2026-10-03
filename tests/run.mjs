@@ -1,7 +1,12 @@
 // 測試流程：用獨立的本機資料庫（.wrangler/test-state）啟動 wrangler dev，灌測試帳號，跑全部測試，最後關掉
 // 用法：npm run test:ci（本機或 GitHub Actions 都一樣）
-import { spawn, execSync } from 'node:child_process';
+import { spawn, spawnSync, execSync } from 'node:child_process';
 import { rmSync } from 'node:fs';
+
+// 先跑不需要伺服器的單元測試（課表引擎、課表教練計算、舊版資料搬移）；失敗就不用啟動伺服器
+const UNIT = ['tests/plan.test.mjs', 'tests/coachcalc.test.mjs', 'tests/migrate.test.mjs'];
+const unit = spawnSync(process.execPath, ['--test', ...UNIT], { stdio: 'inherit', env: { ...process.env, TZ: 'Asia/Taipei' } });
+if (unit.status !== 0) process.exit(unit.status ?? 1);
 
 const PORT = Number(process.env.TEST_PORT) || 8799, STATE = '.wrangler/test-state';
 const sh = (cmd) => execSync(cmd, { stdio: ['ignore', 'inherit', 'inherit'], env: { ...process.env, CI: '1', WRANGLER_SEND_METRICS: 'false' } });

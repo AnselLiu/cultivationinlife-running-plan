@@ -13,8 +13,13 @@ const overflow = () => {
     if (r.width > 0 && r.height > 0 && (r.right > vw + 1 || r.left < -1)) out.push(`${el.tagName.toLowerCase()}${el.id ? `#${el.id}` : ''}.${String(el.className).split(' ')[0]} [${Math.round(r.left)}–${Math.round(r.right)}]`);
   }
   // 按鈕或連結太小（小於 30×30）不好點
-  const small = [...document.querySelectorAll('#view button, #view a.btn, #view [role=button]')].filter((b) => { const r = b.getBoundingClientRect(); return r.width > 0 && (r.height < 30 || r.width < 30); }).slice(0, 5)
-    .map((b) => `小按鈕 ${b.tagName.toLowerCase()}「${b.textContent.trim().slice(0, 8)}」${Math.round(b.getBoundingClientRect().width)}×${Math.round(b.getBoundingClientRect().height)}`);
+  // 可點範圍：按鈕本身＋用 ::after 往外擴的部分（例如快速打勾看起來 28px、可點 44px）
+  const hit = (b) => {
+    const r = b.getBoundingClientRect(), a = getComputedStyle(b, '::after'), out = (v) => Math.max(0, -parseFloat(v) || 0);
+    return a.content !== 'none' && a.position === 'absolute' ? { w: r.width + out(a.left) + out(a.right), h: r.height + out(a.top) + out(a.bottom) } : { w: r.width, h: r.height };
+  };
+  const small = [...document.querySelectorAll('#view button, #view a.btn, #view [role=button]')].filter((b) => { const r = b.getBoundingClientRect(), h = hit(b); return r.width > 0 && (h.h < 30 || h.w < 30); }).slice(0, 5)
+    .map((b) => `小按鈕 ${b.tagName.toLowerCase()}「${b.textContent.trim().slice(0, 8)}」${Math.round(hit(b).w)}×${Math.round(hit(b).h)}`);
   return [...out.slice(0, 8), ...small];
 };
 
@@ -25,7 +30,7 @@ for (const scheme of ['light', 'dark']) test(`逐頁檢查・${scheme === 'dark'
   const ev = await apiAs(request, 't_chair', '/events', { method: 'POST', body: { kind: 'buy', title: '逐頁檢查 團購', date: plus(6), notify: false, items: [{ name: '團服', price: 650, sizes: 'S,M,L' }], pay_info: { account: '測試銀行 004 帳號 123456789012', methods: ['transfer', 'cash'] }, options: [{ name: '全馬', price: 1200 }] } });
   const party = await apiAs(request, 't_chair', '/events', { method: 'POST', body: { kind: 'party', title: '逐頁檢查 慶功宴', date: plus(20), gather_time: '18:30', place: '榮榮園', address: '台北市大安區信義路四段25號2樓', fee: 800, guest_max: 2, meal_options: '葷食,素食', link_url: 'https://forms.gle/example', link_label: '登記座位', notify: false } });
   await login(page, 't_chair'); await acceptPrivacyIfAsked(page);
-  const routes = ['#/', '#/plan', '#/run', '#/map', '#/calendar', '#/challenge', '#/studio', '#/report', '#/past', '#/notifications', '#/tickets', '#/teams', '#/t/youth',
+  const routes = ['#/', '#/plan', '#/plan/season', '#/plan/race', '#/plan/guide', '#/plan/setup', '#/run', '#/map', '#/calendar', '#/challenge', '#/studio', '#/report', '#/past', '#/notifications', '#/tickets', '#/teams', '#/t/youth',
     '#/me', '#/me/profile', '#/me/races', '#/me/reg', '#/me/teams', '#/me/notify', '#/me/security', '#/me/privacy', '#/me/assoc', '#/me/card',
     '#/admin?tab=overview', '#/admin?tab=members', '#/admin?tab=roles', '#/admin?tab=teams', '#/admin?tab=events', '#/admin?tab=settings', '#/admin?tab=audit', '#/roster', '#/logs/team',
     '#/new', `#/e/${ev.id}`, `#/e/${ev.id}/stats`, `#/e/${ev.id}/stats?f=pending`, `#/edit/${ev.id}`, `#/e/${party.id}`, `#/e/${party.id}/stats`, '#/log?extra=1', '#/plan/new', '#/privacy'];

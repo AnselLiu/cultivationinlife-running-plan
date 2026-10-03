@@ -14,6 +14,12 @@ import { tpNow, signupState, signupEnd, evStart, tpText, tpShort, STATE_LABEL, S
 const calendarView = (...a) => lazy('./calendar.js', 'calendarView')(...a);
 const mapView = (...a) => lazy('./map.js', 'mapView')(...a);
 const challengeView = (...a) => lazy('./challenge.js', 'challengeView')(...a);
+// 課表教練（課表頁的用語說明、詳細內容、提醒、滑動換週）：課表畫好、閒下來才載入，首頁不會下載
+const coachWeekExtras = (...a) => lazy('./coach.js', 'weekExtras')(...a);
+// 課表的全季、賽事準備、配速與用語、課表設定（回傳離開頁面時要做的清理，例如賽事倒數的計時器）
+const coachView = (...a) => lazy('./coach.js', 'coachView')(...a);
+// 分享與匯出（複製、PDF、行事曆）：按了分享鈕才載入；PDF 的繪製另外放在 coachpdf.js，選 PDF 才下載
+const coachShare = (...a) => lazy('./coach.js', 'shareSheet')(...a);
 // 新舊版本混在一起（畫面還是舊版、用到才載入的模組已經是新版）會 import 失敗：
 //   重新載入整個 App 換成同一版；30 秒內不重複，避免一直重整
 const VERSION_SKEW = /Importing binding name|does not provide an export named|requested module .* does not provide/i;
@@ -281,10 +287,22 @@ document.addEventListener('visibilitychange', () => { if (document.visibilitySta
 // 登出、刪除帳號：清掉這台裝置暫存的個人資料
 const clearDeviceData = () => {
   navigator.serviceWorker?.controller?.postMessage({ type: 'CLEAR_DATA' });
-  try { localStorage.removeItem('cil-log-queue'); } catch {}
+  try { localStorage.removeItem('cil-log-queue'); localStorage.removeItem('cil-coach'); localStorage.removeItem(OWNER_KEY); } catch {}
   navigator.clearAppBadge?.().catch(() => {});
   bellAt = 0; bellFor = null; bellState = { badge: 0, unread: 0 };
 };
+// 這台裝置的課表設定（身體資料）與離線暫存屬於哪個帳號：登入狀態過期、從別台裝置登出所有裝置後，
+//   換另一個人在這台登入時，先清掉上一位的資料（不只靠按「登出」）
+const OWNER_KEY = 'cil-device-owner';
+function bindDeviceData(id) {
+  if (!id) return;
+  try {
+    const cur = localStorage.getItem(OWNER_KEY);
+    if (cur === id) return;
+    if (cur) { localStorage.removeItem('cil-log-queue'); localStorage.removeItem('cil-coach'); }
+    localStorage.setItem(OWNER_KEY, id);
+  } catch {}
+}
 // 登出前：這台裝置的推播訂閱先從伺服器刪掉，再取消瀏覽器端的訂閱（登出後不再收到這個帳號的推播）
 async function dropPush(server = true) {
   try {
@@ -316,6 +334,69 @@ function toast(msg, { action, onAction, onExpire, focus = false, ms = 2600 } = {
   if (focus) b?.focus();
   const later = () => { if (done) return; if (el.matches(':hover, :focus-within')) setTimeout(later, 1500); else el.expire(); };
   setTimeout(later, ms);
+}
+// 課表設定（只存在這台裝置，不會上傳；登出時清除）：每週天數、週四團練、跑量、成績、身體資料、起跑時間、畫面偏好
+const COACH_DEFAULT = { v: 1, plan: { days: 6, club: true, vol: null }, pb: { dist: '10', time: '' },
+  body: { age: null, sex: null, kg: null, rest: null, sweat: null }, start: {}, ui: { explain: false, exportPersonal: false }, legacy: null };
+const NESTED = ['plan', 'pb', 'body', 'start', 'ui'];
+function coachPrefs() {
+  let v = null;
+  try { v = JSON.parse(localStorage.getItem('cil-coach') || 'null'); } catch {}
+  const d = JSON.parse(JSON.stringify(COACH_DEFAULT));
+  if (!v || typeof v !== 'object') return d;
+  const out = { ...d, ...v };
+  for (const k of NESTED) out[k] = { ...d[k], ...(v[k] && typeof v[k] === 'object' ? v[k] : {}) };
+  return out;
+}
+// patch 的物件欄位只合併改到的鍵，例如 setCoachPrefs({ ui: { explain: true } })
+function setCoachPrefs(patch) {
+  const cur = coachPrefs(), next = { ...cur, ...patch, v: 1 };
+  for (const k of NESTED) if (patch?.[k]) next[k] = { ...cur[k], ...patch[k] };
+  try { localStorage.setItem('cil-coach', JSON.stringify(next)); } catch {}
+  return next;
+}
+// 舊版課表教練（/coach）存在這台裝置的資料：設定 gengCoachModel、完成紀錄與倒數 gengCoachDash
+//   不屬於任何帳號；搬完或下載備份後刪除才從這台裝置拿掉；登出時先問（清除這台裝置的資料也不會動它）
+const LEGACY_KEYS = ['gengCoachModel', 'gengCoachDash'];
+function legacyData() {
+  const out = { model: {}, dash: {} };
+  let found = false;
+  for (const [k, f] of [['gengCoachModel', 'model'], ['gengCoachDash', 'dash']]) {
+    try {
+      const v = localStorage.getItem(k);
+      if (v == null) continue;
+      found = true;
+      const j = JSON.parse(v);
+      if (j && typeof j === 'object' && !Array.isArray(j)) out[f] = j;
+    } catch {}
+  }
+  return found ? out : null;
+}
+const removeLegacy = () => { try { for (const k of LEGACY_KEYS) localStorage.removeItem(k); } catch {} };
+// 舊版有完成紀錄或倒數（只打開過舊版頁面也會留下設定，那不算）
+const legacyHasDash = (d) => Object.keys(d?.dash?.log || {}).length > 0 || (Array.isArray(d?.dash?.cds) && d.dash.cds.length > 0);
+// 還沒回答：沒有搬完、也沒有下載備份後刪除；搬完以後又在舊版記了新的完成紀錄或倒數也算
+function legacyOpen() {
+  const d = legacyData();
+  return !!d && (!['done', 'skipped'].includes(coachPrefs().legacy?.state) || legacyHasDash(d));
+}
+// 課表頁的提醒：沒回答過、選「稍後再說」超過 7 天，或搬完以後舊版又有新的資料
+function legacyDue() {
+  if (!feat('coach')) return false;
+  const d = legacyData();
+  if (!d) return false;
+  const l = coachPrefs().legacy;
+  if (!l) return true;
+  if (l.state === 'later') return !(Date.now() - (Date.parse(l.at) || 0) < 7 * 864e5);
+  return legacyHasDash(d);
+}
+// 登出、刪除帳號前：還有沒搬的舊版資料就先問要保留（之後登入可以再搬）還是刪除；按取消回傳 false（不登出）
+async function askLegacyOnLeave() {
+  if (!legacyOpen()) return true;
+  const v = await choose('這台裝置還有舊版課表教練資料', '設定、完成紀錄與倒數只存在這台裝置，還沒搬進 App。',
+    [{ value: 'keep', label: '保留（之後登入可搬移）', primary: true }, { value: 'drop', label: '刪除', danger: true }]);
+  if (v === 'drop') removeLegacy();
+  return !!v;
 }
 const copy = async (text) => {
   try { await navigator.clipboard.writeText(text); toast('已複製'); }
@@ -401,6 +482,44 @@ async function peekBoot() {
 // 管理者在後台設定的內容（協會資訊、功能開關、文件、隱私權政策）
 const org = () => cfg.settings?.org || {};
 const feat = (k) => cfg.settings?.features?.[k] !== false;
+// 我的課表週期（/api/me 的 planCycle）：協會賽季，或跟自己的一場比賽排 20 週；同一份 cfg 只算一次
+//   /api/me 由 Service Worker 暫存，所以離線也知道是哪個週期
+let cycMemo = null;
+function myCycle() {
+  if (cycMemo?.cfg === cfg) return cycMemo.c;
+  const r = cfg.planCycle?.kind === 'race' ? cfg.planCycle.race : null;
+  const c = r && P.parseISO(r.date) ? P.cycleOf(r.date, { kind: 'race', raceId: r.id, name: r.name, dist: r.dist, goal: r.goal }) : P.CLUB;
+  cycMemo = { cfg, c };
+  return c;
+}
+// 賽事準備看哪一場：個人週期的那一場 → 右上角倒數的那一場 → 我的主要賽事 → 最近的一場 → 協會賽季
+//   data：/api/races 的結果（沒傳就去抓一次）；回傳 { race: { id?, name, date, dist?, goal? } | null, src, data }
+async function raceTarget(data = null) {
+  const today = ymd(new Date()), c = myCycle();
+  const d = data || await api('/races').catch(() => ({ races: [] }));
+  const mine = (d.races || []).filter((r) => r.date >= today).sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+  if (c.kind === 'race') return { race: mine.find((r) => r.id === c.raceId) || { id: c.raceId, name: c.name, date: c.anchor, dist: c.dist, goal: c.goal }, src: 'cycle', data: d };
+  if (cfg.race?.date >= today) return { race: mine.find((r) => r.name === cfg.race.name && r.date === cfg.race.date) || { ...cfg.race }, src: 'countdown', data: d };
+  const r = mine.find((x) => x.is_primary) || mine[0];
+  if (r) return { race: r, src: r.is_primary ? 'primary' : 'nearest', data: d };
+  const club = d.club?.date >= today ? d.club : P.RACE_ISO >= today ? { name: P.CLUB.name, date: P.RACE_ISO } : null;
+  return { race: club ? { ...club, club: true } : null, src: 'club', data: d };
+}
+// 起跑時間存在這台裝置，依比賽（日期＋名稱）分開記，換一場比賽不會帶錯
+const startKey = (r) => `${r.date}|${r.name}`;
+// 課表頁上方的分段：單週｜全季｜賽事｜參考（沒開課表教練就不顯示）；切換用 replace，Android 返回鍵不會在分段之間來回
+const PLAN_SEG = [['/plan', '單週'], ['/plan/season', '全季'], ['/plan/race', '賽事'], ['/plan/guide', '參考']];
+const planSeg = (active) => (feat('coach') ? `<div class="seg planseg" role="group" aria-label="課表頁面">${PLAN_SEG.map(([h, l]) =>
+  `<button type="button" data-pseg="${h}" aria-pressed="${h === active}">${l}</button>`).join('')}</div>` : '');
+document.addEventListener('click', (e) => {
+  const b = e.target.closest?.('[data-pseg]');
+  if (!b || b.getAttribute('aria-pressed') === 'true') return;
+  // 上一頁就是要去的分段（例如從單週點「工具 › 全季課表」進來）：直接返回，不然歷史裡會有兩個一樣的頁面，返回鍵按了像沒反應
+  if (navStack[navStack.length - 2] === b.dataset.pseg) history.back();
+  else location.replace(`#${b.dataset.pseg}`);
+});
+// 課表頁網址：個人週期的會員在看協會賽季時帶 ?c=club（只能看）
+const planHref = (c, n) => `#/plan${n ? `/${n}` : ''}${c.kind === 'club' && myCycle().kind !== 'club' ? '?c=club' : ''}`;
 // 分團：自己在各分團的身分由 /api/me 帶回；伺服器每次都會再檢查一次，這裡只決定要不要顯示按鈕
 // 分團沒有另外上傳圖示時，用內建的正式小圖（耕跑團本團用原本的 logo）
 const TEAM_ICONS = { main: '/icons/icon-192.png', youth: '/teams/youth.webp', kids: '/teams/kids.webp', core: '/teams/core.webp', geng: '/teams/geng.webp' };
@@ -847,6 +966,7 @@ async function listView() {
     </div></div>`;
   for (const b of document.querySelectorAll('[data-tf]')) b.onclick = () => { teamFilter.set(b.dataset.tf); listView(); };
   homeWeather(all);
+  bindTodayCard();
   if (anyTeamAllow('event')) reviewCard();
   bindInstall();
   bindStepup();
@@ -878,38 +998,86 @@ async function homeWeather(events) {
     box.hidden = false;
   } catch {}
 }
-// 今天：我這組今天的課表、今天報名的活動、一鍵記錄（打開 App 第一眼就知道今天要做什麼）
+// 今天：照我的課表週期，今天要練的課、今天報名的活動、一鍵記錄完成（打開 App 第一眼就知道今天要做什麼）
+//   擇一天的課（週末、週五或週六）每個候選日都會出現，直到記錄為止
+let todayTick = null;   // 「完成了」要記的那一列：{ c, n, row, date }
 async function todayCard(events) {
-  const t = ymd(new Date()), w = P.currentWeek();
-  const plan = (await P.weekPlan(w, me.dist, me.grp)) || [];
-  const idx = plan.findIndex((d) => dayDates(w, d.d).includes(t));
-  const day = idx >= 0 ? plan[idx] : null;
-  const logs = takeBoot('todayLogs') || (await api(`/logs?from=${t}&to=${t}`).catch(() => ({ logs: [] }))).logs;
+  const t = ymd(new Date()), c = myCycle(), personal = c.kind !== 'club', wi = P.weekIndexOf(t, c);
+  // 離線時先存在手機、還沒上傳的紀錄也算（剛按「完成了」就看得到，不會再按一次）
+  const pend = (from) => logQueue.get().filter((x) => x.date >= from && x.date <= t).map((x) => ({ ...x, id: null, pending: true }));
+  // 開 App 時一起帶回這週一到今天的紀錄（boot）：擇一天的課不必再等一輪網路才畫得出來
+  const wk = takeBoot('weekLogs'), bootToday = takeBoot('todayLogs');
+  const logs = [...notQueued(wk ? wk.logs.filter((l) => l.date === t) : bootToday || (await api(`/logs?from=${t}&to=${t}`).catch(() => ({ logs: [] }))).logs), ...pend(t)];
   const done = logs.find((l) => l.status !== 'skip') || logs[0];
   const todays = events.filter((e) => e.date === t && ['in', 'wait', 'pending'].includes(e.mine));
-  if (!day && !todays.length && !done) return '';
+  todayTick = null;
+  let main = '', act = '';
+  if (wi < 1) {
+    main = `<h2>${w1Line(c, t)}</h2><div class="row" style="gap:16px"><a class="tiny" href="#/plan/1">看 W1 ›</a>${personal ? '<a class="tiny" href="#/plan?c=club">先看協會課表 ›</a>' : ''}</div>`;
+  } else if (wi > 21) {
+    main = `<h2>這個週期結束了</h2><a class="tiny" href="${feat('plan_cycle') ? '#/plan/setup?go=cycle' : '#/me/races'}">設定下一場 ›</a>`;
+  } else if (!(await P.weekPlan(wi, me.dist, me.grp))) {
+    // 這週還沒有課表資料（W1 還沒公告；個人週期也照同一份範本）
+    main = `<h2>W${wi} 課表還沒公告</h2>${personal ? '<a class="tiny" href="#/plan?c=club">先看協會課表 ›</a>' : ''}`;
+  } else {
+    const rows = P.markOptional(await P.weekPlan(wi, me.dist, me.grp), feat('coach') ? coachPrefs().plan : undefined, wi);
+    let ses = P.todaySessions(t, wi, rows, [], c);
+    // 擇一天的課：前幾天已經記錄過就不再出現（要多查這週前幾天的紀錄）
+    const firstDate = ses.map((r) => P.dayDates(wi, r.d, c, r)[0]).sort()[0];
+    let weekLogs = logs;
+    if (firstDate && firstDate < t) {
+      weekLogs = wk?.from <= firstDate ? [...notQueued(wk.logs.filter((l) => l.date >= firstDate)), ...pend(firstDate)]
+        : [...notQueued((await api(`/logs?from=${firstDate}&to=${t}`).catch(() => ({ logs: logs.filter((l) => !l.pending) }))).logs), ...pend(firstDate)];
+    }
+    const logOf = (r) => weekLogs.filter((l) => P.logMatches(l, c, wi, r));
+    ses = ses.filter((r) => !logOf(r).some((l) => l.date < t));
+    const race = ses.find((r) => P.isRaceDay(r, wi));
+    const runs = ses.filter((r) => r.kind !== 'rest');
+    if (race) main = `<h2 class="race">今天就是 <span translate="no">${esc(c.name)}</span>，加油</h2>${feat('coach') ? '<a class="tiny" href="#/plan/race">比賽日計劃 ›</a>' : ''}`;
+    else if (ses.length && !runs.length) main = '<h2>今天休息</h2><p class="muted" style="margin:0">好好睡、補充水分，明天再練。</p>';
+    else main = runs.map((r) => {
+      const hint = P.paceHint(r.t, me.dist, me.grp), multi = P.dayDates(wi, r.d, c, r).length > 1;
+      return `<h2 class="${r.kind}">${esc(fixText(r.t))}</h2><p class="muted" style="margin:0">${P.KIND_LABEL[r.kind]}${r.opt ? '・可省略' : ''}${hint ? `・${hint}` : ''}${multi ? '・擇一天' : ''}</p>`;
+    }).join('');
+    const next = runs.find((r) => !logOf(r).length), logged = runs.map((r) => logOf(r)[0]).find(Boolean);
+    if (next) {
+      todayTick = { c, n: wi, row: next, date: t };
+      act = `<div class="grid2">${feat('gps') ? `<a class="btn iconbtn" href="#/run" style="justify-content:center">${IC.runner}開始跑步</a>` : ''}<button type="button" class="btn ${feat('gps') ? 'ghost ' : ''}iconbtn" id="tdDone" style="justify-content:center${feat('gps') ? '' : ';grid-column:1/-1'}">${IC.check}完成了</button></div>
+        <a class="tiny" href="#/log?w=${wi}&i=${next.i}${personal ? '&c=r' : ''}">填寫詳細 ›</a>`;
+    } else if (logged?.pending) {
+      act = '<p class="tiny" style="margin:0">待上傳：連上網路會自動上傳</p>';
+    } else if (logged) {
+      act = logged.km || logged.seconds || logged.status === 'skip' ? `<a class="btn ghost sm" href="#/log?id=${logged.id}">看今天的紀錄</a>` : `<a class="btn ghost sm" href="#/log?id=${logged.id}">補填距離</a>`;
+    }
+  }
+  if (!main && !todays.length && !done) return '';
   return `<section class="card todaycard">
-    <div class="row spread"><span class="tiny">今天・${me.dist === 'hm' ? '半馬' : '全馬'} ${esc(me.grp)} 組</span>${done ? `<span class="pill solid">${LOG_ICON[done.status]}${LOG_STATUS_NAME[done.status]}</span>` : ''}</div>
-    ${day ? (day.kind === 'rest' ? '<h2>今天休息</h2><p class="muted" style="margin:0">好好睡、補充水分，明天再練。</p>'
-      : `<h2 class="${day.kind}">${esc(fixText(day.t))}</h2><p class="muted" style="margin:0">${P.KIND_LABEL[day.kind]}${P.paceHint(day.t, me.dist, me.grp) ? `・${P.paceHint(day.t, me.dist, me.grp)}` : ''}</p>`) : ''}
+    <div class="row spread"><span class="tiny">今天・${me.dist === 'hm' ? '半馬' : '全馬'} ${esc(me.grp)} 組${personal && wi >= 1 && wi <= 21 ? `・個人 W${wi}` : ''}</span>${done ? `<span class="pill solid">${LOG_ICON[done.status]}${LOG_STATUS_NAME[done.status]}</span>` : ''}</div>
+    ${main}
     ${todays.map((e) => `<a class="todayev" href="#/e/${e.id}">${IC.calendar}<span><b><span translate="no">${esc(e.title)}</span></b><span class="tiny" style="display:block">${e.gather_time ? `${e.gather_time} 集合` : ''}${e.place ? `・<span translate="no">${esc(e.place)}</span>` : ''}${e.mine === 'wait' ? '・候補中' : e.mine === 'pending' ? '・審核中' : ''}</span></span><span class="tiny">›</span></a>`).join('')}
-    ${day && day.kind !== 'rest' ? (done ? `<a class="btn ghost sm" href="#/log?id=${done.id}">看今天的紀錄</a>`
-      : `<div class="grid2">${feat('gps') ? `<a class="btn iconbtn" href="#/run" style="justify-content:center">${IC.runner}開始跑步</a>` : ''}<a class="btn ${feat('gps') ? 'ghost ' : ''}iconbtn" href="#/log?w=${w}&i=${idx}" style="justify-content:center${feat('gps') ? '' : ';grid-column:1/-1'}">${IC.check}記錄訓練</a></div>`) : ''}
+    ${act}
   </section>`;
 }
-// 本週在整季的哪裡：階段、週次進度與三堂重點課
+// 首頁「完成了」：記下今天這一課（不必填距離），可以復原
+function bindTodayCard() {
+  const b = $('#tdDone');
+  if (b && todayTick) b.onclick = () => quickTick(b, todayTick.c, todayTick.n, todayTick.row, todayTick.date);
+}
+// 本週在整季的哪裡：階段（顏色）、週次進度與三堂重點課；個人週期照自己的 21 週
 async function weekStrip() {
-  const w = P.currentWeek(), info = await P.weekInfo(w);
+  const c = myCycle(), personal = c.kind !== 'club', t = ymd(new Date()), wi = P.weekIndexOf(t, c);
+  const w = Math.min(21, Math.max(1, wi)), all = await P.weeks(), info = all[w - 1];
   const days = await P.weekPlan(w, me.dist, me.grp);
   const key = (days || []).filter((d) => d.kind === 'quality' || d.kind === 'long' || d.kind === 'race').slice(0, 3);
   return `<section class="card weekstrip">
     <div class="row spread">
-      <span class="hd"><b>W${w}</b><span class="muted">${info?.phase || ''}${info?.recovery && w !== 21 ? '・恢復週' : ''}</span></span>
+      <span class="hd"><b>W${w}</b><span class="muted">${info?.phase || ''}${info?.recovery && w !== 21 ? '・恢復週' : ''}${personal ? '・個人週期' : ''}</span></span>
       <a class="tiny" href="#/plan">完整課表 ›</a>
     </div>
-    <div class="dots" aria-hidden="true">${Array.from({ length: 21 }, (_, i) =>
-      `<i class="${i + 1 < w ? 'done' : i + 1 === w ? 'now' : ''}"></i>`).join('')}</div>
-    <div class="keys">${key.map((d) => `<div><span class="d">${esc(dayLabel(d.d))}</span><span>${esc(fixText(d.t))} <span class="hint">${P.paceHint(d.t, me.dist, me.grp)}</span></span></div>`).join('')
+    ${wi < 1 ? `<p class="muted" style="margin:0">${w1Line(c, t)}</p>`
+      : `<div class="dots" aria-hidden="true">${all.slice(0, 21).map((x, i) =>
+        `<i data-ph="${P.PHASES[x.phase] || 'base'}" class="${i + 1 < wi ? 'done' : i + 1 === wi ? 'now' : ''}"></i>`).join('')}</div>`}
+    <div class="keys">${key.map((d) => `<div><span class="d">${esc(dayLabel(d.d))}</span><span>${P.isRaceDay(d, w) && personal ? `比賽日：<span translate="no">${esc(c.name)}</span>` : esc(fixText(d.t))} <span class="hint">${P.paceHint(d.t, me.dist, me.grp)}</span></span></div>`).join('')
       || '<div class="muted">這週沒有重點課。</div>'}</div>
   </section>`;
 }
@@ -1004,6 +1172,9 @@ async function eventView(id) {
     ev.week_no ? P.weekPlan(ev.week_no, me.dist, me.grp) : null]);
   const seatData = seatInfo.seats;
   const myDay = plan?.find((d) => new RegExp(dayPattern(ev.date)).test(d.d));
+  // 個人週期：團練是協會的課，另外列出自己課表這天要練什麼
+  const cyc = myCycle(), cw = cyc.kind !== 'club' && P.inCycle(ev.date, cyc) ? P.weekIndexOf(ev.date, cyc) : null;
+  const myOwn = cw ? (await P.weekPlan(cw, me.dist, me.grp))?.find((d) => P.dayDates(cw, d.d, cyc, d).includes(ev.date)) : null;
 
   view.innerHTML = `
     <section class="card hero">
@@ -1034,11 +1205,11 @@ async function eventView(id) {
     ${inviteOnly && admin ? inviteCard(ev) : ''}
 
     ${myDay ? `<section class="card">
-      <div class="row spread"><h3>你這天的課表</h3><span class="pill">${me.dist === 'hm' ? '半馬' : '全馬'} ${me.grp} 組</span></div>
+      <div class="row spread"><h3>${cyc.kind !== 'club' ? `協會 W${ev.week_no} 課表` : '你這天的課表'}</h3><span class="pill">${me.dist === 'hm' ? '半馬' : '全馬'} ${me.grp} 組</span></div>
       <div class="day ${myDay.kind}">
         <span class="dl"><span>${esc(myDay.d)}</span><span class="k">${P.KIND_LABEL[myDay.kind]}</span></span>
         <span class="t">${esc(myDay.t)} <span class="hint">${P.paceHint(myDay.t, me.dist, me.grp)}</span></span>
-      </div></section>` : ''}
+      </div>${cyc.kind !== 'club' ? `<p class="tiny" style="margin:0">你的課表這天：${myOwn ? (P.isRaceDay(myOwn, cw) ? `比賽日：<span translate="no">${esc(cyc.name)}</span>` : esc(fixText(myOwn.t))) : '沒有排課'}</p>` : ''}</section>` : ''}
     ${ev.plan_text ? `<section class="card"><h3>課表</h3><pre class="out">${esc(ev.plan_text)}</pre></section>` : ''}
     ${ev.spot ? `<section class="card"><div class="row spread"><h3>場地天氣</h3><a class="tiny" href="#/map?spot=${esc(ev.spot.id)}"><span translate="no">${esc(ev.spot.name)}</span> ›</a></div><div id="evWx"><p class="tiny" style="margin:0">載入中…</p></div></section>` : ''}
     ${ev.route ? `<section class="card"><div class="row spread"><h3>路線・${(ev.route.distance / 1000).toFixed(1)} 公里</h3><a class="tiny" href="#/map?route=${esc(ev.route.id)}">在地圖上看 ›</a></div>
@@ -2323,79 +2494,184 @@ function confetti() {
 const studioView = lazy('./photo.js', 'studioView');
 const studio = { stats: null, bg: null, template: 'minimal', size: 'story', source: 'manual', acts: null };
 // ---------- 我的課表 ----------
+// 週期：預設照我的課表週期（協會賽季或個人比賽日）；?c=club 是個人週期的會員看協會賽季（只能看，不能記錄）
+const md = (d) => `${d.getMonth() + 1}/${d.getDate()}`;
+// 「W1 8/3（一）開始，還有 N 天」：整句放在同一段文字，英文介面才對得上句型
+const w1Line = (c, today) => `${c.kind === 'club' ? 'W1 ' : '你的 W1 從 '}${md(c.w1)}（一）開始，還有 ${P.dayDiff(c.w1, P.parseISO(today))} 天`;
+let viewCleanup = null;   // 課表頁加強功能（用語、滑動換週）離開時要清掉的監聽
+const whenIdle = (fn) => (window.requestIdleCallback ? requestIdleCallback(fn, { timeout: 1500 }) : setTimeout(fn, 200));
 async function planView(n) {
-  const week = n || P.currentWeek();
-  const info = await P.weekInfo(week);
-  const days = await P.weekPlan(week, me.dist, me.grp);
-  const posts = (await api(`/plans?week=${week}`).catch(() => ({ plans: [] }))).plans;
-  const s = P.weekStart(week), e = new Date(s.getTime() + 6 * 864e5);
-  const isNow = week === P.currentWeek();
-  // 這週的訓練紀錄：照「週次＋課表那一天」對到每一列
-  const { logs } = await api(`/logs?from=${ymd(s)}&to=${ymd(e)}`).catch(() => ({ logs: [] }));
-  const logOf = (d) => logs.filter((l) => l.week_no === week && l.plan_day === d.d);
+  const q = new URLSearchParams(location.hash.split('?')[1] || '');
+  const mine = myCycle(), c = q.get('c') === 'club' ? P.CLUB : mine, other = c !== mine, personal = c.kind !== 'club';
+  const coach = feat('coach'), today = ymd(new Date()), wi = P.weekIndexOf(today, c);
+  const week = n ? Math.min(21, Math.max(1, n)) : P.currentWeek(new Date(), c);
+  const cq = other ? '?c=club' : '';
+  const all = await P.weeks(), info = all[week - 1] || null;
+  const raw = await P.weekPlan(week, me.dist, me.grp);
+  // 每週能練的天數（課表設定）不夠時，輕鬆跑標成可省略；沒開課表教練就照原本每週 6 天
+  const days = raw ? P.markOptional(raw, coach ? coachPrefs().plan : undefined, week) : null;
+  const s = P.weekStart(week, c), e = P.addDays(s, 6), from = ymd(s), to = ymd(e);
+  // 教練公告是協會週次：個人週期看同一個星期一開始的協會週（賽季外沒有）
+  const postWeek = personal ? P.clubWeekOf(from) : week;
+  const [posts, got] = await Promise.all([
+    postWeek ? api(`/plans?week=${postWeek}`).then((r) => r.plans).catch(() => []) : [],
+    api(`/logs?from=${from}&to=${to}`).then((r) => r.logs).catch(() => [])]);
+  // 離線時先存在手機、還沒上傳的紀錄也算進來（打勾後馬上看得到）
+  const logs = [...notQueued(got), ...logQueue.get().filter((x) => x.date >= from && x.date <= to).map((x) => ({ ...x, id: null, pending: true }))];
+  const isNow = week === wi;
+  // 這週的訓練紀錄：一律用 P.logMatches 對到每一列（同一個週期、同一週、同一天）
+  const logOf = (d) => logs.filter((l) => P.logMatches(l, c, week, d));
   const extras = logs.filter((l) => l.status === 'extra' || !l.plan_day);
-  const planned = (days || []).filter((d) => d.kind !== 'rest');
-  const doneN = planned.filter((d) => logOf(d).some((l) => l.status === 'done')).length;
-  const partN = planned.filter((d) => logOf(d).some((l) => l.status === 'partial') && !logOf(d).some((l) => l.status === 'done')).length;
-  const km = logs.reduce((n, l) => n + (l.km || 0), 0);
-  const rpes = logs.filter((l) => l.rpe), avgRpe = rpes.length ? rpes.reduce((n, l) => n + l.rpe, 0) / rpes.length : 0;
-  const pct = planned.length ? Math.round((doneN + partN * 0.5) / planned.length * 100) : 0;
-  const started = ymd(s) <= ymd(new Date());
+  const others = P.otherCycleLogs(logs, c, week, days);
+  const wc = P.weekCompletion(days, logOf);
+  const km = logs.reduce((x, l) => x + (l.km || 0), 0);
+  const rpes = logs.filter((l) => l.rpe), avgRpe = rpes.length ? rpes.reduce((x, l) => x + l.rpe, 0) / rpes.length : 0;
+  const started = from <= today;
+  const venue = org().thu_venue || '';
+  if (coach && personal && coachPrefs().cycleSeen?.anchor !== c.anchor) setCoachPrefs({ cycleSeen: { anchor: c.anchor, at: today } });
+  // 賽前階段：個人週期跟著自己的比賽（倒數關掉也顯示）；協會賽季跟右上角倒數那一場
+  const stageISO = !coach || other ? null : personal ? c.anchor : cfg.race?.date;
+  const stage = stageISO ? P.raceStage(today, stageISO) : null;
+  const stageName = personal ? c.name : cfg.race?.name || '';
+  const weekday = personal && !P.weekendRace(c);
+  const notices = [];
+  if (other) notices.push(`<span>這是協會賽季 W${week}，只能看</span><span>；你的課表跟著 <span translate="no">${esc(mine.name)}</span>。</span><a href="#/plan">回我的課表 ›</a>`);
+  if (wi < 1 && week === 1) notices.push(`<b>${w1Line(c, today)}</b><br><span>這段時間照平常的量跑${personal ? '，或' : '。'}</span>${personal ? '<a href="#/plan?c=club">先看協會課表 ›</a>' : ''}`);
+  if (info?.src?.startsWith('推估') && (personal || !posts.length)) notices.push(personal ? '個人週期照協會課表範本排課；W9 以後是依 2025 同期推估。' : '教練還沒公告這週課表，先參考去年同期。');
+  if (weekday && week === 20) notices.push('你的比賽不在週末，賽事週的課請跟教練確認');
+  const NOTE = { club: `週四團練${venue ? `・<span translate="no">${esc(venue)}</span>` : ''}`, self: '自己練：團體熱身改 10 分鐘自主熱身', opt: '天數不夠時先省略',
+    rd: '<a class="notelink" href="#/plan/race">比賽日計劃 ›</a>' };
+  const hdrBtns = [canPublishPlan() && c.kind === 'club' ? '<a class="btn ghost sm" href="#/plan/new">發布這週課表</a>' : '',
+    // 全部展開：畫面一出來就在（閒下來才綁定），避免之後才冒出來把下面每一列往下推
+    coach && days?.some((d) => d.kind !== 'rest') ? `<button class="btn ghost sm" id="xall" aria-pressed="${coachPrefs().ui.explain === true}">全部展開</button>` : ''].filter(Boolean);
+  const pace = `${me.dist === 'hm' ? 'HMP' : 'MP'} ${P.fmtPace(P.goalPace(me.dist, me.grp))}/km`;
+  const postCards = posts.map((po) => `<section class="card">
+      <div class="row spread"><h3><span translate="no">${esc(po.title)}</span></h3>${po.team_id ? teamTag(teamOf(po.team_id)) : '<span class="pill">教練發布</span>'}</div>
+      <p class="tiny"><span translate="no">${esc(po.author || '')}</span>・${ago(po.created_at)}</p>
+      <pre class="out">${esc(po.body)}</pre>
+      ${allow('plan') || (po.team_id && teamAllow(po.team_id, 'appoint')) ? `<button class="btn danger sm" data-delplan="${po.id}">刪除</button>` : ''}
+    </section>`).join('');
   view.innerHTML = `
-    ${largeTitle('課表', `${me.dist === 'hm' ? '半馬' : '全馬'} ${me.grp} 組・${me.dist === 'hm' ? 'HMP' : 'MP'} ${P.fmtPace(P.goalPace(me.dist, me.grp))}/km`)}
+    ${largeTitle('課表', `${me.dist === 'hm' ? '半馬' : '全馬'} ${me.grp} 組・${pace}${personal ? '・個人週期' : ''}`,
+      feat('plan_export') ? `<button type="button" class="ltshare" id="planShare" aria-label="分享與匯出">${MI.share}</button>` : '')}
+    ${planSeg('/plan')}
+    ${coach ? `<nav class="wkline" aria-label="選擇週次">${all.slice(0, 21).map((x, i) => {
+      const k = i + 1, d = P.weekStart(k, c);
+      return `<a class="wk" href="#/plan/${k}${cq}" data-ph="${P.PHASES[x.phase] || 'base'}"${k === week ? ' aria-current="page"' : ''}><i aria-hidden="true"></i><b>${k === 21 ? 'R' : `W${k}`}</b><span class="num">${md(d)}</span>${k === wi ? '<em>本週</em>' : ''}</a>`;
+    }).join('')}</nav>` : ''}
     <section class="card">
       <div class="row spread">
         <div>
           <h2>${week === 21 ? '賽後恢復' : `W${week}`}${isNow ? ' <span class="pill">本週</span>' : ''}</h2>
-          <p class="muted" style="margin:2px 0 0">${info?.phase || ''}${info?.recovery && week !== 21 ? '・恢復週' : ''}　${s.getMonth() + 1}/${s.getDate()}–${e.getMonth() + 1}/${e.getDate()}</p>
+          <p class="muted" style="margin:2px 0 0">${info?.phase || ''}${info?.recovery && week !== 21 ? '・恢復週' : ''}　${md(s)}–${md(e)}</p>
+          ${personal ? `<p class="tiny" style="margin:2px 0 0">跟著 <span translate="no">${esc(c.name)}</span>・比賽日 ${dstr(c.anchor)}</p>` : ''}
         </div>
         <div class="row" style="gap:6px">
           <button class="btn ghost sm" id="prev" ${week === 1 ? 'disabled' : ''} aria-label="上一週">‹</button>
           <button class="btn ghost sm" id="next" ${week === 21 ? 'disabled' : ''} aria-label="下一週">›</button>
         </div>
       </div>
-      ${posts.length ? '' : info?.src?.startsWith('推估') ? '<p class="notice" style="margin:0">這週的課表教練還沒公告，先參考去年同期。</p>' : ''}
-      ${canPublishPlan() ? '<a class="btn ghost sm" href="#/plan/new">發布這週課表</a>' : ''}
+      ${notices.map((x) => `<p class="notice" style="margin:0">${x}</p>`).join('')}
+      ${hdrBtns.length ? `<div class="row" style="gap:8px">${hdrBtns.join('')}</div>` : ''}
     </section>
-    ${posts.map((po) => `<section class="card">
-      <div class="row spread"><h3><span translate="no">${esc(po.title)}</span></h3>${po.team_id ? teamTag(teamOf(po.team_id)) : '<span class="pill">教練發布</span>'}</div>
-      <p class="tiny"><span translate="no">${esc(po.author || '')}</span>・${ago(po.created_at)}</p>
-      <pre class="out">${esc(po.body)}</pre>
-      ${allow('plan') || (po.team_id && teamAllow(po.team_id, 'appoint')) ? `<button class="btn danger sm" data-delplan="${po.id}">刪除</button>` : ''}
-    </section>`).join('')}
-    ${days && started ? `<section class="card logsum">
+    ${stage ? `<section class="card stagecard ${stage}">
+      ${stage === 'prep' ? `<h3>${MI.flag}賽前 ${P.dayDiff(P.parseISO(stageISO), P.parseISO(today))} 天</h3><p class="tiny" style="margin:0"><span translate="no">${esc(stageName)}</span>・${dstr(stageISO)}</p>
+        <ul class="tl-list"><li>前一晚：準備號碼布、晶片、衣物、能量膠、別針，設好兩個鬧鐘</li><li>${me.dist === 'hm' ? '前 24–36 小時：輕度超補' : '前 36–48 小時：肝醣超補'}</li></ul>
+        <a class="tiny" href="#/plan/race">比賽日計劃 ›</a>`
+      : stage === 'race' ? `<h3>${MI.flag}今天比賽，加油</h3><p style="margin:0"><b><span translate="no">${esc(stageName)}</span></b></p>
+        <ol class="tl-list" id="stageTl" hidden></ol><a class="tiny" href="#/plan/race">完整比賽日計劃 ›</a>`
+      : `<h3>${MI.flag}辛苦了</h3><p class="muted" style="margin:0">賽後一週以恢復為主，照課表的恢復週慢慢跑。</p><div class="row" style="gap:16px"><a class="tiny" href="#/plan/season">全季回顧 ›</a><a class="tiny" href="${feat('plan_cycle') ? '#/plan/setup?go=cycle' : '#/me/races'}">設定下一場 ›</a></div>`}
+      ${weekday && stage !== 'recover' ? '<p class="notice" style="margin:0">你的比賽不在週末，賽事週的課請跟教練確認</p>' : ''}
+    </section>` : ''}
+    ${coach && !other && legacyDue() ? `<section class="setgroup legacynote"><div class="card setcard">${row('#/plan/setup?migrate=1', IC.runner, '舊版課表教練的資料可以搬進 App', '設定、完成紀錄與倒數；勾選的才會搬')}</div></section>` : ''}
+    ${personal && posts.length ? `<details class="card clubposts"><summary>協會 W${postWeek} 公告（你的課表照個人週期排，內容可能不同）</summary>${postCards}</details>` : postCards}
+    ${days && started && !other ? `<section class="card logsum">
       <div class="lsumtop">
-        <div class="ring" style="--p:${pct}" role="img" aria-label="本週完成 ${pct}%"><b class="num">${pct}<small>%</small></b></div>
+        <div class="ring" style="--p:${wc.pct}" role="img" aria-label="本週完成 ${wc.pct}%"><b class="num">${wc.pct}<small>%</small></b></div>
         <div class="lsum"><span class="tiny">本週訓練</span>
-          <div class="lstats"><span><b class="num">${doneN}</b>/${planned.length} 堂</span><span><b class="num">${km.toFixed(1)}</b> km</span>${avgRpe ? `<span>RPE <b class="num">${avgRpe.toFixed(1)}</b></span>` : ''}</div>
+          <div class="lstats"><span><b class="num">${wc.full}</b>/${wc.req} 堂</span>${wc.extra ? `<span>+${wc.extra} 加練</span>` : ''}<span><b class="num">${km.toFixed(1)}</b> km</span>${avgRpe ? `<span>RPE <b class="num">${avgRpe.toFixed(1)}</b></span>` : ''}</div>
           ${allow('plan') || teams().some((t) => teamAllow(t.id, 'roster')) ? '<a class="tiny" href="#/logs/team">看團員的訓練 ›</a>' : ''}</div>
       </div>
       <div class="lsumact">${feat('gps') ? `<a class="btn iconbtn" href="#/run">${IC.runner}開始跑步</a>` : ''}<a class="btn ghost iconbtn" href="#/log?extra=1">${IC.plus}自主加練</a><a class="btn ghost" href="#/report">報表</a></div>
       <p class="tiny" style="margin:0">${me.share_logs ? '教練與分團幹部看得到你的完成率與里程，看不到備註。' : '紀錄只有你看得到；想讓教練看到，到「我的 → 隱私」打開分享。'}</p>
     </section>` : ''}
-    <div class="days">${days ? days.map((d, i) => {
+    <div class="days${other ? '' : ' ticks'}">${days ? days.map((d, i) => {
       const L = logOf(d), top = L.find((l) => l.status === 'done') || L.find((l) => l.status === 'partial') || L[0];
-      const dates = dayDates(week, d.d), canLog = d.kind !== 'rest' && dates[0] <= ymd(new Date());
-      return `<div class="day ${d.kind}${top ? ` logged ${top.status}` : ''}">
-        <span class="dl"><span>${esc(dayLabel(d.d))}</span><span class="k">${P.KIND_LABEL[d.kind]}</span></span>
-        <span class="t">${esc(fixText(d.t))} <span class="hint">${P.paceHint(d.t, me.dist, me.grp)}</span>
-          ${top ? `<span class="logline">${LOG_STATUS_NAME[top.status]}${top.km ? `・${top.km} km` : ''}${top.seconds ? `・${S.fmtDuration(top.seconds)}` : ''}${top.rpe ? `・RPE ${top.rpe}` : ''}${L.some((l) => l.unread) ? '<span class="pill solid" style="margin-left:6px">教練回饋</span>' : L.some((l) => l.comments) ? '・有回饋' : ''}</span>` : ''}</span>
-        ${top ? `<a class="logbtn ${top.status}" href="#/log?id=${top.id}" aria-label="修改紀錄">${LOG_ICON[top.status]}</a>`
-          : canLog ? `<a class="logbtn" href="#/log?w=${week}&i=${i}" aria-label="記錄${esc(d.d)}">記錄</a>` : ''}
-      </div>`; }).join('') : '<div class="card"><p class="muted">這週沒有課表資料。</p></div>'}</div>
-    ${extras.length ? `<section class="card"><h3>自主加練</h3><div class="roster">${extras.map((l) => `<a class="r" href="#/log?id=${l.id}"><span class="av">＋</span>
-      <span>${esc(dstr(l.date))}${l.km ? `・${l.km} km` : ''}${l.seconds ? `・${S.fmtDuration(l.seconds)}` : ''}<span class="tiny" style="display:block"><span translate="no">${esc(l.note || '')}</span></span></span><span class="tiny">›</span></a>`).join('')}</div></section>` : ''}
+      const race = P.isRaceDay(d, week), tdate = P.tickDate(week, d, c, today);
+      const canLog = !other && d.kind !== 'rest' && !!tdate;
+      const st = top?.status;
+      const text = race && personal ? `比賽日：<span translate="no">${esc(c.name)}</span>` : esc(fixText(d.t));
+      const hint = race && personal ? '' : P.paceHint(d.t, me.dist, me.grp);
+      const notes = coach ? d.noteKeys.filter((k) => NOTE[k]).map((k) => `<span class="note">${NOTE[k]}</span>`).join('') : '';
+      const tick = other ? '' : d.kind === 'rest' ? '<span class="tick none" aria-hidden="true"></span>'
+        // 還沒記錄是勾選框（點了記「完成」）；已經有紀錄點了是打開那筆修改，就當一般按鈕念出狀態
+        : `<button type="button" class="tick${st ? ` ${st}` : ''}" ${top ? `aria-label="修改紀錄（${LOG_STATUS_NAME[st]}）：` : 'role="checkbox" aria-checked="false" aria-label="標記完成：'}${esc(dayLabel(d.d))} ${race && personal ? '比賽日' : esc(fixText(d.t))}" data-tick="${i}" ${(!top && !canLog) || top?.pending ? 'disabled' : ''}>${st ? LOG_ICON[st] : ''}</button>`;
+      return `<div class="day ${d.kind}${d.opt ? ' opt' : ''}${top ? ` logged ${st}` : ''}" data-i="${i}">
+        ${tick}
+        <span class="dl"><span>${esc(dayLabel(d.d))}</span><span class="k">${P.KIND_LABEL[d.kind]}</span>${d.opt ? '<span class="pill opt">可省略</span>' : ''}</span>
+        <div class="t"><span class="tx">${text}</span> <span class="hint">${hint}</span>
+          ${notes}
+          ${top ? `<span class="logline">${top.pending ? '待上傳・' : ''}${LOG_STATUS_NAME[st]}${top.km ? `・${top.km} km` : ''}${top.seconds ? `・${S.fmtDuration(top.seconds)}` : ''}${top.rpe ? `・RPE ${top.rpe}` : ''}${L.some((l) => l.unread) ? '<span class="pill solid" style="margin-left:6px">教練回饋</span>' : L.some((l) => l.comments) ? '・有回饋' : ''}</span>` : ''}
+          ${coach && d.kind !== 'rest' ? `<details class="xd" data-xd="${i}"><summary>詳細內容</summary><div class="xdb"></div></details>` : ''}
+        </div>
+        ${top?.pending ? `<span class="logbtn done" role="img" aria-label="待上傳">${LOG_ICON.done}</span>`
+          : top ? `<a class="logbtn ${st}" href="#/log?id=${top.id}" aria-label="修改紀錄">${LOG_ICON[st]}</a>`
+          : canLog ? `<a class="logbtn" href="#/log?w=${week}&i=${i}${personal ? '&c=r' : ''}" aria-label="記錄${esc(d.d)}">記錄</a>` : ''}
+      </div>`; }).join('') : `<div class="card"><p class="muted">${info?.missing ? `W${week} 課表還沒公告` : '這週沒有課表資料。'}</p></div>`}</div>
+    ${coach && days && !other ? '<div class="warnslot" hidden></div>' : ''}
+    ${extras.length || others.length ? `<section class="card"><h3>${others.length ? '自主加練與其他週期的紀錄' : '自主加練'}</h3><div class="roster">${[...others, ...extras].map((l) => `<a class="r" ${l.id ? `href="#/log?id=${l.id}"` : ''}><span class="av">${l.status === 'extra' || !l.plan_day ? '＋' : LOG_ICON[l.status] || '＋'}</span>
+      <span>${esc(dstr(l.date))}${l.plan_day && l.status !== 'extra' ? `・${esc(P.logWeekLabel(l))} ${esc(dayLabel(l.plan_day))}` : ''}${l.km ? `・${l.km} km` : ''}${l.seconds ? `・${S.fmtDuration(l.seconds)}` : ''}${l.pending ? '・待上傳' : ''}<span class="tiny" style="display:block"><span translate="no">${esc(l.note || '')}</span></span></span><span class="tiny">›</span></a>`).join('')}</div>
+      ${others.length ? '<p class="tiny" style="margin:0">其他週期的紀錄只算里程，不算這週的完成率。</p>' : ''}</section>` : ''}
     <section class="setgroup"><h3 class="sgt">工具</h3><div class="card setcard">
-      ${feat('coach') ? `<a class="setrow" href="/coach"><span class="sic">${IC.runner}</span><span class="st"><b>課表教練</b><span class="tiny">逐週課表、配速換算、年齡分級、補給試算</span></span><span class="chev" aria-hidden="true"></span></a>` : ''}
+      ${coach ? `${row('#/plan/season', MI.plan, '全季課表', '20 週一覽、每週完成率')}${row('#/plan/race', MI.flag, '賽事準備', '比賽日計劃、補給、心率、年齡分級')}
+        ${row('#/plan/guide', MI.help, '配速與用語', '你的配速、課表用語、各階段')}${row('#/plan/setup', IC.sliders, '課表設定', '組別、課表週期、每週天數、身體資料')}
+        <a class="setrow" href="/coach"><span class="sic">${IC.runner}</span><span class="st"><b>舊版課表教練</b><span class="tiny">舊版的完成紀錄與倒數，可以到課表設定搬進 App</span></span><span class="chev" aria-hidden="true"></span></a>` : ''}
       <a class="setrow" href="#/report"><span class="sic">${MI.report}</span><span class="st"><b>訓練報表</b><span class="tiny">週里程、完成率、個人最佳</span></span><span class="chev" aria-hidden="true"></span></a>
       <a class="setrow" href="#/challenge"><span class="sic">${MI.flag}</span><span class="st"><b>每月里程挑戰</b><span class="tiny">徽章、分團對抗、排行榜</span></span><span class="chev" aria-hidden="true"></span></a>
-    </div><p class="tiny center">課表來源：耕跑團記事本</p></section>`;
+    </div><p class="tiny center">課表來源：耕跑團記事本・實際以教練每週公告為準</p></section>`;
   for (const b of document.querySelectorAll('[data-delplan]')) b.onclick = async () => {
     if (!confirm('確定刪除這則課表？')) return;
     await api(`/plans/${b.dataset.delplan}`, { method: 'DELETE' }); toast('已刪除'); render();
   };
-  $('#prev').onclick = () => { location.hash = `#/plan/${week - 1}`; };
-  $('#next').onclick = () => { location.hash = `#/plan/${week + 1}`; };
+  $('#planShare')?.addEventListener('click', (e) => coachShare({ week, cycle: c, from: e.currentTarget }));
+  $('#prev').onclick = () => { location.hash = `#/plan/${week - 1}${cq}`; };
+  $('#next').onclick = () => { location.hash = `#/plan/${week + 1}${cq}`; };
+  // 快速打勾：還沒記錄就記「完成」；已經有紀錄就打開那筆修改
+  for (const b of view.querySelectorAll('[data-tick]')) b.onclick = () => {
+    const d = days[Number(b.dataset.tick)], L = logOf(d), top = L.find((l) => l.status === 'done') || L.find((l) => l.status === 'partial') || L[0];
+    if (top?.id) { location.hash = `#/log?id=${top.id}`; return; }
+    if (top) return;
+    const date = P.tickDate(week, d, c, today);
+    if (date) quickTick(b, c, week, d, date);
+  };
+  // 週次列：選到的那一週捲到中間
+  const wl = view.querySelector('.wkline'), cur = wl?.querySelector('[aria-current]');
+  if (cur) wl.scrollLeft += cur.getBoundingClientRect().left - wl.getBoundingClientRect().left - (wl.clientWidth - cur.offsetWidth) / 2;
+  // 比賽當天：有設定起跑時間就列出接下來三件事（閒下來才載入計算模組）
+  if (stage === 'race') whenIdle(async () => {
+    const st = coachPrefs().start[startKey({ date: stageISO, name: stageName })];
+    if (!st || !$('#stageTl')) return;
+    const { createCoach } = await import('./coachcalc.js');
+    const tl = createCoach({ dist: me.dist, grp: me.grp, start: st, cycle: { kind: 'race', anchor: stageISO, name: stageName } }).raceDayPlan().timeline;
+    const now = new Date(), hm = `${pad2(now.getHours())}:${pad2(now.getMinutes())}`, el = $('#stageTl');
+    const next = tl.filter(([t]) => t >= hm).slice(0, 3);
+    if (!el || !next.length) return;
+    el.innerHTML = next.map(([t, a]) => `<li><b class="num">${esc(t)}</b> ${esc(a)}</li>`).join('');
+    el.hidden = false;
+  });
+  // 用語說明、詳細內容、提醒、滑動換週：畫面畫好、閒下來才載入（第一次畫面只需要 plan.js）
+  if (coach && days) {
+    const mark = {}; view.planMark = mark;
+    whenIdle(async () => {
+      const fresh = () => view.planMark === mark;
+      if (!fresh()) return;   // 已經換頁或重畫
+      try {
+        const done = await coachWeekExtras(view, { week, cycle: c, other, rows: days, venue, hl: q.get('hl'), wi, alive: fresh });
+        // 載入期間換了頁：這次的監聽馬上拿掉，不蓋掉新頁面的清理
+        if (fresh()) viewCleanup = done; else done?.();
+      } catch {}
+    });
+  }
 }
 
 // ---------- 訓練紀錄 ----------
@@ -2404,22 +2680,19 @@ const LOG_ICON = { done: IC.check, partial: IC.half, skip: IC.minus, extra: IC.p
 const FEEL = ['', '很累', '有點累', '普通', '不錯', '很好'];
 const pad2 = (n) => String(n).padStart(2, '0');
 const ymd = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
-// 課表上的「週二」「週五或週六」「週末」→ 那一週實際的日期
-const WD_IDX = { 一: [0], 二: [1], 三: [2], 四: [3], 五: [4], 六: [5], 日: [6], 末: [5, 6] };
-function dayDates(week, label) {
-  const s = P.weekStart(week);
-  const idx = [...String(label).matchAll(/[週周]([一二三四五六日末])/g)].flatMap((m) => WD_IDX[m[1]]);
-  return (idx.length ? idx : [0]).map((i) => ymd(new Date(s.getFullYear(), s.getMonth(), s.getDate() + i)));
-}
+// 課表上的「週二」「週五或週六」「週末」→ 那一週實際的日期：P.dayDates（比賽那一列只在比賽日）
 async function logView() {
   const q = new URLSearchParams(location.hash.split('?')[1] || '');
   let log = null, day = null, week = Number(q.get('w')) || null;
+  // 這筆紀錄屬於哪個課表週期：修改時看紀錄本身；從課表某一列進來時 c=r 表示個人週期（沒有就是協會賽季）
+  let lc = q.get('c') === 'r' ? myCycle() : P.CLUB;
   if (q.get('id')) {
     // 修改：從最近 120 天找這筆
     const { logs } = await api(`/logs?from=${ymd(new Date(Date.now() - 119 * 864e5))}&to=${ymd(new Date())}`);
     log = logs.find((l) => l.id === q.get('id'));
     if (!log) { view.innerHTML = `<div class="card">${emptyState('runner', '找不到這筆紀錄（只能修改 120 天內的紀錄）')}<a class="btn ghost sm" href="#/plan" style="justify-self:center">回課表</a></div>`; return; }
-    week = log.week_no;
+    lc = log.cycle_anchor ? (log.cycle_anchor === myCycle().anchor ? myCycle() : P.cycleOf(log.cycle_anchor)) : P.CLUB;
+    week = log.cycle_anchor ? log.cycle_week : log.week_no;
   } else if (week) {
     day = (await P.weekPlan(week, me.dist, me.grp))?.[Number(q.get('i'))] || null;
   }
@@ -2430,23 +2703,31 @@ async function logView() {
   const today = ymd(new Date());
   // 從「跑完了嗎？」通知進來：帶入那場團練的日期與名稱
   const fromEv = q.get('event') ? await api(`/events/${q.get('event')}`).catch(() => null) : null;
-  let date = log?.date || incoming?.date || (fromEv?.date <= today ? fromEv.date : null) || (day ? dayDates(week, day.d).reduce((a, d) => (d <= today ? d : a), dayDates(week, day.d)[0]) : today);
+  let date = log?.date || incoming?.date || (fromEv?.date <= today ? fromEv.date : null) || (day ? P.dayDates(week, day.d, lc, day).reduce((a, d) => (d <= today ? d : a), P.dayDates(week, day.d, lc, day)[0]) : today);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date > today) date = today;
-  // 沒有指定課表日：用日期去找那週同一天的課表（從拍照分享或跑步記錄進來時自動對上）
+  // 沒有指定課表日：用日期去找我的課表週期那週同一天的課（從拍照分享、跑步記錄或團練通知進來時自動對上）
   if (!log && !day && !q.get('extra')) {
-    const w = P.weekOf(date), plan = await P.weekPlan(w, me.dist, me.grp);
-    const hit = plan?.find((d) => d.kind !== 'rest' && dayDates(w, d.d).includes(date));
-    if (hit) { day = hit; week = w; }
+    const c = myCycle();
+    if (P.inCycle(date, c)) {
+      const w = P.weekIndexOf(date, c), plan = await P.weekPlan(w, me.dist, me.grp);
+      const hit = plan?.find((d) => d.kind !== 'rest' && P.dayDates(w, d.d, c, d).includes(date));
+      if (hit) { day = hit; week = w; lc = c; }
+    }
   }
+  const personal = lc.kind !== 'club';
+  // 個人週期的會員從團練通知進來：也顯示協會這天的團練內容，方便誠實記「部分完成」
+  const evDay = fromEv?.week_no && personal ? (await P.weekPlan(fromEv.week_no, me.dist, me.grp))?.find((d) => new RegExp(dayPattern(fromEv.date)).test(d.d)) : null;
   const extra = !log && !day;
   const v = { status: extra ? 'extra' : 'done', km: '', seconds: null, hr: '', rpe: 5, feel: 3, note: '', ...log, ...(incoming || {}) };
-  const planText = log?.plan_text || day?.t || '';
+  // 個人週期的比賽那一列只記「比賽日」（教練看得到課表內容，看不到你的比賽名稱）
+  const planText = log?.plan_text || (day && personal && P.isRaceDay(day, week) ? '比賽日' : day?.t) || '';
   const label = log?.plan_day || day?.d || '';
   const statuses = extra || v.status === 'extra' ? ['extra'] : ['done', 'partial', 'skip'];
   view.innerHTML = `
-    ${largeTitle(log ? '修改紀錄' : extra ? '自主加練' : '記錄訓練', [fromEv ? `<span translate="no">${esc(fromEv.title)}</span>` : '', week && label ? `W${week}・${esc(dayLabel(label))}` : ''].filter(Boolean).join('・'))}
+    ${largeTitle(log ? '修改紀錄' : extra ? '自主加練' : '記錄訓練', [fromEv ? `<span translate="no">${esc(fromEv.title)}</span>` : '', week && label ? `${personal ? '個人 W' : 'W'}${week}・${esc(dayLabel(label))}` : ''].filter(Boolean).join('・'))}
     ${planText ? `<section class="card plancard ${log?.kind || day?.kind || ''}"><span class="tiny">當天課表</span><p style="margin:0;font-weight:600">${esc(fixText(planText))}</p>
-      <span class="hint">${P.paceHint(planText, me.dist, me.grp)}</span></section>` : ''}
+      <span class="hint">${P.paceHint(planText, me.dist, me.grp)}</span>
+      ${evDay ? `<span class="tiny">團練內容：${esc(fixText(evDay.t))}</span>` : ''}</section>` : ''}
     ${incoming ? `<div class="notice">已帶入${incoming.source === 'health' ? ' Apple 健康' : incoming.source === 'gps' ? '這次 GPS 跑步' : ''}的數據，確認後按儲存。</div>` : ''}
     <section class="card">
       <form id="lf" class="logform">
@@ -2483,31 +2764,34 @@ async function logView() {
   f.onsubmit = async (e) => {
     e.preventDefault();
     const st = f.querySelector('[name=status]:checked')?.value || f.status.value;
-    const body = { id: log?.id, date: f.date.value, status: st, week_no: week || null, plan_day: label || null, kind: log?.kind || day?.kind || null,
+    // 週期欄位：照課表的紀錄帶協會週次（week_no）或個人週期（cycle_anchor、cycle_week）；修改時原樣送回
+    const cyc = label && week ? P.cycleFields(lc, week) : { week_no: null };
+    const body = { id: log?.id, date: f.date.value, status: st, ...cyc, plan_day: label || null, kind: log?.kind || day?.kind || null,
       plan_text: planText || null, km: parseFloat(f.km.value) || null, seconds: S.parseHMS(f.time.value) || null, hr: Number(f.hr.value) || null,
       rpe: Number(f.rpe.value), feel: Number(f.querySelector('[name=feel]:checked')?.value) || null, note: f.note.value,
       source: log?.source || incoming?.source || 'manual' };
-    if (st !== 'skip' && !body.km && !body.seconds) return toast('填一下距離或時間');
+    // 照課表記錄（完成、部分完成）可以不填距離與時間；自主加練才一定要填
+    if (st === 'extra' && !body.km && !body.seconds) return toast('填一下距離或時間');
     try {
       await api('/logs', { method: 'POST', body });
       if (body.source === 'gps' && Run.session()?.status === 'done') Run.discard();   // 已存成紀錄，清掉手機上的這次跑步
-      if (st === 'skip' || log) { toast(st === 'skip' ? '已記下，休息也是訓練的一部分' : '已更新'); location.hash = `#/plan${week ? `/${week}` : ''}`; return; }
+      if (st === 'skip' || log) { toast(st === 'skip' ? '已記下，休息也是訓練的一部分' : '已更新'); location.hash = planHref(lc, week); return; }
       // 記完接著拍照分享：把剛記的距離、時間帶到拍照
       const p = new URLSearchParams({ km: String(body.km || 0), sec: String(body.seconds || 0), date: body.date, title: (fromEv?.title || planText || '今天的跑步').slice(0, 20), logged: '1' });
       view.innerHTML = `<section class="card donecard"><span class="donemark">${IC.check}</span><h2>已記錄，辛苦了</h2>
         <p class="muted" style="margin:0">${body.km ? `${body.km} 公里` : ''}${body.km && body.seconds ? '・' : ''}${body.seconds ? S.fmtDuration(body.seconds) : ''}${body.km && body.seconds ? `・配速 ${S.fmtPace(body.km * 1000, body.seconds)}` : ''}</p>
         ${feat('studio') ? `<a class="btn block iconbtn" href="#/studio?${p}">${ic('<path d="M4 8.2a2 2 0 0 1 2-2h1.9l1.5-2h5.2l1.5 2H18a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2Z"/><circle cx="12" cy="12.6" r="3.6"/>')}拍照分享</a>` : ''}
-        <a class="btn ghost block" href="#/plan${week ? `/${week}` : ''}">回課表</a></section>`;
+        <a class="btn ghost block" href="${planHref(lc, week)}">回課表</a></section>`;
     }
     catch (err) {
       // 斷線（fetch 本身失敗）：先存在手機，連上網路後自動上傳
-      if (!navigator.onLine || err instanceof TypeError) { queueLog(body); toast('目前離線，已先存在手機，連上網路會自動上傳'); location.hash = `#/plan${week ? `/${week}` : ''}`; }
+      if (!navigator.onLine || err instanceof TypeError) { queueLog(body); toast('目前離線，已先存在手機，連上網路會自動上傳'); location.hash = planHref(lc, week); }
       else toast(err.message);
     }
   };
   $('#delLog')?.addEventListener('click', async () => {
     if (!confirm('刪除這筆紀錄？')) return;
-    await api(`/logs/${log.id}`, { method: 'DELETE' }); toast('已刪除'); location.hash = `#/plan${week ? `/${week}` : ''}`;
+    await api(`/logs/${log.id}`, { method: 'DELETE' }); toast('已刪除'); location.hash = planHref(lc, week);
   });
 }
 // 離線時的訓練紀錄暫存區（只放在這台裝置，上傳成功就刪除）
@@ -2515,14 +2799,80 @@ const logQueue = {
   get() { try { return JSON.parse(localStorage.getItem('cil-log-queue') || '[]'); } catch { return []; } },
   set(v) { try { v.length ? localStorage.setItem('cil-log-queue', JSON.stringify(v)) : localStorage.removeItem('cil-log-queue'); } catch {} },
 };
-const queueLog = (body) => logQueue.set([...logQueue.get(), { ...body, id: undefined, queued: Date.now() }].slice(-30));
+// 每筆有一個裝置端的 qid（之後「復原」用來從暫存區刪掉）；回傳 qid。
+//   修改既有紀錄時保留 id，連上網路後是更新那一筆，不會變成新增（也不會被 if_absent 當成重複丟掉）
+const queueLog = (body) => {
+  const qid = `q${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+  logQueue.set([...logQueue.get(), { ...body, qid, queued: Date.now() }].slice(-30));
+  return qid;
+};
+// 伺服器的紀錄裡，離線時改過、還在暫存區的那幾筆先不列（改用暫存區那筆「待上傳」的新內容，不會一天出現兩筆）
+const notQueued = (list) => { const ids = new Set(logQueue.get().map((x) => x.id).filter(Boolean)); return ids.size ? list.filter((l) => !ids.has(l.id)) : list; };
+// 這次開 App 期間補傳過的離線紀錄：qid → 伺服器回傳（{ id, existed }），「復原」時暫存區已經清掉就用這個刪
+const flushed = new Map();
+// ---------- 快速打勾：照課表記「完成」（不必填距離），6 秒內可以復原 ----------
+const ticking = new Set();
+// 回傳 { id, existed }，離線時先存在手機回傳 { qid }；個人週期的比賽那一列只記「比賽日」，不記比賽名稱
+async function tickPlanRow(c, n, row, date) {
+  const body = { date, status: 'done', plan_day: row.d, kind: row.kind || null, plan_text: c.kind !== 'club' && P.isRaceDay(row, n) ? '比賽日' : row.t,
+    source: 'manual', if_absent: true, ...P.cycleFields(c, n) };
+  try { return await api('/logs', { method: 'POST', body }); }
+  catch (e) { if (navigator.onLine === false || e instanceof TypeError) return { qid: queueLog(body) }; throw e; }
+}
+// 復原：線上的刪掉剛新增的那筆（原本就有的不刪）；離線的從暫存區拿掉
+async function undoTick(r) {
+  if (r.qid) {
+    const q = logQueue.get();
+    if (q.some((x) => x.qid === r.qid)) { logQueue.set(q.filter((x) => x.qid !== r.qid)); return; }
+    // 復原前剛好連上網路、已經補傳：改刪伺服器上的那一筆（原本就有的不刪）
+    r = flushed.get(r.qid) || {};
+  }
+  if (r.id && !r.existed) await api(`/logs/${r.id}`, { method: 'DELETE' });
+}
+// 同一列處理中不重複送（連點兩下也只有一筆）；記好後重畫，提示可以復原
+async function quickTick(btn, c, n, row, date) {
+  const key = `${P.cycleKey(c, n)}|${row.d}`;
+  if (ticking.has(key)) return;
+  ticking.add(key);
+  btn.disabled = true; btn.setAttribute('aria-busy', 'true');
+  try {
+    const r = await tickPlanRow(c, n, row, date);
+    const i = btn.dataset.tick;
+    await render();
+    // 重畫後焦點回到同一列，鍵盤與 VoiceOver 不會跳回頁首
+    const again = view.querySelector(`[data-tick="${i}"]`);
+    if (again && !again.disabled) again.focus({ preventScroll: true });
+    if (r.existed) { toast('這一天已經記錄過了'); return; }
+    toast(r.qid ? '目前離線，已先存在手機' : '已記錄完成', { action: '復原', ms: 6000, onAction: async () => {
+      try { await undoTick(r); toast('已復原'); } catch (e) { toast(e.message); }
+      render();
+    } });
+  } catch (e) {
+    toast(e.message);
+    if (btn.isConnected) { btn.disabled = false; btn.removeAttribute('aria-busy'); }
+  } finally { ticking.delete(key); }
+}
 async function flushLogQueue() {
+  if (!me) return;
+  bindDeviceData(me.id);   // 暫存區是上一位登入者的就先清掉，不會傳到這個帳號
   const q = logQueue.get();
-  if (!q.length || !me) return;
+  if (!q.length) return;
   const left = [];
-  for (const { queued, ...b } of q) { try { await api('/logs', { method: 'POST', body: b }); } catch (e) { if (e instanceof TypeError) left.push({ ...b, queued }); } }
+  let up = 0, dup = 0;
+  // 原樣送出：只有快速打勾的那幾筆本來就帶 if_absent（同一週、同一天已經有紀錄就不重複新增）；
+  //   修改既有紀錄帶 id 是更新；那一筆已經在別的裝置刪掉，就改成新增，不讓這次的修改不見
+  for (const { queued, qid, ...b } of q) {
+    try {
+      let r;
+      try { r = await api('/logs', { method: 'POST', body: b }); }
+      catch (e) { if (b.id && !(e instanceof TypeError) && /找不到這筆紀錄/.test(e.message)) r = await api('/logs', { method: 'POST', body: { ...b, id: undefined } }); else throw e; }
+      if (qid) flushed.set(qid, r);
+      if (r?.existed) dup++; else up++;
+    } catch (e) { if (e instanceof TypeError) left.push({ ...b, qid, queued }); }
+  }
   logQueue.set(left);
-  if (left.length < q.length) toast(`已上傳 ${q.length - left.length} 筆離線時的訓練紀錄`);
+  if (up) toast(`已上傳 ${up} 筆離線時的訓練紀錄`);
+  else if (dup) toast('離線時打勾的那幾天已經記錄過了');
 }
 
 // ---------- report.js（用到才載入）----------
@@ -2702,8 +3052,10 @@ function showAsk() {
 setInterval(() => { const k = Run.check(); if (k) askFinish(k); }, 1000);
 // 今天課表的目標：「11K jog」取距離、「60' easyjog」取分鐘，間歇課不設目標
 async function todayGoal() {
-  const t = ymd(new Date()), w = P.currentWeek();
-  const day = ((await P.weekPlan(w, me.dist, me.grp)) || []).find((d) => d.kind !== 'rest' && dayDates(w, d.d).includes(t));
+  const t = ymd(new Date()), c = myCycle();
+  if (!P.inCycle(t, c)) return null;
+  const w = P.weekIndexOf(t, c);
+  const day = ((await P.weekPlan(w, me.dist, me.grp)) || []).find((d) => d.kind !== 'rest' && P.dayDates(w, d.d, c, d).includes(t));
   if (!day || day.kind === 'quality') return null;
   const km = day.t.match(/(\d+(?:\.\d+)?)\s*(?:[~～-]\s*\d+(?:\.\d+)?)?\s*K(?![a-z])/i), min = day.t.match(/^(\d{2,3})\s*['’]/);
   if (km) return { km: Number(km[1]), text: `${km[1]} 公里` };
@@ -2847,6 +3199,7 @@ function meProfile() {
           <label>暱稱<input name="nickname" value="${esc(me.nickname || '')}" maxlength="20" placeholder="團裡怎麼叫你"></label></div>
         <div class="grid2"><label>項目<select name="dist"><option value="fm" ${me.dist === 'fm' ? 'selected' : ''}>全馬</option><option value="hm" ${me.dist === 'hm' ? 'selected' : ''}>半馬</option></select></label>
           <label>組別<select name="grp"></select></label></div>
+        ${feat('coach') ? '<a class="tiny" href="#/plan/setup?go=pb">不知道選哪組？用成績推算 ›</a>' : ''}
         <div class="field"><span class="flabel">所屬跑團</span><span class="fvalue"><span translate="no">${esc(teamOf(me.main_team)?.name || '等待管理員設定')}</span></span><span class="tiny">跟著主團，由管理員設定</span></div>
         <div class="grid2"><label>餐點偏好<select name="meal_pref"><option value="" ${!me.meal_pref ? 'selected' : ''}>未指定</option>
             <option ${me.meal_pref === '葷食' ? 'selected' : ''}>葷食</option><option ${me.meal_pref === '素食' ? 'selected' : ''}>素食</option></select></label>
@@ -2854,7 +3207,9 @@ function meProfile() {
         <label>常跑地點（首頁顯示這裡的天氣）<select name="home_spot"><option value="">（不指定）</option></select></label>
         <button class="btn block">儲存</button>
       </form>
-    </section>`;
+    </section>
+    ${feat('plan_cycle') || cfg.planCycle?.suspended ? group('', [row('#/plan/setup?go=cycle', MI.cal, myCycle().kind === 'race' ? `課表週期：<span translate="no">${esc(myCycle().name)}</span>` : '課表週期：協會賽季',
+      cfg.planCycle?.suspended ? '個人週期目前暫停，課表先照協會賽季' : '跟協會賽季，或跟自己的一場比賽排 20 週')]) : ''}`;
   const f = $('#mf');
   const sync = () => {
     f.grp.innerHTML = Object.entries(P.groups(f.dist.value)).map(([g, v]) => `<option value="${g}">${g} 組・${v[0]}</option>`).join('');
@@ -2892,7 +3247,17 @@ async function meRaces() {
         <span class="row" style="gap:6px">${r.is_primary ? '' : `<button class="btn ghost sm" data-prim="${r.id}">倒數這場</button>`}<button class="btn danger sm" data-delrace="${r.id}" aria-label="刪除">刪除</button></span></div>`;
     }).join('') || '<p class="tiny" style="margin:0">還沒有賽事，加一場吧。</p>';
     for (const b of document.querySelectorAll('[data-prim]')) b.onclick = async () => { await api(`/races/${b.dataset.prim}/primary`, { method: 'POST' }); await api('/me/countdown', { method: 'POST', body: { mode: 'mine' } }); await load(); await refreshCfg(); toast('右上角改成倒數這場'); };
-    for (const b of document.querySelectorAll('[data-delrace]')) b.onclick = async () => { if (!confirm('刪除這場賽事？')) return; await api(`/races/${b.dataset.delrace}`, { method: 'DELETE' }); await load(); await refreshCfg(); };
+    for (const b of document.querySelectorAll('[data-delrace]')) b.onclick = async () => {
+      // 這場是課表週期：先說清楚刪掉後課表會改回協會賽季
+      if (myCycle().kind === 'race' && myCycle().raceId === b.dataset.delrace) {
+        if (await choose('刪除這場賽事？', '這場是你的課表週期。刪掉後課表改回協會賽季，以前的紀錄不會改。', [{ value: 'del', label: '刪除', danger: true }]) !== 'del') return;
+      } else if (!confirm('刪除這場賽事？')) return;
+      try {
+        const r = await api(`/races/${b.dataset.delrace}`, { method: 'DELETE' });
+        await load(); await refreshCfg();
+        if (r?.cycleReset) toast('已刪除，課表改回協會賽季');
+      } catch (err) { toast(err.message); }
+    };
   };
   load();
   $('#raceForm').onsubmit = async (e) => { e.preventDefault(); const f = e.target;
@@ -3090,8 +3455,8 @@ async function meSecurity(googleMsg) {
     e.preventDefault();
     try { me = (await api('/me/admin', { method: 'POST', body: { code: e.target.code.value } })).member; toast('已設定為理事長'); render(); } catch (err) { toast(err.message); }
   });
-  $('#logout').onclick = async () => { await dropPush(); await api('/logout', { method: 'POST' }); clearDeviceData(); me = null; location.hash = '#/'; render(); };
-  $('#logoutAll').onclick = async () => { if (!confirm('要登出所有裝置嗎？包含這一台。')) return; await api('/logout', { method: 'POST', body: { all: true } }); await dropPush(false); clearDeviceData(); me = null; location.hash = '#/'; render(); };
+  $('#logout').onclick = async () => { if (!await askLegacyOnLeave()) return; await dropPush(); await api('/logout', { method: 'POST' }); clearDeviceData(); me = null; location.hash = '#/'; render(); };
+  $('#logoutAll').onclick = async () => { if (!confirm('要登出所有裝置嗎？包含這一台。') || !await askLegacyOnLeave()) return; await api('/logout', { method: 'POST', body: { all: true } }); await dropPush(false); clearDeviceData(); me = null; location.hash = '#/'; render(); };
 }
 function mePrivacy() {
   view.innerHTML = `${subTitle('隱私')}
@@ -3102,12 +3467,13 @@ function mePrivacy() {
     <section class="card"><h3>我們存了什麼</h3>
       <p class="tiny" style="margin:0">姓名、暱稱、組別、主團、餐點偏好、報名與訓練紀錄；賽事報名資料加密保存；電話只有行政人員看得到完整號碼。</p>
       <div class="row"><a class="btn ghost sm" href="#/privacy">隱私權政策</a><a class="btn ghost sm" href="/api/me/export" download>下載我的資料</a></div></section>
+    ${feat('coach') ? group('', [row('#/plan/setup?go=device', MI.phone, '這台裝置上的課表設定與身體資料', '只存在這台裝置，不會上傳；登出時清除')]) : ''}
     <section class="card"><h3>刪除帳號</h3><p class="tiny" style="margin:0">報名、入場券、通知與訓練紀錄都會刪除，中獎紀錄只留獎項給協會對帳。</p>
       <button class="btn danger block" id="delAcct">刪除我的帳號</button></section>`;
   $('#showRank').onchange = async (e) => { try { await api('/me/show-rank', { method: 'POST', body: { on: e.target.checked } }); me.show_rank = e.target.checked; toast(e.target.checked ? '已加入排行榜' : '已退出排行榜'); } catch (err) { e.target.checked = !e.target.checked; toast(err.message); } };
   $('#shareLogs').onchange = async (e) => { try { await api('/me/share-logs', { method: 'POST', body: { share: e.target.checked } }); me.share_logs = e.target.checked; toast(e.target.checked ? '已分享給教練' : '已停止分享'); } catch (err) { e.target.checked = !e.target.checked; toast(err.message); } };
   $('#delAcct').onclick = async () => {
-    if (!confirm('刪除後無法復原。確定刪除帳號？')) return;
+    if (!confirm('刪除後無法復原。確定刪除帳號？') || !await askLegacyOnLeave()) return;
     try { await api('/me', { method: 'DELETE' }); clearDeviceData(); me = null; toast('帳號已刪除'); location.hash = '#/'; render(); } catch (e) { toast(e.message); }
   };
 }
@@ -3208,7 +3574,7 @@ async function render() {
 }
 // 返回鍵：分頁以外的頁面在左上角顯示「‹ 上一層」。App 裡有上一頁就退回上一頁（保留捲動與篩選），
 //   從通知或分享連結直接打開的就回到它的上一層（加到主畫面後沒有瀏覽器的返回鍵）
-const TOP_PAGES = ['/', '/plan', '/run', '/map', '/studio', '/me'];
+const TOP_PAGES = ['/', '/plan', '/plan/season', '/plan/race', '/plan/guide', '/run', '/map', '/studio', '/me'];
 function parentOf(h) {
   if (h === '/studio') return feat('gps') ? ['#/run', '跑步'] : ['#/', '團練'];
   const p = h.split('/');
@@ -3229,7 +3595,8 @@ function tabOf(h) {
 // 頁面名稱（返回鍵顯示「‹ 上一頁的名稱」）
 function nameOf(h) {
   const N = { '/': '團練', '/plan': '課表', '/run': '跑步', '/studio': '拍照', '/me': '我的', '/calendar': '行事曆', '/map': '地圖', '/challenge': '挑戰', '/admin': '管理後台',
-    '/teams': '分團', '/report': '報表', '/tickets': '入場券', '/notifications': '通知', '/past': '過去的團練', '/roster': '名冊', '/logs/team': '團員訓練' };
+    '/teams': '分團', '/report': '報表', '/tickets': '入場券', '/notifications': '通知', '/past': '過去的團練', '/roster': '名冊', '/logs/team': '團員訓練',
+    '/plan/season': '全季課表', '/plan/race': '賽事準備', '/plan/guide': '配速與用語', '/plan/setup': '課表設定' };
   if (N[h]) return N[h];
   if (h.startsWith('/me/')) return ME_SECTIONS[h.slice(4)] || '我的';
   if (h.startsWith('/e/')) return h.endsWith('/stats') ? '統計' : '活動';
@@ -3256,6 +3623,8 @@ function paintBack(hash) {
 async function renderOnce() {
   formDirty = false;
   if (stopScan) { stopScan(); stopScan = null; }
+  view.planMark = null;
+  if (viewCleanup) { try { viewCleanup(); } catch {} viewCleanup = null; }
   const raw = location.hash.replace(/^#/, '') || '/';
   const hash = raw.split('?')[0];
   // 練跑地圖是滿版地圖：整頁不捲動
@@ -3288,6 +3657,7 @@ async function renderOnce() {
   if (!me) {
     try { const r = await api('/me'); me = r.member; cfg = r; } catch { me = null; }
   }
+  bindDeviceData(me?.id);
   paintCountdown();
   applyFeatures();
   $('#bell').hidden = !me;
@@ -3368,6 +3738,13 @@ async function route(hash) {
     if (sc) return await scanView(sc[1]);
     const ev = hash.match(/^\/e\/([\w-]+)$/);
     if (ev) return await eventView(ev[1]);
+    // 課表的全季、賽事準備、配速與用語、課表設定：課表教練關掉時不開放（課表設定仍可以改課表週期）
+    const pc = hash.match(/^\/plan\/(season|race|guide|setup)$/);
+    if (pc) {
+      if (feat('coach') || (pc[1] === 'setup' && (feat('plan_cycle') || cfg.planCycle?.suspended))) { viewCleanup = await coachView(pc[1]); return; }
+      view.innerHTML = `<div class="card">${emptyState('runner', '這個功能目前沒有開放')}<p class="tiny center" style="margin:0">管理員可以在「功能與畫面」打開課表教練</p></div>`;
+      return;
+    }
     const pl = hash.match(/^\/plan(?:\/(\d+))?$/);
     if (pl) return await planView(pl[1] ? Number(pl[1]) : 0);
     view.innerHTML = `<div class="card">${emptyState('runner', '找不到這個頁面')}</div>`;
@@ -3500,4 +3877,4 @@ addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvt 
 addEventListener('appinstalled', () => { installEvt = null; try { localStorage.setItem('cil-installed', '1'); } catch {} document.querySelectorAll('.installcard').forEach((c) => c.remove()); });
 
 // 拆出去的模組（admin.js、photo.js…）從這裡拿共用的工具與狀態
-export { askReason, isOffline, nowTp, signupDefaults, submitLabel, addrField, bindAddrField, latest, $, cfg, downloadAuthed, scanSheet, FEEL, IC, KIND_NAME, LOG_STATUS_NAME, PAID_NAME, ROLE_NAME, TAB_DEFAULT, TEAM_PERMS, TEAM_ROLE_NAME, ago, allow, api, applyFeatures, avatar, barChart, bars, bindComments, bindStepup, copy, dayLabel, dstr, emptyState, esc, eventCard, feat, fixText, group, largeTitle, me, mfaBanner, money, nrow, org, pad2, paintCountdown, passkey, refreshMe, render, route, row, squareIcon, studio, teamAllow, teamIcon, teamOf, teams, toast, view, ymd, camLazy, openSheet };
+export { legacyData, removeLegacy, addrField, bindAddrField, latest, $, cfg, downloadAuthed, scanSheet, FEEL, IC, KIND_NAME, LOG_ICON, LOG_STATUS_NAME, MI, PAID_NAME, ROLE_NAME, TAB_DEFAULT, TEAM_PERMS, TEAM_ROLE_NAME, ago, allow, api, applyFeatures, avatar, barChart, bars, bindComments, bindStepup, btnRow, choose, coachPrefs, copy, countdownPicker, dayLabel, dstr, emptyState, esc, eventCard, feat, fixText, group, ic, largeTitle, me, mfaBanner, money, myCycle, nrow, org, pad2, paintCountdown, passkey, planSeg, queueLog, raceTarget, refreshMe, render, route, row, setCoachPrefs, squareIcon, startKey, studio, subTitle, teamAllow, teamIcon, teamOf, teams, toast, view, ymd, askReason, isOffline, nowTp, signupDefaults, submitLabel, camLazy, openSheet };

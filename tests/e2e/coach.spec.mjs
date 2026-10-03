@@ -1,0 +1,624 @@
+// 課表教練整合進課表分頁：P1 照課表記錄不必填距離（自主加練仍要填距離或時間）；P2 賽事準備、課表設定、分段與路由
+import { test, expect } from '@playwright/test';
+import { login, acceptPrivacyIfAsked, apiAs, BASE } from './helpers.mjs';
+
+const enter = async (page, id) => { await login(page, id); await acceptPrivacyIfAsked(page); };
+
+test('記錄訓練：課表日按「完成」不填距離也能存', async ({ page }) => {
+  await enter(page, 't_other');
+  await page.goto('/#/log?w=2&i=1');                      // W2 週二（已經過去的日子）
+  await expect(page.locator('#lf [name=status][value=done]')).toBeChecked();
+  await page.locator('#lf').getByRole('button', { name: '儲存' }).click();
+  await expect(page.getByText('已記錄，辛苦了')).toBeVisible();
+});
+
+test('記錄訓練：自主加練沒填距離或時間會提醒', async ({ page }) => {
+  await enter(page, 't_other');
+  await page.goto('/#/log?extra=1');
+  await page.locator('#lf').getByRole('button', { name: '儲存' }).click();
+  await expect(page.getByText('填一下距離或時間')).toBeVisible();
+  await expect(page.getByText('已記錄，辛苦了')).toHaveCount(0);
+});
+
+// ---------- P2：賽事準備、課表設定、分段與路由 ----------
+
+test('分段：單週、全季、賽事、參考用 replace 切換（返回鍵不會在分段之間來回）', async ({ page }) => {
+  await enter(page, 't_other');
+  await page.goto('/#/plan');
+  await expect(page.locator('#view .card h2').first()).toContainText(/W\d+|賽後恢復/);
+  const before = await page.evaluate(() => history.length);
+  for (const [name, hash] of [['全季', '#/plan/season'], ['賽事', '#/plan/race'], ['參考', '#/plan/guide'], ['單週', '#/plan']]) {
+    await page.locator('.planseg').getByRole('button', { name }).click();
+    await expect(page).toHaveURL(new RegExp(`${hash.replace('/', '\\/')}$`));
+    await expect(page.locator('.planseg [aria-pressed="true"]')).toHaveText(name);
+  }
+  expect(await page.evaluate(() => history.length)).toBe(before);
+  await expect(page.locator('#backBtn')).toBeHidden();
+});
+
+test('賽事準備：沒填身體資料時顯示空狀態；填了年齡、性別、體重就有年齡分級、心率與補給', async ({ page }) => {
+  await enter(page, 't_other');
+  await page.evaluate(() => localStorage.removeItem('cil-coach'));
+  await page.goto('/#/plan/race');
+  await expect(page.locator('#hr')).toContainText('到課表設定填年齡就會顯示心率');
+  await expect(page.locator('#age')).toContainText('填年齡');
+  await expect(page.locator('#fuel')).toContainText('到課表設定填體重就會顯示');
+  await expect(page.locator('#view')).not.toContainText('bpm');
+  await page.goto('/#/plan/setup?go=body');
+  await page.locator('#bodyForm [name=age]').fill('47');
+  await page.locator('#bodyForm [name=age]').blur();
+  await page.locator('#bodyForm label.chip', { hasText: '男' }).click();
+  await page.locator('#bodyForm [name=kg]').fill('63.5');
+  await page.locator('#bodyForm [name=kg]').blur();
+  await page.goto('/#/plan/race');
+  await expect(page.locator('#hr table.hz:not(.rpe)')).toContainText('Z2');
+  await expect(page.locator('#hr')).toContainText('估算');
+  await expect(page.locator('#age .agemeter')).toBeVisible();
+  await expect(page.locator('#fuel')).toContainText('肝醣超補');
+});
+
+test('半馬沒有年齡分級', async ({ page, request }) => {
+  await apiAs(request, 't_other', '/me/plan', { method: 'PUT', body: { dist: 'hm', grp: 'C' } });
+  try {
+    await enter(page, 't_other');
+    await page.evaluate(() => localStorage.setItem('cil-coach', JSON.stringify({ v: 1, body: { age: 45, sex: 'M' } })));
+    await page.goto('/#/plan/race');
+    await expect(page.locator('#age')).toContainText('半馬沒有年齡分級');
+  } finally { await apiAs(request, 't_other', '/me/plan', { method: 'PUT', body: { dist: 'fm', grp: 'E' } }); }
+});
+
+test('隱私：身體資料不會出現在任何請求裡，只存在 cil-coach；登出時清除', async ({ page }) => {
+  await enter(page, 't_other');
+  const sent = [];
+  page.on('request', (r) => sent.push(`${r.url()} ${r.postData() || ''}`));
+  await page.goto('/#/plan/setup?go=body');
+  const f = page.locator('#bodyForm');
+  for (const [k, v] of [['age', '47'], ['kg', '63.5'], ['rest', '52']]) { await f.locator(`[name=${k}]`).fill(v); await f.locator(`[name=${k}]`).blur(); }
+  await f.locator('label.chip', { hasText: '女' }).click();
+  await page.goto('/#/plan/race');
+  await expect(page.locator('#hr table.hz:not(.rpe)')).toBeVisible();
+  const stored = await page.evaluate(() => JSON.parse(localStorage.getItem('cil-coach')).body);
+  expect(stored).toMatchObject({ age: 47, kg: 63.5, rest: 52, sex: 'F' });
+  for (const s of sent) {
+    expect(s).not.toContain('63.5');
+    expect(s).not.toMatch(/"(age|kg|rest|sex)"\s*:/);
+    expect(s).not.toMatch(/[?&](age|kg|rest|sex)=/);
+  }
+  await page.goto('/#/me/security');
+  await page.locator('#logout').click();
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('cil-coach'))).toBeNull();
+});
+
+test('課表設定：存組別只改項目與組別，課表頁副標題跟著變，暱稱不受影響', async ({ page, request }) => {
+  await enter(page, 't_other');
+  const before = (await apiAs(request, 't_other', '/me')).member;
+  await page.goto('/#/plan/setup');
+  await page.locator('#gtiles label.chip', { hasText: 'D 組' }).click();
+  await page.locator('#grpSave').click();
+  await expect(page.getByText('已儲存')).toBeVisible();
+  await page.goto('/#/plan');
+  await expect(page.locator('#view .lt p')).toContainText('全馬 D 組');
+  const after = (await apiAs(request, 't_other', '/me')).member;
+  expect(after.nickname).toBe(before.nickname);
+  await apiAs(request, 't_other', '/me/plan', { method: 'PUT', body: { grp: before.grp } });
+});
+
+test('課表設定：選自己的比賽排課（W1 預覽），存檔後課表標「個人週期」，再改回協會賽季', async ({ page, request }) => {
+  const d = new Date(Date.now() + 8 * 3600e3 + 200 * 864e5), date = d.toISOString().slice(0, 10);
+  const { id } = await apiAs(request, 't_other', '/races', { method: 'POST', body: { name: 'E2E 測試馬拉松', date, dist: '全馬' } });
+  try {
+    await enter(page, 't_other');
+    await page.goto(`/#/plan/setup?go=cycle&race=${id}`);
+    await expect(page.locator('#cycle [name=cyc][value=race]')).toBeChecked();
+    await expect(page.locator('#cycle .cycraces')).toContainText(/W1 .*開始，還有 \d+ 天/);
+    await page.locator('#cycSave').click();
+    await expect(page.getByText(/已改成跟 .* 排課/)).toBeVisible();
+    // 右上角倒數是另一場時會問要不要一起換：不換
+    const ask = page.locator('.sheet[aria-label="也把右上角倒數改成這場？"]');
+    if (await ask.count()) await ask.getByRole('button', { name: '取消' }).click();
+    await page.goto('/#/plan');
+    await expect(page.locator('#view .lt p')).toContainText('個人週期');
+    await page.goto('/#/plan/setup?go=cycle');
+    await page.locator('#cycle label.cycopt', { hasText: '跟協會賽季' }).click();
+    await page.locator('#cycSave').click();
+    await expect(page.getByText('已改回協會賽季')).toBeVisible();
+  } finally {
+    await apiAs(request, 't_other', '/me/plan', { method: 'PUT', body: { cycle: 'club' } });
+    if (id) await apiAs(request, 't_other', `/races/${id}`, { method: 'DELETE' });
+  }
+});
+
+test('功能關閉：課表教練關掉時四個頁面顯示沒有開放，課表頁沒有分段', async ({ page, request }) => {
+  await apiAs(request, 't_chair', '/settings/features', { method: 'POST', body: { coach: false } });
+  try {
+    await enter(page, 't_other');
+    for (const s of ['season', 'race', 'guide']) {
+      await page.goto(`/#/plan/${s}`);
+      await expect(page.locator('#view')).toContainText('這個功能目前沒有開放');
+    }
+    await page.goto('/#/plan');
+    await expect(page.locator('#view .card h2').first()).toContainText(/W\d+|賽後恢復/);
+    await expect(page.locator('.planseg')).toHaveCount(0);
+  } finally { await apiAs(request, 't_chair', '/settings/features', { method: 'POST', body: { coach: true } }); }
+});
+
+test('凍結時間：賽前 14 天、比賽前一天的倒數、比賽日、賽後恢復', async ({ page }) => {
+  await enter(page, 't_other');
+  await page.evaluate(() => localStorage.setItem('cil-coach', JSON.stringify({ v: 1, start: { '2026-12-20|2026 臺北馬拉松': '06:30' } })));
+  const at = async (iso) => { await page.clock.install({ time: new Date(iso) }); await page.reload(); };
+  await at('2026-12-06T09:00:00+08:00');
+  await page.goto('/#/plan');
+  await expect(page.locator('.stagecard')).toContainText('賽前 14 天');
+  await at('2026-12-19T08:00:00+08:00');
+  await page.goto('/#/plan/race');
+  await expect(page.locator('#raceClock')).toContainText(/\d+:\d{2}/);
+  await at('2026-12-20T05:00:00+08:00');
+  await page.goto('/#/plan');
+  await expect(page.locator('.stagecard.race')).toContainText('今天比賽');
+  await at('2026-12-22T09:00:00+08:00');
+  await page.goto('/#/plan');
+  await expect(page.locator('.stagecard.recover')).toContainText('辛苦了');
+});
+
+test('倒數關閉：賽事準備改用我的賽事或協會賽季，課表頁不顯示賽前階段', async ({ page, request }) => {
+  await apiAs(request, 't_other', '/me/countdown', { method: 'POST', body: { mode: 'off' } });
+  try {
+    await enter(page, 't_other');
+    await page.clock.install({ time: new Date('2026-12-10T09:00:00+08:00') });
+    await page.reload();
+    await page.goto('/#/plan/race');
+    await expect(page.locator('.card.bib .bibrace')).not.toBeEmpty();
+    await page.goto('/#/plan');
+    await expect(page.locator('.stagecard')).toHaveCount(0);
+  } finally { await apiAs(request, 't_other', '/me/countdown', { method: 'POST', body: { mode: 'mine' } }); }
+});
+
+// ---------- P3：單週課表與首頁（快速打勾、離線、可省略、用語、滑動、今天、個人週期） ----------
+const logsOf = async (request, id, from, to) => (await apiAs(request, id, `/logs?from=${from}&to=${to}`)).logs || [];
+// 協會 W3（已經過去的一週）：8/17–8/23
+const W3 = ['2026-08-17', '2026-08-23'];
+const firstTick = (page) => page.locator('.days .day:not(.logged) .tick:not([disabled])').first();
+
+test('快速打勾：記一筆、更新完成率，連點也只有一筆，復原會刪掉', async ({ page, request }) => {
+  await enter(page, 't_other');
+  await page.goto('/#/plan/3');
+  const before = await logsOf(request, 't_other', ...W3);
+  const ring = page.locator('.logsum .ring');
+  const pct0 = await ring.getAttribute('aria-label');
+  const tick = firstTick(page);
+  const label = await tick.getAttribute('aria-label'), idx = await tick.getAttribute('data-tick');
+  await tick.dblclick();
+  await expect(page.getByText('已記錄完成')).toBeVisible();
+  const after = await logsOf(request, 't_other', ...W3);
+  expect(after.length).toBe(before.length + 1);
+  const added = after.find((l) => !before.some((b) => b.id === l.id));
+  expect(added).toMatchObject({ status: 'done', week_no: 3 });
+  expect(added.cycle_anchor ?? null).toBeNull();
+  await expect(ring).not.toHaveAttribute('aria-label', pct0);
+  // 記好後同一列變成「修改紀錄」按鈕，焦點留在這一列
+  const same = page.locator(`.days .tick[data-tick="${idx}"]`);
+  await expect(same).toHaveAttribute('aria-label', /^修改紀錄（完成）：/);
+  await expect(same).not.toHaveAttribute('role', 'checkbox');
+  await expect(same).toBeFocused();
+  expect(label).toMatch(/^標記完成：/);
+  await page.getByRole('button', { name: '復原' }).click();
+  await expect(page.getByText('已復原')).toBeVisible();
+  expect((await logsOf(request, 't_other', ...W3)).length).toBe(before.length);
+});
+
+test('離線打勾：先存在手機，復原從暫存區拿掉；連上網路補傳不重複', async ({ page, context, request }) => {
+  await enter(page, 't_other');
+  await page.goto('/#/plan/3');
+  const before = await logsOf(request, 't_other', ...W3);
+  await context.setOffline(true);
+  await firstTick(page).click();
+  await expect(page.getByText('目前離線，已先存在手機')).toBeVisible();
+  const q1 = await page.evaluate(() => JSON.parse(localStorage.getItem('cil-log-queue') || '[]'));
+  expect(q1).toHaveLength(1);
+  expect(q1[0].qid).toBeTruthy();
+  await page.getByRole('button', { name: '復原' }).click();
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('cil-log-queue'))).toBeNull();
+  // 再打一次勾，連上網路後自動補傳；再補傳一次（模擬另一台裝置）也不會多一筆
+  await firstTick(page).click();
+  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('cil-log-queue') || '[]').length)).toBe(1);
+  const q2 = await page.evaluate(() => JSON.parse(localStorage.getItem('cil-log-queue') || '[]'));
+  await context.setOffline(false);
+  await page.evaluate(() => dispatchEvent(new Event('online')));
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('cil-log-queue'))).toBeNull();
+  const { queued, qid, ...body } = q2[0];
+  const again = await apiAs(request, 't_other', '/logs', { method: 'POST', body: { ...body, if_absent: true } });
+  expect(again.existed).toBe(true);
+  const after = await logsOf(request, 't_other', ...W3);
+  expect(after.length).toBe(before.length + 1);
+  await apiAs(request, 't_other', `/logs/${again.id}`, { method: 'DELETE' });
+});
+
+test('離線修改既有紀錄：連上網路後更新那一筆，不會被當成重複丟掉、也不會多一筆', async ({ page, context, request }) => {
+  await enter(page, 't_other');
+  const made = await apiAs(request, 't_other', '/logs', { method: 'POST', body: { date: '2026-08-19', status: 'done', week_no: 3, plan_day: '週三', source: 'manual' } });
+  try {
+    const before = await logsOf(request, 't_other', ...W3);
+    await page.goto(`/#/log?id=${made.id}`);
+    await expect(page.locator('#lf [name=km]')).toBeVisible();
+    await context.setOffline(true);
+    await page.locator('#lf [name=km]').fill('7.5');
+    await page.locator('#lf').getByRole('button', { name: '儲存' }).click();
+    await expect(page.getByText('目前離線，已先存在手機')).toBeVisible();
+    const q = await page.evaluate(() => JSON.parse(localStorage.getItem('cil-log-queue') || '[]'));
+    expect(q).toHaveLength(1);
+    expect(q[0].id).toBe(made.id);   // 保留 id：補傳時是更新
+    await context.setOffline(false);
+    await page.evaluate(() => dispatchEvent(new Event('online')));
+    await expect.poll(() => page.evaluate(() => localStorage.getItem('cil-log-queue'))).toBeNull();
+    const after = await logsOf(request, 't_other', ...W3);
+    expect(after.length).toBe(before.length);
+    expect(after.find((l) => l.id === made.id).km).toBe(7.5);
+  } finally { await apiAs(request, 't_other', `/logs/${made.id}`, { method: 'DELETE' }); }
+});
+
+test('可省略：每週 4 天時課表標「可省略」，完成率的分母一起變少', async ({ page }) => {
+  await enter(page, 't_other');
+  const denom = async () => Number((await page.locator('.logsum .lstats span').first().innerText()).match(/\/(\d+)/)[1]);
+  await page.evaluate(() => localStorage.setItem('cil-coach', JSON.stringify({ v: 1, plan: { days: 6, club: true, vol: null } })));
+  await page.goto('/#/plan/3');
+  await expect(page.locator('.days .pill.opt')).toHaveCount(0);
+  const six = await denom();
+  await page.evaluate(() => localStorage.setItem('cil-coach', JSON.stringify({ v: 1, plan: { days: 4, club: true, vol: null } })));
+  await page.reload();
+  await expect(page.locator('.days .pill.opt').first()).toBeVisible();   // 等課表畫好再數
+  const opt = await page.locator('.days .pill.opt').count();
+  expect(opt).toBeGreaterThan(0);
+  expect(await denom()).toBe(six - opt);
+  await expect(page.locator('.warnslot .notice')).toBeVisible();
+  await page.evaluate(() => localStorage.removeItem('cil-coach'));
+});
+
+test('用語：點開說明、標示本週全部（?hl=）；詳細內容有主課與配速、沒填年齡不顯示 bpm', async ({ page }) => {
+  await enter(page, 't_other');
+  await page.evaluate(() => localStorage.removeItem('cil-coach'));
+  await page.goto('/#/plan/3');
+  const term = page.locator('.days button.term').first();
+  await expect(term).toBeVisible();
+  const key = await term.getAttribute('data-term');
+  await term.click();
+  const dlg = page.locator('[role=dialog]').filter({ hasText: '本週' });
+  await expect(dlg).toContainText(/本週 \d+ 堂用到/);
+  await dlg.getByRole('button', { name: '標示本週全部' }).click();
+  await expect(page).toHaveURL(new RegExp(`[?&]hl=${key}`));
+  expect(await page.locator('.days .day.term-hl').count()).toBeGreaterThan(0);
+  const xd = page.locator('.days .day.quality').filter({ hasText: /[xX×]\s*\d/ }).locator('details.xd').first();   // 間歇課（有主課）
+  await xd.locator('summary').click();
+  await expect(xd).toContainText('主課');
+  await expect(xd).toContainText('配速');
+  await expect(page.locator('.days')).not.toContainText('bpm');
+});
+
+test('滑動換週：從螢幕邊緣 24px 內開始不換週，中間滑動才換', async ({ page }) => {
+  await enter(page, 't_other');
+  await page.goto('/#/plan/5');
+  await expect(page.locator('.days[data-extras="5"]')).toHaveCount(1);   // 閒下來才載入的加強功能（滑動、用語）已經接上
+  const swipe = (x0, x1) => page.evaluate(([a, b]) => {
+    const el = document.querySelector('.days .day .dl'), y = el.getBoundingClientRect().top + 10;
+    const t = (x) => new Touch({ identifier: 1, target: el, clientX: x, clientY: y });
+    el.dispatchEvent(new TouchEvent('touchstart', { bubbles: true, touches: [t(a)], changedTouches: [t(a)] }));
+    el.dispatchEvent(new TouchEvent('touchend', { bubbles: true, touches: [], changedTouches: [t(b)] }));
+  }, [x0, x1]);
+  await swipe(10, 200);
+  await page.waitForTimeout(300);
+  await expect(page).toHaveURL(/#\/plan\/5$/);
+  await swipe(300, 100);
+  await expect(page).toHaveURL(/#\/plan\/6$/);
+});
+
+test('首頁：比賽日顯示「今天就是 臺北馬拉松」；週末的課週六、週日都出現', async ({ page }) => {
+  await enter(page, 't_other');
+  const at = async (iso) => { await page.clock.install({ time: new Date(iso) }); await page.goto('/#/'); await page.reload(); };
+  await at('2026-12-20T07:00:00+08:00');
+  await expect(page.locator('.todaycard')).toContainText('今天就是 臺北馬拉松');
+  await at('2026-12-12T07:00:00+08:00');
+  const sat = await page.locator('.todaycard h2.long').innerText();
+  await expect(page.locator('.todaycard')).toContainText('擇一天');
+  await at('2026-12-13T07:00:00+08:00');
+  await expect(page.locator('.todaycard h2.long')).toHaveText(sat);
+});
+
+test('契約：課表頁與首頁的導覽選擇器還在；首頁不會載入 coach.js、coachcalc.js、coachpdf.js', async ({ page }) => {
+  const urls = [];
+  page.on('request', (r) => urls.push(new URL(r.url()).pathname));
+  await enter(page, 't_other');
+  await page.clock.install({ time: new Date('2026-11-17T07:00:00+08:00') });   // 未來的週二：還沒有紀錄
+  await page.goto('/#/');
+  await page.reload();
+  await expect(page.locator('.todaycard .btn').first()).toBeVisible();
+  await page.waitForTimeout(2000);
+  for (const f of ['/coach.js', '/coachcalc.js', '/coachpdf.js']) expect(urls).not.toContain(f);
+  await page.goto('/#/plan/3');
+  for (const s of ['.logsum', '.days .day', '.days .logbtn']) await expect(page.locator(s).first()).toBeVisible();
+});
+
+test('英文介面：課表頁除了 translate=no 以外沒有中文', async ({ page }) => {
+  await enter(page, 't_other');
+  await page.evaluate(() => localStorage.setItem('cil-lang', 'en'));
+  try {
+    await page.goto('/#/plan/3');
+    await page.reload();
+    await page.locator('.days button.term').first().waitFor();
+    const left = await page.evaluate(() => {
+      const out = [], w = document.createTreeWalker(document.querySelector('#view'), NodeFilter.SHOW_TEXT);
+      for (let n; (n = w.nextNode());) if (/[一-鿿]/.test(n.nodeValue) && !n.parentElement.closest('[translate=no]')) out.push(n.nodeValue.trim());
+      return out;
+    });
+    expect(left).toEqual([]);
+  } finally { await page.evaluate(() => localStorage.removeItem('cil-lang')); }
+});
+
+test('個人週期：打勾記成個人週次、首頁標個人 W、?c=club 只能看、公告收起來、換回協會後列在其他週期', async ({ page, request }) => {
+  // 比賽日排在讓「今天」落在個人 W3：W1 星期一＝這週一往前兩週；W1＝比賽那週的星期一往前 133 天，所以比賽日（週日）＝這週一＋125 天
+  const now = new Date(Date.now() + 8 * 3600e3), dow = (now.getUTCDay() + 6) % 7;
+  const mon = new Date(now.getTime() - dow * 864e5), raceDay = new Date(mon.getTime() + 125 * 864e5);
+  const date = raceDay.toISOString().slice(0, 10), w2from = new Date(mon.getTime() - 7 * 864e5).toISOString().slice(0, 10);
+  const { id } = await apiAs(request, 't_other', '/races', { method: 'POST', body: { name: 'E2E 個人週期馬', date, dist: '全馬' } });
+  const r = await apiAs(request, 't_other', '/me/plan', { method: 'PUT', body: { cycle: 'race', race_id: id } });
+  expect(r.planCycle?.kind).toBe('race');
+  const club = (await apiAs(request, 't_other', '/me')).member;
+  let post = null;
+  try {
+    const clubWeek = Math.floor((mon - new Date('2026-08-03T00:00:00Z')) / (7 * 864e5)) + 1;
+    if (clubWeek >= 1 && clubWeek <= 21) post = await apiAs(request, 't_chair', '/plans', { method: 'POST', body: { title: 'E2E 協會公告', body: '測試', week_no: clubWeek, notify: false } });
+    await enter(page, 't_other');
+    await page.goto('/#/plan');
+    await expect(page.locator('#view .card h2').first()).toContainText('W3');
+    await expect(page.locator('#view .lt p')).toContainText('個人週期');
+    if (post?.id) {
+      await expect(page.locator('details.clubposts')).toHaveCount(1);
+      await expect(page.locator('details.clubposts')).not.toHaveAttribute('open', '');
+    }
+    // 個人 W2 已經過去：打勾記成 cycle_week 2，伺服器補協會週次
+    await page.goto('/#/plan/2');
+    await firstTick(page).click();
+    await expect(page.getByText('已記錄完成')).toBeVisible();
+    const mineLogs = (await logsOf(request, 't_other', w2from, mon.toISOString().slice(0, 10))).filter((l) => l.cycle_anchor === date);
+    expect(mineLogs).toHaveLength(1);
+    expect(mineLogs[0].cycle_week).toBe(2);
+    // 首頁：標個人 W3
+    await page.goto('/#/');
+    await expect(page.locator('.weekstrip')).toContainText('個人週期');
+    await expect(page.locator('.weekstrip .hd b')).toHaveText('W3');
+    if (await page.locator('.todaycard').count()) await expect(page.locator('.todaycard .tiny').first()).toContainText('個人 W3');
+    // ?c=club：只能看，沒有打勾與記錄
+    await page.goto('/#/plan?c=club');
+    await expect(page.locator('#view')).toContainText('只能看');
+    await expect(page.locator('.days .tick')).toHaveCount(0);
+    await expect(page.locator('.days a.logbtn:not([href*="id="])')).toHaveCount(0);
+    await expect(page.locator('.logsum')).toHaveCount(0);
+    // 換回協會賽季：個人週期的紀錄列在「其他週期的紀錄」，報表有個人W2
+    await apiAs(request, 't_other', '/me/plan', { method: 'PUT', body: { cycle: 'club' } });
+    await page.goto('/#/');
+    await page.reload();
+    await page.goto(`/#/plan/${mineLogs[0].week_no}`);
+    await expect(page.locator('#view')).toContainText('其他週期的紀錄');
+    await expect(page.locator('#view')).toContainText('個人 W2');
+    await page.goto('/#/report');
+    await expect(page.locator('#view svg.chart').filter({ hasText: '個人W2' })).toHaveCount(1);
+    await apiAs(request, 't_other', `/logs/${mineLogs[0].id}`, { method: 'DELETE' });
+  } finally {
+    await apiAs(request, 't_other', '/me/plan', { method: 'PUT', body: { cycle: 'club', grp: club.grp } });
+    if (post?.id) await apiAs(request, 't_chair', `/plans/${post.id}`, { method: 'DELETE' });
+    await apiAs(request, 't_other', `/races/${id}`, { method: 'DELETE' });
+  }
+});
+
+// ---------- P4：全季、參考、分享與匯出 ----------
+
+test('全季：每一列打開那一週；完成數字跟訓練紀錄對得上', async ({ page, request }) => {
+  await enter(page, 't_other');
+  await page.clock.install({ time: new Date('2026-10-03T09:00:00+08:00') });   // W9 週六
+  // W3 週二完成、週四部分完成（部分完成算半堂）
+  const made = [];
+  for (const [date, plan_day, status] of [['2026-08-18', '週二', 'done'], ['2026-08-20', '週四', 'partial']]) {
+    const r = await apiAs(request, 't_other', '/logs', { method: 'POST', body: { date, status, week_no: 3, plan_day, source: 'manual', if_absent: true } });
+    if (!r.existed) made.push(r.id);
+  }
+  try {
+    await page.goto('/#/plan/season');
+    await expect(page.locator('.seasonkpis')).toBeVisible();
+    await expect(page.locator('.seasonkpis .kpi').first()).toContainText(/\d/);
+    await expect(page.locator('.wkrow[href="#/plan/3"] i.heat')).toHaveAttribute('aria-label', /W3 完成 \d+%/);
+    await expect(page.locator('.wkrow[aria-current]')).toContainText('W9');
+    await page.locator('.wkrow[href="#/plan/5"]').click();
+    await expect(page).toHaveURL(/#\/plan\/5$/);
+    await expect(page.locator('#view .card h2').first()).toContainText('W5');
+  } finally { for (const id of made) await apiAs(request, 't_other', `/logs/${id}`, { method: 'DELETE' }); }
+});
+
+test('參考：?term=mp 打開那個用語並捲到那裡', async ({ page }) => {
+  await enter(page, 't_other');
+  await page.goto('/#/plan/guide?term=mp');
+  await expect(page.locator('details#t-mp')).toHaveAttribute('open', '');
+  await expect(page.locator('details#t-easy')).not.toHaveAttribute('open', '');
+  await expect(page.locator('details#t-mp')).toBeInViewport();
+});
+
+test('分享與匯出：預設開；複製文字跟課表一樣、.ics 行程數、PDF 是 application/pdf 且不連外；沒打開個人數字就沒有克數與 bpm', async ({ page, context }) => {
+  await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+  const outside = [];
+  page.on('request', (r) => { const u = new URL(r.url()); if (/^https?:$/.test(u.protocol) && u.origin !== new URL(BASE).origin) outside.push(u.href); });
+  await enter(page, 't_other');
+  await page.evaluate(() => localStorage.setItem('cil-coach', JSON.stringify({ v: 1, body: { age: 47, sex: 'M', kg: 63.5, rest: 52, sweat: '中' } })));
+  await page.goto('/#/plan/9');
+  const btn = page.getByRole('button', { name: '分享與匯出' });
+  await expect(btn).toBeVisible();
+  // 複製 W9：剪貼簿內容是課表文字（標題、W9、來源說明）
+  await btn.click();
+  await expect(page.locator('.sharesheet #shPersonal')).not.toBeChecked();
+  await page.locator('.sharesheet [data-act="week"]').click();
+  await expect(page.getByText('已複製 W9 課表')).toBeVisible();
+  const text = await page.evaluate(() => navigator.clipboard.readText());
+  expect(text).toMatch(/^【.+@.+課表】/);
+  expect(text).toContain('■ W9');
+  expect(text).toContain('實際以教練每週發布為準');
+  // .ics：行程數與說明；沒打開個人數字就沒有毫克數
+  await btn.click();
+  const [ics] = await Promise.all([page.waitForEvent('download'), page.locator('.sharesheet [data-act="ics"]').click()]);
+  expect(ics.suggestedFilename()).toMatch(/\.ics$/);
+  const icsText = (await (await ics.createReadStream()).toArray()).join('').replace(/\r\n /g, '');
+  const n = (icsText.match(/BEGIN:VEVENT/g) || []).length;
+  await expect(page.locator('.icshelp')).toContainText(`已產生 ${n} 個行程`);
+  expect(n).toBeGreaterThan(80);
+  expect(icsText).not.toMatch(/\d+–\d+ mg(?!\/kg)|bpm|你約 \d+/);
+  await page.locator('.sharesheet').getByRole('button', { name: '關閉' }).click();
+  // PDF（含詳細內容）：application/pdf，沒有連到其他網站
+  await btn.click();
+  outside.length = 0;
+  const [pdf] = await Promise.all([page.waitForEvent('download', { timeout: 60000 }), page.locator('.sharesheet [data-act="pdfx"]').click()]);
+  expect(pdf.suggestedFilename()).toMatch(/_詳細版\.pdf$/);
+  const head = Buffer.concat(await (await pdf.createReadStream()).toArray()).subarray(0, 8).toString('latin1');
+  expect(head).toBe('%PDF-1.4');
+  expect(outside).toEqual([]);
+  // 打開個人數字：.ics 才有咖啡因的毫克數
+  await btn.click();
+  await page.locator('.sharesheet .switch').click();
+  const [ics2] = await Promise.all([page.waitForEvent('download'), page.locator('.sharesheet [data-act="ics"]').click()]);
+  expect((await (await ics2.createReadStream()).toArray()).join('').replace(/\r\n /g, '')).toMatch(/\d+–\d+ mg/);
+  await page.evaluate(() => localStorage.removeItem('cil-coach'));
+});
+
+test('分享與匯出：管理員關掉後沒有分享鈕', async ({ page, request }) => {
+  await apiAs(request, 't_chair', '/settings/features', { method: 'POST', body: { plan_export: false } });
+  try {
+    await enter(page, 't_other');
+    for (const h of ['/#/plan', '/#/plan/season']) {
+      await page.goto(h);
+      await expect(page.locator('#view .lt')).toBeVisible();
+      await expect(page.getByRole('button', { name: '分享與匯出' })).toHaveCount(0);
+    }
+  } finally { await apiAs(request, 't_chair', '/settings/features', { method: 'POST', body: { plan_export: true } }); }
+});
+
+// ---------- P5：舊版課表教練資料搬移 ----------
+// 舊版的設定（年齡、性別、體重是舊版預設）與打卡：協會賽季 W3 週二、另一場比賽（2026-11-01）的 W3 週二；倒數一個
+const seedLegacy = (page) => page.evaluate(() => {
+  localStorage.removeItem('cil-coach');
+  localStorage.setItem('gengCoachModel', JSON.stringify({ name: '舊版跑者', dist: 'fm', grp: 'C', age: 45, sex: 'M', kg: 62, days: 5, raceDate: '2026-12-20' }));
+  localStorage.setItem('gengCoachDash', JSON.stringify({ log: { '2026-12-20|3|1': Date.parse('2026-08-18T20:00:00+08:00'), '2026-11-01|3|1': Date.parse('2026-06-30T20:00:00+08:00') },
+    cds: [{ id: 'a', name: 'E2E 舊版倒數', date: '2027-01-15' }], badge: true }));
+});
+const legacyKeys = (page) => page.evaluate(() => [localStorage.getItem('gengCoachModel'), localStorage.getItem('gengCoachDash')]);
+const dropW3Tue = async (request) => { for (const l of await logsOf(request, 't_other', ...W3)) if (l.week_no === 3 && l.plan_day === '週二') await apiAs(request, 't_other', `/logs/${l.id}`, { method: 'DELETE' }); };
+
+test('舊版資料搬移：課表頁提醒、預設值不勾、組別以帳號為準、按上傳才送出、重跑 0 筆、完成搬移清掉舊版', async ({ page, request }) => {
+  await dropW3Tue(request);
+  await enter(page, 't_other');
+  await seedLegacy(page);
+  try {
+    await page.goto('/#/plan');
+    await expect(page.locator('#view .card h2').first()).toContainText(/W\d+|賽後恢復/);
+    await expect(page.locator('.legacynote')).toContainText('舊版課表教練的資料可以搬進 App');
+    const writes = [];
+    page.on('request', (r) => { if (r.method() !== 'GET' && r.url().includes('/api/') && !r.url().includes('/api/vitals')) writes.push(`${r.method()} ${r.url()}`); });
+    await page.locator('.legacynote a').click();
+    await expect(page).toHaveURL(/#\/plan\/setup\?migrate=1$/);
+    const card = page.locator('#legacy');
+    await expect(card).toContainText('舊版跑者');
+    for (const k of ['age', 'sex', 'kg']) {
+      await expect(card.locator(`[data-pref=${k}]`)).not.toBeChecked();
+      await expect(card.locator('label.lgrow', { has: page.locator(`[data-pref=${k}]`) })).toContainText('可能是預設值');
+    }
+    await expect(card.locator('[data-pref=days]')).toBeChecked();
+    await expect(card).toContainText('舊版是全馬 C 組，現在是全馬 E 組');
+    await expect(card.locator('#lgGrp')).toHaveText('改成 C 組');
+    await expect(card.locator('[data-cd]')).toHaveCount(1);
+    await expect(card.locator('[data-cd]')).not.toBeChecked();
+    await expect(card.locator('[data-anchor="2026-11-01"]')).not.toBeChecked();
+    expect(writes).toEqual([]);                                   // 按上傳以前沒有送出任何東西
+    await card.locator('#lgUp').click();
+    const st = card.locator('#lgLogs [role=status]');
+    await expect(st).toContainText('已上傳 1 筆');
+    await expect(st).toContainText('其他週期 1 筆');
+    const got = (await logsOf(request, 't_other', ...W3)).filter((l) => l.week_no === 3 && l.plan_day === '週二');
+    expect(got).toHaveLength(1);
+    expect(got[0]).toMatchObject({ date: '2026-08-18', status: 'done', note: '從舊版課表教練匯入', cycle_anchor: null });
+    expect(writes.filter((w) => w.startsWith('POST') && w.includes('/api/logs'))).toHaveLength(1);
+    // 重跑：已經在訓練紀錄裡，沒有東西可以上傳
+    await page.reload();
+    await expect(card.locator('#lgLogs')).toContainText('可以上傳 0 筆');
+    await expect(card.locator('#lgUp')).toHaveCount(0);
+    // 課表 W3 的週二顯示已記錄
+    await page.goto('/#/plan/3');
+    await expect(page.locator('.days .day.logged', { hasText: '週二' })).toHaveCount(1);
+    await expect(page.locator('.legacynote')).toHaveCount(1);
+    // 完成搬移：兩個舊版的鍵都拿掉，課表頁不再提醒
+    await page.goto('/#/plan/setup?migrate=1');
+    await card.locator('#lgDone').click();
+    await expect.poll(() => legacyKeys(page)).toEqual([null, null]);
+    expect(await page.evaluate(() => JSON.parse(localStorage.getItem('cil-coach')).legacy.state)).toBe('done');
+    await page.goto('/#/plan');
+    await expect(page.locator('#view .card h2').first()).toBeVisible();
+    await expect(page.locator('.legacynote')).toHaveCount(0);
+  } finally {
+    await dropW3Tue(request);
+    await page.evaluate(() => { localStorage.removeItem('gengCoachModel'); localStorage.removeItem('gengCoachDash'); localStorage.removeItem('cil-coach'); });
+  }
+});
+
+test('舊版資料搬移：勾另一場比賽的紀錄才上傳成個人週期；設定只寫進這台裝置', async ({ page, request }) => {
+  await enter(page, 't_other');
+  await seedLegacy(page);
+  const from = '2026-06-29', to = '2026-07-05';
+  try {
+    await page.goto('/#/plan/setup?migrate=1');
+    const card = page.locator('#legacy');
+    await card.locator('[data-anchor="2026-11-01"]').check();
+    await expect(card.locator('#lgUp')).toContainText(/上傳 [12] 筆/);
+    await card.locator('#lgUp').click();
+    await expect(card.locator('#lgLogs [role=status]')).toContainText('其他週期 0 筆');
+    const mine = (await logsOf(request, 't_other', from, to)).filter((l) => l.cycle_anchor === '2026-11-01');
+    expect(mine).toHaveLength(1);
+    expect(mine[0]).toMatchObject({ cycle_week: 3, plan_day: '週二', date: '2026-06-30' });
+    // 設定：勾年齡再套用，只存在 cil-coach
+    await card.locator('[data-pref=age]').check();
+    await card.locator('#lgPrefs').click();
+    await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('cil-coach') || '{}').body?.age)).toBe(45);
+    expect(await page.evaluate(() => JSON.parse(localStorage.getItem('cil-coach')).plan.days)).toBe(5);
+    for (const l of mine) await apiAs(request, 't_other', `/logs/${l.id}`, { method: 'DELETE' });
+  } finally {
+    await dropW3Tue(request);
+    await page.evaluate(() => { localStorage.removeItem('gengCoachModel'); localStorage.removeItem('gengCoachDash'); localStorage.removeItem('cil-coach'); });
+  }
+});
+
+test('舊版資料搬移：下載備份後刪除會下載 JSON 並拿掉舊版的鍵；稍後再說 7 天內不提醒', async ({ page }) => {
+  await enter(page, 't_other');
+  await seedLegacy(page);
+  await page.goto('/#/plan/setup?migrate=1');
+  await page.locator('#lgLater').click();
+  await expect(page).toHaveURL(/#\/plan$/);
+  await expect(page.locator('#view .card h2').first()).toBeVisible();
+  await expect(page.locator('.legacynote')).toHaveCount(0);
+  expect((await legacyKeys(page)).every(Boolean)).toBe(true);
+  await page.goto('/#/plan/setup?migrate=1');
+  const dl = page.waitForEvent('download');
+  await page.locator('#lgDrop').click();
+  const file = await dl;
+  expect(file.suggestedFilename()).toMatch(/\.json$/);
+  const j = JSON.parse((await (await file.createReadStream()).toArray()).join(''));
+  expect(j).toMatchObject({ app: 'gengpao-coach', v: 1, settings: { grp: 'C' } });
+  expect(Object.keys(j.dash.log)).toHaveLength(2);
+  await expect.poll(() => legacyKeys(page)).toEqual([null, null]);
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('cil-coach')).legacy.state)).toBe('skipped');
+  await page.evaluate(() => localStorage.removeItem('cil-coach'));
+});
+
+test('舊版資料搬移：登出時還沒搬就先問，選保留會留下舊版資料（這台裝置的課表設定照樣清除）', async ({ page }) => {
+  await enter(page, 't_other');
+  await seedLegacy(page);
+  await page.evaluate(() => localStorage.setItem('cil-coach', JSON.stringify({ v: 1, plan: { days: 4 } })));
+  await page.goto('/#/me/security');
+  await page.locator('#logout').click();
+  const sheet = page.locator('.sheet[role=dialog]');
+  await expect(sheet).toContainText('這台裝置還有舊版課表教練資料');
+  await sheet.getByRole('button', { name: '保留（之後登入可搬移）' }).click();
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('cil-coach'))).toBeNull();
+  expect((await legacyKeys(page)).every(Boolean)).toBe(true);
+  await page.evaluate(() => { localStorage.removeItem('gengCoachModel'); localStorage.removeItem('gengCoachDash'); });
+});

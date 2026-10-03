@@ -1,7 +1,7 @@
 // 耕跑團 PWA — report.js：從 app.js 拆出來、用到才載入的畫面（第一次開 App 不用下載）
 import * as P from './plan.js';
 import * as S from './studio.js';
-import { $, allow, api, avatar, barChart, bindComments, dayLabel, dstr, esc, FEEL, fixText, group, largeTitle, LOG_STATUS_NAME, me, row, teamAllow, teams, view, ymd } from './app.js';
+import { $, allow, api, avatar, barChart, bindComments, coachPrefs, dayLabel, dstr, esc, feat, FEEL, fixText, group, largeTitle, LOG_STATUS_NAME, me, row, teamAllow, teams, view, ymd } from './app.js';
 
 // ---------- 訓練報表：週里程、完成率、強度趨勢、個人最佳 ----------
 // 圖表一律用 SVG 自己畫（不載外部套件），寬度跟著容器縮放
@@ -32,17 +32,20 @@ async function reportView(range = '12w') {
   const wkLabel = (w) => `${Number(w.slice(5, 7))}/${Number(w.slice(8))}`;
   const kmItems = weeks.map((w) => ({ l: wkLabel(w), v: Math.round(byWeek[w].reduce((n, l) => n + (l.km || 0), 0) * 10) / 10 }));
   const rpeItems = weeks.map((w) => { const r = byWeek[w].filter((l) => l.rpe); return { l: wkLabel(w), v: r.length ? r.reduce((n, l) => n + l.rpe, 0) / r.length : null }; });
-  // 課表完成率（照課表週次）
-  const planWeeks = [...new Set(logs.filter((l) => l.week_no).map((l) => l.week_no))].sort((a, b) => a - b);
+  // 課表完成率：依紀錄的課表週期分組（協會 W12、個人W5），照每週的星期一排序（中途換週期也依時間先後）
+  //   分母跟課表頁一樣：不算休息，也不算「每週天數不夠時可省略」的課
+  const prefs = feat('coach') ? coachPrefs().plan : undefined;
+  const groupsByKey = {};
+  for (const l of logs) { const k = P.logCycleKey(l); if (k) (groupsByKey[k] ||= []).push(l); }
   const done = [];
-  for (const w of planWeeks) {
-    const plan = (await P.weekPlan(w, me.dist, me.grp)) || [];
-    const planned = plan.filter((d) => d.kind !== 'rest');
-    const L = logs.filter((l) => l.week_no === w);
-    const ok = planned.filter((d) => L.some((l) => l.plan_day === d.d && l.status === 'done')).length;
-    const half = planned.filter((d) => !L.some((l) => l.plan_day === d.d && l.status === 'done') && L.some((l) => l.plan_day === d.d && l.status === 'partial')).length;
-    done.push({ l: `W${w}`, v: planned.length ? Math.round((ok + half * 0.5) / planned.length * 100) : 0, c: '#34C759' });
+  for (const [k, L] of Object.entries(groupsByKey)) {
+    const personal = k.startsWith('r:'), n = Number(k.split('|')[1]);
+    const cyc = personal ? P.cycleOf(k.slice(2, 12)) : P.CLUB;
+    const rows = P.markOptional((await P.weekPlan(n, me.dist, me.grp)) || [], prefs, n);
+    const wc = P.weekCompletion(rows, (r) => L.filter((l) => P.logMatches(l, cyc, n, r)));
+    done.push({ l: personal ? `個人W${n}` : `W${n}`, v: wc.pct, c: '#34C759', at: ymd(P.weekStart(n, cyc)) });
   }
+  done.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
   // 每月
   const months = {};
   for (const l of runs) { const k = l.date.slice(0, 7); (months[k] ||= { km: 0, n: 0, sec: 0 }); months[k].km += l.km || 0; months[k].n += 1; months[k].sec += l.seconds || 0; }
@@ -63,7 +66,7 @@ async function reportView(range = '12w') {
     </section>
     <div class="statgrid">
     <section class="card"><h3>每週里程</h3>${barChart(kmItems, { unit: ' km' })}</section>
-    ${done.length ? `<section class="card"><h3>課表完成率</h3>${barChart(done, { unit: '%', h: 120, max: 100 })}<p class="tiny" style="margin:0">完成算 1 堂、部分完成算半堂，休息日不算。</p></section>` : ''}
+    ${done.length ? `<section class="card"><h3>課表完成率</h3>${barChart(done, { unit: '%', h: 120, max: 100 })}<p class="tiny" style="margin:0">完成算 1 堂、部分完成算半堂，休息日與可省略的課不算。</p></section>` : ''}
     <section class="card"><h3>自覺強度（RPE）</h3>${lineChart(rpeItems)}<p class="tiny" style="margin:0">一般來說，輕鬆跑 3–4、質量課 7–8；長期都在 7 以上要注意恢復。</p></section>
     <section class="card"><h3>個人最佳</h3><div class="prs">${prs.map((x) => `<div class="pr"><span class="tiny">${x.name}</span>
       ${x.best ? `<b class="num">${S.fmtDuration(Math.round(x.best.seconds / x.best.km * ({ '5K': 5, '10K': 10, 半馬: 21.0975, 全馬: 42.195 }[x.name])))}</b><span class="tiny">${esc(x.best.date)}・${S.fmtPace(x.best.km * 1000, x.best.seconds)}</span>` : '<b class="num muted">—</b>'}</div>`).join('')}</div>
@@ -78,9 +81,12 @@ async function memberLogsView(mid) {
   const to = ymd(new Date()), from = ymd(new Date(Date.now() - 41 * 864e5));
   const r = await api(`/logs/member/${mid}?from=${from}&to=${to}`);
   const m = r.member;
-  view.innerHTML = `${largeTitle(m.nickname || m.name, `${m.dist === 'hm' ? '半馬' : '全馬'} ${esc(m.grp)} 組・最近 6 週`)}
+  // 個人週期的團員：標「個人 W5 週二」，旁邊附協會週次；不會看到他的比賽名稱與日期
+  const wk = (l) => (l.personal ? `個人 W${l.cycle_week} ${esc(dayLabel(l.plan_day || ''))}${l.week_no ? `・協會 W${l.week_no}` : ''}`
+    : l.week_no ? `W${l.week_no} ${esc(dayLabel(l.plan_day || ''))}` : '');
+  view.innerHTML = `${largeTitle(m.nickname || m.name, `${m.dist === 'hm' ? '半馬' : '全馬'} ${esc(m.grp)} 組${m.plan_cycle === 'race' ? '・個人週期' : ''}・最近 6 週`)}
     <section class="card"><div class="roster">${r.logs.map((l) => `<div class="mlog">
-      <div class="row spread"><b>${dstr(l.date)}${l.week_no ? ` <span class="tiny">W${l.week_no} ${esc(dayLabel(l.plan_day || ''))}</span>` : ''}</b>
+      <div class="row spread"><b>${dstr(l.date)}${wk(l) ? ` <span class="tiny">${wk(l)}</span>` : ''}</b>
         <span class="pill ${l.status === 'done' ? 'solid' : l.status === 'skip' ? '' : 'wait'}">${LOG_STATUS_NAME[l.status]}</span></div>
       ${l.plan_text ? `<span class="tiny">課表：<span translate="no">${esc(fixText(l.plan_text))}</span></span>` : ''}
       <span>${l.km ? `${l.km} km` : ''}${l.seconds ? `・${S.fmtDuration(l.seconds)}` : ''}${l.km && l.seconds ? `・${S.fmtPace(l.km * 1000, l.seconds)}` : ''}${l.hr ? `・心率 ${l.hr}` : ''}${l.rpe ? `・RPE ${l.rpe}` : ''}${l.feel ? `・${FEEL[l.feel]}` : ''}</span>
@@ -108,9 +114,10 @@ async function logsTeamView(week, team) {
     </section>
     <section class="card"><div class="roster">${r.members.map((m) => {
       const p = Math.min(100, Math.round(((m.done || 0) + (m.partial || 0) * 0.5) / planned * 100));
-      return `<a class="r tlog" href="#/logs/m/${esc(m.id)}">${avatar(m)}<span><b><span translate="no">${esc(m.nickname || m.name)}</span></b> <span class="tiny">${m.dist === 'hm' ? '半馬' : '全馬'} ${esc(m.grp)}</span>
+      return `<a class="r tlog" href="#/logs/m/${esc(m.id)}">${avatar(m)}<span><b><span translate="no">${esc(m.nickname || m.name)}</span></b> <span class="tiny">${m.dist === 'hm' ? '半馬' : '全馬'} ${esc(m.grp)}</span>${m.plan_cycle === 'race' ? ' <span class="pill">個人週期</span>' : ''}
         <span class="bar"><i style="width:${p}%"></i></span></span>
-        <span class="num tiny" style="text-align:right"><b>${p}%</b><br>${m.km || 0} km${m.rpe ? `・RPE ${m.rpe}` : ''}</span></a>`; }).join('') || '<p class="muted" style="margin:0">這週還沒有分享的紀錄。</p>'}</div></section>`;
+        <span class="num tiny" style="text-align:right"><b>${p}%</b><br>${m.km || 0} km${m.rpe ? `・RPE ${m.rpe}` : ''}</span></a>`; }).join('') || '<p class="muted" style="margin:0">這週還沒有分享的紀錄。</p>'}</div>
+    ${r.members.some((m) => m.plan_cycle === 'race') ? '<p class="tiny" style="margin:0">個人週期的團員課表堂數不同，完成率僅供參考</p>' : ''}</section>`;
   $('#wprev').onclick = () => logsTeamView(week - 1, team);
   $('#wnext').onclick = () => logsTeamView(week + 1, team);
   $('#tsel').onchange = (ev) => logsTeamView(week, ev.target.value);
