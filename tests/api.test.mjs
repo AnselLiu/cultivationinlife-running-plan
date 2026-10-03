@@ -1038,7 +1038,12 @@ test('附近即時影像：功能開關預設關閉、同步與完整性檢查�
   assert.equal((await call('t_chair', '/cams/sources')).json.sources.find((s) => s.source === 'wra').active, 3, '清單不再出現的鏡頭停用');
   await mock('drop=0');
   assert.equal((await cron('2027-06-17T20:30:00Z')).wra, 4);
-  assert.equal((await cron('2027-06-17T21:30:00Z')).thb, 2);
+  // 公路局（offline）不在排程裡，也不能在後台立即同步；清單由電腦上的同步工具更新（這裡用測試入口模擬）
+  assert.equal(await cron('2027-06-17T21:30:00Z'), null, '公路局被跳過');
+  assert.equal((await call('t_chair', '/cams/sources')).json.sources.find((s) => s.source === 'thb').offline, true);
+  const ts = await call('t_chair', '/cams/sync', { method: 'POST', body: { source: 'thb' } });
+  assert.equal(ts.status, 400); assert.match(ts.json.error, /cams-sync\.mjs/);
+  assert.equal((await call(null, '/dev/cams-import?source=thb')).json.count, 2);
   assert.equal(await cron('2027-06-17T21:40:00Z'), null);
   // 地點附近：1.5 公里內最多 3 支、河濱優先河川鏡頭；不回原始影像網址
   const r = await call('t_runner', '/spots/seed07/cams');

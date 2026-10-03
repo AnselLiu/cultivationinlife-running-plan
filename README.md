@@ -143,3 +143,7 @@ npm run deploy         # 部署正式站
   要啟用自動部署，到 GitHub repo 的 Settings → Secrets and variables → Actions 新增 `CLOUDFLARE_API_TOKEN`（Cloudflare 後台 → My Profile → API Tokens，用「Edit Cloudflare Workers」範本，再加上 D1 Edit 權限）與 `CLOUDFLARE_ACCOUNT_ID`。沒設定的話只跑測試、不部署。
 - 測試環境的邀請碼與初始理事長碼要另外設：`npx wrangler secret put JOIN_CODE --env staging`。
 - 錯誤監控：Cloudflare 後台 → Workers → cil-run → Logs，可以看到伺服器錯誤、排程結果與前端回報的錯誤（`client-error`）。
+- 附近即時影像的公路局清單（約 1.7 MB、2300 多筆）超過免費方案一次執行的 CPU 與子請求，改在電腦上同步（水利署、水利處照常由排程同步，公路局的畫面轉送不受影響）：
+  1. `node tools/cams-sync.mjs thb --out cams-thb.sql`（測試環境加 `--staging`）：抓清單、用和 Worker 一樣的規則解析，筆數少於上次的 70% 就停下；上次的筆數會用唯讀查詢從 D1 讀，也可以用 `--last-count N` 指定。
+  2. 看一下印出來的筆數，確認沒問題後執行它印出的指令（`npx wrangler d1 execute cil-run --remote --file cams-thb.sql`），這一步會寫入正式站的 D1。
+  3. 管理後台「附近即時影像」的公路局那一列會顯示上次更新的時間。清單大約幾個月才有變動，不用天天跑。

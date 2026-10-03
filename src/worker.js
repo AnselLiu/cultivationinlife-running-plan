@@ -1274,7 +1274,7 @@ const api = (async function api(req, env, path, method) {
     const stuck = (r) => r.last_error === Cams.SYNCING && r.last_sync_at && Date.parse(`${r.last_sync_at.replace(' ', 'T')}Z`) < Date.now() - 120e3;
     return json({ sources: Object.entries(Cams.SOURCES).map(([k, S]) => {
       const r = srcs.find((x) => x.source === k) || {};
-      return { source: k, name: S.name, attribution: S.attribution, manual: !!S.manual, consent: !!S.consent, enabled: !!r.enabled,
+      return { source: k, name: S.name, attribution: S.attribution, manual: !!S.manual, consent: !!S.consent, offline: !!S.offline, enabled: !!r.enabled,
         last_sync_at: r.last_sync_at || null, last_ok_at: r.last_ok_at || null, last_count: r.last_count ?? null,
         last_error: stuck(r) ? '上次同步沒有完成（可能超過執行時間上限）' : r.last_error || null,
         active: cnt[k]?.active || 0, down: cnt[k]?.down || 0 };
@@ -1297,6 +1297,7 @@ const api = (async function api(req, env, path, method) {
     if (!can(member, 'settings')) return fail(403, '只有理事長與行政人員可以同步');
     const src = str((await body()).source, 10), S = Cams.sourceOf(src);
     if (!S?.list) return fail(400, '沒有這個來源');
+    if (S.offline) return fail(400, '公路局的清單改用電腦上的同步工具更新（tools/cams-sync.mjs），這裡不能同步');
     if (!(await env.DB.prepare('SELECT enabled FROM cam_sources WHERE source = ?').bind(src).first())?.enabled) return fail(400, '請先開啟這個來源');
     if (await limited(env, `camsync:${src}`, 3, 3600)) return fail(429, '這個來源一小時最多同步 3 次');
     let r;
@@ -4215,7 +4216,8 @@ async function promoteSweep(env, now) {
 //   功能開關（features.cams）關閉時完全不跑；只同步開啟的來源；失敗或筆數驟減時不寫入、不停用，隔天再試
 //   每次排程最多同步一個來源（公路局 XML 約 1.7 MB，解析很吃 CPU，不跟別的來源擠在同一次執行）
 //   開始前先佔用（job_runs 的 cams.<來源>）並把來源標成「同步中」：執行被強制中斷時，管理後台看得到，下個整點也會重跑（最多 3 次）
-const camsDue = (t, s) => Object.entries(Cams.SOURCES).filter(([k, S]) => S.list && s.cams_on.includes(k) && t.h >= S.hour && open(s, `cams.${k}`, t.date)).map(([k]) => k);
+//   offline 的來源（公路局）不在排程裡，改用電腦上的同步工具 tools/cams-sync.mjs
+const camsDue = (t, s) => Object.entries(Cams.SOURCES).filter(([k, S]) => S.list && !S.offline && s.cams_on.includes(k) && t.h >= S.hour && open(s, `cams.${k}`, t.date)).map(([k]) => k);
 async function syncCams(env, now) {
   const s = env.probe || await cronProbe(env, now);
   if (!Cams.featureOn(s.features)) return { done: true, result: null };
@@ -4541,6 +4543,8 @@ async function devRoute(req, env, ctx, url, path) {
   }
   // 測試用：附近即時影像的假來源狀態（只有 CAM_MOCK=1）
   if (path === '/api/dev/cams-mock' && env.CAM_MOCK === '1') return json(Cams.mockControl(q));
+  // 測試用：模擬在電腦上跑 tools/cams-sync.mjs 匯入 offline 來源（同一套解析、完整性檢查與 SQL；假來源不連外）
+  if (path === '/api/dev/cams-import' && env.CAM_MOCK === '1') return json(await Cams.syncSource(env, str(q.get('source'), 10)));
   // 開發用登入
   if (path === '/api/dev/login' && req.method === 'GET') {
     const m = await env.DB.prepare('SELECT * FROM members WHERE id = ?').bind(str(q.get('id'), 32)).first();

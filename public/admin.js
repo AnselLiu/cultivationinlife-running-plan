@@ -665,7 +665,8 @@ function bindSettings() {
         <span class="tiny" style="display:block">${esc(x.attribution)}</span></span>
         <input type="checkbox" data-camsrc="${esc(x.source)}" ${x.enabled ? 'checked' : ''} ${r.editable ? '' : 'disabled'}><i></i></label>
       ${x.consent ? '<p class="tiny" style="margin:0 0 6px">這個來源沒有開放授權聲明，要先取得臺北市水利處的書面同意才能開啟；關閉時不會對水利處發出任何連線。</p>' : ''}
-      ${!x.manual && x.enabled && r.editable ? `<button type="button" class="btn ghost sm" data-camsync="${esc(x.source)}" style="margin:0 0 8px">立即同步</button>` : ''}</div>`).join('');
+      ${x.offline ? `<p class="tiny" style="margin:0 0 8px">清單由電腦上的同步工具更新（tools/cams-sync.mjs）${x.last_ok_at ? `・上次更新 ${camTime(x.last_ok_at)}` : ''}</p>`
+        : !x.manual && x.enabled && r.editable ? `<button type="button" class="btn ghost sm" data-camsync="${esc(x.source)}" style="margin:0 0 8px">立即同步</button>` : ''}</div>`).join('');
     for (const c of box.querySelectorAll('[data-camsrc]')) c.onchange = async () => {
       const x = r.sources.find((s) => s.source === c.dataset.camsrc);
       if (c.checked && x.consent && !confirm(`開啟「${x.name}」前，請確認協會已經取得對方的書面同意。確定已取得嗎？`)) { c.checked = false; return; }

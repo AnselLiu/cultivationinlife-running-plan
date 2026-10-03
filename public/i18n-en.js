@@ -2902,6 +2902,12 @@ export default {
 "・單次最高": "・peak per run",
 "最常碰到額度上限的功能：停下表示做到一半留到下次，超過上限要檢查。": "Features that hit the budget most often: stopped means the rest was left for the next run; over the limit needs a look.",
 "這段期間沒有功能碰到額度上限。": "No feature hit the budget limit in this period.",
-"這次請求的執行額度不夠，請稍後再按一次": "Not enough execution budget for this request. Please try again shortly."
+"這次請求的執行額度不夠，請稍後再按一次": "Not enough execution budget for this request. Please try again shortly.",
+"清單由電腦上的同步工具更新（tools/cams-sync.mjs）": "The list is updated with the sync tool on a computer (tools/cams-sync.mjs)",
+"・上次更新": "・last updated",
+"公路局的清單改用電腦上的同步工具更新（tools/cams-sync.mjs），這裡不能同步": "The Highway Bureau list is updated with the sync tool on a computer (tools/cams-sync.mjs); it can't be synced here",
+"只有理事長可以執行": "Only the chair can run this",
+"一小時最多 3 次": "At most 3 times per hour",
+"這個環境沒有 ctx.exports": "ctx.exports is not available in this environment"
 };
 export const inner = {"團練": "group run", "課表": "training plan", "拍照": "photo", "跑步": "running", "我的": "my", "揪跑": "social run", "分團": "sub-club", "主團": "home club", "報名": "sign up", "幹部": "officers", "團員": "members", "跑友": "runners", "活動": "event", "協會": "Association", "行事曆": "calendar", "地點": "spot", "路線": "route", "天氣": "weather", "通知": "notifications", "賽事": "race", "組別": "group", "訓練紀錄": "training log"};
