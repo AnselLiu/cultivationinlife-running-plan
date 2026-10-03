@@ -51,7 +51,7 @@ test('賽事準備：沒填身體資料時顯示空狀態；填了年齡、性�
   await page.locator('#bodyForm [name=kg]').fill('63.5');
   await page.locator('#bodyForm [name=kg]').blur();
   await page.goto('/#/plan/race');
-  await expect(page.locator('#hr table.hz')).toContainText('Z2');
+  await expect(page.locator('#hr table.hz:not(.rpe)')).toContainText('Z2');
   await expect(page.locator('#hr')).toContainText('估算');
   await expect(page.locator('#age .agemeter')).toBeVisible();
   await expect(page.locator('#fuel')).toContainText('肝醣超補');
@@ -76,7 +76,7 @@ test('隱私：身體資料不會出現在任何請求裡，只存在 cil-coach�
   for (const [k, v] of [['age', '47'], ['kg', '63.5'], ['rest', '52']]) { await f.locator(`[name=${k}]`).fill(v); await f.locator(`[name=${k}]`).blur(); }
   await f.locator('label.chip', { hasText: '女' }).click();
   await page.goto('/#/plan/race');
-  await expect(page.locator('#hr table.hz')).toBeVisible();
+  await expect(page.locator('#hr table.hz:not(.rpe)')).toBeVisible();
   const stored = await page.evaluate(() => JSON.parse(localStorage.getItem('cil-coach')).body);
   expect(stored).toMatchObject({ age: 47, kg: 63.5, rest: 52, sex: 'F' });
   for (const s of sent) {
@@ -220,8 +220,8 @@ test('離線打勾：先存在手機，復原從暫存區拿掉；連上網路�
   await expect.poll(() => page.evaluate(() => localStorage.getItem('cil-log-queue'))).toBeNull();
   // 再打一次勾，連上網路後自動補傳；再補傳一次（模擬另一台裝置）也不會多一筆
   await firstTick(page).click();
+  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('cil-log-queue') || '[]').length)).toBe(1);
   const q2 = await page.evaluate(() => JSON.parse(localStorage.getItem('cil-log-queue') || '[]'));
-  expect(q2).toHaveLength(1);
   await context.setOffline(false);
   await page.evaluate(() => dispatchEvent(new Event('online')));
   await expect.poll(() => page.evaluate(() => localStorage.getItem('cil-log-queue'))).toBeNull();
@@ -265,6 +265,7 @@ test('可省略：每週 4 天時課表標「可省略」，完成率的分母�
   const six = await denom();
   await page.evaluate(() => localStorage.setItem('cil-coach', JSON.stringify({ v: 1, plan: { days: 4, club: true, vol: null } })));
   await page.reload();
+  await expect(page.locator('.days .pill.opt').first()).toBeVisible();   // 等課表畫好再數
   const opt = await page.locator('.days .pill.opt').count();
   expect(opt).toBeGreaterThan(0);
   expect(await denom()).toBe(six - opt);
@@ -285,7 +286,7 @@ test('用語：點開說明、標示本週全部（?hl=）；詳細內容有主�
   await dlg.getByRole('button', { name: '標示本週全部' }).click();
   await expect(page).toHaveURL(new RegExp(`[?&]hl=${key}`));
   expect(await page.locator('.days .day.term-hl').count()).toBeGreaterThan(0);
-  const xd = page.locator('.days .day.quality').filter({ hasText: /\d\s*[xX]\s*\d/ }).locator('details.xd').first();   // 間歇課（有主課）
+  const xd = page.locator('.days .day.quality').filter({ hasText: /[xX×]\s*\d/ }).locator('details.xd').first();   // 間歇課（有主課）
   await xd.locator('summary').click();
   await expect(xd).toContainText('主課');
   await expect(xd).toContainText('配速');

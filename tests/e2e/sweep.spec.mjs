@@ -13,8 +13,13 @@ const overflow = () => {
     if (r.width > 0 && r.height > 0 && (r.right > vw + 1 || r.left < -1)) out.push(`${el.tagName.toLowerCase()}${el.id ? `#${el.id}` : ''}.${String(el.className).split(' ')[0]} [${Math.round(r.left)}–${Math.round(r.right)}]`);
   }
   // 按鈕或連結太小（小於 30×30）不好點
-  const small = [...document.querySelectorAll('#view button, #view a.btn, #view [role=button]')].filter((b) => { const r = b.getBoundingClientRect(); return r.width > 0 && (r.height < 30 || r.width < 30); }).slice(0, 5)
-    .map((b) => `小按鈕 ${b.tagName.toLowerCase()}「${b.textContent.trim().slice(0, 8)}」${Math.round(b.getBoundingClientRect().width)}×${Math.round(b.getBoundingClientRect().height)}`);
+  // 可點範圍：按鈕本身＋用 ::after 往外擴的部分（例如快速打勾看起來 28px、可點 44px）
+  const hit = (b) => {
+    const r = b.getBoundingClientRect(), a = getComputedStyle(b, '::after'), out = (v) => Math.max(0, -parseFloat(v) || 0);
+    return a.content !== 'none' && a.position === 'absolute' ? { w: r.width + out(a.left) + out(a.right), h: r.height + out(a.top) + out(a.bottom) } : { w: r.width, h: r.height };
+  };
+  const small = [...document.querySelectorAll('#view button, #view a.btn, #view [role=button]')].filter((b) => { const r = b.getBoundingClientRect(), h = hit(b); return r.width > 0 && (h.h < 30 || h.w < 30); }).slice(0, 5)
+    .map((b) => `小按鈕 ${b.tagName.toLowerCase()}「${b.textContent.trim().slice(0, 8)}」${Math.round(hit(b).w)}×${Math.round(hit(b).h)}`);
   return [...out.slice(0, 8), ...small];
 };
 
