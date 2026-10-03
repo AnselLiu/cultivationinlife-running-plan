@@ -3,10 +3,11 @@
 //   課表頁畫好、閒下來才呼叫 weekExtras：課表用語可以點、每一列的「詳細內容」、全部展開、
 //   每週天數與跑量的提醒、左右滑動換週、?hl=用語 標示本週用到的課
 //   身體資料（年齡、安靜心率）只從這台裝置的 cil-coach 讀，不會送到伺服器
-import { $, api, cfg, choose, coachPrefs, dayLabel, dstr, emptyState, esc, feat, fixText, group, IC, ic, largeTitle, me, MI, myCycle, org, paintCountdown, planSeg,
-  raceTarget, refreshMe, render, row, setCoachPrefs, startKey, subTitle, toast, view } from './app.js';
+import { $, api, cfg, choose, coachPrefs, dayLabel, dstr, emptyState, esc, feat, fixText, group, IC, ic, largeTitle, legacyData, me, MI, myCycle, org, paintCountdown, planSeg,
+  raceTarget, refreshMe, removeLegacy, render, row, setCoachPrefs, startKey, subTitle, toast, view } from './app.js';
 import * as P from './plan.js';
-import { ageGrade, createCoach, EST_LINE, fuelCalc, GL, GL_ORDER, hrCalc, icsTranslate, lvl, parseGoal, std100, termSpans, termsIn, verdict, VOL, xdRows } from './coachcalc.js';
+import { ageGrade, createCoach, EST_LINE, fuelCalc, GL, GL_ORDER, hrCalc, icsTranslate, legacyBackup, legacyPatch, legacyRange, lvl, parseGoal, planLegacyImport, std100,
+  termSpans, termsIn, verdict, VOL, xdRows } from './coachcalc.js';
 import { lang, t } from './i18n.js';
 
 // 這個人的課表教練計算（組別、每週天數、身體資料、課表週期）
@@ -455,8 +456,13 @@ async function setupView(q) {
     <p class="tiny" style="margin:0">這些只存在這台裝置，換手機或清除瀏覽器資料就不見了，登出時也會清除。項目、組別與課表週期存在你的帳號。</p>
     <button type="button" class="btn danger block" id="devClear">全部清除</button>`);
 
+  // 8. 舊版課表教練資料（這台裝置有舊版的資料才顯示）
+  const raw = coachOn ? legacyData() : null;
+  const lg = raw ? await legacySection(raw, { races: data.races || [], startRace: tgt?.race || null }) : null;
+
   view.innerHTML = `${subTitle('課表設定', '課表、賽事準備用到的設定')}
-    ${coachOn ? secGrp : ''}${secCyc}${coachOn ? secPb + secTrain + secRace + secBody + secDev : ''}`;
+    ${coachOn ? secGrp : ''}${secCyc}${coachOn ? secPb + secTrain + secRace + secBody + secDev : ''}${lg ? lg.html : ''}`;
+  lg?.bind();
 
   // #view 是共用的節點：這裡加的監聽在離開頁面時拿掉（回傳的清理函式）
   const devPaint = () => { const el = $('#devList'); if (el) el.innerHTML = devList(); };
@@ -586,8 +592,185 @@ async function setupView(q) {
       } catch (err) { toast(err.message); btn.disabled = false; }
     };
   }
-  goTo(q.get('go'));
+  goTo(q.get('migrate') === '1' && lg ? 'legacy' : q.get('go'));
   return cleanup;
+}
+
+/* ---------- 舊版課表教練資料搬移（課表設定最後一組；#/plan/setup?migrate=1 捲到這裡） ----------
+   只搬勾選、按了按鈕的：設定只寫進這台裝置的 cil-coach；完成紀錄要按「上傳」、賽事與倒數要按「加到…」才送到伺服器
+   上傳一筆一筆來（不走離線暫存）、帶 if_absent，斷線就停在那裡，再按一次會從沒上傳的繼續
+   舊版的兩個鍵只有「完成搬移」或「下載備份後刪除」才拿掉；不會動 App 圖示的數字（clearAppBadge） */
+const legacyTotals = { logs: 0, races: 0 };
+async function legacySection(raw, { races, startRace }) {
+  const t0 = todayISO(), weeks = await P.weeks(), rg = legacyRange(raw.dash, t0);
+  let raceList = races, existing = [], online = true, include = [], result = null;
+  const loadExisting = async () => {
+    try { existing = (await api(`/logs?from=${rg.from}&to=${rg.to}`)).logs || []; online = navigator.onLine !== false; } catch { existing = []; online = false; }
+  };
+  const calc = () => planLegacyImport({ model: raw.model, dash: raw.dash, weeks, today: t0, races: raceList, existing, include,
+    startKey: startRace ? startKey(startRace) : null, me });
+  await loadExisting();
+  let M = calc();
+  const h3 = (t) => `<h3 style="margin:8px 0 0">${t}</h3>`;
+  const cnt = (n) => `<b class="num">${n}</b>`;
+  const who = M.who;
+
+  // 這是你的資料嗎？（舊版資料跟著裝置，不跟著帳號）
+  const secWho = `<p class="notice" style="margin:0"><b>這是你的資料嗎？</b><br>
+    <span>舊版的名字：</span>${who.name ? `<span translate="no">${esc(who.name)}</span>` : '<span>沒有填</span>'}<span>・${who.group.name}</span><br>
+    <span>這些資料存在這台裝置，不屬於任何帳號；不是你的，請選「下載備份後刪除」。</span></p>`;
+  // a) 設定：跟舊版預設一樣的不勾（可能從來沒改過）
+  const secPrefs = M.prefs.length ? `${h3('課表設定')}
+    <p class="tiny" style="margin:0">只存在這台裝置，不會上傳。標「可能是預設值」的是舊版一開始就填好的數字，確定是你的再勾。</p>
+    <div class="lgrows">${M.prefs.map((f) => `<label class="lgrow"><input type="checkbox" data-pref="${f.key}" ${f.def ? '' : 'checked'}>
+      <span><b>${f.label}</b>${f.def ? ' <span class="pill">可能是預設值</span>' : ''}<span class="tiny" style="display:block">${esc(f.value)}</span></span></label>`).join('')}</div>
+    ${M.prefs.some((f) => f.key === 'start') ? `<p class="tiny" style="margin:0">起跑時間會記在 <span translate="no">${esc(startRace.name)}</span>。</p>` : ''}
+    <button type="button" class="btn ghost block" id="lgPrefs">套用勾選的設定</button>` : '';
+  // 項目與組別以帳號為準：不一樣就給一個按鈕改
+  const gd = M.groupDiff;
+  const secGrp = gd ? `<p class="notice" style="margin:0"><span>舊版是${gd.from.name}，現在是${gd.to.name}</span>
+    <button type="button" class="btn ghost sm" id="lgGrp">${gd.from.dist !== gd.to.dist ? `改成${gd.from.name}` : `改成 ${gd.from.grp} 組`}</button></p>` : '';
+  // b) 舊版的目標賽事
+  const secRace = () => {
+    const r = M.race;
+    if (!r) return '';
+    return `${h3('目標賽事')}
+      <label>賽事名稱<input id="lgRaceName" maxlength="40" value="${esc(r.name)}" autocomplete="off"></label>
+      <p class="tiny" style="margin:0">${dstr(r.date)}・${r.dist}${r.unnamed ? '・舊版沒有填名稱' : ''}</p>
+      ${raceList.length ? '' : '<p class="tiny" style="margin:0">你還沒有賽事：加入後這場會變成右上角倒數的那一場。</p>'}
+      <button type="button" class="btn ghost block" id="lgRace">加到我的賽事</button>`;
+  };
+  // c) 完成紀錄
+  const logsHTML = () => {
+    const L = M.logs, n = L.upload.length;
+    const opts = L.other.map((o) => `<label class="lgrow"><input type="checkbox" data-anchor="${o.anchor}" ${include.includes(o.anchor) ? 'checked' : ''}>
+      <span><span>另外 ${o.count} 筆是跟「${dstr(o.anchor)} 的比賽」排的課表，也一起上傳</span><span class="tiny" style="display:block">記成那場比賽的個人週期；你的課表週期不會改</span></span></label>`).join('');
+    const parts = [`可以上傳 ${n} 筆`, L.existed ? `已經在訓練紀錄 ${L.existed} 筆` : '', L.otherLeft ? `其他週期 ${L.otherLeft} 筆` : '',
+      L.unmatched ? `對不到協會課表 ${L.unmatched} 筆` : '', L.capped ? `超過每天 5 筆 ${L.capped} 筆` : ''].filter(Boolean);
+    let res = '';
+    if (result) {
+      const cyc = myCycle(), offer = feat('plan_cycle') && cyc.kind === 'club'
+        ? result.anchors.map((a) => raceList.find((r) => r.date === a && r.date >= t0)).filter(Boolean) : [];
+      res = `<p class="notice" role="status" style="margin:0"><span>已上傳 ${result.up} 筆・已存在 ${result.ex} 筆・其他週期 ${result.other} 筆・對不到 ${result.unmatched} 筆</span>${result.capped ? `<span>・略過 ${result.capped} 筆（每天最多 5 筆）</span>` : ''}
+        ${result.stopped ? '<br><span>網路中斷，停在這裡；連上網路後再按一次，會從沒上傳的繼續。</span>' : ''}</p>
+        <button type="button" class="btn ghost sm" id="lgBk">下載這些紀錄的備份（JSON）</button>
+        ${offer.map((r) => `<a class="tiny" href="#/plan/setup?go=cycle&race=${encodeURIComponent(r.id)}">改成跟 <span translate="no">${esc(r.name)}</span> 排課 ›</a>`).join('')}`;
+    }
+    return `<p class="tiny" style="margin:0"><span>舊版有 </span>${cnt(L.total)}<span> 筆完成紀錄。按「上傳」才會送到你的訓練紀錄，備註寫「從舊版課表教練匯入」。</span></p>
+      ${opts ? `<div class="lgrows">${opts}</div>` : ''}
+      ${L.total ? `<p class="tiny" style="margin:0">${parts.join('・')}</p>` : ''}
+      ${n ? `<button type="button" class="btn block" id="lgUp">上傳 ${n} 筆完成紀錄到我的訓練紀錄</button>` : ''}
+      ${!online ? '<p class="tiny" style="margin:0">目前沒有網路：連上網路才能上傳。</p>' : ''}
+      ${res}`;
+  };
+  // d) 我的倒數：預設都不勾（私人行程建議留在自己的行事曆）
+  const cdsHTML = () => M.cds.length ? `${h3('倒數')}
+    <p class="tiny" style="margin:0">體檢、旅行這類私人行程建議留在自己的行事曆</p>
+    <div class="lgrows">${M.cds.map((c, i) => `<label class="lgrow${c.exists ? ' off' : ''}"><input type="checkbox" data-cd="${i}" ${c.exists ? 'disabled' : ''}>
+      <span><b><span translate="no">${esc(c.name)}</span></b><span class="tiny" style="display:block">${dstr(c.date)}${c.exists ? '・已在我的賽事' : ''}</span></span></label>`).join('')}</div>
+    ${M.cds.every((c) => c.exists) ? '' : `${raceList.length ? '' : '<p class="tiny" style="margin:0">你還沒有賽事：第一場會變成右上角倒數的那一場。</p>'}
+    <button type="button" class="btn ghost block" id="lgCds">加到我的賽事與倒數</button>`}` : '';
+  // f) 搬完了嗎？
+  const secEnd = `${h3('搬完了嗎？')}
+    <div class="choices"><button type="button" class="btn block" id="lgDone">完成搬移</button>
+      <button type="button" class="btn ghost block" id="lgDrop">下載備份後刪除</button>
+      <button type="button" class="btn ghost block" id="lgLater">稍後再說</button></div>
+    <p class="tiny" style="margin:0">完成或刪除後，舊版課表教練存在這台裝置的設定、完成紀錄與倒數會清掉。</p>`;
+
+  const html = `<section class="setgroup" id="legacy"><h2 class="sgt">舊版課表教練資料</h2><div class="card lgcard">
+    <p class="tiny" style="margin:0">舊版課表教練（/coach）的設定、完成紀錄與倒數存在這台裝置。勾選要搬的項目，按下按鈕才會搬。</p>
+    ${secWho}${secPrefs}${secGrp}<div id="lgRaceBox">${secRace()}</div>
+    ${h3('完成紀錄')}<div id="lgLogs" aria-live="polite">${logsHTML()}</div>
+    <div id="lgCdsBox">${cdsHTML()}</div>${secEnd}</div></section>`;
+
+  const backup = () => saveFile(new Blob([legacyBackup(raw.model, raw.dash)], { type: 'application/json' }), `耕跑課表備份_${t0}.json`);
+  const finish = (state) => setCoachPrefs({ legacy: { state, at: new Date().toISOString(), logs: legacyTotals.logs, races: legacyTotals.races } });
+  const reloadRaces = async () => { raceList = (await api('/races').catch(() => ({ races: raceList }))).races || raceList; M = calc(); };
+  function bind() {
+    const box = $('#lgLogs');
+    const paintLogs = () => { box.innerHTML = logsHTML(); bindLogs(); };
+    const paintRace = () => { $('#lgRaceBox').innerHTML = secRace(); bindRace(); };
+    const paintCds = () => { $('#lgCdsBox').innerHTML = cdsHTML(); bindCds(); };
+    $('#lgPrefs')?.addEventListener('click', () => {
+      const keys = [...view.querySelectorAll('[data-pref]:checked')].map((x) => x.dataset.pref);
+      if (!keys.length) { toast('沒有勾選任何設定'); return; }
+      const patch = legacyPatch(M.prefs, keys), before = hasBody(coachPrefs().body);
+      const next = setCoachPrefs(patch);
+      if (!before && hasBody(next.body)) navigator.storage?.persist?.().catch(() => {});
+      toast(`已套用 ${keys.length} 項設定`);
+      render();
+    });
+    $('#lgGrp')?.addEventListener('click', async () => {
+      try { await api('/me/plan', { method: 'PUT', body: { dist: gd.from.dist, grp: gd.from.grp } }); await refreshMe(); toast(`已改成${gd.from.name}`); render(); }
+      catch (err) { toast(err.message); }
+    });
+    function bindRace() {
+      $('#lgRace')?.addEventListener('click', async () => {
+        const name = $('#lgRaceName').value.trim();
+        if (!name) { toast('請填賽事名稱'); return; }
+        try {
+          await api('/races', { method: 'POST', body: { name, date: M.race.date, dist: M.race.dist } });
+          legacyTotals.races++; toast('已加到我的賽事');
+          await reloadRaces(); paintRace(); paintCds(); paintCountdown();
+        } catch (err) { toast(err.message); }
+      });
+    }
+    function bindLogs() {
+      for (const c of box.querySelectorAll('[data-anchor]')) c.onchange = () => {
+        include = c.checked ? [...new Set([...include, c.dataset.anchor])] : include.filter((a) => a !== c.dataset.anchor);
+        M = calc(); paintLogs();
+      };
+      $('#lgBk')?.addEventListener('click', backup);
+      $('#lgUp')?.addEventListener('click', async (e) => {
+        const btn = e.currentTarget;
+        if (navigator.onLine === false) { toast('目前沒有網路，連上後再試一次'); return; }
+        btn.disabled = true;
+        await loadExisting();
+        if (!online) { toast('連不上伺服器，請稍後再試'); paintLogs(); return; }
+        M = calc();
+        const list = M.logs.upload, anchors = M.logs.other.map((o) => o.anchor);
+        let up = 0, ex = 0, skip = 0, stopped = false;
+        for (const { key, ...b } of list) {
+          btn.textContent = `正在上傳 ${up + ex + skip + 1}/${list.length}`;
+          try { const r = await api('/logs', { method: 'POST', body: b }); if (r.existed) ex++; else up++; }
+          catch (err) { if (err instanceof TypeError) { stopped = true; break; } skip++; }
+        }
+        legacyTotals.logs += up;
+        const before = M.logs;
+        await loadExisting(); M = calc();
+        result = { up, ex: ex + before.existed, other: before.otherLeft, unmatched: before.unmatched, capped: before.capped + skip, stopped, anchors };
+        paintLogs();
+        toast(stopped ? `網路中斷，已上傳 ${up} 筆` : `已上傳 ${up} 筆完成紀錄`);
+      });
+    }
+    function bindCds() {
+      $('#lgCds')?.addEventListener('click', async () => {
+        const pick = [...view.querySelectorAll('[data-cd]:checked')].map((x) => M.cds[Number(x.dataset.cd)]).filter(Boolean);
+        if (!pick.length) { toast('沒有勾選任何倒數'); return; }
+        if (raceList.length + pick.length > 30) { toast(`我的賽事最多 30 場，還能加 ${Math.max(0, 30 - raceList.length)} 場`); return; }
+        let ok = 0;
+        for (const c of pick) {
+          try { await api('/races', { method: 'POST', body: { name: c.name, date: c.date } }); ok++; }
+          catch (err) { toast(err.message); break; }
+        }
+        legacyTotals.races += ok;
+        if (ok) toast(`已加入 ${ok} 個倒數`);
+        await reloadRaces(); paintCds(); paintRace(); paintCountdown();
+      });
+    }
+    bindRace(); bindLogs(); bindCds();
+    $('#lgDone').onclick = async () => {
+      const left = M.logs.upload.length;
+      if (left && await choose(`還有 ${left} 筆完成紀錄沒有上傳`, '完成後這台裝置的舊版資料會清掉，沒上傳的紀錄就找不回來了。', [{ value: 'y', label: '還是完成', danger: true }]) !== 'y') return;
+      removeLegacy(); finish('done'); toast('舊版資料搬好了'); render();
+    };
+    $('#lgDrop').onclick = async () => {
+      if (!await backup()) return;
+      removeLegacy(); finish('skipped'); toast('已下載備份，舊版資料已刪除'); render();
+    };
+    $('#lgLater').onclick = () => { finish('later'); toast('好，7 天後再提醒你'); location.hash = '#/plan'; };
+  }
+  return { html, bind };
 }
 
 /* ---------- 全季課表 #/plan/season（照我的課表週期；?c=club 看協會賽季，只能看） ---------- */

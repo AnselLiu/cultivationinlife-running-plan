@@ -425,3 +425,157 @@ export function createCoach(ctx = {}) {
     predictedMin, suggestGroup, volTier, warnings, breakfastAt, raceDayPlan, explain, hrZoneText,
     headerText, weekText, copyPayload, paceRows, dayOffset, buildIcs, weekStat, seasonStat, noteText: noteText_, weeks: WEEKS };
 }
+
+/* ======================================================================
+   舊版課表教練（/coach）的資料搬進 App：純函式，畫面在 coach.js 的課表設定
+   gengCoachModel：舊版設定（組別、每週天數、身體資料、起跑時間…）
+   gengCoachDash：打卡紀錄 log（鍵「比賽日|週次|第幾列」→ 打勾的時間）、我的倒數 cds、圖示徽章 badge（不搬）
+   規則：只搬勾選的項目；組別以帳號為準；日期不會是未來；同一個週期、同一週、同一天已經有紀錄就略過；每天最多 5 筆
+   ====================================================================== */
+export const LEGACY_KEYS = ['gengCoachModel', 'gengCoachDash'];
+export const LEGACY_NOTE = '從舊版課表教練匯入';
+// 舊版的預設值：跟預設一樣的欄位可能從來沒改過，預設不勾、標「可能是預設值」
+export const LEGACY_DEFAULTS = { vol: '30', days: 6, club: true, start: '06:30', age: 45, sex: 'M', kg: 62, sweat: '中', pbDist: '10', pbTime: '0:48:30' };
+const PB_NAME = { 5: '5K', 10: '10K', 21.0975: '半馬', 42.195: '全馬' };
+const SWEAT_NAME = { 低: '少', 中: '一般', 高: '多' };
+const obj = (x) => (x && typeof x === 'object' && !Array.isArray(x) ? x : {});
+const numIn = (v, lo, hi, dec = 0) => { if (v === '' || v == null || typeof v === 'boolean') return null; const n = Number(v); return Number.isFinite(n) && n >= lo && n <= hi ? Math.round(n * 10 ** dec) / 10 ** dec : null; };
+const distName2 = (d) => (d === 'hm' ? '半馬' : '全馬');
+// 日期要真的存在（2026-13-01 這種不算）
+const okISO = (s) => { const d = P.parseISO(s); return !!d && P.iso(d) === s; };
+
+// 舊版的項目與組別（看不懂就用舊版的預設：全馬 D 組）
+export function legacyGroup(model) {
+  const m = obj(model), dist = m.dist === 'hm' ? 'hm' : 'fm';
+  const grp = typeof m.grp === 'string' && P.groups(dist)[m.grp.toUpperCase()] ? m.grp.toUpperCase() : dist === 'hm' ? 'C' : 'D';
+  return { dist, grp, name: `${distName2(dist)} ${grp} 組` };
+}
+
+// 可以搬的設定：每一欄一列，def＝跟舊版預設一樣（預設不勾）；patch 是 setCoachPrefs 用的部分設定
+// startKey：起跑時間要存在哪一場比賽（沒有目標賽事就不搬起跑時間）
+export function legacyPrefs(model, { startKey = null } = {}) {
+  const m = obj(model), D = LEGACY_DEFAULTS, out = [];
+  const add = (key, label, value, patch, def) => out.push({ key, label, value, patch, def: !!def });
+  const days = numIn(m.days, 3, 6);
+  if (days != null && Number.isInteger(days)) add('days', '每週能跑', `${days} 天`, { plan: { days } }, days === D.days);
+  if (typeof m.club === 'boolean') add('club', '週四團練', m.club ? '參加團練' : '自己練', { plan: { club: m.club } }, m.club === D.club);
+  const vol = VOL.find((v) => v[0] === String(m.vol ?? ''));
+  if (vol) add('vol', '每週跑量', vol[1][0], { plan: { vol: vol[0] } }, vol[0] === D.vol);
+  const st = /^(\d{1,2}):(\d{2})$/.exec(String(m.start || ''));
+  if (startKey && st && +st[1] < 24 && +st[2] < 60) {
+    const v = `${st[1].padStart(2, '0')}:${st[2]}`;
+    add('start', '起跑時間', v, { start: { [startKey]: v } }, v === D.start);
+  }
+  const pbDist = String(m.pbDist ?? ''), pbTime = String(m.pbTime ?? '').trim();
+  if (PB_NAME[pbDist] && parseTime(pbTime) && /^[\d:：]+$/.test(pbTime))
+    add('pb', '成績推算', `${PB_NAME[pbDist]} ${pbTime}`, { pb: { dist: pbDist, time: pbTime } }, pbDist === D.pbDist && pbTime === D.pbTime);
+  const age = numIn(m.age, 10, 100);
+  if (age != null) add('age', '年齡', `${age}`, { body: { age } }, age === D.age);
+  if (m.sex === 'M' || m.sex === 'F') add('sex', '性別', m.sex === 'M' ? '男' : '女', { body: { sex: m.sex } }, m.sex === D.sex);
+  const kg = numIn(m.kg, 25, 200, 1);
+  if (kg != null) add('kg', '體重', `${kg} kg`, { body: { kg } }, kg === D.kg);
+  const rest = numIn(m.rest, 30, 120);
+  if (rest != null) add('rest', '安靜心率', `${rest}`, { body: { rest } }, false);
+  if (SWEAT_NAME[m.sweat]) add('sweat', '流汗程度', SWEAT_NAME[m.sweat], { body: { sweat: m.sweat } }, m.sweat === D.sweat);
+  if (m.explain === true) add('explain', '詳細內容全部展開', '開', { ui: { explain: true } }, false);
+  return out;
+}
+// 勾選的設定合成一個 patch（物件欄位逐鍵合併）
+export function legacyPatch(fields, keys) {
+  const pick = new Set(keys), out = {};
+  for (const f of fields) {
+    if (!pick.has(f.key)) continue;
+    for (const [k, v] of Object.entries(f.patch)) out[k] = { ...(out[k] || {}), ...v };
+  }
+  return out;
+}
+
+// 舊版的目標賽事：今天以後、不是協會賽季那天、我的賽事裡還沒有同一天的，才建議加到我的賽事
+export function legacyRace(model, { today, races = [] }) {
+  const m = obj(model), date = String(m.raceDate || '');
+  if (!okISO(date) || date < today || date === P.RACE_ISO) return null;
+  if (races.some((r) => r.date === date)) return null;
+  const name = String(m.race || '').trim().slice(0, 40);
+  return { name: name || '目標賽事', date, dist: m.dist === 'hm' ? '半馬' : '全馬', unnamed: !name };
+}
+
+// 我的倒數：今天以後的才列（照日期排）；exists＝我的賽事已經有同名同日的
+export function legacyCountdowns(dash, { today, races = [] }) {
+  const cds = Array.isArray(obj(dash).cds) ? dash.cds : [];
+  const seen = new Set(), out = [];
+  for (const c of cds) {
+    const name = String(c?.name || '').trim().slice(0, 40), date = String(c?.date || '');
+    if (!name || !okISO(date) || date < today || seen.has(`${date}|${name}`)) continue;
+    seen.add(`${date}|${name}`);
+    out.push({ name, date, exists: races.some((r) => r.date === date && r.name === name) });
+  }
+  return out.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.name < b.name ? -1 : 1));
+}
+
+// 打卡紀錄對到課表：鍵「比賽日|週次|第幾列」，列號是那一組原始課表的位置（W1 舊版內容不同，不搬）
+//   比賽日是 2026-12-20 → 協會賽季；其他日期 → 那場比賽的個人週期（include 有勾那個日期才上傳）
+//   日期：打勾那天是這一列的日期就用它；不是就用打勾那天（含）以前最近的一天；再不行用今天以前的第一天；都沒有就略過
+//   existing：伺服器上已經有的紀錄（同一個週期、同一週、同一天就算已存在）
+export function legacyLogs({ model, dash, weeks, today, existing = [], include = [] }) {
+  const { dist, grp } = legacyGroup(model), log = obj(obj(dash).log);
+  const keys = Object.keys(log).map((k) => {
+    const m = /^(\d{4}-\d{2}-\d{2})\|(\d{1,2})\|(\d{1,2})$/.exec(k);
+    return m ? { k, anchor: m[1], n: +m[2], i: +m[3] } : { k, bad: true };
+  }).sort((a, b) => (a.bad || b.bad ? (a.bad ? 1 : -1) : a.anchor < b.anchor ? -1 : a.anchor > b.anchor ? 1 : a.n - b.n || a.i - b.i));
+  const perDay = {}, seen = new Set(), others = {}, mapped = {};
+  for (const l of existing) perDay[l.date] = (perDay[l.date] || 0) + 1;
+  const out = { upload: [], existed: 0, unmatched: 0, capped: 0, other: [], otherLeft: 0, total: keys.length };
+  for (const x of keys) {
+    if (x.bad || !okISO(x.anchor) || x.n < 2 || x.n > 21) { out.unmatched++; continue; }
+    const w = weeks?.[x.n - 1], plan = w?.plan;
+    const raw = !plan ? null : plan.fmAll ? (dist === 'hm' ? plan.hmAll : plan.fmAll) : plan[dist]?.[grp];
+    const r = raw?.[x.i];
+    if (!r) { out.unmatched++; continue; }
+    const [d, t] = r, k = kind(d, t), row = { d, t, kind: k };
+    if (k === 'rest') { out.unmatched++; continue; }
+    const club = x.anchor === P.RACE_ISO, cyc = club ? P.CLUB : P.cycleOf(x.anchor);
+    const cands = P.dayDates(x.n, d, cyc, row).filter((v) => v <= today);
+    const ts = Number(log[x.k]), tick = Number.isFinite(ts) && ts > 0 ? P.iso(new Date(ts)) : null;
+    const date = (tick && cands.includes(tick) && tick) || (tick && cands.filter((v) => v <= tick).pop()) || cands[0] || null;
+    if (!date) { out.unmatched++; continue; }
+    if (!club) mapped[x.anchor] = (mapped[x.anchor] || 0) + 1;
+    if (!club && !include.includes(x.anchor)) { others[x.anchor] = (others[x.anchor] || 0) + 1; out.otherLeft++; continue; }
+    const dup = `${P.cycleKey(cyc, x.n)}|${d}`;
+    if (seen.has(dup) || existing.some((l) => P.logMatches(l, cyc, x.n, row))) { out.existed++; continue; }
+    if ((perDay[date] || 0) >= 5) { out.capped++; continue; }
+    seen.add(dup); perDay[date] = (perDay[date] || 0) + 1;
+    out.upload.push({ date, status: 'done', plan_day: d, kind: k, plan_text: !club && P.isRaceDay(row, x.n) ? '比賽日' : t,
+      source: 'manual', note: LEGACY_NOTE, if_absent: true, ...P.cycleFields(cyc, x.n), key: x.k });
+  }
+  // 其他週期（每一場比賽日一個勾選框）：count＝對得到課表的筆數，left＝沒勾所以沒上傳的筆數
+  out.other = Object.keys(mapped).sort().map((anchor) => ({ anchor, count: mapped[anchor], left: others[anchor] || 0 }));
+  return out;
+}
+// 去伺服器查已有紀錄的範圍：協會賽季與每個個人週期的 W1 起（最多往回 365 天，查詢上限一年）到今天
+export function legacyRange(dash, today) {
+  const t = P.parseISO(today), floor = P.iso(P.addDays(t, -365));
+  let from = P.CLUB.w1ISO;
+  for (const k of Object.keys(obj(obj(dash).log))) {
+    const a = /^(\d{4}-\d{2}-\d{2})\|/.exec(k)?.[1];
+    if (a && okISO(a)) { const w = P.cycleOf(a).w1ISO; if (w < from) from = w; }
+  }
+  if (from < floor) from = floor;
+  if (from > today) from = today;
+  return { from, to: today };
+}
+// 全部合在一起（畫面一次拿）
+export function planLegacyImport({ model, dash, weeks, today, races = [], existing = [], include = [], startKey = null, me = null }) {
+  const m = obj(model), g = legacyGroup(m);
+  return {
+    who: { name: String(m.name || '').trim().slice(0, 40), group: g },
+    groupDiff: me && (me.dist !== g.dist || me.grp !== g.grp) ? { from: g, to: { dist: me.dist, grp: me.grp, name: `${distName2(me.dist)} ${me.grp} 組` } } : null,
+    prefs: legacyPrefs(m, { startKey }),
+    race: legacyRace(m, { today, races }),
+    cds: legacyCountdowns(dash, { today, races }),
+    logs: legacyLogs({ model: m, dash, weeks, today, existing, include }),
+  };
+}
+// 舊版格式的備份（跟舊版「匯出備份」一樣，舊版頁面可以還原）
+export function legacyBackup(model, dash, now = new Date()) {
+  return JSON.stringify({ app: 'gengpao-coach', v: 1, exported: new Date(now).toISOString(), settings: obj(model), dash: obj(dash) }, null, 2);
+}

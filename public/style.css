@@ -1480,6 +1480,16 @@ dl.kv dd{margin:0}
 .cycopt input,.cycrace input{width:20px;height:20px;margin:2px 0 0;accent-color:var(--accent)}
 .cycraces{padding-left:34px}
 .cycrace.off{opacity:.6;cursor:default}
+/* 舊版課表教練資料搬移 */
+.lgrows{display:grid;gap:0}
+.lgrow{display:grid;grid-template-columns:24px minmax(0,1fr);gap:10px;align-items:start;min-height:44px;padding:10px 0;cursor:pointer;border-bottom:1px solid var(--stroke)}
+.lgrow:last-child{border-bottom:0}
+.lgrow input{width:20px;height:20px;margin:2px 0 0;accent-color:var(--accent)}
+.lgrow.off{opacity:.6;cursor:default}
+.lgrow .pill{margin-left:6px;vertical-align:1px}
+.lgcard{display:grid;gap:12px}
+.lgcard #lgLogs,.lgcard #lgRaceBox,.lgcard #lgCdsBox{display:grid;gap:10px}
+.lgcard #lgRaceBox:empty,.lgcard #lgCdsBox:empty{display:none}
 .lockline{display:flex;align-items:center;gap:6px}
 .bodyform{display:grid;gap:12px}
 /* 全季課表 */

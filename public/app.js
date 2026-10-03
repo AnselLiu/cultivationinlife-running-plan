@@ -274,6 +274,49 @@ function setCoachPrefs(patch) {
   try { localStorage.setItem('cil-coach', JSON.stringify(next)); } catch {}
   return next;
 }
+// 舊版課表教練（/coach）存在這台裝置的資料：設定 gengCoachModel、完成紀錄與倒數 gengCoachDash
+//   不屬於任何帳號；搬完或下載備份後刪除才從這台裝置拿掉；登出時先問（清除這台裝置的資料也不會動它）
+const LEGACY_KEYS = ['gengCoachModel', 'gengCoachDash'];
+function legacyData() {
+  const out = { model: {}, dash: {} };
+  let found = false;
+  for (const [k, f] of [['gengCoachModel', 'model'], ['gengCoachDash', 'dash']]) {
+    try {
+      const v = localStorage.getItem(k);
+      if (v == null) continue;
+      found = true;
+      const j = JSON.parse(v);
+      if (j && typeof j === 'object' && !Array.isArray(j)) out[f] = j;
+    } catch {}
+  }
+  return found ? out : null;
+}
+const removeLegacy = () => { try { for (const k of LEGACY_KEYS) localStorage.removeItem(k); } catch {} };
+// 舊版有完成紀錄或倒數（只打開過舊版頁面也會留下設定，那不算）
+const legacyHasDash = (d) => Object.keys(d?.dash?.log || {}).length > 0 || (Array.isArray(d?.dash?.cds) && d.dash.cds.length > 0);
+// 還沒回答：沒有搬完、也沒有下載備份後刪除；搬完以後又在舊版記了新的完成紀錄或倒數也算
+function legacyOpen() {
+  const d = legacyData();
+  return !!d && (!['done', 'skipped'].includes(coachPrefs().legacy?.state) || legacyHasDash(d));
+}
+// 課表頁的提醒：沒回答過、選「稍後再說」超過 7 天，或搬完以後舊版又有新的資料
+function legacyDue() {
+  if (!feat('coach')) return false;
+  const d = legacyData();
+  if (!d) return false;
+  const l = coachPrefs().legacy;
+  if (!l) return true;
+  if (l.state === 'later') return !(Date.now() - (Date.parse(l.at) || 0) < 7 * 864e5);
+  return legacyHasDash(d);
+}
+// 登出、刪除帳號前：還有沒搬的舊版資料就先問要保留（之後登入可以再搬）還是刪除；按取消回傳 false（不登出）
+async function askLegacyOnLeave() {
+  if (!legacyOpen()) return true;
+  const v = await choose('這台裝置還有舊版課表教練資料', '設定、完成紀錄與倒數只存在這台裝置，還沒搬進 App。',
+    [{ value: 'keep', label: '保留（之後登入可搬移）', primary: true }, { value: 'drop', label: '刪除', danger: true }]);
+  if (v === 'drop') removeLegacy();
+  return !!v;
+}
 const copy = async (text) => {
   try { await navigator.clipboard.writeText(text); toast('已複製'); }
   catch { toast('複製失敗，請長按文字手動複製'); }
@@ -2354,6 +2397,7 @@ async function planView(n) {
       : `<h3>${MI.flag}辛苦了</h3><p class="muted" style="margin:0">賽後一週以恢復為主，照課表的恢復週慢慢跑。</p><div class="row" style="gap:16px"><a class="tiny" href="#/plan/season">全季回顧 ›</a><a class="tiny" href="${feat('plan_cycle') ? '#/plan/setup?go=cycle' : '#/me/races'}">設定下一場 ›</a></div>`}
       ${weekday && stage !== 'recover' ? '<p class="notice" style="margin:0">你的比賽不在週末，賽事週的課請跟教練確認</p>' : ''}
     </section>` : ''}
+    ${coach && !other && legacyDue() ? `<section class="setgroup legacynote"><div class="card setcard">${row('#/plan/setup?migrate=1', IC.runner, '舊版課表教練的資料可以搬進 App', '設定、完成紀錄與倒數；勾選的才會搬')}</div></section>` : ''}
     ${personal && posts.length ? `<details class="card clubposts"><summary>協會 W${postWeek} 公告（你的課表照個人週期排，內容可能不同）</summary>${postCards}</details>` : postCards}
     ${days && started && !other ? `<section class="card logsum">
       <div class="lsumtop">
@@ -2393,7 +2437,7 @@ async function planView(n) {
     <section class="setgroup"><h3 class="sgt">工具</h3><div class="card setcard">
       ${coach ? `${row('#/plan/season', MI.plan, '全季課表', '20 週一覽、每週完成率')}${row('#/plan/race', MI.flag, '賽事準備', '比賽日計劃、補給、心率、年齡分級')}
         ${row('#/plan/guide', MI.help, '配速與用語', '你的配速、課表用語、各階段')}${row('#/plan/setup', IC.sliders, '課表設定', '組別、課表週期、每週天數、身體資料')}
-        <a class="setrow" href="/coach"><span class="sic">${IC.runner}</span><span class="st"><b>舊版課表教練</b><span class="tiny">完成紀錄與倒數還在舊版，之後會搬進 App</span></span><span class="chev" aria-hidden="true"></span></a>` : ''}
+        <a class="setrow" href="/coach"><span class="sic">${IC.runner}</span><span class="st"><b>舊版課表教練</b><span class="tiny">舊版的完成紀錄與倒數，可以到課表設定搬進 App</span></span><span class="chev" aria-hidden="true"></span></a>` : ''}
       <a class="setrow" href="#/report"><span class="sic">${MI.report}</span><span class="st"><b>訓練報表</b><span class="tiny">週里程、完成率、個人最佳</span></span><span class="chev" aria-hidden="true"></span></a>
       <a class="setrow" href="#/challenge"><span class="sic">${MI.flag}</span><span class="st"><b>每月里程挑戰</b><span class="tiny">徽章、分團對抗、排行榜</span></span><span class="chev" aria-hidden="true"></span></a>
     </div><p class="tiny center">課表來源：耕跑團記事本・實際以教練每週公告為準</p></section>`;
@@ -3142,8 +3186,8 @@ async function meSecurity(googleMsg) {
     e.preventDefault();
     try { me = (await api('/me/admin', { method: 'POST', body: { code: e.target.code.value } })).member; toast('已設定為理事長'); render(); } catch (err) { toast(err.message); }
   });
-  $('#logout').onclick = async () => { await dropPush(); await api('/logout', { method: 'POST' }); clearDeviceData(); me = null; location.hash = '#/'; render(); };
-  $('#logoutAll').onclick = async () => { if (!confirm('要登出所有裝置嗎？包含這一台。')) return; await api('/logout', { method: 'POST', body: { all: true } }); await dropPush(false); clearDeviceData(); me = null; location.hash = '#/'; render(); };
+  $('#logout').onclick = async () => { if (!await askLegacyOnLeave()) return; await dropPush(); await api('/logout', { method: 'POST' }); clearDeviceData(); me = null; location.hash = '#/'; render(); };
+  $('#logoutAll').onclick = async () => { if (!confirm('要登出所有裝置嗎？包含這一台。') || !await askLegacyOnLeave()) return; await api('/logout', { method: 'POST', body: { all: true } }); await dropPush(false); clearDeviceData(); me = null; location.hash = '#/'; render(); };
 }
 function mePrivacy() {
   view.innerHTML = `${subTitle('隱私')}
@@ -3160,7 +3204,7 @@ function mePrivacy() {
   $('#showRank').onchange = async (e) => { try { await api('/me/show-rank', { method: 'POST', body: { on: e.target.checked } }); me.show_rank = e.target.checked; toast(e.target.checked ? '已加入排行榜' : '已退出排行榜'); } catch (err) { e.target.checked = !e.target.checked; toast(err.message); } };
   $('#shareLogs').onchange = async (e) => { try { await api('/me/share-logs', { method: 'POST', body: { share: e.target.checked } }); me.share_logs = e.target.checked; toast(e.target.checked ? '已分享給教練' : '已停止分享'); } catch (err) { e.target.checked = !e.target.checked; toast(err.message); } };
   $('#delAcct').onclick = async () => {
-    if (!confirm('刪除後無法復原。確定刪除帳號？')) return;
+    if (!confirm('刪除後無法復原。確定刪除帳號？') || !await askLegacyOnLeave()) return;
     try { await api('/me', { method: 'DELETE' }); clearDeviceData(); me = null; toast('帳號已刪除'); location.hash = '#/'; render(); } catch (e) { toast(e.message); }
   };
 }
@@ -3533,4 +3577,4 @@ addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvt 
 addEventListener('appinstalled', () => { installEvt = null; try { localStorage.setItem('cil-installed', '1'); } catch {} document.querySelectorAll('.installcard').forEach((c) => c.remove()); });
 
 // 拆出去的模組（admin.js、photo.js…）從這裡拿共用的工具與狀態
-export { addrField, bindAddrField, latest, $, cfg, downloadAuthed, scanSheet, FEEL, IC, KIND_NAME, LOG_ICON, LOG_STATUS_NAME, MI, PAID_NAME, ROLE_NAME, TAB_DEFAULT, TEAM_PERMS, TEAM_ROLE_NAME, ago, allow, api, applyFeatures, avatar, barChart, bars, bindComments, bindStepup, btnRow, choose, coachPrefs, copy, countdownPicker, dayLabel, dstr, emptyState, esc, eventCard, feat, fixText, group, ic, largeTitle, me, mfaBanner, money, myCycle, nrow, org, pad2, paintCountdown, passkey, planSeg, queueLog, raceTarget, refreshMe, render, route, row, setCoachPrefs, squareIcon, startKey, studio, subTitle, teamAllow, teamIcon, teamOf, teams, toast, view, ymd };
+export { legacyData, removeLegacy, addrField, bindAddrField, latest, $, cfg, downloadAuthed, scanSheet, FEEL, IC, KIND_NAME, LOG_ICON, LOG_STATUS_NAME, MI, PAID_NAME, ROLE_NAME, TAB_DEFAULT, TEAM_PERMS, TEAM_ROLE_NAME, ago, allow, api, applyFeatures, avatar, barChart, bars, bindComments, bindStepup, btnRow, choose, coachPrefs, copy, countdownPicker, dayLabel, dstr, emptyState, esc, eventCard, feat, fixText, group, ic, largeTitle, me, mfaBanner, money, myCycle, nrow, org, pad2, paintCountdown, passkey, planSeg, queueLog, raceTarget, refreshMe, render, route, row, setCoachPrefs, squareIcon, startKey, studio, subTitle, teamAllow, teamIcon, teamOf, teams, toast, view, ymd };

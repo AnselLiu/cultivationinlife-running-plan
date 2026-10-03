@@ -465,3 +465,131 @@ test('分享與匯出：管理員關掉後沒有分享鈕', async ({ page, reque
     }
   } finally { await apiAs(request, 't_chair', '/settings/features', { method: 'POST', body: { plan_export: true } }); }
 });
+
+// ---------- P5：舊版課表教練資料搬移 ----------
+// 舊版的設定（年齡、性別、體重是舊版預設）與打卡：協會賽季 W3 週二、另一場比賽（2026-11-01）的 W3 週二；倒數一個
+const seedLegacy = (page) => page.evaluate(() => {
+  localStorage.removeItem('cil-coach');
+  localStorage.setItem('gengCoachModel', JSON.stringify({ name: '舊版跑者', dist: 'fm', grp: 'C', age: 45, sex: 'M', kg: 62, days: 5, raceDate: '2026-12-20' }));
+  localStorage.setItem('gengCoachDash', JSON.stringify({ log: { '2026-12-20|3|1': Date.parse('2026-08-18T20:00:00+08:00'), '2026-11-01|3|1': Date.parse('2026-06-30T20:00:00+08:00') },
+    cds: [{ id: 'a', name: 'E2E 舊版倒數', date: '2027-01-15' }], badge: true }));
+});
+const legacyKeys = (page) => page.evaluate(() => [localStorage.getItem('gengCoachModel'), localStorage.getItem('gengCoachDash')]);
+const dropW3Tue = async (request) => { for (const l of await logsOf(request, 't_other', ...W3)) if (l.week_no === 3 && l.plan_day === '週二') await apiAs(request, 't_other', `/logs/${l.id}`, { method: 'DELETE' }); };
+
+test('舊版資料搬移：課表頁提醒、預設值不勾、組別以帳號為準、按上傳才送出、重跑 0 筆、完成搬移清掉舊版', async ({ page, request }) => {
+  await dropW3Tue(request);
+  await enter(page, 't_other');
+  await seedLegacy(page);
+  try {
+    await page.goto('/#/plan');
+    await expect(page.locator('#view .card h2').first()).toContainText(/W\d+|賽後恢復/);
+    await expect(page.locator('.legacynote')).toContainText('舊版課表教練的資料可以搬進 App');
+    const writes = [];
+    page.on('request', (r) => { if (r.method() !== 'GET' && r.url().includes('/api/') && !r.url().includes('/api/vitals')) writes.push(`${r.method()} ${r.url()}`); });
+    await page.locator('.legacynote a').click();
+    await expect(page).toHaveURL(/#\/plan\/setup\?migrate=1$/);
+    const card = page.locator('#legacy');
+    await expect(card).toContainText('舊版跑者');
+    for (const k of ['age', 'sex', 'kg']) {
+      await expect(card.locator(`[data-pref=${k}]`)).not.toBeChecked();
+      await expect(card.locator('label.lgrow', { has: page.locator(`[data-pref=${k}]`) })).toContainText('可能是預設值');
+    }
+    await expect(card.locator('[data-pref=days]')).toBeChecked();
+    await expect(card).toContainText('舊版是全馬 C 組，現在是全馬 E 組');
+    await expect(card.locator('#lgGrp')).toHaveText('改成 C 組');
+    await expect(card.locator('[data-cd]')).toHaveCount(1);
+    await expect(card.locator('[data-cd]')).not.toBeChecked();
+    await expect(card.locator('[data-anchor="2026-11-01"]')).not.toBeChecked();
+    expect(writes).toEqual([]);                                   // 按上傳以前沒有送出任何東西
+    await card.locator('#lgUp').click();
+    const st = card.locator('#lgLogs [role=status]');
+    await expect(st).toContainText('已上傳 1 筆');
+    await expect(st).toContainText('其他週期 1 筆');
+    const got = (await logsOf(request, 't_other', ...W3)).filter((l) => l.week_no === 3 && l.plan_day === '週二');
+    expect(got).toHaveLength(1);
+    expect(got[0]).toMatchObject({ date: '2026-08-18', status: 'done', note: '從舊版課表教練匯入', cycle_anchor: null });
+    expect(writes.filter((w) => w.startsWith('POST') && w.includes('/api/logs'))).toHaveLength(1);
+    // 重跑：已經在訓練紀錄裡，沒有東西可以上傳
+    await page.reload();
+    await expect(card.locator('#lgLogs')).toContainText('可以上傳 0 筆');
+    await expect(card.locator('#lgUp')).toHaveCount(0);
+    // 課表 W3 的週二顯示已記錄
+    await page.goto('/#/plan/3');
+    await expect(page.locator('.days .day.logged', { hasText: '週二' })).toHaveCount(1);
+    await expect(page.locator('.legacynote')).toHaveCount(1);
+    // 完成搬移：兩個舊版的鍵都拿掉，課表頁不再提醒
+    await page.goto('/#/plan/setup?migrate=1');
+    await card.locator('#lgDone').click();
+    await expect.poll(() => legacyKeys(page)).toEqual([null, null]);
+    expect(await page.evaluate(() => JSON.parse(localStorage.getItem('cil-coach')).legacy.state)).toBe('done');
+    await page.goto('/#/plan');
+    await expect(page.locator('#view .card h2').first()).toBeVisible();
+    await expect(page.locator('.legacynote')).toHaveCount(0);
+  } finally {
+    await dropW3Tue(request);
+    await page.evaluate(() => { localStorage.removeItem('gengCoachModel'); localStorage.removeItem('gengCoachDash'); localStorage.removeItem('cil-coach'); });
+  }
+});
+
+test('舊版資料搬移：勾另一場比賽的紀錄才上傳成個人週期；設定只寫進這台裝置', async ({ page, request }) => {
+  await enter(page, 't_other');
+  await seedLegacy(page);
+  const from = '2026-06-29', to = '2026-07-05';
+  try {
+    await page.goto('/#/plan/setup?migrate=1');
+    const card = page.locator('#legacy');
+    await card.locator('[data-anchor="2026-11-01"]').check();
+    await expect(card.locator('#lgUp')).toContainText(/上傳 [12] 筆/);
+    await card.locator('#lgUp').click();
+    await expect(card.locator('#lgLogs [role=status]')).toContainText('其他週期 0 筆');
+    const mine = (await logsOf(request, 't_other', from, to)).filter((l) => l.cycle_anchor === '2026-11-01');
+    expect(mine).toHaveLength(1);
+    expect(mine[0]).toMatchObject({ cycle_week: 3, plan_day: '週二', date: '2026-06-30' });
+    // 設定：勾年齡再套用，只存在 cil-coach
+    await card.locator('[data-pref=age]').check();
+    await card.locator('#lgPrefs').click();
+    await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('cil-coach') || '{}').body?.age)).toBe(45);
+    expect(await page.evaluate(() => JSON.parse(localStorage.getItem('cil-coach')).plan.days)).toBe(5);
+    for (const l of mine) await apiAs(request, 't_other', `/logs/${l.id}`, { method: 'DELETE' });
+  } finally {
+    await dropW3Tue(request);
+    await page.evaluate(() => { localStorage.removeItem('gengCoachModel'); localStorage.removeItem('gengCoachDash'); localStorage.removeItem('cil-coach'); });
+  }
+});
+
+test('舊版資料搬移：下載備份後刪除會下載 JSON 並拿掉舊版的鍵；稍後再說 7 天內不提醒', async ({ page }) => {
+  await enter(page, 't_other');
+  await seedLegacy(page);
+  await page.goto('/#/plan/setup?migrate=1');
+  await page.locator('#lgLater').click();
+  await expect(page).toHaveURL(/#\/plan$/);
+  await expect(page.locator('#view .card h2').first()).toBeVisible();
+  await expect(page.locator('.legacynote')).toHaveCount(0);
+  expect((await legacyKeys(page)).every(Boolean)).toBe(true);
+  await page.goto('/#/plan/setup?migrate=1');
+  const dl = page.waitForEvent('download');
+  await page.locator('#lgDrop').click();
+  const file = await dl;
+  expect(file.suggestedFilename()).toMatch(/\.json$/);
+  const j = JSON.parse((await (await file.createReadStream()).toArray()).join(''));
+  expect(j).toMatchObject({ app: 'gengpao-coach', v: 1, settings: { grp: 'C' } });
+  expect(Object.keys(j.dash.log)).toHaveLength(2);
+  await expect.poll(() => legacyKeys(page)).toEqual([null, null]);
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('cil-coach')).legacy.state)).toBe('skipped');
+  await page.evaluate(() => localStorage.removeItem('cil-coach'));
+});
+
+test('舊版資料搬移：登出時還沒搬就先問，選保留會留下舊版資料（這台裝置的課表設定照樣清除）', async ({ page }) => {
+  await enter(page, 't_other');
+  await seedLegacy(page);
+  await page.evaluate(() => localStorage.setItem('cil-coach', JSON.stringify({ v: 1, plan: { days: 4 } })));
+  await page.goto('/#/me/security');
+  await page.locator('#logout').click();
+  const sheet = page.locator('.sheet[role=dialog]');
+  await expect(sheet).toContainText('這台裝置還有舊版課表教練資料');
+  await sheet.getByRole('button', { name: '保留（之後登入可搬移）' }).click();
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('cil-coach'))).toBeNull();
+  expect((await legacyKeys(page)).every(Boolean)).toBe(true);
+  await page.evaluate(() => { localStorage.removeItem('gengCoachModel'); localStorage.removeItem('gengCoachDash'); });
+});
