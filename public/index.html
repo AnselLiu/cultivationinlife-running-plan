@@ -11,7 +11,9 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="耕跑團">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<!-- 狀態列用不透明的 default：iOS 26 主畫面 App 在 black-translucent 下，網頁畫面會少掉瀏海的高度（約 59 點），
+     底部固定的分頁列與抽屜離螢幕底邊一大截，CSS 補不到。default 讓網頁從狀態列下方開始、延伸到螢幕底邊 -->
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="format-detection" content="telephone=no">
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
@@ -27,6 +29,7 @@
 <link rel="modulepreload" href="/run.js">
 <link rel="modulepreload" href="/guide.js">
 <link rel="modulepreload" href="/pricing.js">
+<link rel="modulepreload" href="/signup-window.js">
 <link rel="modulepreload" href="/i18n.js">
 </head>
 <body>

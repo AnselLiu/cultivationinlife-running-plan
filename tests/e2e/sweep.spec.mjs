@@ -28,7 +28,7 @@ for (const scheme of ['light', 'dark']) test(`逐頁檢查・${scheme === 'dark'
   const routes = ['#/', '#/plan', '#/plan/season', '#/plan/race', '#/plan/guide', '#/plan/setup', '#/run', '#/map', '#/calendar', '#/challenge', '#/studio', '#/report', '#/past', '#/notifications', '#/tickets', '#/teams', '#/t/youth',
     '#/me', '#/me/profile', '#/me/races', '#/me/reg', '#/me/teams', '#/me/notify', '#/me/security', '#/me/privacy', '#/me/assoc', '#/me/card',
     '#/admin?tab=overview', '#/admin?tab=members', '#/admin?tab=roles', '#/admin?tab=teams', '#/admin?tab=events', '#/admin?tab=settings', '#/admin?tab=audit', '#/roster', '#/logs/team',
-    '#/new', `#/e/${ev.id}`, `#/e/${ev.id}/stats`, `#/edit/${ev.id}`, `#/e/${party.id}`, `#/e/${party.id}/stats`, '#/log?extra=1', '#/plan/new', '#/privacy'];
+    '#/new', `#/e/${ev.id}`, `#/e/${ev.id}/stats`, `#/e/${ev.id}/stats?f=pending`, `#/edit/${ev.id}`, `#/e/${party.id}`, `#/e/${party.id}/stats`, '#/log?extra=1', '#/plan/new', '#/privacy'];
   const problems = {};
   const dir = `test-results/sweep${scheme === 'dark' ? '-dark' : ''}`;
   // 每一頁的 JavaScript 錯誤與失敗的 API（4xx 權限類以外）都算問題

@@ -271,3 +271,70 @@ test('練跑地圖：搜尋、類型、縣市篩選，地圖上的針跟著篩',
   for (const t of await page.locator('#spotList .spotrow b + .tiny').allInnerTexts()) expect(t).toContain('高雄市');
   await page.locator('#spotCity').selectOption('');
 });
+
+// ---- 報名期間 ----
+const tpAt = (min) => new Date(Date.now() + 8 * 3600e3 + min * 60e3).toISOString().slice(0, 16);
+test('尚未開放報名：活動頁顯示開放時間，首頁卡片顯示開放', async ({ page, request }) => {
+  const ev = await apiAs(request, 't_chair', '/events', { method: 'POST', body: { kind: 'track', title: 'E2E 尚未開放', date: plus(4), gather_time: '07:00', signup_start: tpAt(2 * 1440), notify: false } });
+  await enter(page);
+  await page.goto(`/#/e/${ev.id}`);
+  await expect(page.getByText(/尚未開放報名/)).toBeVisible();
+  await expect(page.locator('#signup')).toHaveCount(0);
+  await expect(page.locator('#openCountdown')).toContainText('開放報名');
+  await page.goto('/#/');
+  await expect(page.locator('a.card', { hasText: 'E2E 尚未開放' }).first()).toContainText(/開放/);
+});
+
+test('報名截止與額滿：顯示報名已截止、排候補', async ({ page, request }) => {
+  const closed = await apiAs(request, 't_chair', '/events', { method: 'POST', body: { kind: 'track', title: 'E2E 已截止', date: plus(4), gather_time: '07:00', deadline: tpAt(60), notify: false } });
+  await apiAs(request, 't_chair', `/events/${closed.id}`, { method: 'PUT', body: { kind: 'track', title: 'E2E 已截止', date: plus(4), gather_time: '07:00', deadline: tpAt(-60) } });
+  const full = await apiAs(request, 't_chair', '/events', { method: 'POST', body: { kind: 'track', title: 'E2E 額滿', date: plus(4), gather_time: '07:00', capacity: 1, notify: false } });
+  await apiAs(request, 't_other', `/events/${full.id}/signup`, { method: 'POST', body: {} });
+  await enter(page);
+  await page.goto(`/#/e/${closed.id}`);
+  await expect(page.getByText('報名已截止').first()).toBeVisible();
+  await page.goto(`/#/e/${full.id}`);
+  await expect(page.getByRole('button', { name: '排候補' })).toBeVisible();
+});
+
+test('LINE 分享文字含報名期間', async ({ page, request }) => {
+  const ev = await apiAs(request, 't_chair', '/events', { method: 'POST', body: { kind: 'track', title: 'E2E 分享期間', date: plus(5), gather_time: '07:00', notify: false } });
+  await enter(page);
+  await page.addInitScript(() => { window.open = (u) => { window.__shared = u; return null; }; });
+  await page.goto(`/#/e/${ev.id}`);
+  await page.evaluate(() => { window.open = (u) => { window.__shared = u; return null; }; });
+  await page.locator('#shareLine').click();
+  expect(decodeURIComponent(await page.evaluate(() => window.__shared))).toContain('報名期間');
+});
+
+test('附近即時影像：捲到才載縮圖、點開大圖有顯名、省流量時不自動載入（CAM_MOCK 不連外）', async ({ page, request }) => {
+  // 功能開關預設關閉：先打開
+  await apiAs(request, 't_chair', '/settings/features', { method: 'POST', body: { cams: true } });
+  await apiAs(request, 't_chair', '/cams/sync', { method: 'POST', body: { source: 'wra' } });
+  await enter(page);
+  const frames = [];
+  page.on('request', (r) => { if (r.url().includes('/frame')) frames.push(r.url()); });
+  await page.goto('/#/map?spot=seed07');
+  await expect(page.locator('.spotcard')).toContainText('大佳');
+  await page.locator('#camCard').scrollIntoViewIfNeeded();
+  await expect.poll(() => page.locator('#camBox .camimg img').count()).toBeGreaterThan(0);
+  expect(await page.locator('#camBox .camtile').count()).toBeLessThanOrEqual(3);
+  await expect(page.locator('#camCard')).toContainText('經濟部水利署');
+  await page.locator('#camBox [data-cam="wra:M1"]').click();
+  await expect(page.locator('.camsheet #camvImg')).toBeVisible();
+  await expect(page.locator('.camsheet')).toContainText('影像來源：經濟部水利署');
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.camsheet')).toHaveCount(0);
+  // 省流量：縮圖不自動載入，點了才載
+  await page.addInitScript(() => Object.defineProperty(navigator, 'connection', { value: { saveData: true }, configurable: true }));
+  await page.reload();
+  await page.locator('#camCard').scrollIntoViewIfNeeded();
+  const before = frames.length;
+  await expect(page.locator('#camBox')).toContainText('點一下才載入');
+  await page.waitForTimeout(500);
+  expect(frames.length).toBe(before);
+  // 「我的 → 通知與裝置」的省流量開關（存在這支手機）
+  await page.evaluate(() => localStorage.setItem('cil-cam-lazy', '1'));
+  await page.goto('/#/me/notify');
+  await expect(page.locator('#camLazy')).toBeChecked();
+});

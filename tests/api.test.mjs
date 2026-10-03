@@ -739,8 +739,9 @@ test('通知：跨會員一律 404；計數與看過；全部已讀有上界；�
 test('群發一律是公告、不能偽裝成安全通知；推播偏好只收可以關的類別', async () => {
   const r = await call('t_chair', '/admin/broadcast', { method: 'POST', body: { title: '週末颱風停課', body: '本週六團練取消', teams: ['youth'] } });
   assert.equal(r.status, 200, r.text);
-  const n = (await call('t_runner', '/notifications')).json.items[0];
-  assert.deepEqual([n.title, n.category, n.kind, n.url], ['週末颱風停課', 'announce', 'broadcast', null]);
+  // 用標題找：前一個測試可能在同一秒寫了別的通知，同一秒內的順序看隨機代碼，不能假設是第一則
+  const n = (await call('t_runner', '/notifications')).json.items.find((x) => x.title === '週末颱風停課');
+  assert.deepEqual([n?.title, n?.category, n?.kind, n?.url], ['週末颱風停課', 'announce', 'broadcast', null]);
   assert.equal((await call('t_chair', '/admin/broadcast', { method: 'POST', body: { title: '新裝置登入通知', teams: ['youth'], dryRun: true } })).status, 400);
   assert.equal((await call('t_chair', '/admin/broadcast', { method: 'POST', body: { title: '請登入 App 更新資料', teams: ['youth'], dryRun: true } })).status, 200);
   // 零寬字元、空白、異體字繞不過；內文也不能冒充安全通知
@@ -786,4 +787,494 @@ test('教練公告新課表：推播連到協會賽季的週次（?c=club），�
   assert.ok(n, '有收到通知');
   assert.equal(n.url, '/#/plan/5?c=club');
   assert.equal((await call('t_coach', `/plans/${r.json.id}`, { method: 'DELETE' })).status, 200);
+});
+
+// ---- 活動報名：報名期間、審核、通知、候補遞補、系統預設、排程 ----
+const tp = (min = 0) => new Date(Date.now() + 8 * 3600e3 + min * 60e3).toISOString().slice(0, 16);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));   // created_at 只到秒：順序有差的報名之間 sleep(1100)
+const notes = async (who) => { const r = (await call(who, '/notifications')).json; return [...(r.pinned || []), ...r.items]; };
+const notesFor = async (who, id) => (await notes(who)).filter((n) => (n.url || '').includes(`/e/${id}`));
+const signup = (who, id, body = {}) => call(who, `/events/${id}/signup`, { method: 'POST', body });
+const unsign = (who, id) => call(who, `/events/${id}/signup`, { method: 'DELETE' });
+const review = (who, id, body) => call(who, `/events/${id}/review`, { method: 'POST', body });
+const evBase = { kind: 'track', title: '報名測試', gather_time: '07:00', notify: false };
+async function mkEvent(body, who = 't_chair') {
+  const r = await call(who, '/events', { method: 'POST', body: { ...evBase, date: plus(7), ...body } });
+  assert.equal(r.status, 200, r.text);
+  return r.json.id;
+}
+const stOf = async (who, id) => (await call(who, `/events/${id}`)).json.myStatus;
+
+test('報名期間：台北時間截止、尚未開始、格式錯誤、定期揪跑一起平移', async () => {
+  const base = { ...evBase, title: '期間測試', date: plus(3) };
+  const past = await call('t_chair', '/events', { method: 'POST', body: { ...base, deadline: tp(-60) } });
+  assert.equal(past.status, 400);
+  assert.match(past.json.error, /報名截止時間已經過了/);
+  const id = await mkEvent({ ...base, deadline: tp(60) });
+  assert.equal((await call('t_chair', `/events/${id}`, { method: 'PUT', body: { ...base, deadline: tp(-60) } })).status, 200, '編輯可以把截止改到過去');
+  const late = await signup('t_other', id);
+  assert.equal(late.status, 400, '台北時間已截止（舊版晚 8 小時才擋）');
+  assert.match(late.json.error, /截止/);
+  const soonId = await mkEvent({ ...base, date: plus(5), signup_start: tp(1440) });
+  const soon = await signup('t_other', soonId);
+  assert.equal(soon.status, 400);
+  assert.match(soon.json.error, /報名將於/);
+  const g = (await call('t_other', `/events/${soonId}`)).json;
+  assert.equal(g.myStatus, null);
+  assert.equal(typeof g.serverNow, 'number');
+  assert.equal(g.signup_start, tp(1440));
+  const bad = await call('t_chair', '/events', { method: 'POST', body: { ...base, deadline: 'tomorrow' } });
+  assert.equal(bad.status, 400);
+  assert.match(bad.json.error, /格式不正確/);
+  // 定期揪跑：兩個時間一起依日期差平移；格式錯誤是 400 不是 500
+  const start = plus(10), wd = new Date(`${start}T00:00:00Z`).getUTCDay();
+  const sr = await call('t_chair', '/events', { method: 'POST', body: { ...base, date: start, deadline: `${plus(9)}T22:00`, signup_start: `${plus(8)}T20:00`, repeat: { weekdays: [wd], until: plus(17) } } });
+  assert.equal(sr.status, 200, sr.text);
+  assert.equal(sr.json.count, 2);
+  const second = (await call('t_chair', `/events/${sr.json.id}`)).json.series.find((x) => x.date === plus(17));
+  const s2 = (await call('t_chair', `/events/${second.id}`)).json;
+  assert.equal(s2.deadline, `${plus(16)}T22:00`);
+  assert.equal(s2.signup_start, `${plus(15)}T20:00`);
+  assert.equal((await call('t_chair', '/events', { method: 'POST', body: { ...base, date: start, deadline: '2026-99-99T25:00', repeat: { weekdays: [wd], until: plus(17) } } })).status, 400);
+  assert.equal((await call('t_chair', '/events', { method: 'POST', body: { ...base, signup_start: `${plus(2)}T20:00`, deadline: `${plus(2)}T20:00` } })).status, 400, '開始要早於截止');
+  assert.equal((await call('t_chair', '/events', { method: 'POST', body: { ...base, deadline: `${plus(3)}T08:00` } })).status, 400, '截止不能晚於集合時間');
+  // 沒填截止＝活動開始時截止；幹部代為報名不受期間限制
+  const yid = await mkEvent({ ...base, date: plus(-1) });
+  assert.equal((await signup('t_other', yid)).status, 400);
+  const bulk = await call('t_chair', `/events/${yid}/bulk`, { method: 'POST', body: { names: ['路人跑友'], action: 'signup' } });
+  assert.equal(bulk.json.added, 1, bulk.text);
+});
+
+test('審核：待審核不佔名額也不公開；核准照報名順序；婉拒擋重報；同時核准只成功一次', async () => {
+  const id = await mkEvent({ title: '審核測試', capacity: 1, require_approval: true, notify_signup: true });
+  const a = await signup('t_runner', id);
+  assert.equal(a.json.status, 'pending', a.text);
+  await sleep(1100);
+  const b = await signup('t_other', id);
+  assert.equal(b.json.status, 'pending');
+  assert.equal(b.json.full, false, '待審核不佔名額');
+  assert.ok(!(await call('t_other', `/events/${id}`)).json.signups.some((s) => s.member_id === 't_runner'), '待審核不出現在公開名單');
+  assert.equal(await stOf('t_runner', id), 'pending');
+  const row = (await call('t_runner', '/events')).json.events.find((e) => e.id === id);
+  assert.equal(row.mine, 'pending');
+  assert.ok(!('pending' in row), '一般團員拿不到待審核數');
+  assert.equal((await call('t_chair', '/events')).json.events.find((e) => e.id === id).pending, 2);
+  const pr = await call('t_runner', `/events/${id}/pay-report`, { method: 'POST', body: { method: 'cash' } });
+  assert.equal(pr.status, 400);
+  assert.match(pr.json.error, /審核/);
+  // 故意反過來送：依報名先後排正取
+  const ap = await review('t_chair', id, { action: 'approve', member_ids: ['t_other', 't_runner'] });
+  assert.equal(ap.status, 200, ap.text);
+  assert.deepEqual(ap.json.in.map((x) => x.member_id), ['t_runner']);
+  assert.deepEqual(ap.json.wait.map((x) => [x.member_id, x.position]), [['t_other', 1]]);
+  assert.ok((await notesFor('t_runner', id)).some((n) => /審核通過/.test(n.title)));
+  assert.ok((await notesFor('t_other', id)).some((n) => /審核通過，候補第 1 位/.test(n.title)));
+  // 移出候補要確認；婉拒原因只給本人
+  const nr = await review('t_chair', id, { action: 'reject', member_ids: ['t_other'], note: 'x原因' });
+  assert.equal(nr.status, 409);
+  assert.equal(nr.json.needRevoke, true);
+  assert.equal((await review('t_chair', id, { action: 'reject', member_ids: ['t_other'], note: 'x原因', revoke: true })).status, 200);
+  let g = (await call('t_other', `/events/${id}`)).json;
+  assert.equal(g.myStatus, 'rejected');
+  assert.equal(g.myReviewNote, 'x原因');
+  const re = await signup('t_other', id);
+  assert.equal(re.status, 400);
+  assert.match(re.json.error, /婉拒/);
+  assert.equal((await unsign('t_other', id)).status, 200);
+  assert.equal(await stOf('t_other', id), 'rejected', '取消不能繞過婉拒');
+  assert.equal((await signup('t_other', id)).status, 400);
+  const au = (await call('t_chair', `/audit?from=${plus(-1)}&to=${plus(1)}&action=event.signup`)).json.items;
+  assert.ok(au.some((x) => x.action === 'event.signup_review' && x.target_id === id));
+  assert.ok(au.some((x) => x.action === 'event.signup_reject' && x.target_id === 't_other'));
+  assert.ok(au.every((x) => !(x.detail || '').includes('x原因')), '稽核不記原因');
+  assert.ok((await notesFor('t_other', id)).some((n) => n.title.startsWith('已被移出名單') && n.body.includes('x原因')), '原因只在通知中心內文');
+  // 重新審核 → 待審核；正取取消時不會自動錄取待審核
+  assert.deepEqual((await review('t_chair', id, { action: 'reopen', member_ids: ['t_other'] })).json.reopened.map((x) => x.member_id), ['t_other']);
+  assert.equal(await stOf('t_other', id), 'pending');
+  assert.equal((await unsign('t_runner', id)).json.was, 'in');
+  const st = (await call('t_chair', `/events/${id}/stats`)).json;
+  assert.equal(st.total.in, 0);
+  assert.equal(st.total.pending, 1);
+  assert.equal(st.seatsLeft, 1);
+  // 兩個核准同時送出：只有一個處理成功、只通知一次
+  const before = (await notesFor('t_other', id)).filter((n) => /審核通過/.test(n.title)).length;
+  const [x1, x2] = await Promise.all([1, 2].map(() => review('t_chair', id, { action: 'approve', member_ids: ['t_other'] })));
+  const listed = [x1, x2].filter((x) => [...x.json.in, ...x.json.wait].some((y) => y.member_id === 't_other'));
+  assert.equal(listed.length, 1);
+  assert.ok([x1, x2].some((x) => x.json.skipped.some((y) => y.reason === '這筆已被處理')));
+  assert.equal((await notesFor('t_other', id)).filter((n) => /審核通過/.test(n.title)).length, before + 1);
+  assert.equal(await stOf('t_other', id), 'in');
+  // 權限：監事、一般團員、別的分團團長不能審核；分團團長可以審自己分團的活動；別的活動的報名改不到
+  assert.equal((await review('t_super', id, { action: 'approve', member_ids: ['t_other'] })).status, 403);
+  assert.equal((await review('t_runner', id, { action: 'approve', member_ids: ['t_other'] })).status, 403);
+  assert.equal((await review('t_lead', id, { action: 'reject', member_ids: ['t_other'], revoke: true })).status, 403, '團長不能審全協會活動');
+  const yid = await mkEvent({ title: '青年審核', team_id: 'youth', require_approval: true }, 't_lead');
+  assert.equal((await signup('t_runner', yid)).json.status, 'pending');
+  const cross = await review('t_lead', yid, { action: 'reject', member_ids: ['t_other'], revoke: true });
+  assert.equal(cross.status, 200);
+  assert.equal(cross.json.skipped[0].reason, '找不到這筆報名');
+  assert.equal(await stOf('t_other', id), 'in', '別的活動的報名沒有被改');
+  assert.equal((await review('t_lead', yid, { action: 'approve', member_ids: ['t_runner'] })).json.in.length, 1);
+  // 問卷一律不審核
+  const sid = await mkEvent({ kind: 'survey', title: '問卷不審核', require_approval: true, questions: [{ type: 'text', label: '想法' }] });
+  assert.equal((await call('t_chair', `/events/${sid}`)).json.require_approval, 0);
+  assert.equal((await signup('t_staff', sid, { answers: { q1: 'ok' } })).json.status, 'in');
+});
+
+test('名單不洩漏：非管理者的 GET、列表、統計、CSV 都看不到待審核或婉拒的姓名；統計與 CSV 分開計算', async () => {
+  const id = await mkEvent({ title: '名單測試', capacity: 1, require_approval: true });
+  await review('t_chair', id, { action: 'approve', member_ids: [] });   // 空清單：400，不影響
+  assert.equal((await signup('t_staff', id)).json.status, 'in', '主辦幹部本人報名＝核准');
+  assert.equal((await signup('t_lead', id)).json.status, 'pending');
+  await sleep(1100);
+  assert.equal((await signup('t_super', id)).json.status, 'pending');
+  await review('t_chair', id, { action: 'reject', member_ids: ['t_super'] });
+  const bulk = await call('t_chair', `/events/${id}/bulk`, { method: 'POST', body: { names: ['測試教練'], action: 'signup' } });
+  assert.equal(bulk.json.added, 1);
+  const g = (await call('t_runner', `/events/${id}`)).json;
+  assert.deepEqual(g.signups.map((s) => s.member_id).sort(), ['t_coach', 't_staff']);
+  assert.equal(g.pendingCount, undefined);
+  const list = (await call('t_runner', '/events')).json.events.find((e) => e.id === id);
+  assert.ok(!JSON.stringify(list).includes('測試團長') && !JSON.stringify(list).includes('測試監事'));
+  assert.equal((await call('t_runner', `/events/${id}/stats`)).status, 403);
+  const roster = await call('t_chair', `/events/${id}/roster`);
+  assert.ok(!roster.json.text.includes('測試團長') && !roster.json.text.includes('測試監事'), '名單文字只有正取與候補');
+  const st = (await call('t_chair', `/events/${id}/stats`)).json;
+  assert.equal(st.canReview, true);
+  assert.deepEqual([st.total.in, st.total.wait, st.total.pending, st.total.rejected], [1, 1, 1, 1]);
+  assert.equal(st.people.find((p) => p.member_id === 't_super').status, 'rejected');
+  const csv = (await call('t_chair', `/events/${id}/export.csv`)).text;
+  assert.ok(csv.includes('待審核') && csv.includes('未通過') && csv.includes('"審核"'));
+  assert.equal((await call('t_coach', `/events/${id}/stats`)).status, 200);
+});
+
+test('報名通知：開關控制、狀態沒變不重複、代為報名只通知真的報上的人', async () => {
+  const id = await mkEvent({ title: '通知測試', capacity: 1, notify_signup: true, fee: 300 });
+  assert.equal((await signup('t_lead', id)).json.status, 'in');
+  const ok = (await notesFor('t_lead', id)).filter((n) => n.title.startsWith('報名成功'));
+  assert.equal(ok.length, 1);
+  assert.match(ok[0].body, /應繳 NT\$300/);
+  await signup('t_lead', id, { note: '改備註' });
+  assert.equal((await notesFor('t_lead', id)).filter((n) => n.title.startsWith('報名成功')).length, 1, '修改內容不通知');
+  const w = await signup('t_super', id);
+  assert.equal(w.json.status, 'wait');
+  assert.equal(w.json.position, 1);
+  assert.ok((await notesFor('t_super', id)).some((n) => n.title.startsWith('已排入候補') && n.body.includes('候補第 1 位')));
+  await call('t_chair', `/events/${id}/payments`, { method: 'POST', body: { member_ids: ['t_lead'], paid: 'paid' } });
+  assert.ok((await notesFor('t_lead', id)).some((n) => n.title.startsWith('已確認收款') && n.body === 'NT$300'));
+  const quiet = await mkEvent({ title: '不通知', notify_signup: false });
+  assert.equal((await signup('t_lead', quiet)).json.status, 'in');
+  assert.equal((await notesFor('t_lead', quiet)).length, 0);
+});
+
+test('候補與遞補：重報排到最後、調高名額遞補、移出受邀名單遞補、入場券只給正取', async () => {
+  const body = { title: '遞補測試', capacity: 1 };
+  const id = await mkEvent(body);
+  assert.equal((await signup('t_staff', id)).json.status, 'in');
+  await sleep(1100);
+  assert.equal((await signup('t_super', id)).json.status, 'wait');
+  await sleep(1100);
+  assert.equal((await signup('t_coach', id)).json.status, 'wait');
+  await sleep(1100);
+  await unsign('t_super', id);
+  const back = await signup('t_super', id);
+  assert.equal(back.json.position, 2, '取消後重報排到最後');
+  await unsign('t_staff', id);
+  assert.equal(await stOf('t_coach', id), 'in', '遞補的是排在前面的人');
+  assert.equal(await stOf('t_super', id), 'wait');
+  assert.ok((await notesFor('t_coach', id)).some((n) => n.title.startsWith('候補遞補成功')));
+  assert.equal((await call('t_chair', `/events/${id}`, { method: 'PUT', body: { ...evBase, date: plus(7), ...body, capacity: 2 } })).status, 200);
+  assert.equal(await stOf('t_super', id), 'in', '調高名額遞補');
+  // 邀請制：把正取移出受邀名單，候補遞補
+  const iid = await mkEvent({ title: '邀請遞補', capacity: 1, visibility: 'invite' });
+  await call('t_chair', `/events/${iid}/invites`, { method: 'POST', body: { member_ids: ['t_staff', 't_super'], notify: false } });
+  await signup('t_staff', iid);
+  await sleep(1100);
+  assert.equal((await signup('t_super', iid)).json.status, 'wait');
+  await call('t_chair', `/events/${iid}/invites/t_staff`, { method: 'DELETE' });
+  assert.equal(await stOf('t_super', iid), 'in');
+  // 餐敘：入場券只給正取；遞補的人拿到入場券（含攜伴），取消的人入場券失效
+  const pid = await mkEvent({ kind: 'party', title: '餐敘遞補', capacity: 1, guest_max: 3 });
+  await signup('t_staff', pid, { guests: 1 });
+  await sleep(1100);
+  assert.equal((await signup('t_coach', pid, { guests: 2 })).json.status, 'wait');
+  assert.ok(!(await call('t_coach', '/my/tickets')).json.tickets.some((t) => t.event_id === pid), '候補沒有入場券');
+  const old = (await call('t_staff', '/my/tickets')).json.tickets.find((t) => t.event_id === pid);
+  assert.ok(old);
+  await unsign('t_staff', pid);
+  const mine = (await call('t_coach', '/my/tickets')).json.tickets.find((t) => t.event_id === pid);
+  assert.equal(mine?.guests, 2, '遞補的人有入場券，攜伴照報名時填的');
+  assert.ok(!(await call('t_staff', '/my/tickets')).json.tickets.some((t) => t.event_id === pid));
+  assert.equal((await call('t_chair', `/events/${pid}/checkin`, { method: 'POST', body: { code: old.code } })).status, 404);
+  // 現場報到 QR：需要審核的活動只有正取與候補可以；被婉拒的人任何活動都不行
+  const qid = await mkEvent({ title: '報到審核', date: today, gather_time: '23:58', require_approval: true });
+  const tok = (await call('t_chair', `/events/${qid}/attend-token`, { method: 'POST', body: { on: true } })).json.token;
+  assert.equal((await signup('t_super', qid)).json.status, 'pending');
+  assert.equal((await signup('t_lead', qid)).json.status, 'pending');
+  await review('t_chair', qid, { action: 'reject', member_ids: ['t_lead'] });
+  const at = (who, eid, t) => call(who, `/events/${eid}/attend`, { method: 'POST', body: { t } });
+  assert.match((await at('t_super', qid, tok)).json.error, /等主辦核准/);
+  assert.match((await at('t_lead', qid, tok)).json.error, /未核准/);
+  assert.match((await at('t_other', qid, tok)).json.error, /主辦核准才能參加/);
+  const oid = await mkEvent({ title: '報到一般', date: today, gather_time: '23:58' });
+  const tok2 = (await call('t_chair', `/events/${oid}/attend-token`, { method: 'POST', body: { on: true } })).json.token;
+  const walk = await at('t_other', oid, tok2);
+  assert.equal(walk.status, 200);
+  assert.equal(walk.json.walkIn, true);
+  // 活動開始後，正取不能自己取消
+  const sid = await mkEvent({ title: '已開始', date: today, gather_time: '00:00' });
+  await call('t_chair', `/events/${sid}/bulk`, { method: 'POST', body: { names: ['測試行政'], action: 'signup' } });
+  assert.equal((await unsign('t_staff', sid)).status, 400);
+  // 第一次報名同時送兩次：都成功、只有一列、最多一則通知
+  const did = await mkEvent({ title: '重複送出', notify_signup: true });
+  const [d1, d2] = await Promise.all([signup('t_lead', did), signup('t_lead', did)]);
+  assert.equal(d1.status, 200, d1.text);
+  assert.equal(d2.status, 200, d2.text);
+  assert.equal((await call('t_chair', `/events/${did}/stats`)).json.people.length, 1);
+  assert.ok((await notesFor('t_lead', did)).filter((n) => n.title.startsWith('報名成功')).length <= 1);
+});
+
+test('系統預設：只有理事長與行政能改；建立時沒帶欄位用預設；舊版畫面編輯不會清掉設定', async () => {
+  const set = (who, body) => call(who, '/settings/signup', { method: 'POST', body });
+  try {
+    assert.equal((await set('t_coach', { approval: true })).status, 403);
+    const r = await set('t_chair', { approval: true, notify: false, open_days: 999, open_time: 'xx', close_days: 1, close_time: '22:00' });
+    assert.equal(r.status, 200, r.text);
+    assert.equal(r.json.value.open_days, 60);
+    assert.equal(r.json.value.open_time, '20:00');
+    assert.equal((await set('t_chair', { open_days: 1, close_days: 3 })).status, 400);
+    assert.deepEqual((await call('t_chair', '/me')).json.settings.signup, r.json.value);
+    const plain = { kind: 'track', title: '預設測試', date: plus(9), gather_time: '07:00', notify: false };
+    const id = (await call('t_chair', '/events', { method: 'POST', body: plain })).json.id;
+    let e = (await call('t_chair', `/events/${id}`)).json;
+    assert.deepEqual([e.require_approval, e.notify_signup, e.signup_start], [1, 0, null]);
+    // 舊版畫面：PUT 沒帶新欄位 → 不變
+    assert.equal((await call('t_chair', `/events/${id}`, { method: 'PUT', body: { ...plain, place: '河濱' } })).status, 200);
+    e = (await call('t_chair', `/events/${id}`)).json;
+    assert.equal(e.require_approval, 1);
+    assert.equal(e.place, '河濱');
+    await signup('t_lead', id);
+    await sleep(1100);
+    await signup('t_super', id);
+    const off = await call('t_chair', `/events/${id}`, { method: 'PUT', body: { ...plain, require_approval: false } });
+    assert.equal(off.status, 409);
+    assert.equal(off.json.needPendingAction, true);
+    assert.equal(off.json.pending, 2);
+    const admit = await call('t_chair', `/events/${id}`, { method: 'PUT', body: { ...plain, require_approval: false, pending_action: 'admit' } });
+    assert.equal(admit.status, 200, admit.text);
+    assert.equal(await stOf('t_lead', id), 'in');
+    assert.equal(await stOf('t_super', id), 'in');
+    assert.ok((await notesFor('t_super', id)).some((n) => n.title.startsWith('審核通過')));
+  } finally {
+    await set('t_chair', { approval: false, notify: true, open_days: null, close_days: null });
+  }
+  const au = (await call('t_chair', `/audit?from=${plus(-1)}&to=${plus(1)}&action=settings.signup`)).json.items;
+  assert.ok(au.length >= 1);
+});
+
+test('排程：開放報名推播一次、20:00 待審核整理、活動結束後待審核失效、改時間重設提醒', async () => {
+  const oid = await mkEvent({ title: '開放推播', team_id: 'youth', date: '2027-07-01', signup_start: '2027-06-20T20:00', notify: true }, 't_lead');
+  assert.ok((await call(null, '/dev/cron?at=2027-06-20T11:30:00Z')).json.signupOpen === 0, '還沒到開放時間');
+  assert.ok((await call(null, '/dev/cron?at=2027-06-20T12:30:00Z')).json.signupOpen >= 1);
+  assert.ok((await notesFor('t_runner', oid)).some((n) => n.title.startsWith('開放報名')));
+  assert.equal((await call(null, '/dev/cron?at=2027-06-20T13:30:00Z')).json.signupOpen, 0, '只推一次');
+  // 待審核：20:00 整理一次；活動結束後失效
+  const rid = await mkEvent({ title: '逾期審核', date: '2027-06-10', gather_time: '07:00', require_approval: true });
+  assert.equal((await signup('t_other', rid)).json.status, 'pending');
+  assert.ok((await call(null, '/dev/cron?at=2027-06-09T12:00:00Z')).json.signupReviews >= 1);
+  assert.ok((await notesFor('t_chair', rid)).some((n) => n.title.startsWith('還有 1 筆待審核')));
+  assert.equal((await call(null, '/dev/cron?at=2027-06-09T12:30:00Z')).json.signupReviews, 0);
+  await call(null, '/dev/cron?at=2027-06-10T01:30:00Z');
+  assert.equal(await stOf('t_other', rid), null);
+  assert.ok((await notesFor('t_other', rid)).some((n) => n.title.startsWith('申請已失效')));
+  const au = (await call('t_chair', `/audit?from=${plus(-1)}&to=${plus(1)}&action=signup.expire`)).json.items;
+  assert.ok(au.some((x) => x.target_id === rid));
+  // 改期：重設活動提醒
+  const body = { title: '改期提醒', date: '2027-08-10', gather_time: '19:00' };
+  const mid = await mkEvent(body);
+  await signup('t_lead', mid);
+  assert.ok((await call(null, '/dev/cron?at=2027-08-09T12:00:00Z')).json.events >= 1);
+  await call('t_chair', `/events/${mid}`, { method: 'PUT', body: { ...evBase, ...body, date: '2027-08-12' } });
+  assert.ok((await call(null, '/dev/cron?at=2027-08-11T12:00:00Z')).json.events >= 1, '改期後會再提醒');
+});
+
+test('審核補強：全會與邀請制的開放推播、移出後領取碼失效、改時間平移報名期間、監事不能審核、取消待辦不放金額', async () => {
+  // 開放推播：全會活動（沒有分團）與邀請制，參數綁定要對（D1 參數數量不符會丟錯，這場的推播就永遠不會送）
+  const aid = await mkEvent({ title: '全會開放', date: '2027-07-02', signup_start: '2027-06-21T20:00', notify: true });
+  const iid = await mkEvent({ title: '邀請開放', date: '2027-07-03', signup_start: '2027-06-22T20:00', notify: true, visibility: 'invite' });
+  await call('t_chair', `/events/${iid}/invites`, { method: 'POST', body: { member_ids: ['t_runner'], notify: false } });
+  const c1 = (await call(null, '/dev/cron?at=2027-06-21T12:30:00Z')).json;
+  assert.ok(c1.signupOpen >= 1, JSON.stringify(c1));
+  assert.ok((await notesFor('t_other', aid)).some((n) => n.title.startsWith('開放報名')));
+  const c2 = (await call(null, '/dev/cron?at=2027-06-22T12:30:00Z')).json;
+  assert.ok(c2.signupOpen >= 1, JSON.stringify(c2));
+  assert.ok((await notesFor('t_runner', iid)).some((n) => n.title.startsWith('開放報名')));
+  assert.ok(!(await notesFor('t_other', iid)).some((n) => n.title.startsWith('開放報名')), '不在受邀名單的人不推');
+  // 監事不能審核
+  assert.equal((await review('t_super', aid, { action: 'approve', member_ids: ['t_other'] })).status, 403);
+  // 團購到貨後被移出：領取碼失效，也不再回傳
+  const buy = await mkEvent({ kind: 'buy', title: '移出團購', date: plus(16), items: [{ name: '帽子', price: 200 }], pay_info: { methods: ['transfer'] } });
+  const hat = (await call('t_other', `/events/${buy}`)).json.items[0];
+  await signup('t_other', buy, { items: [{ id: hat.id, qty: 1 }] });
+  await call('t_chair', `/events/${buy}/arrived`, { method: 'POST', body: {} });
+  const code = (await call('t_other', `/events/${buy}`)).json.myPickCode;
+  assert.match(code, /^[A-Z2-9]{6}$/);
+  assert.equal((await review('t_chair', buy, { action: 'reject', member_ids: ['t_other'], revoke: true })).status, 200);
+  assert.equal((await call('t_other', `/events/${buy}`)).json.myPickCode, null);
+  const pk = await call('t_chair', `/events/${buy}/pickup`, { method: 'POST', body: { code } });
+  assert.equal(pk.status, 404);
+  assert.match(pk.json.error, /已失效/);
+  // 改時間（含日期）：報名截止與還沒到的開始時間跟著平移
+  const mv = await mkEvent({ title: '平移期間', date: plus(10), deadline: `${plus(9)}T22:00`, signup_start: `${plus(2)}T20:00` });
+  assert.equal((await call('t_chair', `/events/${mv}/notice`, { method: 'POST', body: { type: 'time', date: plus(6) } })).status, 200);
+  let e = (await call('t_chair', `/events/${mv}`)).json;
+  assert.deepEqual([e.date, e.deadline, e.signup_start], [plus(6), `${plus(5)}T22:00`, null], '截止跟著提前 4 天；開始時間平移後已經過了，改成立即開放');
+  assert.equal((await call('t_chair', `/events/${mv}/notice`, { method: 'POST', body: { type: 'time', date: plus(1), gather_time: '07:00' } })).status, 200);
+  e = (await call('t_chair', `/events/${mv}`)).json;
+  assert.ok(!e.deadline || e.deadline <= `${plus(1)}T07:00`, `截止不會晚於活動開始：${e.deadline}`);
+  // 已繳費的正取取消：主辦待辦不放金額
+  const paid = await mkEvent({ title: '退費待辦', options: [{ name: '一般', price: 300 }] });
+  await signup('t_runner', paid, { option: '一般' });
+  await call('t_chair', `/events/${paid}/payments`, { method: 'POST', body: { member_ids: ['t_runner'], paid: 'paid' } });
+  await unsign('t_runner', paid);
+  const todo = (await notesFor('t_chair', paid)).find((n) => n.title.endsWith('有人取消報名'));
+  assert.ok(todo, '主辦收到退費待辦');
+  assert.ok(!/NT\$/.test(todo.body || ''), todo.body);
+  // 標記已退費：待辦結掉，待退費備註清掉
+  await call('t_chair', `/events/${paid}/payments`, { method: 'POST', body: { member_ids: ['t_runner'], paid: 'refunded' } });
+  const row = (await call('t_chair', `/events/${paid}/stats`)).json.people.find((x) => x.member_id === 't_runner');
+  assert.equal(row?.paid, 'refunded');
+  assert.ok(!/待退費/.test(row?.paid_note || ''));
+});
+
+test('附近即時影像：功能開關預設關閉、同步與完整性檢查、最近鏡頭（3 公里備援）不回原始網址、畫面轉送與節流、來源開關要同意、手動直播連結（CAM_MOCK 不連外）', async () => {
+  const mock = (q = '') => fetch(`${BASE}/api/dev/cams-mock?${q}`).then((r) => r.json());
+  const frame = (who, id) => call(who, `/cams/${encodeURIComponent(id)}/frame`);
+  const near = async (who = 't_runner') => (await call(who, '/spots/seed07/cams')).json.cams;
+  await mock('reset=1');
+  // 權限：要登入；來源設定只有理事長、行政人員能改，監事只能看
+  assert.equal((await call(null, '/spots/seed07/cams')).status, 401);
+  assert.equal((await call(null, `/cams/${encodeURIComponent('wra:M1')}/frame`)).status, 401);
+  assert.equal((await call('t_runner', '/cams/sources')).status, 403);
+  assert.equal((await call('t_runner', '/cams/sync', { method: 'POST', body: { source: 'wra' } })).status, 403);
+  const sv = await call('t_super', '/cams/sources');
+  assert.equal(sv.status, 200); assert.equal(sv.json.editable, false);
+  assert.equal((await call('t_super', '/cams/sources', { method: 'POST', body: { source: 'wra', enabled: false } })).status, 403);
+  // 預設：水利署、公路局開啟；臺北市水利處關閉（要書面同意），關閉時不能同步、也不會連線
+  const on = async () => Object.fromEntries((await call('t_chair', '/cams/sources')).json.sources.map((s) => [s.source, s.enabled]));
+  assert.deepEqual(await on(), { wra: true, thb: true, heo: false, link: true });
+  assert.equal((await call('t_chair', '/cams/sync', { method: 'POST', body: { source: 'heo' } })).status, 400);
+  assert.equal((await call('t_chair', '/cams/sources', { method: 'POST', body: { source: '__proto__', enabled: true } })).status, 400, '來源代碼查不到原型上的東西');
+  assert.equal((await call('t_chair', '/cams/sources', { method: 'POST', body: { source: 'constructor', enabled: true } })).status, 400);
+  // 手動同步（功能開關關著也可以先測）：白名單外的主機、非 https、非預設埠、國外座標都不收
+  const w = await call('t_chair', '/cams/sync', { method: 'POST', body: { source: 'wra' } });
+  assert.equal(w.status, 200); assert.equal(w.json.count, 4);
+  assert.equal((await call('t_chair', '/cams/sources')).json.sources.find((s) => s.source === 'wra').last_error, null, '同步成功後清掉「同步中」');
+  // 功能開關預設關閉：地點卡不顯示、畫面與新增連結都 404、排程不同步
+  const cron = async (at) => (await call(null, `/dev/cron?at=${at}`)).json.cams;
+  assert.equal((await call('t_chair', '/cams/sources')).json.feature, false);
+  const off = await call('t_runner', '/spots/seed07/cams');
+  assert.equal(off.status, 200); assert.equal(off.json.enabled, false); assert.deepEqual(off.json.cams, []);
+  assert.equal((await frame('t_runner', 'wra:M1')).status, 404);
+  assert.equal((await call('t_chair', '/cams', { method: 'POST', body: { name: 'x', page_url: 'https://www.youtube.com/watch?v=x', lat: 25.07, lng: 121.54 } })).status, 404);
+  const hits0 = Object.values((await mock()).hits).reduce((n, v) => n + v, 0);
+  assert.equal(await cron('2027-06-15T20:30:00Z'), null, '功能關閉時排程不同步');
+  assert.equal(Object.values((await mock()).hits).reduce((n, v) => n + v, 0), hits0, '也不連線');
+  assert.equal((await call('t_chair', '/settings/features', { method: 'POST', body: { cams: true } })).status, 200);
+  assert.equal((await call('t_chair', '/cams/sources')).json.feature, true);
+  // 排程：每天每個來源只同步一次（台北 04:00 起），每次排程最多一個來源
+  await mock('shrink=1');
+  const c1 = await cron('2027-06-15T20:30:00Z');
+  assert.match(String(c1.wra), /^error: 筆數從 4 掉到 1/, '筆數驟減：這次不寫入');
+  assert.equal(c1.thb, undefined, '公路局 05:00 才同步');
+  assert.equal((await cron('2027-06-15T20:40:00Z')), null, '同一天不重複');
+  assert.ok((await near()).some((c) => c.id === 'wra:M1'), '完整性檢查擋下時不停用任何鏡頭');
+  assert.match((await call('t_chair', '/cams/sources')).json.sources.find((s) => s.source === 'wra').last_error, /這次不更新/);
+  await mock('shrink=0&drop=1');
+  assert.equal((await cron('2027-06-16T20:30:00Z')).wra, 3, '少一支（75%）照常更新');
+  assert.equal((await call('t_chair', '/cams/sources')).json.sources.find((s) => s.source === 'wra').active, 3, '清單不再出現的鏡頭停用');
+  await mock('drop=0');
+  assert.equal((await cron('2027-06-17T20:30:00Z')).wra, 4);
+  assert.equal((await cron('2027-06-17T21:30:00Z')).thb, 2);
+  assert.equal(await cron('2027-06-17T21:40:00Z'), null);
+  // 地點附近：1.5 公里內最多 3 支、河濱優先河川鏡頭；不回原始影像網址
+  const r = await call('t_runner', '/spots/seed07/cams');
+  assert.equal(r.status, 200);
+  assert.match(r.headers.get('cache-control'), /^private/);
+  const cams = r.json.cams;
+  assert.ok(cams.length >= 2 && cams.length <= 3, `鏡頭 ${cams.length} 支`);
+  assert.ok(cams.every((c) => c.dist <= 1500 && c.attribution && c.source_name), '都在 1.5 公里內、有顯名');
+  assert.ok(!cams.some((c) => c.id === 'wra:M4'), '太遠的不列');
+  assert.ok(cams.filter((c) => c.source === 'wra').length <= 2, '同一來源最多 2 支');
+  assert.equal(cams.find((c) => c.id === 'wra:M1').attribution, '影像來源：經濟部水利署（政府資料開放授權條款第1版）');
+  assert.ok(!/src_url|getImage|\/snapshot|cctv-ss|fmg\.wra/.test(r.text), '不回原始影像網址');
+  assert.equal(r.json.enabled, true);
+  assert.ok(cams.every((c) => c.far === false));
+  assert.equal((await call('t_runner', '/spots/nope404/cams')).status, 404);
+  // 1.5 公里內沒有：改給 3 公里內最近的 1 支，標 far
+  const fb = (await call('t_runner', '/spots/seed01/cams')).json.cams;
+  assert.equal(fb.length, 1, '備援半徑只給一支');
+  assert.ok(fb[0].far && fb[0].dist > 1500 && fb[0].dist <= 3000, `較遠 ${fb[0].dist} 公尺`);
+  // 畫面轉送：檔頭判斷格式（水利署標 jpeg 其實是 PNG）、不轉送來源的 cookie、快取、CSP
+  const f1 = await frame('t_runner', 'wra:M1');
+  assert.equal(f1.status, 200);
+  assert.equal(f1.headers.get('content-type'), 'image/png');
+  assert.equal(f1.headers.get('set-cookie'), null, '來源的 cookie 不轉送');
+  assert.match(f1.headers.get('cache-control'), /^private, max-age=\d+$/);
+  assert.equal(f1.headers.get('content-security-policy'), "default-src 'none'");
+  assert.equal(f1.headers.get('x-content-type-options'), 'nosniff');
+  assert.ok(Date.parse(f1.headers.get('x-cam-at')) > Date.now() - 120e3, '有擷取時間');
+  const f2 = await frame('t_other', 'wra:M1');
+  assert.equal(f2.status, 200);
+  assert.match(f2.headers.get('x-cam-cache'), /^(hit|mem)$/, '60 秒內不再向來源抓');
+  const hits = (await mock()).hits;
+  assert.equal(Object.entries(hits).filter(([u]) => /CCTV_SN=0xMOCKM1$/.test(u)).reduce((n, [, v]) => n + v, 0), 1, '同一支鏡頭只向來源抓一次');
+  assert.equal((await frame('t_runner', 'thb:CCTV-T1')).headers.get('content-type'), 'image/jpeg');
+  // 抓不到：502；60 秒內再要也不會再打來源，而且照實回 502（不是「更新中」的 503）
+  assert.equal((await frame('t_runner', 'wra:M3')).status, 502);
+  assert.equal((await frame('t_runner', 'wra:M3')).status, 502);
+  assert.equal(Object.entries((await mock()).hits).filter(([u]) => /0xBROKEN$/.test(u)).reduce((n, [, v]) => n + v, 0), 1, '節流期間不再向來源抓');
+  assert.equal((await frame('t_runner', 'wra:NOPE')).status, 404);
+  assert.equal((await frame('t_runner', 'wra:M5')).status, 404, '白名單外的鏡頭根本沒有收進來');
+  // 臺北市水利處：沒有勾選書面同意不能開；開啟後才同步、才出現；關掉立即消失，也不再轉送
+  assert.equal(Object.keys((await mock()).hits).filter((u) => u.includes('heopublic')).length, 0, '關閉時沒有任何連線');
+  assert.equal((await call('t_chair', '/cams/sources', { method: 'POST', body: { source: 'heo', enabled: true } })).status, 400);
+  assert.equal((await call('t_chair', '/cams/sources', { method: 'POST', body: { source: 'heo', enabled: true, consent: true } })).status, 200);
+  assert.equal((await call('t_chair', '/cams/sync', { method: 'POST', body: { source: 'heo' } })).json.count, 2, '只收 IsLive=1；iframe 類改用封面圖');
+  assert.ok((await near()).some((c) => c.source === 'heo' && c.attribution === '影像來源：臺北市政府工務局水利工程處'));
+  assert.equal((await frame('t_runner', 'heo:H2')).status, 200);
+  assert.ok(Object.keys((await mock()).hits).some((u) => u === 'https://video.nvr.taifo.com.tw/memfs/ab77d8d8-5abf-46f7-abba-9789b04e64e6.jpg'));
+  assert.equal((await call('t_chair', '/cams/sources', { method: 'POST', body: { source: 'heo', enabled: false } })).status, 200);
+  assert.ok(!(await near()).some((c) => c.source === 'heo'), '關掉立即消失');
+  assert.equal((await frame('t_runner', 'heo:H1')).status, 404);
+  await cron('2027-06-18T20:30:00Z');
+  assert.equal(Object.entries((await mock()).hits).filter(([u]) => u.includes('heopublic')).reduce((n, [, v]) => n + v, 0), 1, '關閉後排程不再連線');
+  // 手動直播連結：幹部新增、只外連（沒有畫面轉送）；直播連結的來源關掉時不能新增
+  const link = { name: '大佳河濱直播', page_url: 'https://www.youtube.com/watch?v=test123', label: '臺北市觀光傳播局', lat: 25.07358, lng: 121.54011, kind: 'park' };
+  await call('t_chair', '/cams/sources', { method: 'POST', body: { source: 'link', enabled: false } });
+  assert.equal((await call('t_runner', '/spots/seed07/cams')).json.link, false);
+  assert.equal((await call('t_chair', '/cams', { method: 'POST', body: link })).status, 400);
+  await call('t_chair', '/cams/sources', { method: 'POST', body: { source: 'link', enabled: true } });
+  assert.equal((await call('t_runner', '/spots/seed07/cams')).json.link, true);
+  assert.equal((await call('t_runner', '/cams', { method: 'POST', body: link })).status, 403);
+  assert.equal((await call('t_chair', '/cams', { method: 'POST', body: { ...link, page_url: 'http://example.com' } })).status, 400);
+  assert.equal((await call('t_chair', '/cams', { method: 'POST', body: { ...link, lat: 40 } })).status, 400);
+  const lk = await call('t_chair', '/cams', { method: 'POST', body: link });
+  assert.equal(lk.status, 200);
+  const shown = (await near()).find((c) => c.id === lk.json.id);
+  assert.equal(shown.media, 'link'); assert.equal(shown.page_url, link.page_url); assert.match(shown.attribution, /臺北市觀光傳播局/);
+  assert.equal(shown.label, '臺北市觀光傳播局'); assert.equal(shown.source_name, '官方直播');
+  assert.equal((await frame('t_runner', lk.json.id)).status, 404, '連結不轉送畫面');
+  assert.equal((await call('t_runner', `/cams/${lk.json.id}`, { method: 'DELETE' })).status, 403);
+  assert.equal((await call('t_chair', `/cams/${lk.json.id}`, { method: 'DELETE' })).status, 200);
+  assert.ok(!(await near()).some((c) => c.id === lk.json.id));
+  // 每位跑友 10 分鐘最多 120 張
+  let last = null;
+  for (let i = 0; i < 121; i++) last = await frame('t_lead', 'wra:M1');
+  assert.equal(last.status, 429);
+  // 全站緊急停用：關掉功能開關，地點卡與畫面立即消失
+  assert.equal((await call('t_chair', '/settings/features', { method: 'POST', body: { cams: false } })).status, 200);
+  assert.equal((await call('t_runner', '/spots/seed07/cams')).json.enabled, false);
+  assert.equal((await frame('t_runner', 'wra:M1')).status, 404);
+  await mock('reset=1');
 });

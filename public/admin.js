@@ -1,6 +1,7 @@
 // 耕跑團 PWA — admin.js：從 app.js 拆出來、用到才載入的畫面（第一次開 App 不用下載）
 import * as Party from './party.js';
-import { $, latest, scanSheet, ago, allow, api, applyFeatures, avatar, barChart, bars, bindStepup, cfg, esc, group, IC, largeTitle, me, mfaBanner, nrow, org, pad2, paintCountdown, passkey, refreshMe, render, ROLE_NAME, row, studio, TAB_DEFAULT, TEAM_PERMS, teamAllow, teamIcon, teamOf, teams, toast, view } from './app.js';
+import { defaultWindow, SIGNUP_DEFAULTS, tpText } from './signup-window.js';
+import { $, latest, nowTp, scanSheet, ago, allow, api, applyFeatures, avatar, barChart, bars, bindStepup, cfg, esc, group, IC, largeTitle, me, mfaBanner, nrow, org, pad2, paintCountdown, passkey, refreshMe, render, ROLE_NAME, row, studio, TAB_DEFAULT, TEAM_PERMS, teamAllow, teamIcon, teamOf, teams, toast, view } from './app.js';
 
 // ---------- 管理介面（RBAC、會籍、座位圖）----------
 let adminSeq = 0;
@@ -342,11 +343,14 @@ const AUDIT_NAME = {
   'calendar.on': '產生行事曆訂閱', 'calendar.off': '停用行事曆訂閱',
   'passkey.add': '新增通行金鑰', 'passkey.remove': '移除通行金鑰', 'passkey.denied': '通行金鑰驗證失敗', 'mfa.verify': '兩步驟驗證', 'login.new_device': '新裝置登入',
   'settings.security': '修改兩步驟驗證設定', 'audit.verify': '稽核完整性檢查',
+  'settings.signup': '修改活動報名預設', 'event.signup_review': '審核報名', 'event.signup_reject': '婉拒或移出報名', 'event.reopen': '恢復活動',
+  'signup.expire': '待審核逾期失效', 'event.orders_export': '下載訂購單',
   'google.link': '綁定 Google', 'login.denied': '登入驗證失敗', 'team.post': '發布分團公告', 'team.post_delete': '刪除分團公告', 'privacy.show_rank': '排行榜設定', broadcast: '群發通知', 'retention.cleanup': '資料保存期限清理', 'event.invite_denied': '邀請連結無效', 'privacy.share_logs': '訓練紀錄分享設定', 'settings.shortcut': '修改捷徑連結',
+  'settings.cams': '附近即時影像來源開關', 'settings.cams_sync': '同步攝影機清單', 'cam.link.add': '新增直播連結', 'cam.link.delete': '刪除直播連結',
 };
 // 稽核紀錄：一定要選時間區間（預設最近 7 天），再依類型、操作者、對象縮小；一次 50 筆
 const AUDIT_GROUPS = { '': '所有類型', role: '身分變更', membership: '會籍', team: '分團', event: '活動', checkin: '報到', lottery: '抽獎',
-  settings: '系統設定', privacy: '個資', login: '登入', passkey: '通行金鑰', mfa: '兩步驟驗證', account: '帳號', 'join.denied': '邀請碼錯誤', bootstrap: '初始設定', plan: '課表' };
+  settings: '系統設定', signup: '報名審核', privacy: '個資', login: '登入', passkey: '通行金鑰', mfa: '兩步驟驗證', account: '帳號', 'join.denied': '邀請碼錯誤', bootstrap: '初始設定', plan: '課表' };
 function auditPanel() {
   const to = new Date().toISOString().slice(0, 10), from = new Date(Date.now() - 6 * 864e5).toISOString().slice(0, 10);
   return `<section class="card">
@@ -477,13 +481,16 @@ function bindEventsPanel() {
 
 // ---------- 系統設定（理事長、行政人員）----------
 const FEATURE_NAME = { gps: '跑步記錄（計時＋GPS）', studio: '拍照分享', health: 'Apple 健康匯入', file: 'GPX／TCX 檔匯入', coach: '課表教練（全季、賽事準備、配速與用語）',
-  plan_cycle: '個人課表週期（跟自己的比賽排 20 週）', plan_export: '分享與匯出課表（複製、PDF、行事曆）', party: '餐敘活動（春酒、慶功宴、尾牙）' };
+  plan_cycle: '個人課表週期（跟自己的比賽排 20 週）', plan_export: '分享與匯出課表（複製、PDF、行事曆）', party: '餐敘活動（春酒、慶功宴、尾牙）', cams: '附近即時影像（政府公開攝影機）' };
 // 功能開關的說明：關掉會影響什麼（課表教練與教練身分容易搞混，寫清楚）
 const FEATURE_HELP = { coach: '關閉後所有人都看不到這些頁面；不影響每週課表與訓練紀錄',
   plan_cycle: '關閉後所有人都照協會賽季排課；已選的週期會保留，打開後恢復',
   plan_export: '教練已同意分享，預設開啟；關閉後所有人都看不到分享按鈕' };
+// 預設關閉的功能（要明確打開才有）
+const FEATURE_OFF = new Set(['cams']);
 function settingsPanel() {
   const o = org(), f = cfg.settings?.features || {}, docs = cfg.settings?.docs || [], pv = cfg.settings?.privacy || {};
+  const sd = { ...SIGNUP_DEFAULTS, ...(cfg.settings?.signup || {}) };
   return `
   <h3 class="sgt">協會</h3>
   <section class="card">
@@ -523,10 +530,30 @@ function settingsPanel() {
   <section class="card">
     <h3>功能開關</h3>
     <form id="featForm" class="toggles">
-      ${Object.entries(FEATURE_NAME).map(([k, v]) => `<label class="switch"><span>${v}${FEATURE_HELP[k] ? `<span class="tiny" style="display:block">${FEATURE_HELP[k]}</span>` : ''}</span><input type="checkbox" name="${k}" ${f[k] !== false ? 'checked' : ''}><i></i></label>`).join('')}
+      ${Object.entries(FEATURE_NAME).map(([k, v]) => `<label class="switch"><span>${v}${FEATURE_HELP[k] ? `<span class="tiny" style="display:block">${FEATURE_HELP[k]}</span>` : ''}</span><input type="checkbox" name="${k}" ${(FEATURE_OFF.has(k) ? f[k] === true : f[k] !== false) ? 'checked' : ''}><i></i></label>`).join('')}
       <button class="btn sm">儲存功能開關</button>
     </form>
     <p class="tiny" style="margin:0">關掉後，跑友的畫面上就看不到這個功能；已存的資料不會刪除。</p>
+  </section>
+  <section class="card"><h3>活動報名預設</h3>
+    <form id="signupDefForm" class="toggles">
+      <label class="switch"><span>新活動預設需要審核<span class="tiny" style="display:block">報名後由主辦幹部核准；問卷不適用</span></span><input type="checkbox" name="approval" ${sd.approval ? 'checked' : ''}><i></i></label>
+      <label class="switch"><span>新活動預設通知報名者<span class="tiny" style="display:block">報名成功、排入候補、確認收款時推播給本人</span></span><input type="checkbox" name="notify" ${sd.notify ? 'checked' : ''}><i></i></label>
+      <div class="grid2">
+        <label>報名開始<select name="open_days"><option value="">建立後立即開放</option>${[1, 2, 3, 5, 7, 10, 14, 21, 30].map((n) => `<option value="${n}" ${sd.open_days === n ? 'selected' : ''}>活動前 ${n} 天</option>`).join('')}</select></label>
+        <label>開始時間<input type="time" name="open_time" value="${esc(sd.open_time || '20:00')}"></label>
+        <label>報名截止<select name="close_days"><option value="">活動開始時（集合時間）</option><option value="0" ${sd.close_days === 0 ? 'selected' : ''}>活動當天</option>${[1, 2, 3, 5, 7, 14].map((n) => `<option value="${n}" ${sd.close_days === n ? 'selected' : ''}>活動前 ${n} 天</option>`).join('')}</select></label>
+        <label>截止時間<input type="time" name="close_time" value="${esc(sd.close_time || '22:00')}"></label>
+      </div>
+      <p class="tiny" id="sdPreview" aria-live="polite" style="margin:0"></p>
+      <button class="btn sm">儲存報名預設</button>
+    </form>
+    <p class="tiny" style="margin:0">只影響之後新增的活動；已建立的活動不會改，幹部建立時也可以逐場調整。</p>
+  </section>
+  <section class="card" id="camSrcCard">
+    <h3>附近即時影像</h3>
+    <p class="tiny" style="margin:0">地點卡會列出 1.5 公里內的政府公開攝影機（沒有就列 3 公里內最近一支），畫面由本站轉送、不保存，跑友的 IP 不會送到影像來源。功能開關打開後，鏡頭清單每天清晨 04:00 起自動同步（每小時只同步一個來源，依序是水利署、公路局、水利處）。關掉來源後立即不再顯示，也不再連線。</p>
+    <div id="camSrcList" class="toggles"><p class="tiny" style="margin:0">載入中…</p></div>
   </section>
   <section class="card">
     <h3>分頁列名稱</h3>
@@ -611,6 +638,35 @@ function bindSettings() {
     } catch (err) { toast(err.message); }
     b.disabled = false; b.textContent = t;
   };
+  // 附近即時影像：來源開關、上次同步、鏡頭數；臺北市水利處要先確認取得書面同意
+  const camTime = (t) => { if (!t) return ''; const d = new Date(`${t.replace(' ', 'T')}Z`); return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
+  // refocus：重畫後把焦點放回剛才操作的開關或按鈕
+  const loadCamSrc = async (refocus) => {
+    const r = await api('/cams/sources').catch(() => null);
+    const box = $('#camSrcList');
+    if (!box) return;
+    if (!r) { box.innerHTML = '<p class="tiny" style="margin:0">讀不到來源狀態</p>'; return; }
+    box.innerHTML = (r.feature ? '' : '<p class="notice" style="margin:0 0 6px">功能開關的「附近即時影像」目前關閉：跑友看不到，排程也不會同步。可以先設定來源、按「立即同步」測試。</p>') + r.sources.map((x) => `<div class="camsrc">
+      <label class="switch"><span>${esc(x.name)}<span class="tiny" style="display:block">${x.manual ? `幹部在地點卡新增的官方直播外連，目前 ${x.active} 個`
+        : `${x.last_ok_at ? `上次同步 ${camTime(x.last_ok_at)}・${x.active} 支鏡頭${x.down ? `（${x.down} 支暫時抓不到）` : ''}` : '還沒有同步過'}${x.last_error ? `・最近一次失敗（${camTime(x.last_sync_at)}）：${esc(x.last_error)}` : ''}`}</span>
+        <span class="tiny" style="display:block">${esc(x.attribution)}</span></span>
+        <input type="checkbox" data-camsrc="${esc(x.source)}" ${x.enabled ? 'checked' : ''} ${r.editable ? '' : 'disabled'}><i></i></label>
+      ${x.consent ? '<p class="tiny" style="margin:0 0 6px">這個來源沒有開放授權聲明，要先取得臺北市水利處的書面同意才能開啟；關閉時不會對水利處發出任何連線。</p>' : ''}
+      ${!x.manual && x.enabled && r.editable ? `<button type="button" class="btn ghost sm" data-camsync="${esc(x.source)}" style="margin:0 0 8px">立即同步</button>` : ''}</div>`).join('');
+    for (const c of box.querySelectorAll('[data-camsrc]')) c.onchange = async () => {
+      const x = r.sources.find((s) => s.source === c.dataset.camsrc);
+      if (c.checked && x.consent && !confirm(`開啟「${x.name}」前，請確認協會已經取得對方的書面同意。確定已取得嗎？`)) { c.checked = false; return; }
+      try { await api('/cams/sources', { method: 'POST', body: { source: x.source, enabled: c.checked, consent: c.checked && x.consent } }); toast(c.checked ? `已開啟${x.name}` : `已關閉${x.name}`); loadCamSrc(`[data-camsrc="${x.source}"]`); }
+      catch (err) { c.checked = !c.checked; toast(err.message); }
+    };
+    for (const b of box.querySelectorAll('[data-camsync]')) b.onclick = async () => {
+      b.disabled = true; b.textContent = '同步中…';
+      try { const s = await api('/cams/sync', { method: 'POST', body: { source: b.dataset.camsync } }); toast(`已同步 ${s.count} 支鏡頭`); } catch (err) { toast(err.message); }
+      loadCamSrc(`[data-camsync="${b.dataset.camsync}"]`);
+    };
+    if (refocus) (box.querySelector(refocus) || box.querySelector('[data-camsrc]'))?.focus();
+  };
+  loadCamSrc();
   const reload = async (msg) => { await refreshMe(); toast(msg); applyFeatures(); paintCountdown(); adminView('settings'); };
   const save = async (key, body, msg) => { try { await api(`/settings/${key}`, { method: 'POST', body }); await reload(msg); } catch (e) { toast(e.message); } };
   $('#orgForm').onsubmit = (e) => { e.preventDefault(); const f = e.target;
@@ -623,6 +679,22 @@ function bindSettings() {
   });
   $('#tabsForm').onsubmit = (e) => { e.preventDefault(); const f = e.target;
     save('tabs', Object.fromEntries(Object.keys(TAB_DEFAULT).map((k) => [k, f[k].value.trim()])), '已儲存分頁列名稱'); };
+  // 活動報名預設：即時預覽「下個週六 07:00 的團練」會怎麼算
+  const sdf = $('#signupDefForm');
+  if (sdf) {
+    const readSd = () => ({ approval: sdf.approval.checked, notify: sdf.notify.checked, open_days: sdf.open_days.value === '' ? null : Number(sdf.open_days.value), open_time: sdf.open_time.value || '20:00',
+      close_days: sdf.close_days.value === '' ? null : Number(sdf.close_days.value), close_time: sdf.close_time.value || '22:00' });
+    const preview = () => {
+      const v = readSd(), now = nowTp(), wd = new Date(`${now.slice(0, 10)}T00:00:00Z`).getUTCDay();
+      const sat = new Date(Date.parse(`${now.slice(0, 10)}T00:00:00Z`) + ((6 - wd + 7) % 7 || 7) * 864e5).toISOString().slice(0, 10);
+      // 預覽規則本身：拿範例活動 40 天前當「現在」，不會因為今天已經過了那個時間就顯示成立即開放（例如週六晚上設「活動前 7 天」）
+      const ev = { date: sat, gather_time: '07:00', kind: 'track' }, w = defaultWindow(ev, v, new Date(Date.parse(`${sat}T00:00:00Z`) - 40 * 864e5).toISOString().slice(0, 16));
+      sdf.open_time.disabled = v.open_days == null; sdf.close_time.disabled = v.close_days == null;
+      $('#sdPreview').textContent = `例：${tpText(`${sat}T07:00`)} 的團練 → ${w.start ? `${tpText(w.start)} 開放` : '建立後立即開放'}、${w.end ? `${tpText(w.end)} 截止` : '集合時截止'}${v.approval ? '，需要審核' : ''}`;
+    };
+    sdf.addEventListener('input', preview); sdf.addEventListener('change', preview); preview();
+    sdf.onsubmit = (e) => { e.preventDefault(); save('signup', readSd(), '已儲存活動報名預設'); };
+  }
   $('#featForm').onsubmit = (e) => { e.preventDefault(); const f = e.target, body = {};
     for (const k of Object.keys(FEATURE_NAME)) body[k] = f[k].checked;
     save('features', body, '已儲存功能開關'); };

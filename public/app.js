@@ -8,6 +8,7 @@ import * as Guide from './guide.js';
 import { quote, charges } from './pricing.js';
 import * as I18N from './i18n.js';
 import { CATS, CHIPS } from './notif-cats.js';
+import { tpNow, signupState, signupEnd, evStart, tpText, tpShort, STATE_LABEL, SIGNUP_DEFAULTS } from './signup-window.js';
 // 用到才下載的模組：管理後台、拍照、報表、活動表單與統計、分團
 // 剛部署的那幾秒可能拿到舊檔：載入失敗就等一下、加版本參數再試一次，仍失敗才顯示錯誤
 const calendarView = (...a) => lazy('./calendar.js', 'calendarView')(...a);
@@ -62,6 +63,11 @@ let writes = 0;
 const idleWaiters = [];
 let formDirty = false, hiddenAt = 0;   // 表單填到一半、App 進背景的時間（決定能不能自動換新版）
 const apiTimes = [];   // [路徑, 總毫秒, 伺服器毫秒]，送速度紀錄時整理成中位數
+let skewMs = 0;       // 伺服器時間 − 手機時間（毫秒）
+// 現在的台北牆上時間 'YYYY-MM-DDTHH:MM'（經伺服器校正）
+const nowTp = () => tpNow(Date.now() + skewMs);
+const signupDefaults = () => ({ ...SIGNUP_DEFAULTS, ...(cfg.settings?.signup || {}) });
+const isOffline = () => !!document.getElementById('offline');
 const api = async (path, opt = {}, retried = false) => {
   const method = opt.method || 'GET';
   if (method !== 'GET') writes++;
@@ -89,6 +95,8 @@ const api = async (path, opt = {}, retried = false) => {
   if (res.status >= 500 && res.status !== 503) throw new Error('伺服器忙碌，請稍後再試');
   const data = await res.json().catch(() => ({}));
   if (method === 'GET') offlineBar(res.headers.get('x-cil-offline') === '1');
+  // 伺服器時間校正：報名期間用伺服器的時間判斷（手機時鐘不準、在其他時區都一樣）；離線暫存的回應不算
+  if (method === 'GET' && typeof data.serverNow === 'number' && res.headers.get('x-cil-offline') !== '1') skewMs = data.serverNow - Date.now();
   // 高風險操作要先用通行金鑰驗證：跳出 Face ID／指紋，驗證完自動再送一次
   if (res.status === 403 && data.stepup && !retried && !/新增通行金鑰/.test(data.error || '')) {
     try { await passkey('stepup'); } catch (e) { throw new Error(e.message === '已取消' ? '已取消驗證' : data.error); }
@@ -142,6 +150,67 @@ function choose(title, message, options) {
     host.addEventListener('click', (e) => { const v = e.target.closest('[data-v]')?.dataset.v; if (v === undefined) return; host.remove(); done(v || null); });
   });
 }
+// 婉拒原因面板：常用理由 chips＋自由填寫（最多 120 字）；回傳 { note } 或 null（取消）
+//   who：團員自己填的姓名，一律當純文字、不翻譯；lines：說明句（純文字，空字串略過）；ok：確認鍵文字（婉拒／移出）
+//   開著的時候 Tab 只在面板裡循環，關掉後焦點回到原本的按鈕
+function askReason(title, { who = '', lines = [], chips = [], ok = '婉拒' } = {}) {
+  return new Promise((done) => {
+    const back = document.activeElement;
+    const host = document.createElement('div');
+    host.className = 'sheet'; host.setAttribute('role', 'dialog'); host.setAttribute('aria-modal', 'true'); host.setAttribute('aria-label', title);
+    const text = lines.filter(Boolean);
+    host.innerHTML = `<div class="sheet-bg" data-x="1"></div><div class="sheet-card card"><h3>${esc(title)}</h3>
+      ${who ? `<p style="margin:0"><b translate="no">${esc(who)}</b></p>` : ''}
+      ${text.map((x) => `<p class="muted" style="margin:0">${esc(x)}</p>`).join('')}
+      ${chips.length ? `<div class="chips" role="group" aria-label="常用原因">${chips.map((c) => `<button type="button" class="chip" data-c="${esc(c)}" aria-pressed="false">${esc(c)}</button>`).join('')}</div>` : ''}
+      <label>原因（選填）<textarea maxlength="120" rows="3" aria-describedby="reasonHint"></textarea></label>
+      <p class="tiny" id="reasonHint" style="margin:0">原因只有本人看得到，推播不會顯示原因</p>
+      <div class="choices"><button type="button" class="btn danger block" data-ok="1">${esc(ok)}</button><button type="button" class="btn ghost block" data-x="1">取消</button></div></div>`;
+    document.body.append(host);
+    const ta = host.querySelector('textarea');
+    const close = (v) => { host.remove(); if (back?.isConnected) back.focus(); done(v); };
+    host.querySelector('.chip, textarea')?.focus();
+    host.addEventListener('click', (e) => {
+      const c = e.target.closest('[data-c]');
+      if (c) {
+        host.querySelectorAll('[data-c]').forEach((x) => x.setAttribute('aria-pressed', String(x === c)));
+        ta.value = c.dataset.c === '其他' ? ta.value : c.dataset.c;
+        if (c.dataset.c === '其他') ta.focus();
+        return;
+      }
+      if (e.target.closest('[data-ok]')) { close({ note: ta.value.trim().slice(0, 120) }); return; }
+      if (e.target.closest('[data-x]')) close(null);
+    });
+    host.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') { close(null); return; }
+      if (e.key !== 'Tab') return;
+      const f = [...host.querySelectorAll('button, textarea')].filter((x) => !x.disabled);
+      const i = f.indexOf(document.activeElement);
+      if (e.shiftKey && i <= 0) { e.preventDefault(); f[f.length - 1].focus(); }
+      else if (!e.shiftKey && i === f.length - 1) { e.preventDefault(); f[0].focus(); }
+    });
+  });
+}
+// 報名按鈕的文字：依活動類型、自己的狀態、是否額滿、是否需要審核
+function submitLabel(ev, myStatus, full) {
+  if (ev.kind === 'survey' || ev.survey) return myStatus ? '更新回覆' : '送出回覆';
+  if (myStatus === 'pending') return '更新申請';
+  if (myStatus === 'in' || myStatus === 'wait') return '更新報名';
+  if (ev.require_approval && !ev.manage) return full ? '送出申請（額滿，核准後排候補）' : '送出申請';   // 主辦幹部本人報名＝核准
+  if (full) return '排候補';
+  return '我要報名';
+}
+// 報名送出後的提示
+function signupToast(r, ev) {
+  if (ev.kind === 'survey') return '已送出，謝謝你的回覆';
+  if (r.status === 'pending') return r.full ? '已送出申請，目前額滿，核准後會排入候補' : '已送出申請，等主辦幹部審核，結果會通知你';
+  if (r.status === 'wait') return `人數已滿，已排入候補第 ${r.position || 1} 位，有人取消會自動遞補並通知你`;
+  if (r.amount) return `報名完成，應繳 ${money(r.amount)}`;
+  return ev.kind === 'party' ? '報名完成，入場券在上方' : `報名完成，${dstr(ev.date)} 見`;
+}
+// 分享與公告用的報名期間文字；只有開放或即將開放時才附連結
+const windowLine = (ev) => `報名期間：${ev.signup_start ? tpShort(ev.signup_start) : '即日起'} – ${tpShort(signupEnd(ev))}${ev.require_approval ? '（需主辦審核）' : ''}`;
+const shareable = (ev) => ['open', 'soon'].includes(signupState(ev, nowTp()));
 // 需要驗證的下載（例如含身分證字號的團體報名資料）：先過通行金鑰驗證，再把檔案存到手機
 async function downloadAuthed(url, filename) {
   let res = await fetch(url);
@@ -659,6 +728,8 @@ function loginView() {
 // 依功能開關顯示或隱藏分頁
 // 下方分頁列：管理員可以改名稱，每個人可以選只顯示圖示
 const TAB_DEFAULT = { home: '團練', plan: '課表', run: '跑步', map: '地圖', studio: '拍照', me: '我的' };
+// 附近即時影像的省流量：打開後地點卡的影像不自動載入、大圖不自動更新（只存在這支手機）
+const camLazy = { get() { try { return localStorage.getItem('cil-cam-lazy') === '1'; } catch { return false; } }, set(v) { try { v ? localStorage.setItem('cil-cam-lazy', '1') : localStorage.removeItem('cil-cam-lazy'); } catch {} } };
 const iconsOnly = { get() { try { return localStorage.getItem('cil-tab-icons') === '1'; } catch { return false; } }, set(v) { try { v ? localStorage.setItem('cil-tab-icons', '1') : localStorage.removeItem('cil-tab-icons'); } catch {} } };
 function applyTabs() {
   const names = { ...TAB_DEFAULT, ...(cfg.settings?.tabs || {}) };
@@ -776,7 +847,7 @@ function privacyView() {
       <h3>三、利用期間、地區、對象與方式</h3>
       <p>期間：${esc(PRIVACY.retention)}。<br>
          地區：台灣，以及雲端服務（Cloudflare）的資料中心所在地。<br>
-         對象：依職務最小權限開放給協會幹部；分團團長與幹部可以看自己分團的名冊（不含電話）與該分團活動的報名及問卷結果；電話完整號碼只有行政人員看得到。賽事報名資料只在你報名「代為團體報名」的活動並勾選同意後，提供給該活動的主辦幹部，用來向賽事主辦單位送出團體報名，每次下載都留有稽核紀錄。通訊地址存檔前會送到中華郵政的 3+3 郵遞區號服務核對寫法並補上郵遞區號，只傳送地址文字。不提供給第三方行銷使用。<br>
+         對象：依職務最小權限開放給協會幹部；分團團長與幹部可以看自己分團的名冊（不含電話）與該分團活動的報名及問卷結果；電話完整號碼只有行政人員看得到。賽事報名資料只在你報名「代為團體報名」的活動並勾選同意後，提供給該活動的主辦幹部，用來向賽事主辦單位送出團體報名，每次下載都留有稽核紀錄。通訊地址存檔前會送到中華郵政的 3+3 郵遞區號服務核對寫法並補上郵遞區號，只傳送地址文字。練跑地圖的「附近即時影像」由本站伺服器向政府公開攝影機取得畫面再轉給你，你的 IP 與位置不會傳給影像來源，本站也不保存影像。不提供給第三方行銷使用。<br>
          方式：以電子方式處理，全程加密傳輸。</p>
       <h3>四、您的權利</h3>
       <p>您可以隨時行使個人資料保護法第 3 條的權利：</p>
@@ -837,6 +908,7 @@ async function listView() {
     <div class="chiprow">${chips}${teamLink}</div>
     <div class="dash"><div style="display:grid;gap:14px">
     ${today}
+    <section class="card" id="reviewCard" hidden></section>
     <a class="card tight wxmini" id="homeWx" hidden></a>
     ${strip}
     ${next ? heroCard(next) : `<section class="card hero"><span class="sweep"></span><h2>還沒有排定的團練</h2><p class="muted" style="margin:0">幹部發布後，這裡就會出現，也會推播通知你。</p></section>`}
@@ -851,10 +923,18 @@ async function listView() {
   for (const b of document.querySelectorAll('[data-tf]')) b.onclick = () => { teamFilter.set(b.dataset.tf); listView(); };
   homeWeather(all);
   bindTodayCard();
+  if (anyTeamAllow('event')) reviewCard();
   bindInstall();
   bindStepup();
   flushLogQueue();
   if (!me.mfaPending) Guide.maybeStart();   // 第一次登入：使用說明導覽
+}
+// 幹部：報名待審核（畫面畫好後才載入，有資料才顯示）
+async function reviewCard() {
+  const r = await api('/me/reviews').catch(() => null), box = $('#reviewCard');
+  if (!r?.events?.length || !box?.isConnected) return;
+  box.innerHTML = `<h3>報名待審核</h3>${r.events.map((e) => `<a class="todayev" href="#/e/${esc(e.id)}/stats?f=pending">${IC.calendar}<span><b><span translate="no">${esc(e.title)}</span></b><span class="tiny" style="display:block">${dstr(e.date)}・${e.n} 筆${e.seatsLeft != null ? `・剩 ${e.seatsLeft} 個名額` : ''}</span></span><span class="tiny">›</span></a>`).join('')}`;
+  box.hidden = false;
 }
 // 首頁天氣：今天報名的活動有指定地點就用那裡，否則用「常跑地點」；畫面畫好後才載入，不拖慢開啟
 async function homeWeather(events) {
@@ -885,7 +965,7 @@ async function todayCard(events) {
   const wk = takeBoot('weekLogs'), bootToday = takeBoot('todayLogs');
   const logs = [...notQueued(wk ? wk.logs.filter((l) => l.date === t) : bootToday || (await api(`/logs?from=${t}&to=${t}`).catch(() => ({ logs: [] }))).logs), ...pend(t)];
   const done = logs.find((l) => l.status !== 'skip') || logs[0];
-  const todays = events.filter((e) => e.date === t && (e.mine === 'in' || e.mine === 'wait'));
+  const todays = events.filter((e) => e.date === t && ['in', 'wait', 'pending'].includes(e.mine));
   todayTick = null;
   let main = '', act = '';
   if (wi < 1) {
@@ -930,7 +1010,7 @@ async function todayCard(events) {
   return `<section class="card todaycard">
     <div class="row spread"><span class="tiny">今天・${me.dist === 'hm' ? '半馬' : '全馬'} ${esc(me.grp)} 組${personal && wi >= 1 && wi <= 21 ? `・個人 W${wi}` : ''}</span>${done ? `<span class="pill solid">${LOG_ICON[done.status]}${LOG_STATUS_NAME[done.status]}</span>` : ''}</div>
     ${main}
-    ${todays.map((e) => `<a class="todayev" href="#/e/${e.id}">${IC.calendar}<span><b><span translate="no">${esc(e.title)}</span></b><span class="tiny" style="display:block">${e.gather_time ? `${e.gather_time} 集合` : ''}${e.place ? `・<span translate="no">${esc(e.place)}</span>` : ''}${e.mine === 'wait' ? '・候補中' : ''}</span></span><span class="tiny">›</span></a>`).join('')}
+    ${todays.map((e) => `<a class="todayev" href="#/e/${e.id}">${IC.calendar}<span><b><span translate="no">${esc(e.title)}</span></b><span class="tiny" style="display:block">${e.gather_time ? `${e.gather_time} 集合` : ''}${e.place ? `・<span translate="no">${esc(e.place)}</span>` : ''}${e.mine === 'wait' ? '・候補中' : e.mine === 'pending' ? '・審核中' : ''}</span></span><span class="tiny">›</span></a>`).join('')}
     ${act}
   </section>`;
 }
@@ -958,6 +1038,20 @@ async function weekStrip() {
   </section>`;
 }
 
+// 首頁大卡右下角：先看自己的狀態，再看報名期間
+function heroPill(e) {
+  const glass = (t) => `<span class="pill" style="background:rgba(255,255,255,.22);color:#fff">${t}</span>`;
+  if (e.mine === 'in') return '<span class="pill" style="background:#fff;color:#1C4698">已報名</span>';
+  if (e.mine === 'wait') return '<span class="pill wait">候補中</span>';
+  if (e.mine === 'pending') return '<span class="pill wait">審核中</span>';
+  if (e.mine === 'rejected') return '<span class="pill no">未通過</span>';
+  const st = signupState(e, nowTp());
+  if (st === 'cancelled') return glass('已取消');
+  if (st === 'off') return glass('未開放報名');
+  if (st === 'soon') return glass(`${tpShort(e.signup_start)} 開放`);
+  if (st === 'ended') return glass('報名已截止');
+  return glass(e.capacity && e.signed >= e.capacity ? '額滿・可候補' : '去報名 ›');
+}
 function heroCard(e) {
   const d = d2(e.date), days = Math.round((d - new Date().setHours(0, 0, 0, 0)) / 864e5);
   return `<a class="card hero" href="#/e/${e.id}">
@@ -970,8 +1064,7 @@ function heroCard(e) {
     <p class="muted" style="margin:0">${dstr(e.date)}${e.gather_time ? ` ${e.gather_time} 集合` : ''}${e.place ? `・<span translate="no">${esc(e.place)}</span>` : ''}</p>
     <div class="row spread">
       <span class="row" style="gap:8px">${avatarStack(e.peek || [], e.signed)}<span class="tiny">${e.signed} 人報名${e.waiting ? `・候補 ${e.waiting}` : ''}${e.capacity ? `／${e.capacity}` : ''}</span></span>
-      ${e.mine === 'in' ? '<span class="pill" style="background:#fff;color:#1C4698">已報名</span>'
-        : e.mine === 'wait' ? '<span class="pill wait">候補中</span>' : '<span class="pill" style="background:rgba(255,255,255,.22);color:#fff">去報名 ›</span>'}
+      ${heroPill(e)}
     </div>
   </a>`;
 }
@@ -983,10 +1076,12 @@ function eventCard(e) {
       <span class="body">
         <span class="pills"><span class="pill ${e.kind}">${KIND_NAME[e.kind] || '活動'}</span>${teamTag(teamOf(e.team_id))}${e.visibility === 'invite' ? `<span class="pill lock">${IC.lock}邀請制</span>` : ''}</span>
         <span class="t"><span translate="no">${esc(e.title)}</span></span>
-        <span class="tiny">${e.gather_time ? `${e.gather_time}　` : ''}<span translate="no">${esc(e.place || '')}</span>${(() => { const ps = [...(e.options || []), ...(e.kind === 'buy' ? e.items || [] : [])].map((o) => o.price).filter(Boolean); return ps.length ? `　${money(Math.min(...ps))} 起` : e.fee ? `　${money(e.fee)}` : ''; })()}</span>
+        <span class="tiny">${e.gather_time ? `${e.gather_time}　` : ''}<span translate="no">${esc(e.place || '')}</span>${(() => { const ps = [...(e.options || []), ...(e.kind === 'buy' ? e.items || [] : [])].map((o) => o.price).filter(Boolean); return ps.length ? `　${money(Math.min(...ps))} 起` : e.fee ? `　${money(e.fee)}` : ''; })()}${!e.mine && e.signup_start && signupState(e, nowTp()) === 'soon' ? `　${tpShort(e.signup_start)} 開放` : ''}</span>
         ${e.capacity ? `<span class="bar"><i style="width:${pct}%"></i></span>` : ''}
       </span>
-      <span class="evright">${e.mine === 'in' ? `<span class="mine">${IC.check}已報名</span>` : e.mine === 'wait' ? '<span class="mine wait">候補中</span>' : ''}
+      <span class="evright">${e.mine === 'in' ? `<span class="mine">${IC.check}已報名</span>` : e.mine === 'wait' ? '<span class="mine wait">候補中</span>'
+        : e.mine === 'pending' ? '<span class="mine wait">審核中</span>' : e.mine === 'rejected' ? '<span class="mine no">未通過</span>' : ''}
+        ${e.pending ? `<span class="pill wait">待審核 ${e.pending}</span>` : ''}
         ${e.signed ? `${avatarStack(e.peek || [], e.signed)}<span class="tiny num">${e.signed}${e.capacity ? `/${e.capacity}` : ' 人'}</span>` : ''}</span>
     </div>
   </a>`;
@@ -1020,10 +1115,11 @@ async function eventView(id) {
   const admin = ev.manage;
   const survey = ev.kind === 'survey', qs = ev.questions || [];
   const useForm = ev.kind === 'party' || qs.length > 0 || (ev.options || []).length > 0 || !!ev.group_reg || (ev.items || []).length > 0 || charges(ev);
-  const ins = ev.signups.filter((s) => s.status === 'in');
-  const waits = ev.signups.filter((s) => s.status === 'wait');
-  const mine = ev.signups.find((s) => s.member_id === me.id);
-  const closed = !ev.signup_open || ev.status !== 'open' || (ev.deadline && new Date(ev.deadline) < new Date());
+  const ins = ev.signups.filter((s) => s.status === 'in'), waits = ev.signups.filter((s) => s.status === 'wait');
+  // 自己的狀態一律從 myStatus 取（待審核、未通過不在公開的 signups 裡）
+  const myStatus = ev.myStatus, live = ['in', 'wait', 'pending'].includes(myStatus);
+  const now = nowTp(), st = signupState(ev, now), full = !!ev.capacity && ins.length >= ev.capacity;
+  const canSubmit = st === 'open' && myStatus !== 'rejected', started = now >= evStart(ev);
   const party = ev.kind === 'party';
   // 入場券、座位、當週課表同時載入
   const [myTicket, seatInfo, plan] = await Promise.all([
@@ -1049,7 +1145,8 @@ async function eventView(id) {
         : ev.fee ? `<div class="pricechips"><span><b>費用</b><span class="num">${money(ev.fee)}</span></span></div>` : ''}
       ${ev.pricing?.early_off && ev.pricing.early_until >= ymd(new Date()) ? `<p class="tiny" style="margin:0;color:rgba(255,255,255,.9)">早鳥 ${esc(ev.pricing.early_until.slice(5).replace('-', '/'))} 前報名折 ${money(ev.pricing.early_off)}${ev.pricing.member_off ? `・協會會員再折 ${money(ev.pricing.member_off)}` : ''}</p>`
         : ev.pricing?.member_off ? `<p class="tiny" style="margin:0;color:rgba(255,255,255,.9)">協會會員折 ${money(ev.pricing.member_off)}</p>` : ''}
-      ${ev.cancelled ? '<p class="cancelled">這場已取消</p>' : ''}
+      ${ev.cancelled ? '<p class="cancelled">這場已取消</p>' : `<p class="tiny" style="margin:0;color:rgba(255,255,255,.9)">${survey ? `回覆截止 ${tpText(signupEnd(ev))}`
+        : `報名期間 ${ev.signup_start ? tpText(ev.signup_start) : '即日起'} – ${tpText(signupEnd(ev))}${ev.require_approval ? '・需主辦審核' : ''}`}</p>`}
       ${ev.group_reg ? '<p class="tiny" style="margin:0;color:rgba(255,255,255,.85)">由幹部代為團體報名</p>' : ''}
       ${(ev.series || []).length > 1 ? `<div class="serieschips" aria-label="定期揪跑的其他場次">${ev.series.filter((x) => x.date >= ymd(new Date())).slice(0, 8).map((x) => `<a class="${x.id === ev.id ? 'on' : ''}" href="#/e/${esc(x.id)}">${esc(dstr(x.date))}</a>`).join('')}</div>` : ''}
       ${ev.note ? `<p class="muted" style="margin:0;white-space:pre-wrap"><span translate="no">${esc(ev.note)}</span></p>` : ''}
@@ -1075,19 +1172,25 @@ async function eventView(id) {
       ${routeSvg(ev.route.points)}<div class="row" style="gap:8px"><button class="btn ghost sm" id="evGpx">下載 GPX</button></div></section>` : ''}
 
     ${party && myTicket ? ticketCard(myTicket, ev) : ''}
-    ${mine?.status === 'in' && (ev.myAmount || (ev.myAmount == null && charges(ev))) ? payCard(ev) : ''}
+    ${myStatus === 'in' && (ev.myAmount || (ev.myAmount == null && charges(ev))) ? payCard(ev) : ''}
 
     <section class="card">
       <div class="row spread">
         <h3>${survey ? '已回覆' : '報名'} ${ins.length}${ev.capacity ? ` / ${ev.capacity}` : ''} 人</h3>
-        ${mine && mine.status !== 'cancel'
-          ? `<button class="btn danger sm" id="cancel">${survey ? '撤回回覆' : '取消報名'}</button>`
-          : closed ? `<span class="tiny">${survey ? '問卷已截止' : '未開放報名'}</span>` : (useForm ? '' : `<button class="btn sm" id="signup">我要報名</button>`)}
+        ${live
+          ? `<span class="row" style="gap:6px">${myStatus === 'in' && started ? '<span class="tiny">活動已開始</span>' : ''}<button class="btn danger sm" id="cancel" ${myStatus === 'in' && started ? 'disabled' : ''}>${myStatus === 'pending' ? '撤回申請' : survey ? '撤回回覆' : '取消報名'}</button></span>`
+          : myStatus === 'rejected' ? '<span class="tiny">未通過審核</span>'
+          : !canSubmit ? `<span class="tiny">${STATE_LABEL[st](ev)}</span>` : (useForm ? '' : `<button class="btn sm" id="signup">${submitLabel(ev, null, full)}</button>`)}
       </div>
-      ${useForm && !closed ? signupForm(ev, mine && mine.status !== 'cancel') : ''}
+      ${useForm && canSubmit ? signupForm(ev, myStatus, full) : ''}
+      ${isOffline() && (canSubmit || live) ? '<p class="tiny" style="margin:0">目前離線，連上網路後再報名</p>' : ''}
       ${party && (ev.fee || ev.guest_max || ev.meal_options) ? `<p class="tiny">${ev.fee ? `費用 ${ev.fee} 元　` : ''}${ev.guest_max ? `可攜伴 ${ev.guest_max} 位　` : ''}${ev.meal_options ? `餐點：${esc(ev.meal_options)}` : ''}</p>` : ''}
-      ${mine?.status === 'wait' ? '<p class="notice" style="margin:0">你在候補名單，有人取消會自動遞補並通知你。</p>' : ''}
-      ${mine && mine.status !== 'cancel' && ev.myAttended ? `<div class="row" style="gap:6px"><span class="pill solid">${IC.check}已出席</span></div>` : ''}
+      ${myStatus === 'pending' ? `<p class="notice" style="margin:0">你的報名在等主辦幹部審核，結果會通知你${charges(ev) ? '；核准後再繳費' : ''}。</p>`
+        : myStatus === 'rejected' ? `<p class="notice" style="margin:0">主辦未通過這筆報名${ev.myReviewNote ? `：<span translate="no">${esc(ev.myReviewNote)}</span>` : ''}。有疑問請聯絡主辦人。</p>`
+        : myStatus === 'wait' ? `<p class="notice" style="margin:0">你在候補第 ${ev.myPosition || 1} 位，有人取消會自動遞補並通知你。</p>`
+        : st === 'soon' && !myStatus ? '<p class="notice" id="openCountdown" style="margin:0"></p>' : ''}
+      ${!myStatus && canSubmit && ev.require_approval && !admin && (ev.capacity || (ev.items || []).some((i) => i.stock)) ? '<p class="tiny" style="margin:0">審核期間不保留名額與庫存</p>' : ''}
+      ${live && ev.myAttended ? `<div class="row" style="gap:6px"><span class="pill solid">${IC.check}已出席</span></div>` : ''}
       <div class="roster">
         ${ins.map((s) => `<div class="r">${avatar(s)}<span><span translate="no">${esc(s.name)}</span>${s.note ? ` <span class="tiny"><span translate="no">${esc(s.note)}</span></span>` : ''}</span><span class="pill">${esc(s.grp)}</span></div>`).join('')
           || '<p class="muted" style="margin:0">還沒有人報名，當第一個吧。</p>'}
@@ -1102,7 +1205,9 @@ async function eventView(id) {
     ${admin ? `<section class="card">
       <div class="row spread"><h3>管理</h3><span class="tiny">${ev.team ? `<span translate="no">${esc(ev.team.name)}</span>的活動` : '全協會活動'}</span></div>
       <div class="row">
+        ${ev.pendingCount > 0 ? `<a class="btn sm" href="#/e/${ev.id}/stats?f=pending">待審核 ${ev.pendingCount} ›</a>` : ''}
         <a class="btn sm" href="#/e/${ev.id}/stats">報名統計${qs.length ? '與問卷' : ''}</a>
+        ${ev.cancelled ? `<a class="btn sm" href="#/edit/${ev.id}?reopen=1">恢復這場活動</a>` : ''}
         <a class="btn ghost sm" href="#/edit/${ev.id}">編輯</a>
         <a class="btn ghost sm" href="#/new?from=${ev.id}">複製成新活動</a>
         ${ev.group_reg ? `<button class="btn sm" data-regcsv="${ev.id}">下載團體報名資料</button>` : ''}
@@ -1116,8 +1221,8 @@ async function eventView(id) {
           <div data-nt="place" hidden style="display:grid;gap:12px"><label>新的地點<input name="place" maxlength="120" placeholder="例如 改到大佳河濱公園"></label>${addrField('address', '地址', '選填・送郵局核對')}</div>
           <label>說明（會一起推播）<textarea name="message" maxlength="300" placeholder="例如 下雨改室內，帶瑜珈墊"></textarea></label>
           <fieldset class="qset"><legend>通知誰</legend><div class="chips">
-            <label class="chip"><input type="radio" name="audience" value="signed" ${ev.signups.some((x) => x.status !== 'cancel') ? 'checked' : ''}><span>已報名的人（${ev.signups.filter((x) => x.status !== 'cancel').length}）</span></label>
-            <label class="chip"><input type="radio" name="audience" value="all" ${ev.signups.some((x) => x.status !== 'cancel') ? '' : 'checked'}><span>${inviteOnly ? '所有受邀的人' : ev.team ? '整個分團' : '全協會'}</span></label></div>
+            <label class="chip"><input type="radio" name="audience" value="signed" ${ev.signups.length + (ev.pendingCount || 0) ? 'checked' : ''}><span>已報名的人（${ev.signups.length + (ev.pendingCount || 0)}）</span></label>
+            <label class="chip"><input type="radio" name="audience" value="all" ${ev.signups.length + (ev.pendingCount || 0) ? '' : 'checked'}><span>${inviteOnly ? '所有受邀的人' : ev.team ? '整個分團' : '全協會'}</span></label></div>
             <span class="tiny">用外部表單登記的活動（例如慶功宴）沒有人在 App 報名，要選第二個。</span></fieldset>
           <button class="btn sm">送出並通知</button>
         </form></details>`}
@@ -1164,23 +1269,38 @@ async function eventView(id) {
     if (!shareUrl()) return toast('先在下方「邀請連結」開啟，才能分享');
     const price = (ev.options || []).length ? ev.options.map((o) => `${o.name}${o.price ? ` ${money(o.price)}` : ''}`).join('／') : ev.fee ? money(ev.fee) : '';
     const text = [`【${KIND_NAME[ev.kind] || '活動'}】${ev.title}`, `${dstr(ev.date)}${ev.gather_time ? ` ${ev.gather_time}` : ''}${ev.place ? `・${ev.place}` : ''}`,
-      price ? `費用：${price}` : '', ev.deadline ? `報名截止：${ev.deadline.replace('T', ' ')}` : '', `${ev.kind === 'survey' ? '填寫' : '報名'}：${shareUrl()}`].filter(Boolean).join('\n');
+      price ? `費用：${price}` : '', ev.cancelled ? '' : windowLine(ev), shareable(ev) ? `${ev.kind === 'survey' ? '填寫' : '報名'}：${shareUrl()}` : ''].filter(Boolean).join('\n');
     open(`https://line.me/R/share?text=${encodeURIComponent(text)}`, '_blank', 'noopener');
   });
   if (inviteOnly && admin) bindInviteCard(ev);
 
+  // 離線：報名、取消都不排進離線佇列，按鈕直接停用
+  if (isOffline()) for (const b of [$('#signup'), $('#cancel'), $('#pform button:not([type=button])')]) if (b) b.disabled = true;
   const sb = $('#signup');
   sb?.addEventListener('click', once(sb, async () => {
     try {
       const r = await api(`/events/${id}/signup`, { method: 'POST', body: { name: me.name, grp: me.grp, dist: me.dist } });
-      toast(r.status === 'wait' ? '人數已滿，已排入候補，有人取消會自動遞補並通知你' : `報名完成，${dstr(ev.date)} 見`); render();
+      toast(signupToast(r, ev)); render();
     } catch (e) { toast(e.message); }
   }));
   $('#cancel')?.addEventListener('click', async () => {
     const paidMsg = ev.myPaid === 'paid' ? '你已經繳費，取消後的退費由主辦幹部處理。' : ev.myPayReported ? '你已經回報繳費，取消後請跟主辦幹部聯絡退費。' : '';
-    if (!confirm(survey ? '確定撤回回覆？' : `${paidMsg}確定取消報名？`)) return;
-    try { await api(`/events/${id}/signup`, { method: 'DELETE' }); toast(survey ? '已撤回回覆' : '已取消報名'); render(); } catch (e) { toast(e.message); }
+    const lateMsg = myStatus === 'in' && now > signupEnd(ev) ? '截止後取消請先聯絡主辦，費用依主辦規定。' : '';
+    if (!confirm(myStatus === 'pending' ? '撤回這筆申請？' : survey ? '確定撤回回覆？' : `${lateMsg}${paidMsg}確定取消報名？`)) return;
+    try { await api(`/events/${id}/signup`, { method: 'DELETE' }); toast(myStatus === 'pending' ? '已撤回申請' : survey ? '已撤回回覆' : '已取消報名'); render(); } catch (e) { toast(e.message); }
   });
+  // 尚未開放：倒數；剩不到 6 小時改成時間到再向伺服器重新讀取（按鈕由伺服器的狀態決定，前端不自己打開）
+  const cd = $('#openCountdown');   // #countdown 是上方的賽事倒數，不能重複
+  if (cd && ev.signup_start) {
+    const left = () => Math.max(0, Date.parse(`${ev.signup_start}:00Z`) - Date.parse(`${nowTp()}:00Z`));
+    const paint = () => { const m = Math.ceil(left() / 60e3), d = Math.floor(m / 1440), h = Math.floor((m % 1440) / 60);
+      cd.textContent = d || h ? `${d ? `${d} 天 ` : ''}${h} 小時後開放報名` : `${m % 60} 分鐘後開放報名`; };
+    // 頁面開著跨過 6 小時門檻也要排上重新讀取（每分鐘檢查一次，只排一次）
+    let armed = false;
+    const arm = () => { if (armed || left() >= 6 * 3600e3) return; armed = true; setTimeout(() => { if (cd.isConnected) render(); }, left() + 1500); };
+    paint(); arm();
+    const t = setInterval(() => { if (!cd.isConnected) return clearInterval(t); paint(); arm(); }, 60e3);
+  }
   if (ev.spot) import('./weather.js').then((W) => W.load(ev.spot.lat, ev.spot.lng).then((w) => { if ($('#evWx')) $('#evWx').innerHTML = W.forEvent(w, ev.date, ev.gather_time); }))
     .catch((e) => { if ($('#evWx')) $('#evWx').innerHTML = `<p class="tiny" style="margin:0">${esc(e.message)}</p>`; });
   $('#evGpx')?.addEventListener('click', async () => (await import('./map.js')).downloadGpx(ev.route.name, ev.route.points));
@@ -1224,7 +1344,7 @@ async function eventView(id) {
         name: me.name, grp: me.grp, dist: me.dist, note: f.note?.value || '', answers,
         option: f.querySelector('[name=option]:checked')?.value || null, reg_consent: !!f.reg_consent?.checked,
         guests: Number(f.guests?.value || 0), meal: f.meal?.value || '', items: readItems(f) } });
-      toast(r.status !== 'wait' && r.amount ? `報名完成，應繳 ${money(r.amount)}` : r.status === 'wait' ? '人數已滿，已排入候補' : survey ? '已送出，謝謝你的回覆' : party ? '報名完成，入場券在上方' : '報名完成'); render();
+      toast(signupToast(r, ev)); render();
     } catch (err) { toast(err.message); }
   });
   $('#cform')?.addEventListener('submit', async (e) => {
@@ -1292,7 +1412,7 @@ async function eventView(id) {
   $('#copyRoster')?.addEventListener('click', async () => copy((await api(`/events/${id}/roster`)).text));
   $('#del')?.addEventListener('click', async () => {
     const later = (ev.series || []).filter((x) => x.date > ev.date).length;
-    const n = ev.signups.filter((x) => x.status !== 'cancel').length;
+    const n = ev.signups.length + (ev.pendingCount || 0);
     const pick = await choose('刪除活動', `${later ? `這是定期揪跑，之後還有 ${later} 場。` : ''}刪除後無法復原${n ? `，已報名的 ${n} 人會收到通知` : ''}。`,
       later ? [{ value: 'one', label: '只刪這一場', danger: true }, { value: 'after', label: `連同之後 ${later} 場一起刪`, danger: true }] : [{ value: 'one', label: '刪除', danger: true }]);
     if (!pick) return;
@@ -1312,7 +1432,7 @@ async function announceText(ev) {
   if (ev.place) L.push(`地點：${ev.place}`);
   if ((ev.options || []).length) L.push(`組別與費用：${ev.options.map((o) => `${o.name}${o.price ? ` ${money(o.price)}` : ''}`).join('／')}`);
   else if (ev.fee) L.push(`費用：${money(ev.fee)}`);
-  if (ev.deadline) L.push(`報名截止：${ev.deadline.replace('T', ' ')}`);
+  if (!ev.cancelled) L.push(windowLine(ev));
   if (ev.lead) L.push(`帶團：${ev.lead}`);
   if (ev.week_no) {
     const info = await P.weekInfo(ev.week_no);
@@ -1324,8 +1444,8 @@ async function announceText(ev) {
   } else if (ev.plan_text) { L.push('', ev.plan_text); }
   if (ev.note) L.push('', ev.note);
   if (ev.link_url) L.push('', `${ev.link_label || '登記'}：${ev.link_url}`);
-  if (ev.signup_open && ev.visibility !== 'invite') L.push('', `報名：${location.origin}/#/e/${ev.id}`);
-  if (ev.signup_open && ev.visibility === 'invite' && ev.invite?.token) L.push('', `報名（邀請連結）：${location.origin}/#/e/${ev.id}?t=${ev.invite.token}`);
+  if (shareable(ev) && ev.visibility !== 'invite') L.push('', `報名：${location.origin}/#/e/${ev.id}`);
+  if (shareable(ev) && ev.visibility === 'invite' && ev.invite?.token) L.push('', `報名（邀請連結）：${location.origin}/#/e/${ev.id}?t=${ev.invite.token}`);
   return L.join('\n');
 }
 const dayPattern = (date) => { const w = d2(date).getDay(); return w === 0 || w === 6 ? '週末|週日' : `週${WD[w]}`; };
@@ -1549,6 +1669,7 @@ const todoBox = (t) => {
     t.applied ? row('#/admin?tab=members', tile, '入會申請', '', num(t.applied)) : '',
     ...t.joins.map((j) => row(`#/t/${esc(j.tid)}`, tile, `<span translate="no">「${esc(j.name)}」</span>入團申請`, '', num(j.n))),
     ...t.pays.map((p) => row(`#/e/${esc(p.id)}/stats`, tile, `<span translate="no">「${esc(p.title)}」</span>繳費確認`, '', num(p.n))),
+    ...(t.reviews || []).map((p) => row(`#/e/${esc(p.id)}/stats?f=pending`, tile, `<span translate="no">「${esc(p.title)}」</span>報名待審核`, '', num(p.n))),
     t.spots ? row('#/map', tile, '地點審核', '', num(t.spots)) : '',
   ].join('')}</div></section>`;
 };
@@ -1909,7 +2030,7 @@ function bindInviteCard(ev) {
 }
 
 // 報名表：春酒的攜伴與餐點、活動自訂問卷；基本資料一律帶入「我的」設定
-function signupForm(ev, mine) {
+function signupForm(ev, myStatus, full) {
   // 從「先填賽事報名資料」回來：把剛才選的組別、商品、備註帶回來
   let draft = null;
   try { draft = JSON.parse(sessionStorage.getItem('cil-after-reg') || 'null'); if (draft?.ev === ev.id) sessionStorage.removeItem('cil-after-reg'); else draft = null; } catch {}
@@ -1929,7 +2050,7 @@ function signupForm(ev, mine) {
     ${questionFields(ev.questions || [], ev.myAnswers || {})}
     ${draft ? '<p class="notice" style="margin:0">已帶回你剛才選的內容，確認後送出報名。</p>' : ''}
     ${survey ? '' : `<label>備註（選填）<input name="note" maxlength="40" value="${esc(ev.draftNote || '')}" placeholder="${party ? '素食、座位需求…' : '晚到、只跑前半段…'}"></label>`}
-    <button class="btn block">${survey ? (mine ? '更新回覆' : '送出回覆') : mine ? '更新報名' : '我要報名'}</button>
+    <button class="btn block">${submitLabel(ev, myStatus, full)}</button>
   </form>`;
 }
 // 團購／加購：每個尺寸一列，數量用 − ＋ 調整；顯示剩餘庫存
@@ -1948,7 +2069,7 @@ function bindQuote(f, ev) {
   const box = f.querySelector('#quote');
   const paint = () => {
     if (!box) return;
-    const signedOn = ev.signups.find((s) => s.member_id === me.id && s.status !== 'cancel')?.created_at?.slice(0, 10) || ymd(new Date());
+    const signedOn = ev.mySignedOn || nowTp().slice(0, 10);   // 早鳥看這次報名的日期（台北時間）
     const q = quote(ev, { option: f.querySelector('[name=option]:checked')?.value || null, guests: Number(f.guests?.value || 0), items: readItems(f), membership: ev.myMembership, signedOn });
     box.innerHTML = q.lines.length ? `${q.lines.map((l) => `<div class="ql ${l.amount < 0 ? 'off' : ''}"><span><span translate="no">${esc(l.label)}</span>${l.qty > 1 ? ` × ${l.qty}` : ''}</span><span class="num">${l.amount < 0 ? '−' : ''}${money(Math.abs(l.amount))}</span></div>`).join('')}
       <div class="ql total"><span>合計</span><b class="num">${money(q.total)}</b></div>` : '';
@@ -3166,6 +3287,7 @@ async function meNotify() {
     </section>
     <section class="card"><h3>顯示</h3>
       <label class="switch"><span>分頁列只顯示圖示<span class="tiny" style="display:block">隱藏下方圖示底下的文字</span></span><input type="checkbox" id="iconsOnly" ${iconsOnly.get() ? 'checked' : ''}><i></i></label>
+      ${cfg.settings?.features?.cams === true ? `<label class="switch"><span>省流量：影像不自動載入<span class="tiny" style="display:block">地點卡的附近即時影像點了才載入、不自動更新</span></span><input type="checkbox" id="camLazy" ${camLazy.get() ? 'checked' : ''}><i></i></label>` : ''}
       <div class="row spread"><span>語言<span class="tiny" style="display:block" translate="no">Language</span></span>
         <div class="seg" role="group" aria-label="Language" translate="no"><button data-lang="zh" aria-pressed="${I18N.lang === 'zh'}">中文</button><button data-lang="en" aria-pressed="${I18N.lang === 'en'}">English</button></div></div></section>`;
   $('#pushBtn')?.addEventListener('click', () => togglePush(sub));
@@ -3190,6 +3312,7 @@ async function meNotify() {
   }).catch(() => {});
   bindInstall();
   $('#iconsOnly').onchange = (e) => { iconsOnly.set(e.target.checked); applyTabs(); };
+  $('#camLazy')?.addEventListener('change', (e) => camLazy.set(e.target.checked));
   for (const b of document.querySelectorAll('[data-lang]')) b.onclick = () => { if (b.dataset.lang !== I18N.lang) I18N.setLang(b.dataset.lang); };
   $('#calNew').onclick = async () => {
     if (cfg.calendarOn && !confirm('重新產生後，已經訂閱的舊網址會失效，要在行事曆重新訂閱。確定？')) return;
@@ -3425,7 +3548,8 @@ async function renderOnce() {
       // 先用上次的資料畫出來，網路回來後資料有變才重畫（不重播進場動畫、使用者正在輸入就不打擾）
       me = stale.member; cfg = stale; bootData = stale.boot || null; vitals.warm = true;
       fresh.then((r) => {
-        const changed = JSON.stringify(r) !== JSON.stringify(stale);
+        const same = (x) => JSON.stringify({ ...x, serverNow: 0 });   // 伺服器時間每次都不同，不算資料有變
+        const changed = same(r) !== same(stale);
         me = r.member; cfg = r; bootData = r.boot || null;
         if (!changed && me) return;
         const typing = document.activeElement?.matches?.('input, textarea, select') && view.contains(document.activeElement);
@@ -3544,9 +3668,12 @@ const theme = {
   get() { try { return localStorage.getItem('cil-theme'); } catch { return null; } },
   set(v) { try { v ? localStorage.setItem('cil-theme', v) : localStorage.removeItem('cil-theme'); } catch {} },
 };
+const THEME_COLOR = { light: '#EEF2F9', dark: '#060F1C' };
 const applyTheme = () => {
   const t = theme.get();
   if (t) document.documentElement.dataset.theme = t; else delete document.documentElement.dataset.theme;
+  // 狀態列顏色：手動選了主題就兩個 meta 都用那個主題的顏色，否則照系統
+  for (const m of document.querySelectorAll('meta[name="theme-color"]')) m.content = THEME_COLOR[t || (/dark/.test(m.media) ? 'dark' : 'light')];
 };
 applyTheme();
 $('#theme').onclick = () => {
@@ -3633,4 +3760,4 @@ addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvt 
 addEventListener('appinstalled', () => { installEvt = null; try { localStorage.setItem('cil-installed', '1'); } catch {} document.querySelectorAll('.installcard').forEach((c) => c.remove()); });
 
 // 拆出去的模組（admin.js、photo.js…）從這裡拿共用的工具與狀態
-export { legacyData, removeLegacy, addrField, bindAddrField, latest, $, cfg, downloadAuthed, scanSheet, FEEL, IC, KIND_NAME, LOG_ICON, LOG_STATUS_NAME, MI, PAID_NAME, ROLE_NAME, TAB_DEFAULT, TEAM_PERMS, TEAM_ROLE_NAME, ago, allow, api, applyFeatures, avatar, barChart, bars, bindComments, bindStepup, btnRow, choose, coachPrefs, copy, countdownPicker, dayLabel, dstr, emptyState, esc, eventCard, feat, fixText, group, ic, largeTitle, me, mfaBanner, money, myCycle, nrow, org, pad2, paintCountdown, passkey, planSeg, queueLog, raceTarget, refreshMe, render, route, row, setCoachPrefs, squareIcon, startKey, studio, subTitle, teamAllow, teamIcon, teamOf, teams, toast, view, ymd };
+export { legacyData, removeLegacy, addrField, bindAddrField, latest, $, cfg, downloadAuthed, scanSheet, FEEL, IC, KIND_NAME, LOG_ICON, LOG_STATUS_NAME, MI, PAID_NAME, ROLE_NAME, TAB_DEFAULT, TEAM_PERMS, TEAM_ROLE_NAME, ago, allow, api, applyFeatures, avatar, barChart, bars, bindComments, bindStepup, btnRow, choose, coachPrefs, copy, countdownPicker, dayLabel, dstr, emptyState, esc, eventCard, feat, fixText, group, ic, largeTitle, me, mfaBanner, money, myCycle, nrow, org, pad2, paintCountdown, passkey, planSeg, queueLog, raceTarget, refreshMe, render, route, row, setCoachPrefs, squareIcon, startKey, studio, subTitle, teamAllow, teamIcon, teamOf, teams, toast, view, ymd, askReason, isOffline, nowTp, signupDefaults, submitLabel, camLazy, openSheet };

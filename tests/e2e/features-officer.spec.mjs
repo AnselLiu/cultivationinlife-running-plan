@@ -122,3 +122,76 @@ test('通知中心：幹部看得到「待辦」chip 與待處理摘要，連到
   await expect(page.locator('#todoBox a[href="#/t/youth"]')).toBeVisible();
   await apiAs(request, 't_other', '/teams/youth/leave', { method: 'POST' });
 });
+
+// ---- 報名設定與審核 ----
+test.describe('報名設定', () => {
+  test.afterAll(async ({ request }) => { await apiAs(request, 't_chair', '/settings/signup', { method: 'POST', body: { approval: false, notify: true, open_days: null, close_days: null } }); });
+  test('報名設定：系統預設帶入報名期間，改日期會跟著算，手動改過就不動', async ({ page, request }) => {
+    await apiAs(request, 't_chair', '/settings/signup', { method: 'POST', body: { open_days: 3, open_time: '20:00', close_days: 1, close_time: '22:00', approval: true, notify: true } });
+    await enter(page, 't_chair');
+    await page.goto(`/#/new?date=${plus(10)}`);
+    await expect(page.locator('#ef [name=signup_start]')).toHaveValue(`${plus(7)}T20:00`);
+    await expect(page.locator('#ef [name=deadline]')).toHaveValue(`${plus(9)}T22:00`);
+    await expect(page.locator('#ef [name=require_approval]')).toBeChecked();
+    await expect(page.locator('#ef [name=notify_signup]')).toBeChecked();
+    await expect(page.locator('#winHint')).toContainText('需要審核');
+    await page.locator('#ef [name=date]').fill(plus(12));
+    await page.locator('#ef [name=date]').dispatchEvent('change');
+    await expect(page.locator('#ef [name=signup_start]')).toHaveValue(`${plus(9)}T20:00`);
+    await page.locator('#ef [name=deadline]').fill(`${plus(10)}T21:00`);
+    await page.locator('#ef [name=date]').fill(plus(13));
+    await page.locator('#ef [name=date]').dispatchEvent('change');
+    await expect(page.locator('#ef [name=deadline]')).toHaveValue(`${plus(10)}T21:00`);
+    await page.locator('#ef [name=title]').fill(`E2E 報名設定 ${tag}`);
+    await page.locator('#ef [name=gather_time]').fill('07:00');
+    if (await page.locator('#ef [name=notify]').count()) await page.locator('#ef [name=notify]').uncheck();
+    await page.getByRole('button', { name: '建立' }).click();
+    await expect(page.getByText(/開放報名/).first()).toBeVisible();
+  });
+});
+
+test('審核：團員送出申請，幹部在統計頁核准與婉拒', async ({ page, request, browser }) => {
+  const ev = await apiAs(request, 't_chair', '/events', { method: 'POST', body: { kind: 'track', title: `E2E 審核 ${tag}`, date: plus(8), gather_time: '07:00', require_approval: true, notify: false } });
+  const runner = await browser.newPage();
+  await enter(runner, 't_runner');
+  await runner.goto(`/#/e/${ev.id}`);
+  await runner.getByRole('button', { name: '送出申請' }).click();
+  await expect(runner.getByText(/已送出申請/)).toBeVisible();
+  await expect(runner.locator('#cancel')).toHaveText('撤回申請');
+  await expect(runner.getByText(/審核/).first()).toBeVisible();
+  await apiAs(request, 't_other', `/events/${ev.id}/signup`, { method: 'POST', body: {} });
+  await enter(page, 't_chair');
+  await page.goto(`/#/e/${ev.id}/stats?f=pending`);
+  await expect(page.locator('[data-f="pending"]')).toHaveAttribute('aria-pressed', 'true');
+  await page.locator('.prow[data-mid="t_runner"] [data-rv="approve"]').click();
+  await expect(page.getByText(/已核准 1 人/)).toBeVisible();
+  await runner.reload();
+  await expect(runner.getByRole('button', { name: '取消報名' })).toBeVisible();
+  await expect(runner.locator('#view')).not.toContainText('審核中');
+  await page.locator('.prow[data-mid="t_other"] [data-rv="reject"]').click();
+  await page.locator('.sheet [data-c="資格不符"]').click();
+  await page.locator('.sheet [data-ok]').click();
+  await expect(page.getByText(/已婉拒 1 人/)).toBeVisible();
+  const other = await browser.newPage();
+  await enter(other, 't_other');
+  await other.goto(`/#/e/${ev.id}`);
+  await expect(other.getByText('未通過審核')).toBeVisible();
+  await expect(other.getByText(/資格不符/)).toBeVisible();
+  await expect(other.getByRole('button', { name: '我要報名' })).toHaveCount(0);
+});
+
+test('關閉審核：還有待審核時要確認，確認後直接錄取', async ({ page, request }) => {
+  const ev = await apiAs(request, 't_chair', '/events', { method: 'POST', body: { kind: 'track', title: `E2E 關閉審核 ${tag}`, date: plus(9), gather_time: '07:00', require_approval: true, notify: false } });
+  await apiAs(request, 't_lead', `/events/${ev.id}/signup`, { method: 'POST', body: {} });
+  await enter(page, 't_chair');
+  await page.goto(`/#/edit/${ev.id}`);
+  // 開關的 checkbox 是隱藏的（寬高 0），跟其他測試一樣點外層的開關
+  await page.locator('#ef label.switch', { has: page.locator('[name=require_approval]') }).click();
+  await expect(page.locator('#ef [name=require_approval]')).not.toBeChecked();
+  let msg = '';
+  page.once('dialog', (d) => { msg = d.message(); d.accept(); });
+  await page.getByRole('button', { name: '儲存' }).click();
+  await expect(page).toHaveURL(new RegExp(`#/e/${ev.id}$`));
+  expect(msg).toContain('還有 1 筆待審核');
+  expect((await apiAs(request, 't_chair', `/events/${ev.id}/stats`)).total.pending).toBe(0);
+});

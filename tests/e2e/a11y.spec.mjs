@@ -1,7 +1,7 @@
 // 無障礙：用 axe 檢查主要頁面，嚴重（critical）與重大（serious）問題一律要修
 import { test, expect } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
-import { login, acceptPrivacyIfAsked } from './helpers.mjs';
+import { login, apiAs, acceptPrivacyIfAsked, plus } from './helpers.mjs';
 
 const PAGES = ['#/', '#/plan', '#/plan/race', '#/plan/setup', '#/plan/season', '#/plan/guide', '#/run', '#/calendar', '#/challenge', '#/me', '#/me/profile', '#/me/notify', '#/me/reg', '#/map', '#/tickets', '#/notifications'];
 test('登入頁沒有嚴重的無障礙問題', async ({ page }) => {
@@ -53,3 +53,26 @@ for (const scheme of ['light', 'dark']) for (const p of ['#/notifications', '#/m
     }
   });
 }
+// 報名設定、統計頁審核、後台活動報名預設（幹部頁面）：淺色、深色都要通過，375px 寬不能水平捲動
+for (const scheme of ['light', 'dark']) test(`無障礙 報名設定與審核（${scheme}）`, async ({ page, request }) => {
+  const ev = await apiAs(request, 't_chair', '/events', { method: 'POST', body: { kind: 'track', title: '無障礙 審核', date: plus(6), gather_time: '07:00', capacity: 5, require_approval: true, notify: false } });
+  await apiAs(request, 't_other', `/events/${ev.id}/signup`, { method: 'POST', body: {} });
+  await page.emulateMedia({ colorScheme: scheme });
+  await page.setViewportSize({ width: 375, height: 812 });
+  await login(page, 't_chair'); await acceptPrivacyIfAsked(page);
+  for (const p of ['#/new', `#/e/${ev.id}/stats?f=pending`, '#/admin?tab=settings']) {
+    await page.goto(`/${p}`);
+    await page.waitForTimeout(1200);
+    expect(await axeBad(page), p).toEqual([]);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), `${p} 水平捲動`).toBe(true);
+  }
+  // 整批操作列與婉拒面板
+  await page.goto(`/#/e/${ev.id}/stats?f=pending`);
+  await page.locator('.prow [data-sel]').first().check();
+  await expect(page.getByRole('toolbar', { name: '整批審核' })).toBeVisible();
+  await page.locator('[data-bulk="reject"]').click();
+  await expect(page.getByRole('dialog')).toBeVisible();
+  expect(await axeBad(page)).toEqual([]);
+  await page.locator('.sheet [data-x]').last().click();
+});
+
