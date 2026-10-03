@@ -715,7 +715,7 @@ async function homeWeather(events) {
 async function todayCard(events) {
   const t = ymd(new Date()), w = P.currentWeek();
   const plan = (await P.weekPlan(w, me.dist, me.grp)) || [];
-  const idx = plan.findIndex((d) => dayDates(w, d.d).includes(t));
+  const idx = plan.findIndex((d) => P.dayDates(w, d.d, P.CLUB, d).includes(t));
   const day = idx >= 0 ? plan[idx] : null;
   const logs = takeBoot('todayLogs') || (await api(`/logs?from=${t}&to=${t}`).catch(() => ({ logs: [] }))).logs;
   const done = logs.find((l) => l.status !== 'skip') || logs[0];
@@ -1726,7 +1726,7 @@ async function planView(n) {
     </section>` : ''}
     <div class="days">${days ? days.map((d, i) => {
       const L = logOf(d), top = L.find((l) => l.status === 'done') || L.find((l) => l.status === 'partial') || L[0];
-      const dates = dayDates(week, d.d), canLog = d.kind !== 'rest' && dates[0] <= ymd(new Date());
+      const dates = P.dayDates(week, d.d, P.CLUB, d), canLog = d.kind !== 'rest' && dates[0] <= ymd(new Date());
       return `<div class="day ${d.kind}${top ? ` logged ${top.status}` : ''}">
         <span class="dl"><span>${esc(dayLabel(d.d))}</span><span class="k">${P.KIND_LABEL[d.kind]}</span></span>
         <span class="t">${esc(fixText(d.t))} <span class="hint">${P.paceHint(d.t, me.dist, me.grp)}</span>
@@ -1755,13 +1755,7 @@ const LOG_ICON = { done: IC.check, partial: IC.half, skip: IC.minus, extra: IC.p
 const FEEL = ['', '很累', '有點累', '普通', '不錯', '很好'];
 const pad2 = (n) => String(n).padStart(2, '0');
 const ymd = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
-// 課表上的「週二」「週五或週六」「週末」→ 那一週實際的日期
-const WD_IDX = { 一: [0], 二: [1], 三: [2], 四: [3], 五: [4], 六: [5], 日: [6], 末: [5, 6] };
-function dayDates(week, label) {
-  const s = P.weekStart(week);
-  const idx = [...String(label).matchAll(/[週周]([一二三四五六日末])/g)].flatMap((m) => WD_IDX[m[1]]);
-  return (idx.length ? idx : [0]).map((i) => ymd(new Date(s.getFullYear(), s.getMonth(), s.getDate() + i)));
-}
+// 課表上的「週二」「週五或週六」「週末」→ 那一週實際的日期：P.dayDates（比賽那一列只在比賽日）
 async function logView() {
   const q = new URLSearchParams(location.hash.split('?')[1] || '');
   let log = null, day = null, week = Number(q.get('w')) || null;
@@ -1781,12 +1775,12 @@ async function logView() {
   const today = ymd(new Date());
   // 從「跑完了嗎？」通知進來：帶入那場團練的日期與名稱
   const fromEv = q.get('event') ? await api(`/events/${q.get('event')}`).catch(() => null) : null;
-  let date = log?.date || incoming?.date || (fromEv?.date <= today ? fromEv.date : null) || (day ? dayDates(week, day.d).reduce((a, d) => (d <= today ? d : a), dayDates(week, day.d)[0]) : today);
+  let date = log?.date || incoming?.date || (fromEv?.date <= today ? fromEv.date : null) || (day ? P.dayDates(week, day.d, P.CLUB, day).reduce((a, d) => (d <= today ? d : a), P.dayDates(week, day.d, P.CLUB, day)[0]) : today);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date > today) date = today;
   // 沒有指定課表日：用日期去找那週同一天的課表（從拍照分享或跑步記錄進來時自動對上）
   if (!log && !day && !q.get('extra')) {
     const w = P.weekOf(date), plan = await P.weekPlan(w, me.dist, me.grp);
-    const hit = plan?.find((d) => d.kind !== 'rest' && dayDates(w, d.d).includes(date));
+    const hit = plan?.find((d) => d.kind !== 'rest' && P.dayDates(w, d.d, P.CLUB, d).includes(date));
     if (hit) { day = hit; week = w; }
   }
   const extra = !log && !day;
@@ -1838,7 +1832,8 @@ async function logView() {
       plan_text: planText || null, km: parseFloat(f.km.value) || null, seconds: S.parseHMS(f.time.value) || null, hr: Number(f.hr.value) || null,
       rpe: Number(f.rpe.value), feel: Number(f.querySelector('[name=feel]:checked')?.value) || null, note: f.note.value,
       source: log?.source || incoming?.source || 'manual' };
-    if (st !== 'skip' && !body.km && !body.seconds) return toast('填一下距離或時間');
+    // 照課表記錄（完成、部分完成）可以不填距離與時間；自主加練才一定要填
+    if (st === 'extra' && !body.km && !body.seconds) return toast('填一下距離或時間');
     try {
       await api('/logs', { method: 'POST', body });
       if (body.source === 'gps' && Run.session()?.status === 'done') Run.discard();   // 已存成紀錄，清掉手機上的這次跑步
@@ -1866,12 +1861,18 @@ const logQueue = {
   get() { try { return JSON.parse(localStorage.getItem('cil-log-queue') || '[]'); } catch { return []; } },
   set(v) { try { v.length ? localStorage.setItem('cil-log-queue', JSON.stringify(v)) : localStorage.removeItem('cil-log-queue'); } catch {} },
 };
-const queueLog = (body) => logQueue.set([...logQueue.get(), { ...body, id: undefined, queued: Date.now() }].slice(-30));
+// 每筆有一個裝置端的 qid（之後「復原」用來從暫存區刪掉）；回傳 qid
+const queueLog = (body) => {
+  const qid = `q${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+  logQueue.set([...logQueue.get(), { ...body, id: undefined, qid, queued: Date.now() }].slice(-30));
+  return qid;
+};
 async function flushLogQueue() {
   const q = logQueue.get();
   if (!q.length || !me) return;
   const left = [];
-  for (const { queued, ...b } of q) { try { await api('/logs', { method: 'POST', body: b }); } catch (e) { if (e instanceof TypeError) left.push({ ...b, queued }); } }
+  // 照課表的紀錄帶 if_absent：同一週、同一天已經有紀錄（例如另一台裝置記過）就不重複新增
+  for (const { queued, qid, ...b } of q) { try { await api('/logs', { method: 'POST', body: { ...b, if_absent: true } }); } catch (e) { if (e instanceof TypeError) left.push({ ...b, qid, queued }); } }
   logQueue.set(left);
   if (left.length < q.length) toast(`已上傳 ${q.length - left.length} 筆離線時的訓練紀錄`);
 }
@@ -2050,7 +2051,7 @@ setInterval(() => { const k = Run.check(); if (k) askFinish(k); }, 1000);
 // 今天課表的目標：「11K jog」取距離、「60' easyjog」取分鐘，間歇課不設目標
 async function todayGoal() {
   const t = ymd(new Date()), w = P.currentWeek();
-  const day = ((await P.weekPlan(w, me.dist, me.grp)) || []).find((d) => d.kind !== 'rest' && dayDates(w, d.d).includes(t));
+  const day = ((await P.weekPlan(w, me.dist, me.grp)) || []).find((d) => d.kind !== 'rest' && P.dayDates(w, d.d, P.CLUB, d).includes(t));
   if (!day || day.kind === 'quality') return null;
   const km = day.t.match(/(\d+(?:\.\d+)?)\s*(?:[~～-]\s*\d+(?:\.\d+)?)?\s*K(?![a-z])/i), min = day.t.match(/^(\d{2,3})\s*['’]/);
   if (km) return { km: Number(km[1]), text: `${km[1]} 公里` };
@@ -2709,4 +2710,4 @@ addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvt 
 addEventListener('appinstalled', () => { installEvt = null; try { localStorage.setItem('cil-installed', '1'); } catch {} document.querySelectorAll('.installcard').forEach((c) => c.remove()); });
 
 // 拆出去的模組（admin.js、photo.js…）從這裡拿共用的工具與狀態
-export { addrField, bindAddrField, latest, $, cfg, downloadAuthed, scanSheet, FEEL, IC, KIND_NAME, LOG_STATUS_NAME, PAID_NAME, ROLE_NAME, TAB_DEFAULT, TEAM_PERMS, TEAM_ROLE_NAME, ago, allow, api, applyFeatures, avatar, barChart, bars, bindComments, bindStepup, copy, dayLabel, dstr, emptyState, esc, eventCard, feat, fixText, group, largeTitle, me, mfaBanner, money, org, pad2, paintCountdown, passkey, refreshMe, render, route, row, squareIcon, studio, teamAllow, teamIcon, teamOf, teams, toast, view, ymd };
+export { addrField, bindAddrField, latest, $, cfg, downloadAuthed, scanSheet, FEEL, IC, KIND_NAME, LOG_STATUS_NAME, PAID_NAME, ROLE_NAME, TAB_DEFAULT, TEAM_PERMS, TEAM_ROLE_NAME, ago, allow, api, applyFeatures, avatar, barChart, bars, bindComments, bindStepup, copy, dayLabel, dstr, emptyState, esc, eventCard, feat, fixText, group, largeTitle, me, mfaBanner, money, org, pad2, paintCountdown, passkey, queueLog, refreshMe, render, route, row, squareIcon, studio, teamAllow, teamIcon, teamOf, teams, toast, view, ymd };
