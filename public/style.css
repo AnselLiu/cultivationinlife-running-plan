@@ -1247,7 +1247,7 @@ body.fullmap .top{position:fixed;left:0;right:0;background:var(--glass-hi)!impor
 body.fullmap .top .brand span{opacity:0}
 body.fullmap .top .ctitle{opacity:1;transform:translate(-50%,0)}
 body.fullmap .top .countdown{opacity:0;pointer-events:none}
-@media (min-width:1024px){body.fullmap .top{left:var(--side)}}
+@media (min-width:1024px){body.fullmap .top{left:var(--side);margin-left:0}}
 /* 手機：抽屜的內容在浮動分頁列上方淡出（Apple 地圖式），不會從分頁列底下透出來；拉到全開一樣捲得到最後一行（下方留了分頁列的高度）
    --hid＝抽屜在畫面下緣外的高度（JS 跟著 transform 設定），所以淡出的位置一直對齊分頁列，切換高度時跟著動畫一起移動 */
 @property --hid{syntax:"<length>";inherits:true;initial-value:0px}

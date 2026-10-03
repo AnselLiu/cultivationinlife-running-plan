@@ -34,6 +34,8 @@ const pinHtml = (s, warn) => `<div class="mpin k-${s.kind}${s.status !== 'approv
 const kindTile = (k, extra = '') => `<span class="ktile k-${k} ${extra}" aria-hidden="true">${glyph(k)}</span>`;
 const CITIES = ['臺北市', '新北市', '基隆市', '桃園市', '新竹市', '新竹縣', '苗栗縣', '臺中市', '彰化縣', '南投縣', '雲林縣', '嘉義市', '嘉義縣', '臺南市', '高雄市', '屏東縣', '宜蘭縣', '花蓮縣', '臺東縣', '澎湖縣', '金門縣', '連江縣'];
 const INFO = { lap: '一圈', surface: '路面', light: '夜間照明', water: '飲水', toilet: '廁所', parking: '停車', hours: '開放時間' };
+// 資訊值是團員寫的，不翻譯；只有「有／無」這種值換成介面文字（字典裡單獨的「有」是句子片段，翻出來會變成怪字）
+const infoVal = (x) => { const yn = RS.yesNo(x); return yn === null ? `<b translate="no">${esc(x)}</b>` : `<b translate="no">${yn ? (lang === 'en' ? 'Yes' : '有') : (lang === 'en' ? 'No' : '無')}</b>`; };
 const REP = { crowd: ['人潮', ['少', '普通', '多']], surface: ['路況', ['乾燥', '濕滑', '積水', '施工', '封閉']], light: ['照明', ['充足', '偏暗', '沒有']], weather: ['天氣', ['晴', '陰', '小雨', '大雨', '悶熱', '強風']] };
 const BASES = {
   emap: ['電子地圖', 'https://wmts.nlsc.gov.tw/wmts/EMAP/default/GoogleMapsCompatible/{z}/{y}/{x}', 18, '© 內政部國土測繪中心'],
@@ -490,7 +492,7 @@ async function openSpot(id, fly) {
       ${(() => { const o = s.info?.hours ? hoursNow(s.info.hours) : null; return s.info?.hours ? `<p class="ohours"><span class="ostat ${o ? (o.open ? 'on' : 'off') : ''}">${o ? esc(o.label) : '開放時間'}</span><span class="tiny"><span translate="no">${esc(s.info.hours)}</span></span></p>` : ''; })()}
       ${camSection(d.editor)}
       ${s.intro ? `<p class="muted" style="margin:0;white-space:pre-wrap"><span translate="no">${esc(s.intro)}</span></p>` : ''}
-      ${Object.keys(s.info || {}).length ? `<div class="infochips">${Object.entries(INFO).filter(([k]) => s.info[k]).map(([k, v]) => `<span data-info="${k}"><span class="tiny">${v}</span><b>${esc(s.info[k])}</b></span>`).join('')}</div>` : ''}
+      ${Object.keys(s.info || {}).length ? `<div class="infochips">${Object.entries(INFO).filter(([k]) => s.info[k]).map(([k, v]) => `<span data-info="${k}"><span class="tiny">${v}</span>${infoVal(s.info[k])}</span>`).join('')}</div>` : ''}
       <div class="row" style="gap:8px"><a class="btn sm" href="${nav}" target="_blank" rel="noopener">導航 ${IC.external}</a><button class="btn ghost sm" id="offBtn">下載離線地圖</button>${s.status !== 'approved' ? '' : canCreate() ? `<a class="btn ghost sm" href="#/new?spot=${esc(s.id)}">在這裡開揪跑</a>`
         : `<a class="btn ghost sm" href="${lineShare(`我想在「${s.name}」揪跑，有人要一起嗎？ ${location.origin}/#/map?spot=${s.id}`)}" target="_blank" rel="noopener">在 LINE 揪人</a>`}
         ${data.editor || (s.mine && s.status === 'pending') ? '<button class="btn ghost sm" id="editSpot">編輯</button>' : ''}</div>

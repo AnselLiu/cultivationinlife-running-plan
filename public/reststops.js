@@ -356,10 +356,14 @@ export const nearHtml = () => (feat() ? `<section class="card restnear" id="rest
     <div id="restNearBox"><p class="tiny" style="margin:0">載入中…</p></div>
   </section>` : '');
 // 只有「有／沒有」意思的值（有、是、無、yes、true、✓…）：不是補充說明；「有，在 9 號水門旁」只留後面的說明（已經放在這一類底下）
-const BARE = /^(?:有|是|有的|對|可|可以|可用|提供|有提供|無|沒有|否|不|不可|無提供|未提供|y|yes|true|ok|available|n|no|false|none|n\/a|na|[01✓✔☑✗✘×xvo○◯-])$/i;
+const YES = /^(?:有|是|有的|對|可|可以|可用|提供|有提供|y|yes|true|ok|available|[1✓✔☑vo○◯])$/i;
+const NO = /^(?:無|沒有|否|不|不可|無提供|未提供|n|no|false|none|n\/a|na|[0✗✘×x-])$/i;
+const bareOf = (v) => String(v ?? '').trim().replace(/[\s。．.!！~～]+$/u, '');
+// 地點卡的資訊小標籤用：只有「有／沒有」意思的值回傳 true／false，其他（有寫說明）回傳 null
+export const yesNo = (v) => { const t = bareOf(v); return YES.test(t) ? true : NO.test(t) ? false : null; };
 const noteOf = (v) => {
   const t = String(v ?? '').trim();
-  if (!t || BARE.test(t.replace(/[\s。．.!！~～]+$/u, ''))) return '';
+  if (!t || yesNo(t) !== null) return '';
   return t.replace(/^(?:有|是|有的|有提供|yes|y|✓|✔)\s*[，,、:：；;]\s*(?=\S)/i, '');
 };
 let nearP = null;
