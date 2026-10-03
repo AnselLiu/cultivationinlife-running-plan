@@ -62,7 +62,8 @@ test('拍照收進跑步：分頁列亮「跑步」、返回鍵是「‹ 跑步�
 });
 
 test.describe('功能開關', () => {
-  test.afterEach(async ({ request }) => { await apiAs(request, 't_chair', '/settings/features', { method: 'POST', body: {} }); });
+  // 沒送的開關會保留原值（課表教練合併後的規則），所以要明確打開
+  test.afterEach(async ({ request }) => { await apiAs(request, 't_chair', '/settings/features', { method: 'POST', body: { gps: true, studio: true } }); });
   test('GPS 關、拍照開：第 3 格是拍照（沒有返回鍵）；兩個都關：剩 4 格，膠囊位置正確', async ({ page, request }) => {
     await apiAs(request, 't_chair', '/settings/features', { method: 'POST', body: { gps: false } });
     await enter(page);
