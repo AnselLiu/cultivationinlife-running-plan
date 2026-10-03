@@ -101,6 +101,8 @@ async function mapView() {
   $('#pickCancel').onclick = endPick;
   await loadSpots();
   if (!el.isConnected) return;
+  // 載入期間已經打開新增地點或路線的表單（手快的人）：不要用清單把表單蓋掉
+  if ($('#panel form')) return;
   if (q.get('spot')) openSpot(q.get('spot'), 'jump');
   else if (q.get('route')) showRoute(q.get('route'), 'jump');
   else listPanel();

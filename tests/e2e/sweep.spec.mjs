@@ -31,14 +31,20 @@ for (const scheme of ['light', 'dark']) test(`逐頁檢查・${scheme === 'dark'
     '#/new', `#/e/${ev.id}`, `#/e/${ev.id}/stats`, `#/edit/${ev.id}`, `#/e/${party.id}`, `#/e/${party.id}/stats`, '#/log?extra=1', '#/plan/new', '#/privacy'];
   const problems = {};
   const dir = `test-results/sweep${scheme === 'dark' ? '-dark' : ''}`;
+  // 每一頁的 JavaScript 錯誤與失敗的 API（4xx 權限類以外）都算問題
+  let errs = [];
+  page.on('pageerror', (e) => errs.push(`JS 錯誤：${e.message}`));
+  page.on('console', (m) => { if (m.type() === 'error' && !/Failed to load resource|favicon|service worker|tile/i.test(m.text())) errs.push(`console：${m.text().slice(0, 160)}`); });
+  page.on('response', (res) => { if (res.url().includes('/api/') && res.status() >= 500) errs.push(`API ${res.status()}：${new URL(res.url()).pathname}`); });
   for (const r of routes) {
+    errs = [];
     await page.goto(`/${r}`);
     // 只換 # 不會重新載入頁面：等骨架消失才算畫好
     const ok = await page.waitForFunction(() => document.querySelector('#view') && !document.querySelector('#view .skel'), null, { timeout: 8000 }).then(() => true, () => false);
     if (!ok) { problems[r] = ['8 秒後還在載入']; continue; }
     await page.waitForLoadState('networkidle').catch(() => {});
     await page.waitForTimeout(400);
-    const bad = await page.evaluate(overflow);
+    const bad = [...await page.evaluate(overflow), ...errs];
     if (bad.length) problems[r] = bad;
     // 整頁截圖時把浮動的上方列與分頁列藏起來，不然會疊在頁面中間
     await page.addStyleTag({ content: '.tabs,.top{visibility:hidden!important}' });

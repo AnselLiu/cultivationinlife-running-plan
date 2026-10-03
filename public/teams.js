@@ -1,5 +1,5 @@
 // 耕跑團 PWA — teams.js：從 app.js 拆出來、用到才載入的畫面（第一次開 App 不用下載）
-import { $, ago, allow, api, avatar, emptyState, esc, eventCard, largeTitle, me, refreshMe, row, squareIcon, TEAM_ROLE_NAME, teamAllow, teamIcon, teamOf, teams, toast, view } from './app.js';
+import { latest, $, ago, allow, api, avatar, emptyState, esc, eventCard, largeTitle, me, refreshMe, row, squareIcon, TEAM_ROLE_NAME, teamAllow, teamIcon, teamOf, teams, toast, view } from './app.js';
 
 // ---------- 分團 ----------
 const POLICY_NAME = { open: '直接加入', approve: '需團長或幹部審核' };
@@ -16,11 +16,13 @@ async function teamsView() {
     ${allow('settings') ? '<a class="tiny center" href="#/admin?tab=teams" style="padding:6px">管理分團 ›</a>' : ''}`;
 }
 async function teamView(tid, q = '') {
-  await refreshMe();
+  // 更新自己的分團狀態（剛申請、剛被核准）跟活動、名冊同時載入，不用一個等一個
+  const canRoster = teamAllow(tid, 'roster');
+  const [, { events }, roster] = await Promise.all([refreshMe().catch(() => {}), api('/events'),
+    canRoster ? api(`/teams/${tid}/members?q=${encodeURIComponent(q)}`) : null]);
   const t = teamOf(tid);
   if (!t) { view.innerHTML = `<div class="card">${emptyState('runner', '找不到這個分團')}</div>`; return; }
-  const inTeam = t.my_status === 'active', manage = teamAllow(tid, 'roster');
-  const [{ events }, roster] = await Promise.all([api('/events'), manage ? api(`/teams/${tid}/members?q=${encodeURIComponent(q)}`) : null]);
+  const inTeam = t.my_status === 'active', manage = canRoster && !!roster && teamAllow(tid, 'roster');
   const evs = events.filter((e) => e.team_id === tid);
   const canEdit = allow('settings') || teamAllow(tid, 'appoint');
   view.innerHTML = `
@@ -155,22 +157,36 @@ function teamRosterCard(t, r, q) {
   return `
     ${pending.length ? `<section class="card"><h3>待審核（${pending.length}）</h3><div class="roster">${pending.map(row).join('')}</div></section>` : ''}
     <section class="card">
-      <div class="row spread"><h3>分團名冊</h3><span class="tiny">${q ? `符合 ${r.total} 人` : `${r.total} 人`}</span></div>
-      <form id="tmq" class="row" style="gap:8px" role="search"><input name="q" value="${esc(q)}" placeholder="搜尋姓名或暱稱" aria-label="搜尋分團名冊" style="flex:1" autocomplete="off"><button class="btn ghost sm">搜尋</button></form>
+      <div class="row spread"><h3>分團名冊</h3><span class="tiny" id="tmCount">${q ? `符合 ${r.total} 人` : `${r.total} 人`}</span></div>
+      <form id="tmq" class="row" style="gap:8px" role="search" data-live="empty"><input name="q" value="${esc(q)}" placeholder="搜尋姓名或暱稱" aria-label="搜尋分團名冊" style="flex:1" autocomplete="off"><button class="btn ghost sm">搜尋</button></form>
       <div class="roster" id="tmList">${active.map(row).join('') || '<p class="muted" style="margin:0">沒有符合的團員</p>'}</div>
       ${r.next ? '<button class="btn ghost sm block" id="tmMore">載入更多</button>' : ''}
       <p class="tiny" style="margin:0">團長由理事長指派；團長可以指派分團幹部。分團名冊不顯示電話。</p>
     </section>
     ${r.can.add ? `<section class="card"><h3>把跑友加進<span translate="no">${esc(t.name)}</span></h3>
-      <form id="tmAdd" class="row" style="gap:8px" role="search"><input name="q" placeholder="輸入姓名搜尋（至少 1 個字）" aria-label="搜尋要加入的跑友" style="flex:1" autocomplete="off"><button class="btn ghost sm">搜尋</button></form>
+      <form id="tmAdd" class="row" style="gap:8px" role="search" data-live><input name="q" placeholder="輸入姓名搜尋（至少 1 個字）" aria-label="搜尋要加入的跑友" style="flex:1" autocomplete="off"><button class="btn ghost sm">搜尋</button></form>
       <div id="tmAddList" class="roster"></div></section>` : ''}`;
 }
 function bindTeamRoster(t, r, q) {
   const act = async (body, msg) => { try { await api(`/teams/${t.id}/members`, { method: 'POST', body }); toast(msg); teamView(t.id, q); } catch (e) { toast(e.message); } };
   for (const b of document.querySelectorAll('[data-tm]')) b.onclick = () => act({ member_id: b.dataset.id, action: b.dataset.tm }, b.dataset.tm === 'approve' ? '已通過' : '已婉拒');
-  $('#tmq').onsubmit = (e) => { e.preventDefault(); teamView(t.id, e.target.q.value.trim()); };
+  // 搜尋名冊：只換名單，不重畫整頁（打字時輸入框不會跳掉）
+  const tmOnly = latest();
+  $('#tmq').onsubmit = async (e) => {
+    e.preventDefault();
+    const qq = e.target.q.value.trim();
+    try {
+      const res = await tmOnly(api(`/teams/${t.id}/members?q=${encodeURIComponent(qq)}`));
+      q = qq; r.members = res.members; r.next = res.next; r.total = res.total;
+      $('#tmList').innerHTML = res.members.map(teamMemberRow(r)).join('') || '<p class="muted" style="margin:0">沒有符合的團員</p>';
+      $('#tmCount').textContent = q ? `符合 ${r.total} 人` : `${r.total} 人`;
+      $('#tmMore')?.remove();
+      if (r.next) { $('#tmList').insertAdjacentHTML('afterend', '<button class="btn ghost sm block" id="tmMore">載入更多</button>'); bindMore(); }
+      bindRoles();
+    } catch (err) { toast(err.message); }
+  };
   // 分頁：一次 50 人，往下接
-  $('#tmMore')?.addEventListener('click', async (e) => {
+  const bindMore = () => $('#tmMore')?.addEventListener('click', async (e) => {
     e.target.disabled = true;
     try {
       const more = await api(`/teams/${t.id}/members?q=${encodeURIComponent(q)}&after=${r.next}`);
@@ -179,6 +195,7 @@ function bindTeamRoster(t, r, q) {
       if (r.next) e.target.disabled = false; else e.target.remove();
     } catch (err) { toast(err.message); e.target.disabled = false; }
   });
+  bindMore();
   const bindRoles = () => { for (const b of document.querySelectorAll('[data-tmrole]')) b.onclick = () => {
     $('#tmDlg')?.remove();
     const opts = Object.entries(TEAM_ROLE_NAME).filter(([k]) => k !== 'lead' || r.can.lead).filter(([k]) => r.can.appoint || k === 'member');
@@ -191,11 +208,12 @@ function bindTeamRoster(t, r, q) {
     $('#tmDlg').onsubmit = (e) => { e.preventDefault(); act({ member_id: b.dataset.tmrole, action: 'role', role: e.target.role.value, title: e.target.title.value }, '已更新'); };
   }; };
   bindRoles();
+  const addOnly = latest();
   $('#tmAdd')?.addEventListener('submit', async (e) => {
     e.preventDefault();
     const qq = e.target.q.value.trim();
     if (!qq) return toast('請輸入姓名');
-    const { members } = await api(`/members?q=${encodeURIComponent(qq)}`);
+    const { members } = await addOnly(api(`/members?q=${encodeURIComponent(qq)}`));
     $('#tmAddList').innerHTML = members.map((m) => `<div class="r">${avatar(m)}<span><span translate="no">${esc(m.name)}</span>${m.nickname ? ` <span class="tiny"><span translate="no">${esc(m.nickname)}</span></span>` : ''}</span>
       ${m.teams.some((x) => x.t === t.id && x.s === 'active') ? '<span class="tiny">已在團內</span>' : `<button class="btn ghost sm" data-addm="${m.id}">加入</button>`}</div>`).join('') || '<p class="muted" style="margin:0">找不到</p>';
     for (const x of document.querySelectorAll('[data-addm]')) x.onclick = () => act({ member_id: x.dataset.addm, action: 'add' }, '已加入');

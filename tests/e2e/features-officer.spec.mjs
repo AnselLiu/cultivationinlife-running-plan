@@ -44,7 +44,7 @@ test('代為團體報名：沒填資料先帶去填，填完回來報名，選�
   await page.getByRole('link', { name: '去填寫 ›' }).click();
   await expect(page).toHaveURL(/#\/me\/reg/);
   const f = page.locator('#regForm');
-  for (const [k, v] of [['name_zh', '路人跑友'], ['id_no', 'B223456789'], ['birthday', '1992-02-02'], ['phone', '0911222333'], ['emergency_name', '家人'], ['emergency_phone', '0922333444']]) await f.locator(`[name=${k}]`).fill(v);
+  for (const [k, v] of [['name_zh', '路人跑友'], ['id_no', 'B223456782'], ['birthday', '1992-02-02'], ['phone', '0911222333'], ['emergency_name', '家人'], ['emergency_phone', '0922333444']]) await f.locator(`[name=${k}]`).fill(v);
   await f.locator('[name=gender]').selectOption('女');
   await f.locator('[name=shirt]').selectOption('S');
   await f.getByRole('button', { name: '儲存' }).click();

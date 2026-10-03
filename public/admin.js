@@ -1,8 +1,9 @@
 // 耕跑團 PWA — admin.js：從 app.js 拆出來、用到才載入的畫面（第一次開 App 不用下載）
 import * as Party from './party.js';
-import { $, scanSheet, ago, allow, api, applyFeatures, avatar, barChart, bars, bindStepup, cfg, esc, group, IC, largeTitle, me, mfaBanner, org, pad2, paintCountdown, passkey, refreshMe, render, ROLE_NAME, row, studio, TAB_DEFAULT, TEAM_PERMS, teamAllow, teamIcon, teamOf, teams, toast, view } from './app.js';
+import { $, latest, scanSheet, ago, allow, api, applyFeatures, avatar, barChart, bars, bindStepup, cfg, esc, group, IC, largeTitle, me, mfaBanner, org, pad2, paintCountdown, passkey, refreshMe, render, ROLE_NAME, row, studio, TAB_DEFAULT, TEAM_PERMS, teamAllow, teamIcon, teamOf, teams, toast, view } from './app.js';
 
 // ---------- 管理介面（RBAC、會籍、座位圖）----------
+let adminSeq = 0;
 const MEMBERSHIP_NAME = { none: '跑友', applied: '申請中', active: '協會會員', expired: '會籍到期' };
 async function adminView(tab) {
   tab ||= new URLSearchParams(location.hash.split('?')[1] || '').get('tab') || 'overview';
@@ -10,19 +11,35 @@ async function adminView(tab) {
   if (!allow('members') && !allow('roles') && !allow('settings')) { view.innerHTML = '<div class="card"><p class="muted">沒有管理權限。</p></div>'; return; }
   const tabs = [['overview', '總覽'], ['members', '會員'], ['roles', '權限'], ['teams', '分團'], ['events', '活動'], ...(allow('settings') ? [['settings', '系統設定']] : []), ...(allow('audit') ? [['audit', '稽核']] : [])];
   // 只拿統計數字，名單要下條件才查
+  const my = ++adminSeq;
   const meta = await api('/members?role=officers');
-  view.innerHTML = `
-    ${largeTitle('管理後台', `${meta.total} 位跑友`)}
-    <div class="seg">${tabs.map(([k, v]) => `<button data-tab="${k}" aria-pressed="${tab === k}">${v}</button>`).join('')}</div>
-    <div id="panel">${tab === 'overview' ? await overviewPanel()
-      : tab === 'members' ? await membersPanel(meta)
-      : tab === 'roles' ? rolesPanel(meta)
-      : tab === 'teams' ? adminTeamsPanel()
-      : tab === 'audit' ? auditPanel()
-      : tab === 'settings' ? settingsPanel()
-      : await eventsPanel()}</div>`;
-  // 分頁寫進網址：重新整理或返回時停在同一頁
-  for (const b of document.querySelectorAll('[data-tab]')) b.onclick = () => { history.replaceState(null, '', `#/admin?tab=${b.dataset.tab}`); adminView(b.dataset.tab); };
+  if (my !== adminSeq || !location.hash.startsWith('#/admin')) return;   // 等資料的時候已經換頁或換分頁：不要蓋掉
+  // 已經在管理後台：只換下面的內容，標題與分頁列不動（不會整頁跳動、捲動位置也保留）
+  if (!view.querySelector('.adminseg')) {
+    view.innerHTML = `${largeTitle('管理後台', `<span id="adminTotal">${meta.total}</span> 位跑友`)}
+      <div class="seg adminseg" role="group" aria-label="管理分頁">${tabs.map(([k, v]) => `<button type="button" data-atab="${k}" aria-pressed="${tab === k}">${v}</button>`).join('')}</div>
+      <div id="panel"></div>`;
+    // 分頁寫進網址：重新整理或返回時停在同一頁（只綁在管理分頁的按鈕上，不要碰到下方分頁列）
+    for (const b of view.querySelectorAll('[data-atab]')) b.onclick = () => {
+      if (b.getAttribute('aria-pressed') === 'true') return;
+      history.replaceState(null, '', `#/admin?tab=${b.dataset.atab}`); adminView(b.dataset.atab);
+    };
+  }
+  $('#adminTotal') && ($('#adminTotal').textContent = meta.total);
+  for (const b of view.querySelectorAll('[data-atab]')) b.setAttribute('aria-pressed', String(b.dataset.atab === tab));
+  const panel = $('#panel');
+  panel.style.minHeight = `${panel.offsetHeight}px`;   // 換內容時先保留高度，畫面不會往上縮再彈回來
+  panel.setAttribute('aria-busy', 'true');
+  const html = tab === 'overview' ? await overviewPanel()
+    : tab === 'members' ? await membersPanel(meta)
+    : tab === 'roles' ? rolesPanel(meta)
+    : tab === 'teams' ? adminTeamsPanel()
+    : tab === 'audit' ? auditPanel()
+    : tab === 'settings' ? settingsPanel()
+    : await eventsPanel();
+  if (my !== adminSeq || !panel.isConnected) return;
+  panel.innerHTML = html;
+  panel.style.minHeight = ''; panel.removeAttribute('aria-busy');
   if (tab === 'overview') bindOverview();
   if (tab === 'members') bindMembers();
   if (tab === 'roles') { for (const b of document.querySelectorAll('[data-role]')) b.onclick = () => roleDialog(b.dataset.role, b.dataset.name, b.dataset.cur); bindHandover(); }
@@ -73,6 +90,9 @@ async function loadHealth(days = 7) {
     <div class="vitals">${HEALTH.map(([k, label, good, poor, u]) => { const m = h.metrics[k]; return `<div class="vital ${grade(m.p75, good, poor)}"><span class="tiny">${label}</span><b class="num">${fmt(m.p75, u)}</b>
       <span class="tiny">${m.n ? `${m.n} 次${k === 'ready' && m.warmP75 != null ? `・有暫存 ${fmt(m.warmP75, u)}` : ''}` : '還沒有資料'}</span></div>`; }).join('')}</div>
     <p class="tiny" style="margin:0">數字是 p75：四分之三的人比這個快。綠色達到 Google 建議值、橘色要注意、紅色要改善。不記錄是誰。</p>
+    <h3>最慢的資料讀取</h3>
+    ${(h.apis || []).length ? `<div class="itemtable">${h.apis.map((a) => `<div class="itr"><span><b class="num" style="font-weight:600">${esc(a.page)}</b><span class="tiny" style="display:block">${a.n} 次${a.srv != null ? `・伺服器 ${fmt(a.srv, 'ms')}` : ''}</span></span><b class="num">${fmt(a.p75, 'ms')}</b></div>`).join('')}</div>
+      <p class="tiny" style="margin:0">總時間減掉伺服器時間，就是花在網路上的時間。</p>` : '<p class="tiny" style="margin:0">還沒有資料。</p>'}
     <h3>前端錯誤</h3>
     ${h.errors.length ? `<div class="roster">${h.errors.map((e) => `<div class="r"><span class="av num" style="font-size:12px">${e.n}</span><span><b style="word-break:break-word">${esc(e.message)}</b>
       <span class="tiny" style="display:block">${esc(e.page || '')}${e.source ? `・${esc(e.source)}:${e.line}` : ''}・${esc(e.device || '')}・${ago(e.last_at)}</span></span></div>`).join('')}</div>`
@@ -99,7 +119,7 @@ function bindOverview() {
 // 名冊查詢：一律下條件（關鍵字、會籍、身分、分團），一次 50 筆
 const memberCache = new Map();
 function memberFilterForm(id, { membership = true } = {}) {
-  return `<form id="${id}" class="filters">
+  return `<form id="${id}" class="filters" role="search" data-live>
     <input name="q" placeholder="姓名、暱稱、跑團或會員編號" aria-label="搜尋跑友" autocomplete="off" enterkeyhint="search">
     <div class="grid3">
       ${membership ? `<select name="membership" aria-label="會籍"><option value="">所有會籍</option>${Object.entries(MEMBERSHIP_NAME).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select>` : ''}
@@ -112,9 +132,10 @@ function memberFilterForm(id, { membership = true } = {}) {
 // 綁定查詢表單：結果寫進 listEl，可以「載入更多」
 function bindMemberSearch(form, listEl, rowFn, after) {
   let params = null, next = null;
+  const only = latest();
   const load = async (more) => {
     const qs = new URLSearchParams({ ...params, ...(more ? { after: next } : {}) });
-    const r = await api(`/members?${qs}`);
+    const r = await only(api(`/members?${qs}`));
     for (const m of r.members) memberCache.set(m.id, m);
     next = r.next;
     const html = r.members.map(rowFn).join('');
@@ -228,20 +249,20 @@ function rolesPanel(data) {
         ${allow('roles') ? `<button class="btn ghost sm" data-role="${m.id}" data-name="${esc(m.name)}" data-cur="${m.role}">變更</button>` : ''}</div>`).join('')}</div>
     </section>`).join('')}
     ${allow('roles') ? `<section class="card"><h3>指派身分</h3>
-      <form id="roleSearch" class="row" style="gap:8px"><input name="q" maxlength="20" placeholder="輸入跑友姓名或暱稱" aria-label="搜尋要指派身分的跑友" style="flex:1;min-width:160px" required><button class="btn ghost sm">搜尋</button></form>
+      <form id="roleSearch" class="row" style="gap:8px" role="search" data-live><input name="q" maxlength="20" placeholder="輸入跑友姓名或暱稱" aria-label="搜尋要指派身分的跑友" style="flex:1;min-width:160px" required><button class="btn ghost sm">搜尋</button></form>
       <div id="roleList" class="roster"></div></section>` : ''}
     ${me.role === 'chair' ? `<section class="card" id="handover">
       <h3>移交理事長</h3>
       <p class="tiny" style="margin:0">新任理事長加入後，在這裡一步移交：對方成為理事長，你同時改成下面選的身分。雙方都要重新登入，並寫入稽核紀錄。</p>
-      <form id="hoSearch" class="row" style="gap:8px"><input name="q" maxlength="20" placeholder="輸入新任理事長的姓名" aria-label="搜尋新任理事長" style="flex:1;min-width:160px" required><button class="btn ghost sm">搜尋</button></form>
+      <form id="hoSearch" class="row" style="gap:8px" role="search" data-live><input name="q" maxlength="20" placeholder="輸入新任理事長的姓名" aria-label="搜尋新任理事長" style="flex:1;min-width:160px" required><button class="btn ghost sm">搜尋</button></form>
       <div id="hoList" class="roster"></div>
     </section>` : ''}`;
 }
 function bindHandover() {
-  const rs = $('#roleSearch');
+  const rs = $('#roleSearch'), rsOnly = latest(), hoOnly = latest();
   if (rs) rs.onsubmit = async (e) => {
     e.preventDefault();
-    const { members } = await api(`/members?q=${encodeURIComponent(rs.q.value.trim())}`).catch((err) => { toast(err.message); return { members: [] }; });
+    const { members } = await rsOnly(api(`/members?q=${encodeURIComponent(rs.q.value.trim())}`).catch((err) => { toast(err.message); return { members: [] }; }));
     $('#roleList').innerHTML = members.slice(0, 12).map((m) => `<div class="r">${avatar(m)}<span><b><span translate="no">${esc(m.name)}</span></b><span class="tiny" style="display:block">${esc(ROLE_NAME[m.role] || '團員')}</span></span>
       <button class="btn ghost sm" data-role="${esc(m.id)}" data-name="${esc(m.name)}" data-cur="${esc(m.role)}">變更</button></div>`).join('') || '<p class="tiny" style="margin:0">找不到符合的跑友。</p>';
     for (const b of document.querySelectorAll('#roleList [data-role]')) b.onclick = () => roleDialog(b.dataset.role, b.dataset.name, b.dataset.cur);
@@ -249,7 +270,7 @@ function bindHandover() {
   const f = $('#hoSearch'); if (!f) return;
   f.onsubmit = async (e) => {
     e.preventDefault();
-    const { members } = await api(`/members?q=${encodeURIComponent(f.q.value.trim())}`).catch((err) => { toast(err.message); return { members: [] }; });
+    const { members } = await hoOnly(api(`/members?q=${encodeURIComponent(f.q.value.trim())}`).catch((err) => { toast(err.message); return { members: [] }; }));
     const list = members.filter((m) => m.id !== me.id).slice(0, 10);
     $('#hoList').innerHTML = list.map((m) => `<div class="r">${avatar(m)}<span><b><span translate="no">${esc(m.name)}</span></b><span class="tiny" style="display:block">${esc(ROLE_NAME[m.role] || '')}</span></span>
       <button class="btn sm" data-ho="${esc(m.id)}" data-name="${esc(m.name)}">移交給這位</button></div>`).join('') || '<p class="tiny" style="margin:0">找不到符合的跑友。</p>';

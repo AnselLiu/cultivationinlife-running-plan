@@ -239,6 +239,13 @@ test('代為團體報名：要先填好賽事報名資料並同意；組別價�
   const id = ev.json.id;
   assert.equal((await call('t_runner', `/events/${id}/signup`, { method: 'POST', body: { option: '全馬', reg_consent: true } })).status, 400, '還沒填賽事報名資料');
   assert.equal((await call('t_runner', '/me/race-profile', { method: 'PUT', body: { ...profile, id_no: 'not-an-id!' } })).status, 400);
+  // 身分證字號驗檢查碼（A123456788 最後一碼錯）；身分證與護照分開，至少要有一個
+  assert.equal((await call('t_runner', '/me/race-profile', { method: 'PUT', body: { ...profile, id_no: 'A123456788' } })).status, 400, '檢查碼錯');
+  assert.equal((await call('t_runner', '/me/race-profile', { method: 'PUT', body: { ...profile, id_no: '', passport_no: 'AB-123' } })).status, 400, '護照格式');
+  assert.equal((await call('t_runner', '/me/race-profile', { method: 'PUT', body: { ...profile, id_no: '', passport_no: '' } })).json.complete, false, '兩個都沒填就不完整');
+  const pp = await call('t_runner', '/me/race-profile', { method: 'PUT', body: { ...profile, id_no: '', passport_no: '312345678' } });
+  assert.equal(pp.json.complete, true, '外籍跑友只填護照也可以');
+  assert.equal((await call('t_runner', '/me/race-profile')).json.profile.address_zip, '106682', '通訊地址經郵局核對');
   const put = await call('t_runner', '/me/race-profile', { method: 'PUT', body: profile });
   assert.equal(put.json.complete, true);
   assert.equal((await call('t_runner', '/me/race-profile')).json.profile.id_no, 'A123456789', '本人看得到完整內容');
@@ -427,6 +434,15 @@ test('活動異動、跑完接續、團購到貨領取 QR、銀行對帳、會�
   // 慶功宴這類用外部表單登記的餐敘：有地址；改日期與時間時通知所有看得到的人（不只已報名的人）
   const pv = await call('t_chair', '/events', { method: 'POST', body: { kind: 'party', title: '慶功宴', date: '2027-06-01', gather_time: '18:30', place: '榮榮園', address: '臺北市大安區信義路四段25號2樓', link_url: 'https://forms.gle/x', notify: false } });
   assert.equal((await call('t_runner', `/events/${pv.json.id}`)).json.address, '臺北市大安區信義路四段25號2樓');
+  assert.equal((await call('t_runner', `/events/${pv.json.id}`)).json.address_zip, '106682', '地址經郵局核對，存 6 碼郵遞區號');
+  // 地址一律要經過郵局核對：沒有縣市、查不到門牌都擋下
+  assert.equal((await call('t_chair', '/events', { method: 'POST', body: { kind: 'party', title: '地址錯', date: '2027-06-02', address: '信義路四段25號', notify: false } })).status, 400);
+  assert.equal((await call('t_chair', '/events', { method: 'POST', body: { kind: 'party', title: '地址錯', date: '2027-06-02', address: '臺北市大安區信義路', notify: false } })).status, 400);
+  const ck = await call('t_runner', '/address/check', { method: 'POST', body: { address: '台北市大安區愛國東路２１６號' } });
+  assert.deepEqual([ck.status, ck.json.zip, ck.json.address], [200, '106682', '臺北市大安區愛國東路216號'], '全形數字轉半形、台改臺');
+  assert.equal((await call(null, '/address/check', { method: 'POST', body: { address: '臺北市大安區愛國東路216號' } })).status, 401);
+  // 賽事報名資料的通訊地址也要核對，團體報名 CSV 多一欄郵遞區號
+  assert.equal((await call('t_runner', '/me/race-profile', { method: 'PUT', body: { address: '大安區某某路' } })).status, 400);
   assert.equal((await call('t_chair', `/events/${pv.json.id}/notice`, { method: 'POST', body: { type: 'time', date: '2027-06-04', gather_time: '19:00' } })).json.count, 0, '沒人報名、只通知報名的人');
   assert.ok((await call('t_chair', `/events/${pv.json.id}/notice`, { method: 'POST', body: { type: 'other', message: '請大家登記座位', audience: 'all' } })).json.count > 1, '全協會都收到');
   const pv2 = (await call('t_runner', `/events/${pv.json.id}`)).json;

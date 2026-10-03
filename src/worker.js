@@ -43,12 +43,14 @@ const isTime = (s) => !s || /^\d{2}:\d{2}$/.test(s);
 const today = () => new Date(Date.now() + 8 * 3600e3).toISOString().slice(0, 10);
 const url0 = (req) => new URL(req.url);
 // 隱私權政策版本：預設值；實際版本由後台「系統設定」決定，改版後使用者下次開啟會被要求重新同意
-const PRIVACY_VERSION = '2026-10-03.3';
+const PRIVACY_VERSION = '2026-10-03.4';
 const SETTING_KEYS = ['org', 'features', 'docs', 'privacy'];
 async function getSettings(env, preloaded) {
   const rows = preloaded || (await env.DB.prepare(`SELECT key, value FROM settings WHERE key IN ('org','features','docs','privacy','tabs')`).all()).results;
   const out = { org: {}, features: {}, docs: [], privacy: { version: PRIVACY_VERSION, body: '' }, tabs: {} };
   for (const r of rows) { try { out[r.key] = JSON.parse(r.value); } catch {} }
+  // 用內建條文時，版本跟著程式走（條文改了就要重新同意）；後台自訂條文才用後台存的版本
+  if (!out.privacy.body) out.privacy.version = PRIVACY_VERSION;
   out.privacy.version ||= PRIVACY_VERSION;
   return out;
 }
@@ -308,7 +310,7 @@ async function googleCallback(req, env, url) {
 
 // ---- 賽事報名資料（代為團體報名用）：AES-GCM 加密，金鑰 RACE_KEY（32 bytes base64）----
 const RACE_FIELDS = {
-  name_zh: ['中文姓名', 20, true], name_en: ['英文姓名（護照拼音）', 40, false], id_no: ['身分證字號或護照號碼', 20, true],
+  name_zh: ['中文姓名', 20, true], name_en: ['英文姓名（護照拼音）', 40, false], id_no: ['身分證字號（或居留證號）', 10, false], passport_no: ['護照號碼', 12, false],
   birthday: ['生日', 10, true], gender: ['性別', 4, true], phone: ['手機', 20, true], email: ['Email', 80, false],
   address: ['通訊地址', 120, false], emergency_name: ['緊急聯絡人', 20, true], emergency_phone: ['緊急聯絡人電話', 20, true],
   emergency_rel: ['關係', 10, false], shirt: ['衣服尺寸', 6, true], note: ['備註', 100, false],
@@ -329,10 +331,51 @@ async function openPrivate(env, enc, memberId) {
   const alg = parts[0] === 'v1' ? { name: 'AES-GCM', iv: WebAuthn.unb64u(iv), additionalData: new TextEncoder().encode(memberId) } : { name: 'AES-GCM', iv: WebAuthn.unb64u(iv) };
   return JSON.parse(new TextDecoder().decode(await crypto.subtle.decrypt(alg, await raceKey(env), WebAuthn.unb64u(ct))));
 }
+// ---- 地址核對：送中華郵政 3+3 郵遞區號 Web Service（官方介面 GetZipAddress），拿到 6 碼郵遞區號才算通過 ----
+//   只送地址文字，不含姓名或其他資料；回傳郵局正規化後的寫法（例如「台」改「臺」）與郵遞區號
+//   測試環境設 POST_MOCK=1 時不連外：含「號」且以縣市開頭就當作通過
+const POST_WS = 'https://33wsp.post.gov.tw/LZWZIP/TZIP33.asmx';
+const CITY_RE = /^(臺|台)(北|中|南|東)(市|縣)|^(新北|桃園|高雄|基隆|新竹|嘉義)(市|縣)|^(苗栗|彰化|南投|雲林|屏東|宜蘭|花蓮|澎湖|金門|連江)縣/;
+async function postCheck(env, raw) {
+  const addr = String(raw || '').replace(/\s+/g, '').replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xFEE0)).slice(0, 120);
+  if (!addr) return { ok: true, empty: true };
+  if (!CITY_RE.test(addr)) return { ok: false, error: '地址請從縣市開始寫，例如 臺北市大安區信義路四段25號' };
+  if (env.POST_MOCK === '1' && env.DEV_LOGIN === '1') return /號/.test(addr) ? { ok: true, address: addr.replace(/^台/, '臺'), zip: '106682' } : { ok: false, error: '郵局查不到這個門牌，請確認路名、段、巷弄與號碼' };
+  const x = addr.replace(/[<>&'"]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', "'": '&apos;', '"': '&quot;' })[c]);
+  let text = '';
+  try {
+    const r = await fetch(POST_WS, { method: 'POST', signal: AbortSignal.timeout(6000),
+      headers: { 'content-type': 'text/xml; charset=utf-8', SOAPAction: '"http://tempuri.org/GetZipAddress"' },
+      body: `<?xml version="1.0" encoding="utf-8"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><GetZipAddress xmlns="http://tempuri.org/"><addrStr>${x}</addrStr></GetZipAddress></soap:Body></soap:Envelope>` });
+    if (!r.ok) return { ok: false, unavailable: true };
+    text = await r.text();
+  } catch { return { ok: false, unavailable: true }; }
+  const m = text.match(/<GetZipAddressResult>([\s\S]*?)<\/GetZipAddressResult>/);
+  let j = null;
+  try { j = JSON.parse(m[1].replace(/&(quot|amp|lt|gt|apos);/g, (_, e) => ({ quot: '"', amp: '&', lt: '<', gt: '>', apos: "'" })[e])); } catch { return { ok: false, unavailable: true }; }
+  // 只對到鄉鎮市區（3 碼）表示路名或門牌郵局查不到
+  if (!/^\d{6}$/.test(j?.ZipCode || '')) return { ok: false, error: '郵局查不到這個門牌，請確認路名、段、巷弄與號碼' };
+  return { ok: true, address: String(j.Address || addr).replace(/\s+/g, '').slice(0, 120), zip: j.ZipCode, notServed: j.AddressNotServed === 'Y' };
+}
+const postFail = (c) => (c.unavailable ? [503, '郵局的地址核對服務暫時連不上，請稍後再試（或先不填地址）'] : [400, c.error]);
+
+// 身分證字號、居留證號（新式 8/9、舊式 A–D）：格式加檢查碼
+const ID_LETTERS = 'ABCDEFGHJKLMNPQRSTUVXYWZIO';   // A=10 … H=17, J=18 …, W=32, Z=33, I=34, O=35
+function twIdOk(v) {
+  if (!/^[A-Z][12ABCD89]\d{8}$/.test(v)) return false;
+  const n = ID_LETTERS.indexOf(v[0]) + 10, second = /\d/.test(v[1]) ? Number(v[1]) : (ID_LETTERS.indexOf(v[1]) + 10) % 10;
+  const d = [Math.floor(n / 10), n % 10, second, ...v.slice(2).split('').map(Number)];
+  return d.reduce((sum, x, i) => sum + x * [1, 9, 8, 7, 6, 5, 4, 3, 2, 1, 1][i], 0) % 10 === 0;
+}
+// 舊資料：以前身分證與護照共用一格，讀出來時護照號碼搬到自己的欄位
+function splitIdNo(p) {
+  if (p?.id_no && !p.passport_no && !/^[A-Z][12ABCD89]\d{8}$/.test(p.id_no)) { p.passport_no = p.id_no; p.id_no = ''; }
+  return p;
+}
 const maskId = (v) => (v ? `${v.slice(0, 2)}${'*'.repeat(Math.max(0, v.length - 5))}${v.slice(-3)}` : '');
 
 // ---- 活動 ----
-const eventCols = 'id, kind, title, date, gather_time, end_time, place, lead, note, week_no, plan_text, capacity, signup_open, deadline, status, created_at, fee, guest_max, meal_options, link_url, link_label, team_id, questions, visibility, created_by, options, group_reg, items, pricing, pay_info, min_qty, series_id, spot_id, route_id, address';
+const eventCols = 'id, kind, title, date, gather_time, end_time, place, lead, note, week_no, plan_text, capacity, signup_open, deadline, status, created_at, fee, guest_max, meal_options, link_url, link_label, team_id, questions, visibility, created_by, options, group_reg, items, pricing, pay_info, min_qty, series_id, spot_id, route_id, address, address_zip';
 
 // 報名問卷：單選、複選、簡答；最多 12 題
 const Q_TYPES = ['single', 'multi', 'text'];
@@ -1022,6 +1065,10 @@ async function api(req, env, path, method) {
     const rows = Object.entries(LIM).map(([k, max]) => [k, Number(b[k])]).filter(([k, v]) => Number.isFinite(v) && v >= 0 && v <= LIM[k]);
     if (rows.length) await env.DB.batch(rows.map(([k, v]) => env.DB.prepare('INSERT INTO client_metrics (day, metric, value, page, device, standalone, warm) VALUES (?, ?, ?, ?, ?, ?, ?)')
       .bind(today(), k, Math.round(v * (k === 'cls' ? 1000 : 1)) / (k === 'cls' ? 1000 : 1), page, device, b.standalone ? 1 : 0, b.warm ? 1 : 0)));
+    // 資料讀取時間：每種 API（代碼換成 :id）的中位數，api＝總時間、apisrv＝其中伺服器處理的時間
+    const apis = (Array.isArray(b.api) ? b.api : []).slice(0, 10).filter((x) => /^\/[\w/:.-]{1,48}$/.test(x?.p || '') && Number.isFinite(x.ms) && x.ms >= 0 && x.ms <= 60000);
+    if (apis.length) await env.DB.batch(apis.flatMap((x) => [['api', x.ms], ...(Number.isFinite(x.srv) && x.srv >= 0 && x.srv <= 60000 ? [['apisrv', x.srv]] : [])]
+      .map(([k, v]) => env.DB.prepare('INSERT INTO client_metrics (day, metric, value, page, device, standalone, warm) VALUES (?, ?, ?, ?, ?, ?, 0)').bind(today(), k, Math.round(v), x.p, device, b.standalone ? 1 : 0))));
     return json({ ok: true });
   }
   // 速度與錯誤（管理後台總覽）：最近 N 天的 p75 與最常見的錯誤
@@ -1040,7 +1087,12 @@ async function api(req, env, path, method) {
     }
     const errors = (await env.DB.prepare(`SELECT message, source, line, page, device, SUM(n) AS n, MAX(last_at) AS last_at FROM client_errors WHERE day >= ?
       GROUP BY message, source, line ORDER BY n DESC LIMIT 20`).bind(from).all()).results;
-    return json({ days, metrics, errors });
+    // 最慢的資料讀取（p75）：總時間與其中伺服器處理的時間
+    const apiRows = (await env.DB.prepare("SELECT metric, page, value FROM client_metrics WHERE day >= ? AND metric IN ('api', 'apisrv') ORDER BY value").bind(from).all()).results;
+    const byPage = {};
+    for (const r of apiRows) (byPage[r.page] ||= { api: [], apisrv: [] })[r.metric].push(r.value);
+    const apis = Object.entries(byPage).map(([p, v]) => ({ page: p, n: v.api.length, p75: pct(v.api, 0.75), srv: pct(v.apisrv, 0.75) })).filter((x) => x.n).sort((a, b2) => b2.p75 - a.p75).slice(0, 8);
+    return json({ days, metrics, errors, apis });
   }
   // 分團小圖：網址帶版本號，可以長期快取
   const mic = path.match(/^\/api\/teams\/([\w-]{1,16})\/icon$/);
@@ -1289,6 +1341,7 @@ async function api(req, env, path, method) {
     const b = await body(), e = readEvent(b);
     if (!e) return fail(400, '活動資料不完整');
     if (e.team_id && !(await teamIds()).includes(e.team_id)) return fail(400, '找不到這個分團');
+    if (e.address) { const c = await postCheck(env, e.address); if (!c.ok) return fail(...postFail(c)); e.address = c.address; e.address_zip = c.zip; }
     if (!teamCan(e.team_id, 'event')) return fail(403, e.team_id ? '只有這個分團的團長與幹部可以建立活動' : '只有幹部可以建立全協會活動');
     if (e.route_id && !(await env.DB.prepare('SELECT 1 FROM routes WHERE id = ? AND (shared = 1 OR created_by = ?)').bind(e.route_id, member.id).first())) return fail(400, '找不到這條路線');
     // 定期揪跑：每週選幾天、到哪一天為止，一次建立每一場（最多 60 場），可選擇遇到國定假日不開
@@ -1309,9 +1362,9 @@ async function api(req, env, path, method) {
     // 報名截止：跟著每一場往後推（保持跟活動日的距離）
     const dl = (d) => { if (!e.deadline) return e.deadline; const shift = Date.parse(`${d}T00:00:00Z`) - Date.parse(`${e.date}T00:00:00Z`); const t = new Date(Date.parse(`${e.deadline}:00Z`) + shift); return t.toISOString().slice(0, 16); };
     const ids = dates.map(() => rid(8)), id = ids[0];
-    await env.DB.batch(dates.map((d, i) => env.DB.prepare(`INSERT INTO events (id, kind, title, date, gather_time, end_time, place, lead, note, week_no, plan_text, capacity, signup_open, deadline, created_by, fee, guest_max, meal_options, link_url, link_label, team_id, questions, visibility, options, group_reg, items, pricing, pay_info, min_qty, series_id, spot_id, route_id, address)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .bind(ids[i], e.kind, e.title, d, e.gather_time, e.end_time, e.place, e.lead, e.note, i ? null : e.week_no, e.plan_text, e.capacity, e.signup_open, dl(d), member.id, e.fee, e.guest_max, e.meal_options, e.link_url, e.link_label, e.team_id, e.questions, e.visibility, e.options, e.group_reg, e.items, e.pricing, e.pay_info, e.min_qty, series, e.spot_id, e.route_id, e.address)));
+    await env.DB.batch(dates.map((d, i) => env.DB.prepare(`INSERT INTO events (id, kind, title, date, gather_time, end_time, place, lead, note, week_no, plan_text, capacity, signup_open, deadline, created_by, fee, guest_max, meal_options, link_url, link_label, team_id, questions, visibility, options, group_reg, items, pricing, pay_info, min_qty, series_id, spot_id, route_id, address, address_zip)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .bind(ids[i], e.kind, e.title, d, e.gather_time, e.end_time, e.place, e.lead, e.note, i ? null : e.week_no, e.plan_text, e.capacity, e.signup_open, dl(d), member.id, e.fee, e.guest_max, e.meal_options, e.link_url, e.link_label, e.team_id, e.questions, e.visibility, e.options, e.group_reg, e.items, e.pricing, e.pay_info, e.min_qty, series, e.spot_id, e.route_id, e.address, e.address_zip || null)));
     // 複製活動：沿用原活動的座位圖（獎項每年不同，不複製）
     const from = str(b.copy_from, 32);
     if (from) {
@@ -1366,12 +1419,14 @@ async function api(req, env, path, method) {
     if (method === 'PUT') {
       const e = readEvent(await body());
       if (!e) return fail(400, '活動資料不完整');
+      if (e.address && e.address === cur.address) e.address_zip = cur.address_zip;
+      else if (e.address) { const c = await postCheck(env, e.address); if (!c.ok) return fail(...postFail(c)); e.address = c.address; e.address_zip = c.zip; }
       if (e.team_id && !(await teamIds()).includes(e.team_id)) return fail(400, '找不到這個分團');
       // 原本的分團與改過去的分團都要有權限
       if (!teamCan(cur.team_id, 'event') || !teamCan(e.team_id, 'event')) return fail(403, '沒有編輯這個活動的權限');
       if (e.route_id && e.route_id !== cur.route_id && !(await env.DB.prepare('SELECT 1 FROM routes WHERE id = ? AND (shared = 1 OR created_by = ?)').bind(e.route_id, member.id).first())) return fail(400, '找不到這條路線');
-      await env.DB.prepare(`UPDATE events SET kind=?, title=?, date=?, gather_time=?, end_time=?, place=?, lead=?, note=?, week_no=?, plan_text=?, capacity=?, signup_open=?, deadline=?, fee=?, guest_max=?, meal_options=?, link_url=?, link_label=?, team_id=?, questions=?, visibility=?, options=?, group_reg=?, items=?, pricing=?, pay_info=?, min_qty=?, spot_id=?, route_id=?, address=? WHERE id = ?`)
-        .bind(e.kind, e.title, e.date, e.gather_time, e.end_time, e.place, e.lead, e.note, e.week_no, e.plan_text, e.capacity, e.signup_open, e.deadline, e.fee, e.guest_max, e.meal_options, e.link_url, e.link_label, e.team_id, e.questions, e.visibility, e.options, e.group_reg, e.items, e.pricing, e.pay_info, e.min_qty, e.spot_id, e.route_id, e.address, id).run();
+      await env.DB.prepare(`UPDATE events SET kind=?, title=?, date=?, gather_time=?, end_time=?, place=?, lead=?, note=?, week_no=?, plan_text=?, capacity=?, signup_open=?, deadline=?, fee=?, guest_max=?, meal_options=?, link_url=?, link_label=?, team_id=?, questions=?, visibility=?, options=?, group_reg=?, items=?, pricing=?, pay_info=?, min_qty=?, spot_id=?, route_id=?, address=?, address_zip=? WHERE id = ?`)
+        .bind(e.kind, e.title, e.date, e.gather_time, e.end_time, e.place, e.lead, e.note, e.week_no, e.plan_text, e.capacity, e.signup_open, e.deadline, e.fee, e.guest_max, e.meal_options, e.link_url, e.link_label, e.team_id, e.questions, e.visibility, e.options, e.group_reg, e.items, e.pricing, e.pay_info, e.min_qty, e.spot_id, e.route_id, e.address, e.address_zip || null, id).run();
       await audit(env, req, member, 'event.update', 'event', id, `${e.title}${cur.visibility !== e.visibility ? `（改為${e.visibility === 'invite' ? '邀請制' : '公開'}）` : ''}`);
       return json({ ok: true });
     }
@@ -1470,23 +1525,39 @@ async function api(req, env, path, method) {
   }
 
   // ---- 賽事報名資料（本人）----
+  // 地址核對（表單即時檢查用，存檔時伺服器還會再查一次）
+  if (path === '/api/address/check' && method === 'POST') {
+    const g = need(); if (g) return g;
+    if (await limited(env, `addr:${member.id}`, 40, 600)) return fail(429, '查詢太多次，請稍後再試');
+    const c = await postCheck(env, str((await body()).address, 160));
+    return c.ok ? json({ ok: true, address: c.address || '', zip: c.zip || '', notServed: !!c.notServed }) : fail(...postFail(c));
+  }
   if (path === '/api/me/race-profile') {
     const g = need(); if (g) return g;
     if (!env.RACE_KEY) return fail(503, '賽事報名資料功能還沒啟用，請聯絡行政人員');
     if (method === 'GET') {
       const row = await env.DB.prepare('SELECT enc, complete, updated_at FROM member_private WHERE member_id = ?').bind(member.id).first();
       return json({ fields: Object.fromEntries(Object.entries(RACE_FIELDS).map(([k, [label, max, req]]) => [k, { label, max, req }])),
-        profile: row ? await openPrivate(env, row.enc, member.id) : null, complete: !!row?.complete, updated_at: row?.updated_at || null });
+        profile: row ? splitIdNo(await openPrivate(env, row.enc, member.id)) : null, complete: !!row?.complete, updated_at: row?.updated_at || null });
     }
     if (method === 'PUT') {
       const b = await body(), p = {};
       for (const [k, [, max]] of Object.entries(RACE_FIELDS)) p[k] = str(b[k], max);
       p.id_no = p.id_no.toUpperCase().replace(/\s/g, '');
+      p.passport_no = p.passport_no.toUpperCase().replace(/\s/g, '');
       if (p.birthday && !isDate(p.birthday)) return fail(400, '生日格式不正確');
       if (p.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(p.email)) return fail(400, 'Email 格式不正確');
-      if (p.id_no && !/^[A-Z][12A-D89]\d{8}$/.test(p.id_no) && !/^[A-Z0-9]{6,12}$/.test(p.id_no)) return fail(400, '身分證字號或護照號碼格式不正確');
+      if (p.id_no && !twIdOk(p.id_no)) return fail(400, '身分證字號（或居留證號）不正確，請再核對一次');
+      if (p.passport_no && !/^[A-Z0-9]{6,12}$/.test(p.passport_no)) return fail(400, '護照號碼格式不正確（英文字母與數字 6–12 碼）');
       if (p.gender && !['男', '女', '其他'].includes(p.gender)) return fail(400, '性別請選 男、女 或 其他');
-      const complete = Object.entries(RACE_FIELDS).every(([k, [, , req]]) => !req || p[k]) ? 1 : 0;
+      // 通訊地址：送中華郵政核對，存郵局的寫法與 6 碼郵遞區號（沒改就不再送）
+      if (p.address) {
+        const old = await env.DB.prepare('SELECT enc FROM member_private WHERE member_id = ?').bind(member.id).first().then((r) => (r ? openPrivate(env, r.enc, member.id) : null)).catch(() => null);
+        if (old?.address === p.address && old.address_zip) p.address_zip = old.address_zip;
+        else { const c = await postCheck(env, p.address); if (!c.ok) return fail(...postFail(c)); p.address = c.address; p.address_zip = c.zip; }
+      }
+      // 身分證字號（或居留證號）與護照號碼至少要有一個
+      const complete = Object.entries(RACE_FIELDS).every(([k, [, , req]]) => !req || p[k]) && (p.id_no || p.passport_no) ? 1 : 0;
       await env.DB.prepare(`INSERT INTO member_private (member_id, enc, complete, updated_at) VALUES (?, ?, ?, datetime('now'))
         ON CONFLICT(member_id) DO UPDATE SET enc = excluded.enc, complete = excluded.complete, updated_at = excluded.updated_at`)
         .bind(member.id, await sealPrivate(env, p, member.id), complete).run();
@@ -1511,11 +1582,12 @@ async function api(req, env, path, method) {
     const rows = (await env.DB.prepare(`SELECT s.member_id, s.name, s.option, s.status, s.paid, s.created_at, p.enc FROM signups s
       JOIN member_private p ON p.member_id = s.member_id WHERE s.event_id = ? AND s.status = 'in' AND s.reg_consent_at IS NOT NULL ORDER BY s.created_at`).bind(ev.id).all()).results;
     const cell = (v) => { let x = String(v ?? ''); if (/^[=+\-@\t\r]/.test(x)) x = `'${x}`; return `"${x.replace(/"/g, '""')}"`; };
-    const keys = Object.keys(RACE_FIELDS);
-    const head = ['報名組別', ...keys.map((k) => RACE_FIELDS[k][0]), '繳費', '報名時間'];
+    // 通訊地址前面加郵遞區號（中華郵政核對過的 6 碼）
+    const keys = Object.keys(RACE_FIELDS).flatMap((k) => (k === 'address' ? ['address_zip', 'address'] : [k]));
+    const head = ['報名組別', ...keys.map((k) => (k === 'address_zip' ? '郵遞區號' : RACE_FIELDS[k][0])), '繳費', '報名時間'];
     const PAID = { unpaid: '未繳', paid: '已繳', waived: '免繳', refunded: '已退費' };
     const lines = [];
-    for (const r of rows) { const p = await openPrivate(env, r.enc, r.member_id); lines.push([r.option || '', ...keys.map((k) => p[k] || ''), PAID[r.paid] || '', r.created_at].map(cell).join(',')); }
+    for (const r of rows) { const p = splitIdNo(await openPrivate(env, r.enc, r.member_id)); lines.push([r.option || '', ...keys.map((k) => p[k] || ''), PAID[r.paid] || '', r.created_at].map(cell).join(',')); }
     await audit(env, req, member, 'event.reg_export', 'event', ev.id, `${rows.length} 筆（含身分證字號）`);
     return new Response(`﻿${[head.map(cell).join(','), ...lines].join('\r\n')}`, { headers: { ...SEC_HEADERS, 'cache-control': 'no-store',
       'content-type': 'text/csv; charset=utf-8', 'content-disposition': `attachment; filename="registrations.csv"; filename*=UTF-8''${encodeURIComponent(`${ev.date}-${ev.title}-團體報名.csv`)}` } });
@@ -1587,10 +1659,12 @@ async function api(req, env, path, method) {
       const place = str(b.place, 120), address = str(b.address, 120), time = isTime(str(b.gather_time, 5)) && str(b.gather_time, 5) ? str(b.gather_time, 5) : '';
       const date = isDate(str(b.date, 10)) ? str(b.date, 10) : '';
       if (type === 'place' && !place) return fail(400, '請填新的地點');
+      let addrOk = { ok: true };
+      if (type === 'place' && address) { addrOk = await postCheck(env, address); if (!addrOk.ok) return fail(...postFail(addrOk)); }
       if (type === 'time' && !time && !date) return fail(400, '請填新的日期或時間');
       if (type === 'other' && !msg) return fail(400, '請填異動內容');
       if (type === 'cancel') await env.DB.prepare("UPDATE events SET status = 'cancelled', signup_open = 0 WHERE id = ?").bind(ev.id).run();
-      if (type === 'place') await env.DB.prepare('UPDATE events SET place = ?, address = ?, spot_id = ? WHERE id = ?').bind(place, address || null, /^[\w-]{1,32}$/.test(b.spot_id || '') ? b.spot_id : null, ev.id).run();
+      if (type === 'place') await env.DB.prepare('UPDATE events SET place = ?, address = ?, address_zip = ?, spot_id = ? WHERE id = ?').bind(place, addrOk.address || null, addrOk.zip || null, /^[\w-]{1,32}$/.test(b.spot_id || '') ? b.spot_id : null, ev.id).run();
       if (type === 'time') await env.DB.prepare('UPDATE events SET date = COALESCE(?, date), gather_time = COALESCE(?, gather_time), remind_hour_at = NULL, remind_day_at = NULL WHERE id = ?').bind(date || null, time || null, ev.id).run();
       let ids;
       if (b.audience === 'all') ids = ev.visibility === 'invite'
@@ -1599,7 +1673,7 @@ async function api(req, env, path, method) {
       else ids = (await env.DB.prepare("SELECT member_id FROM signups WHERE event_id = ? AND status IN ('in', 'wait') AND member_id IS NOT NULL").bind(ev.id).all()).results.map((r) => r.member_id).filter((x) => x !== member.id);
       const TITLE = { cancel: '活動取消', place: '改地點', time: '改時間', other: '活動通知' };
       const when = `${date ? `${date.slice(5).replace('-', '/')}（${'日一二三四五六'[new Date(`${date}T00:00:00Z`).getUTCDay()]}）` : ''}${time ? ` ${time}` : ''}`.trim();
-      const body2 = type === 'cancel' ? `${ev.date} 這場取消${msg ? `：${msg}` : ''}` : type === 'place' ? `改到 ${place}${address ? `（${address}）` : ''}${msg ? `。${msg}` : ''}` : type === 'time' ? `改成 ${when}${msg ? `。${msg}` : ''}` : msg;
+      const body2 = type === 'cancel' ? `${ev.date} 這場取消${msg ? `：${msg}` : ''}` : type === 'place' ? `改到 ${place}${addrOk.address ? `（${addrOk.address}）` : ''}${msg ? `。${msg}` : ''}` : type === 'time' ? `改成 ${when}${msg ? `。${msg}` : ''}` : msg;
       if (ids.length) await notify(env, ids, 'event', { title: `${TITLE[type]}：${ev.title}`, body: body2, url: `/#/e/${ev.id}`, tag: `notice-${ev.id}` });
       await audit(env, req, member, 'event.notice', 'event', ev.id, `${TITLE[type]}：${body2}`.slice(0, 200));
       return json({ ok: true, count: ids.length });
@@ -3076,7 +3150,11 @@ export default {
       if ((req.headers.get('content-type') || '').split(';')[0].trim().toLowerCase() !== 'application/json' && req.method !== 'DELETE') return fail(415, '請用 JSON');
     }
     try {
-      return await api(req, env, path, req.method);
+      const t0 = Date.now();
+      const res = await api(req, env, path, req.method);
+      // 伺服器處理時間（主要是等資料庫）：開發工具看得到，前端也用它分辨慢在網路還是伺服器
+      try { res.headers.set('server-timing', `app;dur=${Date.now() - t0}`); } catch {}
+      return res;
     } catch (e) {
       console.error('api', path, e);
       return fail(500, '伺服器錯誤');

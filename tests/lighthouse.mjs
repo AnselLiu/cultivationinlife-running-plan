@@ -19,7 +19,7 @@ rmSync(STATE, { recursive: true, force: true });
 mkdirSync(OUT, { recursive: true });
 sh(`npx wrangler d1 migrations apply cil-run --local --persist-to ${STATE}`);
 sh(`npx wrangler d1 execute cil-run --local --persist-to ${STATE} --file tests/seed.sql`);
-const vars = { DEV_LOGIN: '1', JOIN_CODE: 'test-join', HASH_SALT: 'test-salt', AUDIT_KEY: 'test-audit-key', RACE_KEY: 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8' };
+const vars = { DEV_LOGIN: '1', POST_MOCK: '1', JOIN_CODE: 'test-join', HASH_SALT: 'test-salt', AUDIT_KEY: 'test-audit-key', RACE_KEY: 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8' };
 const dev = spawn('npx', ['wrangler', 'dev', '--port', String(PORT), '--inspector-port', '0', '--persist-to', STATE, ...Object.entries(vars).flatMap(([k, v]) => ['--var', `${k}:${v}`])],
   { stdio: ['ignore', 'ignore', 'inherit'], detached: process.platform !== 'win32' });
 const stop = () => { try { process.kill(-dev.pid); } catch { try { dev.kill(); } catch {} } };

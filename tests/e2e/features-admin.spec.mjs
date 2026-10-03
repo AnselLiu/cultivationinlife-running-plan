@@ -29,8 +29,8 @@ test('會員：查詢跑友、掃描會籍卡（手動貼上）', async ({ page,
 test('權限：搜尋跑友指派身分，分頁停在權限', async ({ page }) => {
   await enter(page, 't_chair');
   await page.goto('/#/admin?tab=roles');
+  // 即時搜尋：打字就出結果，不用按「搜尋」
   await page.locator('#roleSearch [name=q]').fill('路人');
-  await page.locator('#roleSearch').getByRole('button').click();
   await page.locator('#roleList [data-role]').first().click();
   await page.locator('#rf [name=role]').selectOption('coach');
   await page.locator('#rf').getByRole('button', { name: '儲存' }).click();
@@ -60,4 +60,28 @@ test('系統設定：功能開關、分頁名稱、立即備份；稽核查詢�
   if (await verify.count()) { await verify.click(); await expect(page.locator('#panel')).toContainText(/異常|筆/); }
   await page.goto('/#/roster');
   await expect(page.locator('h1')).toContainText('名冊');
+});
+
+test('管理後台：切換每個分頁不會整頁跳動；離開後點下方分頁列不會被拉回管理後台', async ({ page }) => {
+  await enter(page, 't_chair');
+  await page.goto('/#/admin');
+  await expect(page.locator('.adminseg')).toBeVisible();
+  for (const name of ['會員', '權限', '分團', '活動', '系統設定', '稽核', '總覽']) {
+    const title = await page.locator('#view h1').elementHandle();
+    await page.locator('.adminseg').getByRole('button', { name }).click();
+    await expect(page.locator('.adminseg [aria-pressed="true"]')).toHaveText(name);
+    await expect(page.locator('#panel')).not.toHaveAttribute('aria-busy', 'true');
+    expect(await title.evaluate((el) => el.isConnected), '標題與分頁列沒有重畫').toBe(true);
+  }
+  // 以前分頁按鈕的點擊會綁到下方分頁列，離開後每點一次都會被拉回管理後台
+  await page.locator('.tabs a[data-tab="/plan"]').click();
+  await expect(page).toHaveURL(/#\/plan$/);
+  await page.waitForTimeout(1500);
+  await expect(page).toHaveURL(/#\/plan$/);
+  await expect(page.locator('#view h1')).toContainText('課表');
+  await expect(page.locator('.tabs a[data-tab="/plan"]')).toHaveAttribute('aria-current', '');
+  await page.locator('.tabs a[data-tab="/me"]').click();
+  await page.waitForTimeout(1000);
+  await expect(page).toHaveURL(/#\/me$/);
+  await expect(page.locator('.adminseg')).toHaveCount(0);
 });

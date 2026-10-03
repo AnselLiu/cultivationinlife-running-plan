@@ -1,5 +1,5 @@
 // 耕跑團 PWA — manage.js：從 app.js 拆出來、用到才載入的畫面（第一次開 App 不用下載）
-import { $, ago, downloadAuthed, scanSheet, allow, api, bars, copy, dstr, emptyState, esc, feat, group, IC, KIND_NAME, largeTitle, me, money, PAID_NAME, row, teamAllow, teams, toast, view } from './app.js';
+import { $, addrField, bindAddrField, ago, downloadAuthed, scanSheet, allow, api, bars, copy, dstr, emptyState, esc, feat, group, IC, KIND_NAME, largeTitle, me, money, PAID_NAME, row, teamAllow, teams, toast, view } from './app.js';
 
 // ---------- 幹部：新增／編輯活動 ----------
 const DRAFT = 'cil-ev-draft';
@@ -34,10 +34,8 @@ async function formView(id) {
         <label data-when="!survey"><span data-when="!party">集合時間</span><span data-when="party">開始時間</span><input type="time" name="gather_time" value="${esc(d.gather_time || '')}"></label>
       </div>
       <div data-when="!survey">
-        <div class="grid2">
-          <label>地點<input name="place" maxlength="60" value="${esc(d.place || '')}" placeholder="臺北田徑場 400 場"></label>
-          <label>地址（選填）<input name="address" maxlength="120" autocomplete="off" value="${esc(d.address || '')}" placeholder="臺北市大安區信義路四段 25 號 2 樓"></label>
-        </div>
+        <label>地點<input name="place" maxlength="60" value="${esc(d.place || '')}" placeholder="臺北田徑場 400 場"></label>
+        ${addrField('address', '地址', '選填・餐廳或場館，送郵局核對')}
         <div class="grid2">
           <label>練跑地圖的地點<select name="spot_id"><option value="">（不指定）</option>${spots.filter((x) => x.status === 'approved').map((x) => `<option value="${esc(x.id)}" ${d.spot_id === x.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select></label>
           <label>路線<select name="route_id"><option value="">（不指定）</option>${routes.map((r) => `<option value="${esc(r.id)}" ${d.route_id === r.id ? 'selected' : ''}>${esc(r.name)}・${(r.distance / 1000).toFixed(1)} 公里</option>`).join('')}</select></label>
@@ -146,6 +144,7 @@ async function formView(id) {
     }
   };
   f.kind.onchange = sync; sync();
+  bindAddrField(f, 'address', f.address.value || d.address, f.address.value && f.address.value !== d.address ? '' : d.address_zip);
   const visHint = () => { $('#visHint').textContent = f.visibility.value === 'invite'
     ? '只有受邀的人看得到，不會出現在其他人的列表，也不會通知其他人。建立後在活動頁邀請人或開邀請連結。'
     : '選了分團就是分團的人看得到（私密分團只有團員），沒選就是全協會。'; };

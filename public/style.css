@@ -14,7 +14,7 @@
   --rim:rgba(255,255,255,.9); --rim-2:rgba(255,255,255,.25);
   --stroke:rgba(11,27,51,.08);
   --accent:#1C4698; --on-accent:#fff; --accent-soft:rgba(28,70,152,.10);
-  --easy:#456B0F; --q:#B64400; --long:#1C4698; --rest:#55637A; --str:#6D45B0; --race:#C41E3A; --ok:#34C759; --mid:#FF9F0A;
+  --easy:#456B0F; --q:#B64400; --long:#1C4698; --rest:#55637A; --str:#6D45B0; --race:#C41E3A; --ok:#34C759; --mid:#FF9F0A; --ok-ink:#1E7E34;
   --warn:#6B5B00; --warn-bg:rgba(253,243,109,.5);
   --shadow-s:0 1px 1px rgba(11,27,51,.04), 0 2px 8px -2px rgba(11,27,51,.10);
   --shadow-l:0 1px 2px rgba(11,27,51,.05), 0 12px 32px -14px rgba(11,27,51,.30);
@@ -30,7 +30,7 @@
   --rim:rgba(255,255,255,.22); --rim-2:rgba(255,255,255,.04);
   --stroke:rgba(255,255,255,.08);
   --accent:#FDF36D; --on-accent:#0B1B33; --accent-soft:rgba(253,243,109,.14);
-  --easy:#C9E36A; --q:#FFB347; --long:#8FB2F5; --rest:#A3B1C8; --str:#C9A8FF; --race:#FF7A85; --ok:#30D158; --mid:#FF9F0A;
+  --easy:#C9E36A; --q:#FFB347; --long:#8FB2F5; --rest:#A3B1C8; --str:#C9A8FF; --race:#FF7A85; --ok:#30D158; --mid:#FF9F0A; --ok-ink:#30D158;
   --warn:#FDF36D; --warn-bg:rgba(253,243,109,.14);
   --shadow-s:0 1px 2px rgba(0,0,0,.4); --shadow-l:0 18px 44px -20px rgba(0,0,0,.85);
 }}
@@ -41,7 +41,7 @@
   --rim:rgba(255,255,255,.22); --rim-2:rgba(255,255,255,.04);
   --stroke:rgba(255,255,255,.08);
   --accent:#FDF36D; --on-accent:#0B1B33; --accent-soft:rgba(253,243,109,.14);
-  --easy:#C9E36A; --q:#FFB347; --long:#8FB2F5; --rest:#A3B1C8; --str:#C9A8FF; --race:#FF7A85; --ok:#30D158; --mid:#FF9F0A;
+  --easy:#C9E36A; --q:#FFB347; --long:#8FB2F5; --rest:#A3B1C8; --str:#C9A8FF; --race:#FF7A85; --ok:#30D158; --mid:#FF9F0A; --ok-ink:#30D158;
   --warn:#FDF36D; --warn-bg:rgba(253,243,109,.14);
   --shadow-s:0 1px 2px rgba(0,0,0,.4); --shadow-l:0 18px 44px -20px rgba(0,0,0,.85);
 }
@@ -504,11 +504,13 @@ form.signup{display:grid;gap:12px}
 .req{font-size:11px;font-weight:700;color:var(--race);background:color-mix(in srgb,var(--race) 10%,transparent);border-radius:6px;padding:1px 6px}
 .chips{display:flex;flex-wrap:wrap;gap:8px}
 .chip{display:inline-flex;cursor:pointer;font-size:15px;color:var(--ink)}
+/* 勾選式的膠囊（label 包 input＋span）：外框只畫在 span 上，label 本身不要再一層 */
+label.chip{padding:0;background:none;box-shadow:none;border-radius:999px}
 .chip input{position:absolute;opacity:0;width:1px;height:1px}
-.chip span{padding:9px 15px;border-radius:999px;border:1px solid var(--stroke);background:var(--glass-hi);transition:background .15s,color .15s,transform .15s var(--tap)}
+.chip > span{padding:9px 15px;border-radius:999px;border:1px solid var(--stroke);background:var(--glass-hi);transition:background .15s,color .15s,transform .15s var(--tap)}
 .chip input:checked + span{background:var(--accent);color:var(--on-accent);border-color:transparent}
 .chip input:focus-visible + span{outline:2.5px solid color-mix(in srgb,var(--accent) 65%,transparent);outline-offset:2px}
-.chip:active span{transform:scale(.95)}
+.chip:active > span{transform:scale(.95)}
 fieldset.group{border:1px solid var(--stroke);border-radius:var(--r-l);padding:14px;margin:0;display:grid;gap:12px;min-width:0}
 fieldset.group legend{font-size:13px;font-weight:700;color:var(--ink-2);padding:0 6px}
 .qedit{display:grid;gap:10px}
@@ -573,7 +575,7 @@ fieldset.group legend{font-size:13px;font-weight:700;color:var(--ink-2);padding:
 .plancard.quality{--st:var(--q)}.plancard.easy{--st:var(--easy)}.plancard.strength{--st:var(--str)}.plancard.race{--st:var(--race)}
 .logform{display:grid;gap:14px}
 .logform input[type=range]{padding:0;height:32px;accent-color:var(--accent);background:transparent;border:0}
-.chips.status .chip span{padding:10px 16px;font-weight:650}
+.chips.status .chip > span{padding:10px 16px;font-weight:650}
 .r.tlog{grid-template-columns:32px 1fr 92px}
 .r.tlog .bar{height:6px;border-radius:3px;margin-top:6px}
 @media (max-width:400px){.day{grid-template-columns:62px 1fr auto}}
@@ -590,8 +592,8 @@ svg.ic{width:1.15em;height:1.15em;flex:none;fill:none;stroke:currentColor;stroke
 .docic{display:grid;place-items:center;width:32px;height:32px;border-radius:9px;background:var(--accent-soft);color:var(--accent)}
 .docic svg.ic{width:18px;height:18px}
 .day .logbtn svg.ic{width:19px;height:19px;stroke-width:2.4}
-.chips.status .chip span{display:inline-flex;align-items:center;gap:6px}
-.chips.feel .chip span{font-size:15px;padding:9px 14px}
+.chips.status .chip > span{display:inline-flex;align-items:center;gap:6px}
+.chips.feel .chip > span{font-size:15px;padding:9px 14px}
 h3 svg.ic{width:18px;height:18px}
 .winners svg.ic{width:12px;height:12px;stroke-width:2.6;margin-left:3px}
 .av svg.ic{width:14px;height:14px;stroke-width:2.6}
@@ -1146,3 +1148,19 @@ input[type="date"]::-webkit-date-and-time-value,input[type="time"]::-webkit-date
 .pricechips > span{display:inline-flex;align-items:baseline;gap:8px;padding:6px 12px;border-radius:999px;background:rgba(255,255,255,.14);font-size:14px}
 .pricechips b{font-weight:600}
 .pricechips .num{font-weight:700}
+/* 地址（跟郵局一樣）：縣市、鄉鎮市區、郵遞區號、路名門牌；下方是郵局核對結果 */
+.addrfield{border:0;padding:0;margin:0;display:grid;gap:8px;min-width:0}
+.addrfield legend{font-size:13px;color:var(--ink-2);font-weight:500;padding:0;margin-bottom:5px;display:flex;gap:8px;align-items:baseline}
+.addrfield legend .tiny{font-size:12px;color:var(--ink-3)}
+.addrsel{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px}
+.addrstreet{display:grid;grid-template-columns:auto minmax(0,1fr);gap:8px;align-items:stretch}
+.addrstreet .zip{min-width:76px;padding:0 10px;display:grid;place-items:center;border-radius:var(--r-m);background:color-mix(in srgb,var(--ink) 6%,transparent);color:var(--ink);font-weight:650;font-size:15px;letter-spacing:.02em}
+.addrstreet .zip:empty::before{content:"郵遞區號";font-size:12px;font-weight:500;color:var(--ink-3)}
+.addrcheck{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--ink-2)}
+.addrcheck svg{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:2.2}
+.addrcheck.ok{color:var(--ok-ink)}
+.addrcheck.bad{color:var(--race)}
+#panel[aria-busy="true"]{opacity:.55;transition:opacity .2s}
+/* 選位置或畫路線時，地圖上的圖釘與路線不要搶走點擊 */
+#map.picking .leaflet-marker-pane,#map.picking .leaflet-overlay-pane{pointer-events:none}
+#map.picking .leaflet-marker-pane *,#map.picking .leaflet-overlay-pane *{pointer-events:none!important}

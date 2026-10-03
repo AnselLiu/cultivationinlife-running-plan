@@ -38,10 +38,12 @@ const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<
 // 寫入中的請求數：送出表單時按鈕先停用，等所有寫入完成才恢復（避免連點送出兩次）
 let writes = 0;
 const idleWaiters = [];
+const apiTimes = [];   // [路徑, 總毫秒, 伺服器毫秒]，送速度紀錄時整理成中位數
 const api = async (path, opt = {}, retried = false) => {
   const method = opt.method || 'GET';
   if (method !== 'GET') writes++;
   let res;
+  const t0 = performance.now();
   try {
     res = await fetch(`/api${path}`, {
       method,
@@ -55,6 +57,12 @@ const api = async (path, opt = {}, retried = false) => {
   } finally {
     if (method !== 'GET' && --writes === 0) idleWaiters.splice(0).forEach((f) => f());
   }
+  // 讀取類記錄花多久（不含離線暫存的結果）：路徑的代碼換成 :id，只記路徑不記參數
+  if (method === 'GET' && !res.headers.get('x-cil-offline')) {
+    const p = `/${path.split('?')[0].split('/').filter(Boolean).map((x) => (/^[\w-]{8,}$/.test(x) && /\d/.test(x) ? ':id' : x)).join('/')}`.slice(0, 48);
+    const srv = Number((res.headers.get('server-timing') || '').match(/dur=([\d.]+)/)?.[1]);
+    if (apiTimes.length < 300) apiTimes.push([p, performance.now() - t0, Number.isFinite(srv) ? srv : null]);
+  }
   if (res.status >= 500 && res.status !== 503) throw new Error('伺服器忙碌，請稍後再試');
   const data = await res.json().catch(() => ({}));
   if (method === 'GET') offlineBar(res.headers.get('x-cil-offline') === '1');
@@ -66,8 +74,29 @@ const api = async (path, opt = {}, retried = false) => {
   if (!res.ok) throw new Error(data.error || `錯誤 ${res.status}`);
   return data;
 };
-// 送出表單：送出鍵先停用並顯示「處理中」，所有寫入完成（或驗證沒過）才恢復
+// 即時搜尋：<form data-live> 打字停 0.3 秒、或改了下拉選單，就自動查（不用再按「搜尋」）。
+//   注音、倉頡選字中不查；沒有任何條件時不查（名冊一律要有條件），data-live="empty" 的表單清空也會重查
+const liveTimers = new WeakMap();
+const liveGo = (f) => {
+  if (!f.isConnected) return;
+  const q = (f.q?.value || '').trim(), sel = [...f.querySelectorAll('select')].some((x) => x.value);
+  if (!q && !sel && f.dataset.live !== 'empty') return;
+  if (f.dataset.lastLive === `${q}|${new URLSearchParams(new FormData(f))}`) return;
+  f.dataset.lastLive = `${q}|${new URLSearchParams(new FormData(f))}`;
+  f.requestSubmit();
+};
+document.addEventListener('input', (e) => {
+  const f = e.target.closest?.('form[data-live]');
+  if (!f || e.isComposing || e.target.tagName === 'SELECT') return;
+  clearTimeout(liveTimers.get(f)); liveTimers.set(f, setTimeout(() => liveGo(f), 300));
+});
+document.addEventListener('compositionend', (e) => { const f = e.target.closest?.('form[data-live]'); if (f) { clearTimeout(liveTimers.get(f)); liveTimers.set(f, setTimeout(() => liveGo(f), 300)); } });
+document.addEventListener('change', (e) => { const f = e.target.closest?.('form[data-live]'); if (f && e.target.tagName === 'SELECT') liveGo(f); });
+// 只採用最後一次查詢的結果：打字很快時，比較早送出、比較晚回來的結果不會蓋掉新的
+const latest = () => { let n = 0; return (p) => { const my = ++n; return p.then((v) => (my === n ? v : new Promise(() => {}))); }; };
+// 送出表單：送出鍵先停用並顯示「處理中」，所有寫入完成（或驗證沒過）才恢復（即時搜尋自動送出的不算）
 document.addEventListener('submit', (e) => {
+  if (e.target.matches('[data-live]')) { e.target.dataset.lastLive = `${(e.target.q?.value || '').trim()}|${new URLSearchParams(new FormData(e.target))}`; if (!e.submitter) return; }
   const btns = [...e.target.querySelectorAll('button:not([type="button"]), input[type="submit"]')].filter((b) => !b.disabled);
   if (!btns.length) return;
   for (const b of btns) { b.disabled = true; b.classList.add('busy'); b.setAttribute('aria-busy', 'true'); }
@@ -142,6 +171,14 @@ try {
   po('paint', (e) => { if (e.name === 'first-contentful-paint') vitals.fcp = e.startTime; });
 } catch {}
 let vitalsSent = false;
+// 每種 API 的中位數，最慢的 10 種
+const apiSummary = () => {
+  const by = {};
+  for (const [p, ms, srv] of apiTimes) (by[p] ||= []).push([ms, srv]);
+  const mid = (a) => a.sort((x, y) => x - y)[Math.floor(a.length / 2)];
+  return Object.entries(by).map(([p, v]) => ({ p, ms: Math.round(mid(v.map((x) => x[0]))), srv: v.some((x) => x[1] != null) ? Math.round(mid(v.filter((x) => x[1] != null).map((x) => x[1]))) : undefined }))
+    .sort((a, b) => b.ms - a.ms).slice(0, 10);
+};
 const sendVitals = () => {
   if (vitalsSent || vitals.ready == null) return;
   vitalsSent = true;
@@ -149,7 +186,7 @@ const sendVitals = () => {
   const r = (v) => (v == null ? undefined : Math.round(v));
   fetch('/api/vitals', { method: 'POST', keepalive: true, headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ ready: r(vitals.ready), fcp: r(vitals.fcp), lcp: r(vitals.lcp), inp: r(vitals.inp), cls: vitals.cls == null ? undefined : Math.round(vitals.cls * 1000) / 1000,
-      ttfb: r(nav?.responseStart), page: vitals.page, warm: vitals.warm, standalone: matchMedia('(display-mode: standalone)').matches || navigator.standalone === true }) }).catch(() => {});
+      ttfb: r(nav?.responseStart), page: vitals.page, warm: vitals.warm, api: apiSummary(), standalone: matchMedia('(display-mode: standalone)').matches || navigator.standalone === true }) }).catch(() => {});
 };
 addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') sendVitals(); });
 addEventListener('pagehide', sendVitals);
@@ -175,6 +212,60 @@ const copy = async (text) => {
 
 // 導航：Apple 裝置開 Apple 地圖，其他開 Google 地圖（只帶地點文字，不帶個人資料）
 const mapsUrl = (q) => (/iPhone|iPad|Macintosh/.test(navigator.userAgent) ? `https://maps.apple.com/?q=${encodeURIComponent(q)}` : `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(q)}`);
+// 地址欄位（跟郵局一樣）：選縣市 → 鄉鎮市區（帶出 3 碼郵遞區號）→ 填路名門牌；填好就送中華郵政核對，
+//   換成郵局的寫法並顯示 6 碼郵遞區號，查不到就提示（存檔時伺服器會再查一次）。縣市與鄉鎮市區清單來自郵局的 3+3 服務
+let zip3P = null;
+const zip3 = () => (zip3P ||= fetch('/data/zip3.json').then((r) => r.json()).catch(() => { zip3P = null; return {}; }));
+function addrField(name, label = '地址', hint = '') {
+  return `<fieldset class="addrfield" data-addr="${name}"><legend>${label}${hint ? `<span class="tiny">${hint}</span>` : ''}</legend>
+    <div class="addrsel"><select data-a="city" aria-label="縣市"><option value="">縣市</option></select>
+      <select data-a="dist" aria-label="鄉鎮市區" disabled><option value="">鄉鎮市區</option></select></div>
+    <div class="addrstreet"><output class="zip num" data-a="zip" aria-label="郵遞區號"></output><input data-a="street" maxlength="100" autocomplete="off" placeholder="路名、段、巷、弄、號、樓" aria-label="路名與門牌"></div>
+    <input type="hidden" name="${name}"><span class="addrcheck" role="status" hidden></span></fieldset>`;
+}
+async function bindAddrField(form, name, value = '', zip6 = '') {
+  const box = form.querySelector(`.addrfield[data-addr="${name}"]`);
+  if (!box) return;
+  const Z = await zip3(), q = (k) => box.querySelector(`[data-a="${k}"]`);
+  const city = q('city'), dist = q('dist'), street = q('street'), zipEl = q('zip'), hidden = box.querySelector(`[name="${name}"]`), out = box.querySelector('.addrcheck');
+  city.insertAdjacentHTML('beforeend', Object.keys(Z).map((c) => `<option>${c}</option>`).join(''));
+  const fillDist = () => {
+    const list = Z[city.value] || [];
+    dist.innerHTML = `<option value="">鄉鎮市區</option>${list.map(([d, z]) => `<option value="${d}" data-zip="${z}">${d}</option>`).join('')}`;
+    dist.disabled = !list.length;
+  };
+  const show = (cls, html) => { out.className = `addrcheck ${cls}`; out.innerHTML = html; out.hidden = !html; };
+  // 帶入原本的地址：拆成縣市、鄉鎮市區、其餘
+  const split = (v) => {
+    v = String(v || '').replace(/^台/, '臺');
+    const c = Object.keys(Z).find((k) => v.startsWith(k)), d = c && (Z[c] || []).find(([x]) => v.slice(c.length).startsWith(x));
+    return { c: c || '', d: d ? d[0] : '', rest: v.slice((c || '').length + (d ? d[0].length : 0)) };
+  };
+  const put = (v) => { const x = split(v); city.value = x.c; fillDist(); dist.value = x.d; street.value = x.c ? x.rest : v; };
+  put(value);
+  hidden.value = value || '';
+  zipEl.textContent = zip6 || dist.selectedOptions[0]?.dataset.zip || '';
+  if (zip6 && value) show('ok', `${IC.check}<span>郵局核對通過</span>`);
+  let last = value || '', seq = 0;
+  const compose = async () => {
+    const full = city.value && dist.value && street.value.trim() ? `${city.value}${dist.value}${street.value.trim().replace(/\s+/g, '')}` : '';
+    zipEl.textContent = dist.selectedOptions[0]?.dataset.zip || '';
+    hidden.value = full || `${city.value}${dist.value}${street.value.trim()}`;   // 填一半也照送：伺服器核對時會擋下並說明
+    if (!full) { show(street.value.trim() && !dist.value ? 'bad' : '', street.value.trim() && !dist.value ? '請先選縣市與鄉鎮市區' : ''); last = ''; return; }
+    if (full === last && out.classList.contains('ok')) return;
+    last = full; const my = ++seq;
+    show('wait', '郵局核對中…');
+    try {
+      const r = await api('/address/check', { method: 'POST', body: { address: full } });
+      if (my !== seq) return;
+      put(r.address); hidden.value = r.address; last = r.address; zipEl.textContent = r.zip;
+      show('ok', `${IC.check}<span>郵局核對通過${r.notServed ? '（不按址投遞區域）' : ''}</span>`);
+    } catch (e) { if (my === seq) show('bad', esc(e.message)); }
+  };
+  city.addEventListener('change', () => { fillDist(); compose(); });
+  dist.addEventListener('change', compose);
+  street.addEventListener('change', compose);
+}
 const KIND_NAME = { track: '田徑場團練', core: '核心日', long: '長跑團練', race: '賽事', party: '餐敘聚會', survey: '問卷調查', buy: '團購', other: '活動' };
 const ROLE_NAME = { chair: '理事長', director: '理事', supervisor: '監事', staff: '行政人員', coach: '教練', member: '團員' };
 const allow = (p) => !!me?.can?.includes(p);
@@ -478,6 +569,7 @@ function richText(src) {
 }
 // 隱私權政策每次改版的重點：要重新同意時放在最上面，不用整篇讀完才知道改了什麼
 const PRIVACY_CHANGES = {
+  '2026-10-03.4': ['你填的通訊地址（選填）會送到中華郵政的郵遞區號服務核對寫法、補上郵遞區號，只送地址文字，不含姓名'],
   '2026-10-03.3': ['新增「賽事報名資料」：只有要幹部代為團體報名時才填，加密保存，逐場同意後才提供給主辦幹部', '記錄 App 的開啟速度與錯誤訊息，只記裝置類型與頁面，不記是誰'],
 };
 function privacyView() {
@@ -506,7 +598,7 @@ function privacyView() {
       <h3>三、利用期間、地區、對象與方式</h3>
       <p>期間：${esc(PRIVACY.retention)}。<br>
          地區：台灣，以及雲端服務（Cloudflare）的資料中心所在地。<br>
-         對象：依職務最小權限開放給協會幹部；分團團長與幹部可以看自己分團的名冊（不含電話）與該分團活動的報名及問卷結果；電話完整號碼只有行政人員看得到。賽事報名資料只在你報名「代為團體報名」的活動並勾選同意後，提供給該活動的主辦幹部，用來向賽事主辦單位送出團體報名，每次下載都留有稽核紀錄。不提供給第三方行銷使用。<br>
+         對象：依職務最小權限開放給協會幹部；分團團長與幹部可以看自己分團的名冊（不含電話）與該分團活動的報名及問卷結果；電話完整號碼只有行政人員看得到。賽事報名資料只在你報名「代為團體報名」的活動並勾選同意後，提供給該活動的主辦幹部，用來向賽事主辦單位送出團體報名，每次下載都留有稽核紀錄。通訊地址存檔前會送到中華郵政的 3+3 郵遞區號服務核對寫法並補上郵遞區號，只傳送地址文字。不提供給第三方行銷使用。<br>
          方式：以電子方式處理，全程加密傳輸。</p>
       <h3>四、您的權利</h3>
       <p>您可以隨時行使個人資料保護法第 3 條的權利：</p>
@@ -704,10 +796,12 @@ async function eventView(id) {
   const mine = ev.signups.find((s) => s.member_id === me.id);
   const closed = !ev.signup_open || ev.status !== 'open' || (ev.deadline && new Date(ev.deadline) < new Date());
   const party = ev.kind === 'party';
-  const myTicket = party ? (await api('/my/tickets')).tickets.find((t) => t.event_id === ev.id) : null;
-  const seatInfo = party ? await api(`/events/${id}/seats`) : { seats: [], layout: null };
+  // 入場券、座位、當週課表同時載入
+  const [myTicket, seatInfo, plan] = await Promise.all([
+    party ? api('/my/tickets').then((r) => r.tickets.find((t) => t.event_id === ev.id)) : null,
+    party ? api(`/events/${id}/seats`) : { seats: [], layout: null },
+    ev.week_no ? P.weekPlan(ev.week_no, me.dist, me.grp) : null]);
   const seatData = seatInfo.seats;
-  const plan = ev.week_no ? await P.weekPlan(ev.week_no, me.dist, me.grp) : null;
   const myDay = plan?.find((d) => new RegExp(dayPattern(ev.date)).test(d.d));
 
   view.innerHTML = `
@@ -718,7 +812,7 @@ async function eventView(id) {
       </div>
       <h2><span translate="no">${esc(ev.title)}</span></h2>
       <p class="muted" style="margin:0">${ev.gather_time ? `${ev.gather_time} ${party ? '開始' : '集合'}` : ''}${ev.end_time ? `－${ev.end_time}` : ''}${ev.place ? `　<span translate="no">${esc(ev.place)}</span>` : ''}${ev.lead ? `　帶團：<span translate="no">${esc(ev.lead)}</span>` : ''}</p>
-      ${ev.address || (ev.place && !ev.spot) ? `<a class="navlink" href="${mapsUrl(ev.address || ev.place)}" target="_blank" rel="noopener">${IC.pin}<span>${ev.address ? `<span translate="no">${esc(ev.address)}</span>` : '在地圖上查看'}</span><b>導航</b></a>` : ''}
+      ${ev.address || (ev.place && !ev.spot) ? `<a class="navlink" href="${mapsUrl(ev.address || ev.place)}" target="_blank" rel="noopener">${IC.pin}<span>${ev.address ? `${ev.address_zip ? `<span class="num">${esc(ev.address_zip)}</span> ` : ''}<span translate="no">${esc(ev.address)}</span>` : '在地圖上查看'}</span><b>導航</b></a>` : ''}
       ${(ev.options || []).length || (ev.items || []).length ? `<div class="pricechips">${[...(ev.options || []), ...(ev.items || [])].map((o) => `<span><b><span translate="no">${esc(o.name)}</span></b>${o.price ? `<span class="num">${money(o.price)}</span>` : ''}</span>`).join('')}</div>`
         : ev.fee ? `<div class="pricechips"><span><b>費用</b><span class="num">${money(ev.fee)}</span></span></div>` : ''}
       ${ev.pricing?.early_off && ev.pricing.early_until >= ymd(new Date()) ? `<p class="tiny" style="margin:0;color:rgba(255,255,255,.9)">早鳥 ${esc(ev.pricing.early_until.slice(5).replace('-', '/'))} 前報名折 ${money(ev.pricing.early_off)}${ev.pricing.member_off ? `・協會會員再折 ${money(ev.pricing.member_off)}` : ''}</p>`
@@ -787,7 +881,7 @@ async function eventView(id) {
         <form id="noticeForm" class="noticeform">
           <div class="chips">${[['time', '改時間'], ['place', '改地點'], ['other', '提醒或通知'], ['cancel', '取消活動']].map(([k, v], i) => `<label class="chip"><input type="radio" name="type" value="${k}" ${i ? '' : 'checked'}><span>${v}</span></label>`).join('')}</div>
           <div class="grid2" data-nt="time"><label>新的日期<input type="date" name="date" value="${esc(ev.date)}"></label><label>${party ? '新的開始時間' : '新的集合時間'}<input type="time" name="gather_time" value="${esc(ev.gather_time || '')}"></label></div>
-          <div class="grid2" data-nt="place" hidden><label>新的地點<input name="place" maxlength="120" placeholder="例如 改到大佳河濱公園"></label><label>地址（選填）<input name="address" maxlength="120" autocomplete="off"></label></div>
+          <div data-nt="place" hidden style="display:grid;gap:12px"><label>新的地點<input name="place" maxlength="120" placeholder="例如 改到大佳河濱公園"></label>${addrField('address', '地址', '選填・送郵局核對')}</div>
           <label>說明（會一起推播）<textarea name="message" maxlength="300" placeholder="例如 下雨改室內，帶瑜珈墊"></textarea></label>
           <fieldset class="qset"><legend>通知誰</legend><div class="chips">
             <label class="chip"><input type="radio" name="audience" value="signed" ${ev.signups.some((x) => x.status !== 'cancel') ? 'checked' : ''}><span>已報名的人（${ev.signups.filter((x) => x.status !== 'cancel').length}）</span></label>
@@ -867,6 +961,7 @@ async function eventView(id) {
   if (nf) {
     const sync = () => { const t = nf.querySelector('[name=type]:checked').value; for (const el of nf.querySelectorAll('[data-nt]')) el.hidden = el.dataset.nt !== t; };
     nf.addEventListener('change', sync); sync();
+    bindAddrField(nf, 'address');
     nf.onsubmit = async (e) => {
       e.preventDefault();
       const t = nf.querySelector('[name=type]:checked').value;
@@ -1096,7 +1191,7 @@ function inviteCard(ev) {
   return `<section class="card" id="invCard">
     <div class="row spread"><h3 class="row" style="gap:6px">${IC.lock}受邀名單</h3><span class="tiny"><b class="num">${ev.invite?.count || 0}</b> 人受邀</span></div>
     <p class="tiny" style="margin:0">只有名單上的人看得到這個活動。移出名單會一併取消他的報名與入場券。</p>
-    <form id="invSearch" class="row" style="gap:8px" role="search"><input name="q" placeholder="搜尋姓名或暱稱邀請" aria-label="搜尋要邀請的人" style="flex:1" autocomplete="off"><button class="btn ghost sm">搜尋</button></form>
+    <form id="invSearch" class="row" style="gap:8px" role="search" data-live><input name="q" placeholder="搜尋姓名或暱稱邀請" aria-label="搜尋要邀請的人" style="flex:1" autocomplete="off"><button class="btn ghost sm">搜尋</button></form>
     <div class="roster" id="invHits"></div>
     ${teamOpts.length ? `<form id="invTeam" class="row" style="gap:8px"><select name="team" style="flex:1">${teamOpts.map((t) => `<option value="${esc(t.id)}">整個${esc(t.name)}（${t.count} 人）</option>`).join('')}</select><button class="btn ghost sm">邀請整團</button></form>` : ''}
     <div class="invlink">
@@ -1112,13 +1207,14 @@ function inviteCard(ev) {
 function bindInviteCard(ev) {
   const reload = () => eventView(ev.id);
   const add = async (body, msg) => { try { const r = await api(`/events/${ev.id}/invites`, { method: 'POST', body }); toast(r.added ? `${msg}（新增 ${r.added} 人，已通知）` : '他們都已經在名單上'); reload(); } catch (e) { toast(e.message); } };
+  const invOnly = latest();
   $('#invSearch').onsubmit = async (e) => {
     e.preventDefault();
     const q = e.target.q.value.trim();
     if (!q) return toast('請輸入姓名');
     // 協會幹部從全體名冊找；分團幹部從自己分團找
-    const r = allow('roster') ? await api(`/members?q=${encodeURIComponent(q)}`)
-      : ev.team_id ? await api(`/teams/${ev.team_id}/members?q=${encodeURIComponent(q)}`) : { members: [] };
+    const r = await invOnly(allow('roster') ? api(`/members?q=${encodeURIComponent(q)}`)
+      : ev.team_id ? api(`/teams/${ev.team_id}/members?q=${encodeURIComponent(q)}`) : Promise.resolve({ members: [] }));
     $('#invHits').innerHTML = r.members.map((m) => `<div class="r">${avatar(m)}<span><span translate="no">${esc(m.name)}</span>${m.nickname ? ` <span class="tiny"><span translate="no">${esc(m.nickname)}</span></span>` : ''}</span>
       <button class="btn ghost sm" data-inv="${m.id}">邀請</button></div>`).join('') || '<p class="muted" style="margin:0">找不到</p>';
     for (const b of document.querySelectorAll('[data-inv]')) b.onclick = () => add({ member_ids: [b.dataset.inv] }, '已邀請');
@@ -2001,7 +2097,6 @@ async function meView(section) {
 async function meHome(welcome) {
   const main = teamOf(me.main_team);
   const staff = allow('members') || allow('roles') || allow('settings') || allow('roster') || canPublishPlan();
-  const regRow = await api('/me/race-profile').catch(() => null);
   view.innerHTML = `
     ${largeTitle('我的')}
     ${welcome ? '<div class="notice">歡迎加入！先到「個人資料」確認項目和組別；主團會由管理員設定。</div>' : ''}
@@ -2016,7 +2111,7 @@ async function meHome(welcome) {
       row('#/report', MI.report, '訓練報表', '週里程、完成率、個人最佳'),
       row('#/challenge', MI.flag, '每月里程挑戰', '徽章、分團對抗、排行榜'),
       row('#/me/races', MI.flag, '我的賽事與倒數', '右上角倒數哪一場'),
-      row('#/me/reg', MI.idcard, '賽事報名資料', '幹部代為團體報名時使用', regRow?.complete ? '<span class="pill solid">已填好</span>' : regRow?.profile ? '<span class="pill wait">未填完</span>' : ''),
+      row('#/me/reg', MI.idcard, '賽事報名資料', '幹部代為團體報名時使用', '<span id="regBadge"></span>'),
       row('#/tickets', MI.ticket, '入場券、團購領取與中獎紀錄'),
     ])}
     ${group('分團', [row('#/me/teams', MI.team, '主團與分團', main ? `主團：<span translate="no">${esc(main.name)}</span>` : '主團由管理員設定')])}
@@ -2036,6 +2131,8 @@ async function meHome(welcome) {
   bindStepup();
   $('#openGuide').onclick = () => Guide.start();
   $('#shareApp').onclick = () => shareApp();
+  // 賽事報名資料填好了沒：畫面先出來，狀態晚一點補上（要解密，不要擋住整頁）
+  api('/me/race-profile').then((r) => { const b = $('#regBadge'); if (b) b.outerHTML = r?.complete ? '<span class="pill solid">已填好</span>' : r?.profile ? '<span class="pill wait">未填完</span>' : ''; }).catch(() => {});
 }
 function meProfile() {
   view.innerHTML = `${subTitle('個人資料', '報名時會直接帶入，不用每次重填')}
@@ -2109,14 +2206,17 @@ async function meReg() {
     <section class="card notice-card"><b>${IC.lock} 這份資料怎麼保護</b>
       <ul class="steps"><li>加密後才存進資料庫，只有你自己看得到完整內容</li>
         <li>只有在你報名「由幹部代為團體報名」的活動、並勾選同意時，那一場的主辦幹部才能下載</li>
-        <li>每次下載都會留下稽核紀錄；你可以隨時修改或刪除</li></ul></section>
+        <li>每次下載都會留下稽核紀錄；你可以隨時修改或刪除</li>
+        <li>通訊地址會送到中華郵政的郵遞區號服務核對，補上 6 碼郵遞區號（只送地址，不含姓名）</li></ul></section>
     <form id="regForm" class="card regform">
       <div class="grid2">${input('name_zh')}${input('name_en', 'text', 'autocapitalize="characters" placeholder="WANG DA-MING"')}</div>
-      <label>${lt('id_no')}<span class="idwrap"><input name="id_no" maxlength="${F.id_no.max}" value="${esc(p.id_no || '')}" autocomplete="off" autocapitalize="characters" spellcheck="false" type="password"><button type="button" class="btn ghost sm" id="idShow">顯示</button></span></label>
+      <p class="tiny" style="margin:0">身分證字號與護照號碼至少填一個；外籍跑友填居留證號或護照號碼。</p>
+      <label><span class="lt">${F.id_no.label}</span><span class="idwrap"><input name="id_no" maxlength="${F.id_no.max}" value="${esc(p.id_no || '')}" autocomplete="off" autocapitalize="characters" spellcheck="false" type="password" placeholder="A123456789"><button type="button" class="btn ghost sm" id="idShow" aria-label="顯示身分證字號">顯示</button></span></label>
+      <label><span class="lt">${F.passport_no.label}</span><input name="passport_no" maxlength="${F.passport_no.max}" value="${esc(p.passport_no || '')}" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="臺灣護照 9 碼數字"></label>
       <div class="grid2">${input('birthday', 'date')}${select('gender', ['男', '女', '其他'])}</div>
       <div class="grid2">${input('phone', 'tel', 'inputmode="tel" autocomplete="tel"')}${select('shirt', ['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL'])}</div>
       ${input('email', 'email', 'autocomplete="email"')}
-      ${input('address', 'text', 'autocomplete="street-address"')}
+      ${addrField('address', '通訊地址', '選填・送郵局核對')}
       <fieldset class="group"><legend>緊急聯絡人</legend>
         <div class="grid2">${input('emergency_name', 'text', '', '姓名')}${input('emergency_phone', 'tel', 'inputmode="tel"', '電話')}</div>
         ${input('emergency_rel', 'text', 'placeholder="配偶、父母…"', '關係')}</fieldset>
@@ -2125,10 +2225,12 @@ async function meReg() {
       ${d.profile ? '<button type="button" class="btn danger block" id="regDel">刪除我的賽事報名資料</button>' : ''}
       ${d.updated_at ? `<p class="tiny center" style="margin:0">上次更新：${ago(d.updated_at)}</p>` : ''}
     </form>`;
+  bindAddrField($('#regForm'), 'address', p.address, p.address_zip);
   $('#idShow').onclick = () => { const i = $('#regForm').id_no; i.type = i.type === 'password' ? 'text' : 'password'; $('#idShow').textContent = i.type === 'password' ? '顯示' : '隱藏'; };
   $('#regForm').onsubmit = async (e) => {
     e.preventDefault();
     const body = Object.fromEntries([...new FormData(e.target)].map(([k, v]) => [k, String(v).trim()]));
+    if (!body.id_no && !body.passport_no) return toast('身分證字號或護照號碼至少填一個');
     try {
       const r = await api('/me/race-profile', { method: 'PUT', body });
       let back = null; try { back = JSON.parse(sessionStorage.getItem('cil-after-reg') || 'null'); } catch {}
@@ -2343,6 +2445,12 @@ function parentOf(h) {
   if (['/teams', '/tickets', '/admin', '/roster'].includes(h) || h.startsWith('/m/')) return ['#/me', '我的'];
   return ['#/', '團練'];
 }
+// 這一頁屬於哪個分頁：本身是分頁就是自己，不然沿著上一層往上找（最多找 4 層）
+function tabOf(h) {
+  const TOP = ['/', '/plan', '/run', '/studio', '/me'];
+  for (let i = 0; i < 4 && !TOP.includes(h); i++) h = parentOf(h)[0].slice(1);
+  return h;
+}
 // 頁面名稱（返回鍵顯示「‹ 上一頁的名稱」）
 function nameOf(h) {
   const N = { '/': '團練', '/plan': '課表', '/run': '跑步', '/studio': '拍照', '/me': '我的', '/calendar': '行事曆', '/map': '地圖', '/challenge': '挑戰', '/admin': '管理後台',
@@ -2372,10 +2480,9 @@ async function renderOnce() {
   if (stopScan) { stopScan(); stopScan = null; }
   const raw = location.hash.replace(/^#/, '') || '/';
   const hash = raw.split('?')[0];
-  for (const a of document.querySelectorAll('.tabs a')) {
-    const on = a.dataset.tab === '/' ? hash === '/' || hash === '/calendar' : a.dataset.tab === '/run' ? hash === '/run' || hash === '/map' : a.dataset.tab === '/plan' ? hash.startsWith('/plan') || hash === '/challenge' : hash.startsWith(a.dataset.tab);
-    a.toggleAttribute('aria-current', on);
-  }
+  // 子頁面（管理後台、名冊、活動統計…）也亮起它所屬的分頁
+  const tab = tabOf(hash);
+  for (const a of document.querySelectorAll('.tabs a')) a.toggleAttribute('aria-current', a.dataset.tab === tab);
   paintCountdown();
   if (!me && firstLoad) {
     firstLoad = false;
@@ -2567,4 +2674,4 @@ addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvt 
 addEventListener('appinstalled', () => { installEvt = null; try { localStorage.setItem('cil-installed', '1'); } catch {} document.querySelectorAll('.installcard').forEach((c) => c.remove()); });
 
 // 拆出去的模組（admin.js、photo.js…）從這裡拿共用的工具與狀態
-export { $, cfg, downloadAuthed, scanSheet, FEEL, IC, KIND_NAME, LOG_STATUS_NAME, PAID_NAME, ROLE_NAME, TAB_DEFAULT, TEAM_PERMS, TEAM_ROLE_NAME, ago, allow, api, applyFeatures, avatar, barChart, bars, bindComments, bindStepup, copy, dayLabel, dstr, emptyState, esc, eventCard, feat, fixText, group, largeTitle, me, mfaBanner, money, org, pad2, paintCountdown, passkey, refreshMe, render, route, row, squareIcon, studio, teamAllow, teamIcon, teamOf, teams, toast, view, ymd };
+export { addrField, bindAddrField, latest, $, cfg, downloadAuthed, scanSheet, FEEL, IC, KIND_NAME, LOG_STATUS_NAME, PAID_NAME, ROLE_NAME, TAB_DEFAULT, TEAM_PERMS, TEAM_ROLE_NAME, ago, allow, api, applyFeatures, avatar, barChart, bars, bindComments, bindStepup, copy, dayLabel, dstr, emptyState, esc, eventCard, feat, fixText, group, largeTitle, me, mfaBanner, money, org, pad2, paintCountdown, passkey, refreshMe, render, route, row, squareIcon, studio, teamAllow, teamIcon, teamOf, teams, toast, view, ymd };
