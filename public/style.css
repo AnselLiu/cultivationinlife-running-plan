@@ -992,3 +992,23 @@ details.group[open] > summary{margin-bottom:2px}
 .repform{display:grid;gap:12px}
 .linkbtn{border:0;background:none;color:var(--accent);cursor:pointer;padding:0;font:inherit}
 .routesvg path{fill:none;stroke:var(--accent);stroke-width:4;stroke-linejoin:round;stroke-linecap:round}
+.langseg{width:200px;margin:4px auto 0}
+
+/* ---------- 登入頁：品牌開場 ---------- */
+body.guest .tabs,body.guest #countdown{display:none}
+body.guest main{padding-bottom:40px}
+.welcome{display:grid;justify-items:center;text-align:center;gap:6px;padding:28px 8px 12px}
+.wmark{width:96px;height:96px;border-radius:26px;box-shadow:0 18px 40px rgba(28,70,152,.35),0 2px 6px rgba(11,27,51,.2);animation:wfloat 6s ease-in-out infinite}
+@keyframes wfloat{50%{transform:translateY(-6px)}}
+.wtitle{margin:14px 0 0;font-size:46px;font-weight:800;letter-spacing:.06em;line-height:1.05}
+.wsub{margin:0;font-size:12px;letter-spacing:.32em;color:var(--ink-3);font-weight:600}
+.wlead{margin:10px 0 4px;font-size:20px;font-weight:600;color:var(--accent)}
+.wfeat{list-style:none;margin:14px 0 0;padding:0;display:grid;grid-template-columns:1fr 1fr;gap:10px;width:100%;max-width:520px}
+.wfeat li{display:grid;justify-items:start;text-align:left;gap:2px;padding:14px;border-radius:var(--r-l);background:var(--glass);-webkit-backdrop-filter:var(--blur);backdrop-filter:var(--blur);box-shadow:var(--shadow-s),inset 0 1px 0 var(--rim)}
+.wfeat .wic{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;background:var(--accent-soft);color:var(--accent);margin-bottom:6px}
+.wfeat .wic svg.ic{width:20px;height:20px}
+.wfeat b{font-size:15px}
+.authcard{gap:12px}
+.authcard .btn.google{min-height:52px;font-size:17px}
+@media (prefers-reduced-motion:reduce){.wmark{animation:none}}
+body.guest .top .brand{opacity:0;pointer-events:none}

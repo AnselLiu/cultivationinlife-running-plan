@@ -55,7 +55,9 @@ test('通行金鑰：註冊、登入、防重放與偽造、幹部強制兩步�
   assert.equal((await assertion('login', null, { counter: 1 })).status, 400, '計數倒退要擋');
 
   // 強制兩步驟：沒驗證過的工作階段不能開；開了之後沒驗證的幹部只有跑友權限
-  assert.equal((await call('/settings/security', { require_mfa: true }, cookie)).status, 400);
+  const noMfa = await call('/settings/security', { require_mfa: true }, cookie);
+  assert.equal(noMfa.status, 403, '改安全設定要先用通行金鑰驗證');
+  assert.equal(noMfa.json.stepup, true);
   assert.equal((await call('/settings/security', { require_mfa: true }, pkCookie)).status, 200);
   assert.equal((await call('/me', null, cookie)).json.member.mfaPending, true);
   assert.equal((await call('/members?q=測試', null, cookie)).status, 403);

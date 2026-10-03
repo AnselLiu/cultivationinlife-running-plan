@@ -55,8 +55,8 @@ export function tableList(seats, table) {
     <div class="row spread"><h3>第 ${table} 桌</h3><span class="tiny">${list.length} 位${list.some((s) => s.guests) ? `・含攜伴 ${list.reduce((n, s) => n + (s.guests || 0), 0)}` : ''}</span></div>
     <div class="seatlist">${list.map((s, i) => `
       <div class="seatrow"><span class="num tiny">${i + 1}</span>
-        <span><b>${esc(s.name)}</b>${s.nickname ? ` <span class="tiny">${esc(s.nickname)}</span>` : ''}
-          <span class="tiny" style="display:block">${esc(s.club || '')}${s.guests ? `・攜伴 ${s.guests}` : ''}${s.note ? `・${esc(s.note)}` : ''}</span></span>
+        <span><b><span translate="no">${esc(s.name)}</span></b>${s.nickname ? ` <span class="tiny"><span translate="no">${esc(s.nickname)}</span></span>` : ''}
+          <span class="tiny" style="display:block">${esc(s.club || '')}${s.guests ? `・攜伴 ${s.guests}` : ''}${s.note ? `・<span translate="no">${esc(s.note)}</span>` : ''}</span></span>
       </div>`).join('')}</div>
   </div>`;
 }
@@ -67,8 +67,8 @@ export function seatResults(seats, q) {
   if (!hit.length) return '<p class="muted">找不到，換個關鍵字或問工作人員。</p>';
   return hit.map((s) => `<button class="seatrow hit" data-table="${s.table_no}">
       <span class="tblbadge num">${s.table_no}</span>
-      <span><b>${esc(s.name)}</b>${s.nickname ? ` <span class="tiny">${esc(s.nickname)}</span>` : ''}
-        <span class="tiny" style="display:block">${esc(s.club || '')}${s.note ? `・${esc(s.note)}` : ''}</span></span>
+      <span><b><span translate="no">${esc(s.name)}</span></b>${s.nickname ? ` <span class="tiny"><span translate="no">${esc(s.nickname)}</span></span>` : ''}
+        <span class="tiny" style="display:block">${esc(s.club || '')}${s.note ? `・<span translate="no">${esc(s.note)}</span>` : ''}</span></span>
     </button>`).join('');
 }
 
@@ -92,7 +92,7 @@ export function stageHTML(prizes, draws) {
       </div>
       <aside class="lside">
         <div class="row spread"><b>得獎紀錄</b><button class="btn ghost sm" id="lCsv">匯出 CSV</button></div>
-        <div id="lLog">${draws.slice().reverse().map((d) => `<div class="lrow"><span>${esc(d.name)}</span></div>`).join('')}</div>
+        <div id="lLog">${draws.slice().reverse().map((d) => `<div class="lrow"><span><span translate="no">${esc(d.name)}</span></span></div>`).join('')}</div>
       </aside>
     </div>
   </div>`;

@@ -16,7 +16,7 @@ async function formView(id) {
   if (!id && !d.place && d.spot_id) d.place = spots.find((x) => x.id === d.spot_id)?.name || '';
   const teamOpts = [...(allow('event') ? [['', '全協會']] : []), ...teams().filter((t) => teamAllow(t.id, 'event')).map((t) => [t.id, t.name])];
   if (!teamOpts.length) { view.innerHTML = `<div class="card">${emptyState('calendar', '只有幹部與分團幹部可以建立活動')}</div>`; return; }
-  view.innerHTML = `${largeTitle(id ? '編輯活動' : from ? '複製活動' : '新增活動', from ? `從「${esc(src.title)}」複製，座位圖也會一起帶過來` : '')}
+  view.innerHTML = `${largeTitle(id ? '編輯活動' : from ? '複製活動' : '新增活動', from ? `從「<span translate="no">${esc(src.title)}</span>」複製，座位圖也會一起帶過來` : '')}
   <section class="card">
     <form id="ef">
       <div class="grid2">
@@ -208,7 +208,7 @@ async function statsView(id) {
     ...(st.kind === 'party' ? [['攜伴', t.guests], ['已報到', `${t.checkedIn}/${t.in}`]] : survey ? [] : st.kind === 'buy' ? [['已領取', `${st.picked}/${t.in}`]] : [['出席', `${t.attended}/${t.in}`]]), ['協會會員', t.members]];
   const money = st.money, nf = (n) => n.toLocaleString('zh-TW');
   view.innerHTML = `
-    ${largeTitle('統計', `${esc(st.title)}・${dstr(st.date)}`, `<a class="btn ghost sm" href="#/e/${id}">回活動</a>`)}
+    ${largeTitle('統計', `<span translate="no">${esc(st.title)}</span>・${dstr(st.date)}`, `<a class="btn ghost sm" href="#/e/${id}">回活動</a>`)}
     <section class="kpis">${kpi.map(([k, v]) => `<div class="card kpi"><span class="tiny">${k}</span><b class="num">${v}</b></div>`).join('')}</section>
     ${st.capacity ? `<section class="card"><div class="row spread"><h3>名額</h3><span class="tiny num">${t.in}/${st.capacity}</span></div>
       <span class="bar big"><i style="width:${Math.min(100, Math.round(t.in / st.capacity * 100))}%"></i></span></section>` : ''}
@@ -225,7 +225,7 @@ async function statsView(id) {
     ${(st.items || []).length ? `<section class="card"><div class="row spread"><h3>團購數量</h3>${st.minQty ? `<span class="tiny">成團門檻 ${st.minQty} 件</span>` : ''}</div>
       ${st.minQty ? (() => { const sum = st.items.reduce((n, i) => n + i.total, 0); return `<div class="row spread"><span>${sum >= st.minQty ? `${IC.check} 已成團` : `還差 ${st.minQty - sum} 件成團`}</span><span class="tiny num">${sum}/${st.minQty}</span></div>
         <span class="bar big"><i style="width:${Math.min(100, Math.round(sum / st.minQty * 100))}%"></i></span>`; })() : ''}
-      <div class="itemtable">${st.items.map((i) => `<div class="itr"><b>${esc(i.name)}</b><span class="tiny">${money2(i.price)}${i.stock ? `・庫存 ${i.stock}，剩 ${Math.max(0, i.stock - i.total)}` : ''}</span>
+      <div class="itemtable">${st.items.map((i) => `<div class="itr"><b><span translate="no">${esc(i.name)}</span></b><span class="tiny">${money2(i.price)}${i.stock ? `・庫存 ${i.stock}，剩 ${Math.max(0, i.stock - i.total)}` : ''}</span>
         <span class="sizes">${Object.entries(i.by).map(([z, n]) => `<span class="pill">${z === '—' ? '數量' : esc(z)} <b class="num">${n}</b></span>`).join('') || '<span class="tiny">還沒有人訂</span>'}</span><b class="num">${i.total}</b></div>`).join('')}</div>
       <div class="row"><a class="btn sm" href="/api/events/${id}/orders.csv" download>下載訂購單</a><span class="tiny">已領取 ${st.picked}/${t.in}</span></div></section>` : ''}
     ${st.groupReg ? `<section class="card"><div class="row spread"><h3>團體報名資料</h3><span class="tiny">${st.regReady}/${t.in} 人已同意提供</span></div>
@@ -241,19 +241,19 @@ async function statsView(id) {
       <section class="card"><h3>每天新增${survey ? '回覆' : '報名'}</h3>${bars(st.byDay.slice(-14).map(([d, n]) => [d.slice(5).replace('-', '/'), n]))}</section>
     </div>
     ${st.questions.map((q) => `<section class="card">
-      <div class="row spread"><h3>${esc(q.label)}</h3><span class="tiny">${Q_TYPE_NAME[q.type]}${q.type === 'text' ? `・${q.answers.length} 則` : `・${q.answered}/${t.in} 人回答`}</span></div>
+      <div class="row spread"><h3><span translate="no">${esc(q.label)}</span></h3><span class="tiny">${Q_TYPE_NAME[q.type]}${q.type === 'text' ? `・${q.answers.length} 則` : `・${q.answered}/${t.in} 人回答`}</span></div>
       ${q.type === 'text'
-        ? `<div class="answers">${q.answers.map((a) => `<div><b>${esc(a.name)}</b><span>${esc(a.text)}</span></div>`).join('') || '<p class="muted" style="margin:0">還沒有回答</p>'}</div>`
+        ? `<div class="answers">${q.answers.map((a) => `<div><b><span translate="no">${esc(a.name)}</span></b><span>${esc(a.text)}</span></div>`).join('') || '<p class="muted" style="margin:0">還沒有回答</p>'}</div>`
         : bars(q.counts.map((c) => [c.o, c.n]), q.answered)}
     </section>`).join('')}
     ${survey ? '' : `<section class="card">
       <div class="row spread"><h3>名單</h3><span class="tiny">${st.people.length} 人</span></div>
       <input id="pq" placeholder="搜尋姓名" aria-label="搜尋名單" autocomplete="off">
-      <div class="roster" id="plist">${st.people.map((x) => `<div class="r prow ${x.payReported && x.paid !== 'paid' ? 'reported' : ''}" data-name=""${esc(`${x.name} ${x.nickname || ''}`)}">
+      <div class="roster" id="plist">${st.people.map((x) => `<div class="r prow ${x.payReported && x.paid !== 'paid' ? 'reported' : ''}" data-name="${esc(`${x.name} ${x.nickname || ''}`)}">
         <label class="attend" title="出席"><input type="checkbox" data-att="${esc(x.member_id)}" ${x.attended ? 'checked' : ''} ${st.kind === 'party' ? 'disabled' : ''}><i>${IC.check}</i></label>
-        <span><b>${esc(x.name)}</b>${x.nickname ? ` <span class="tiny">${esc(x.nickname)}</span>` : ''}${x.amount ? ` <span class="num tiny">${money2(x.amount)}</span>` : ''}
-          <span class="tiny" style="display:block">${x.option ? `${esc(x.option)}・` : ''}${itemText(x.items, st.items)}${st.groupReg ? (x.regOk ? '報名資料 OK・' : '報名資料未提供・') : ''}${x.status === 'wait' ? '候補・' : ''}${x.guests ? `攜伴 ${x.guests}・` : ''}${esc(x.paid_note || '')}</span>
-          ${x.payReported && x.paid !== 'paid' ? `<span class="payrep">${PAY_METHOD[x.payMethod] || '已回報'}${x.payRef ? ` 後五碼 <b class="num">${esc(x.payRef)}</b>` : ''}・${ago(x.payReported)} <button type="button" class="btn sm" data-confirm="${esc(x.member_id)}">確認收款</button></span>` : ''}
+        <span><b><span translate="no">${esc(x.name)}</span></b>${x.nickname ? ` <span class="tiny"><span translate="no">${esc(x.nickname)}</span></span>` : ''}${x.amount ? ` <span class="num tiny">${money2(x.amount)}</span>` : ''}
+          <span class="tiny" style="display:block">${x.option ? `${esc(x.option)}・` : ''}${itemText(x.items, st.items)}${st.groupReg ? (x.regOk ? '報名資料 OK・' : '報名資料未提供・') : ''}${x.status === 'wait' ? '候補・' : ''}${x.guests ? `攜伴 ${x.guests}・` : ''}<span translate="no">${esc(x.paid_note || '')}</span></span>
+          ${x.payReported && x.paid !== 'paid' ? `<span class="payrep">${PAY_METHOD[x.payMethod] || '已回報'}${x.payRef ? ` 後五碼 <b class="num"><span translate="no">${esc(x.payRef)}</span></b>` : ''}・${ago(x.payReported)} <button type="button" class="btn sm" data-confirm="${esc(x.member_id)}">確認收款</button></span>` : ''}
           ${(st.items || []).length && x.status === 'in' ? `<label class="inline tiny"><input type="checkbox" data-pick="${esc(x.member_id)}" ${x.picked ? 'checked' : ''}> 已領取</label>` : ''}</span>
         ${money ? `<select data-pay="${esc(x.member_id)}" aria-label="繳費狀態" class="paysel ${x.paid}">${Object.entries(PAID_NAME).map(([k, v]) => `<option value="${k}" ${x.paid === k ? 'selected' : ''}>${v}</option>`).join('')}</select>` : '<span></span>'}
       </div>`).join('')}</div>

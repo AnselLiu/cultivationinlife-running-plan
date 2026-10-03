@@ -82,7 +82,7 @@ async function memberLogsView(mid) {
     <section class="card"><div class="roster">${r.logs.map((l) => `<div class="mlog">
       <div class="row spread"><b>${dstr(l.date)}${l.week_no ? ` <span class="tiny">W${l.week_no} ${esc(dayLabel(l.plan_day || ''))}</span>` : ''}</b>
         <span class="pill ${l.status === 'done' ? 'solid' : l.status === 'skip' ? '' : 'wait'}">${LOG_STATUS_NAME[l.status]}</span></div>
-      ${l.plan_text ? `<span class="tiny">課表：${esc(fixText(l.plan_text))}</span>` : ''}
+      ${l.plan_text ? `<span class="tiny">課表：<span translate="no">${esc(fixText(l.plan_text))}</span></span>` : ''}
       <span>${l.km ? `${l.km} km` : ''}${l.seconds ? `・${S.fmtDuration(l.seconds)}` : ''}${l.km && l.seconds ? `・${S.fmtPace(l.km * 1000, l.seconds)}` : ''}${l.hr ? `・心率 ${l.hr}` : ''}${l.rpe ? `・RPE ${l.rpe}` : ''}${l.feel ? `・${FEEL[l.feel]}` : ''}</span>
       <details data-cm="${l.id}"><summary class="tiny" style="cursor:pointer">回饋${l.comments ? `（${l.comments}）` : ''}</summary><div class="cmts"></div>
         <form class="row cmform" style="gap:8px"><input name="body" maxlength="500" placeholder="給這次訓練一點回饋" style="flex:1"><button class="btn sm">送出</button></form></details>
@@ -108,7 +108,7 @@ async function logsTeamView(week, team) {
     </section>
     <section class="card"><div class="roster">${r.members.map((m) => {
       const p = Math.min(100, Math.round(((m.done || 0) + (m.partial || 0) * 0.5) / planned * 100));
-      return `<a class="r tlog" href="#/logs/m/${esc(m.id)}">${avatar(m)}<span><b>${esc(m.nickname || m.name)}</b> <span class="tiny">${m.dist === 'hm' ? '半馬' : '全馬'} ${esc(m.grp)}</span>
+      return `<a class="r tlog" href="#/logs/m/${esc(m.id)}">${avatar(m)}<span><b><span translate="no">${esc(m.nickname || m.name)}</span></b> <span class="tiny">${m.dist === 'hm' ? '半馬' : '全馬'} ${esc(m.grp)}</span>
         <span class="bar"><i style="width:${p}%"></i></span></span>
         <span class="num tiny" style="text-align:right"><b>${p}%</b><br>${m.km || 0} km${m.rpe ? `・RPE ${m.rpe}` : ''}</span></a>`; }).join('') || '<p class="muted" style="margin:0">這週還沒有分享的紀錄。</p>'}</div></section>`;
   $('#wprev').onclick = () => logsTeamView(week - 1, team);

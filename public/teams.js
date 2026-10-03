@@ -10,9 +10,9 @@ async function teamsView() {
     ${largeTitle('分團', '主團由管理員設定；想加入其他分團，申請後由該團幹部核准')}
     <div class="teamgrid">${list.map((t) => `<a class="card lit teamcard" href="#/t/${esc(t.id)}" style="--tc:${esc(t.color)}">
       <span class="dot" aria-hidden="true"></span>
-      <span class="row spread"><span class="row" style="gap:10px">${teamIcon(t, 'md')}<b>${esc(t.name)}</b></span>${t.id === me.main_team ? '<span class="pill solid">我的主團</span>' : t.my_status === 'active' ? `<span class="pill solid">${esc(t.my_title || TEAM_ROLE_NAME[t.my_role])}</span>` : t.my_status === 'pending' ? '<span class="pill wait">申請中</span>' : t.private ? '<span class="pill">私密</span>' : ''}</span>
-      ${t.intro ? `<span class="tiny">${esc(t.intro)}</span>` : ''}
-      <span class="row spread"><span class="tiny num">${t.count} 人</span><span class="tiny">${t.leaders.filter((l) => l.role === 'lead').map((l) => `團長 ${esc(l.nickname || l.name)}`).join('、')}</span></span>
+      <span class="row spread"><span class="row" style="gap:10px">${teamIcon(t, 'md')}<b><span translate="no">${esc(t.name)}</span></b></span>${t.id === me.main_team ? '<span class="pill solid">我的主團</span>' : t.my_status === 'active' ? `<span class="pill solid">${esc(t.my_title || TEAM_ROLE_NAME[t.my_role])}</span>` : t.my_status === 'pending' ? '<span class="pill wait">申請中</span>' : t.private ? '<span class="pill">私密</span>' : ''}</span>
+      ${t.intro ? `<span class="tiny"><span translate="no">${esc(t.intro)}</span></span>` : ''}
+      <span class="row spread"><span class="tiny num">${t.count} 人</span><span class="tiny">${t.leaders.filter((l) => l.role === 'lead').map((l) => `團長 <span translate="no">${esc(l.nickname || l.name)}</span>`).join('、')}</span></span>
     </a>`).join('') || `<div class="card">${emptyState('runner', '還沒有分團')}</div>`}</div>
     ${allow('settings') ? '<a class="tiny center" href="#/admin?tab=teams" style="padding:6px">管理分團 ›</a>' : ''}`;
 }
@@ -28,16 +28,16 @@ async function teamView(tid, q = '') {
     <section class="card hero teamhero" style="--tc:${esc(t.color)}">
       <div class="row spread"><span class="pill" style="background:rgba(255,255,255,.2);color:#fff">${t.private ? '私密分團' : '分團'}・${t.count} 人</span>
         ${inTeam ? `<span class="pill" style="background:#fff;color:${esc(t.color)}">${esc(t.my_title || TEAM_ROLE_NAME[t.my_role])}</span>` : ''}</div>
-      <div class="row" style="gap:14px">${teamIcon(t, 'lg')}<h2 style="margin:0">${esc(t.name)}</h2></div>
-      ${t.intro ? `<p class="muted" style="margin:0;white-space:pre-wrap">${esc(t.intro)}</p>` : ''}
-      <div class="leaders">${t.leaders.map((l) => `<span class="ldr">${avatar(l)}<span><b>${esc(l.nickname || l.name)}</b><span class="tiny">${esc(l.title || TEAM_ROLE_NAME[l.role])}</span></span></span>`).join('')}</div>
+      <div class="row" style="gap:14px">${teamIcon(t, 'lg')}<h2 style="margin:0"><span translate="no">${esc(t.name)}</span></h2></div>
+      ${t.intro ? `<p class="muted" style="margin:0;white-space:pre-wrap"><span translate="no">${esc(t.intro)}</span></p>` : ''}
+      <div class="leaders">${t.leaders.map((l) => `<span class="ldr">${avatar(l)}<span><b><span translate="no">${esc(l.nickname || l.name)}</span></b><span class="tiny"><span translate="no">${esc(l.title || TEAM_ROLE_NAME[l.role])}</span></span></span></span>`).join('')}</div>
       <div class="row">
         ${inTeam ? (t.line_url ? `<a class="btn line sm" href="${esc(t.line_url)}" target="_blank" rel="noopener">加入 LINE 群組</a>` : '')
           : t.my_status === 'pending' ? '<span class="pill" style="background:rgba(255,255,255,.2);color:#fff">已申請，等幹部核准</span>'
           : `<button class="btn sm" id="joinTeam" style="background:#fff;color:${esc(t.color)}">申請加入</button>`}
         ${(inTeam && t.id !== me.main_team && t.my_role !== 'lead') || t.my_status === 'pending' ? `<button class="btn sm glassbtn" id="leaveTeam">${inTeam ? '退出' : '取消申請'}</button>` : ''}
       </div>
-      ${t.self_managed ? `<p class="tiny" style="margin:0">${esc(t.name)}的成員由${esc(t.name)}的團長與幹部處理。</p>` : ''}
+      ${t.self_managed ? `<p class="tiny" style="margin:0"><span translate="no">${esc(t.name)}</span>的成員由<span translate="no">${esc(t.name)}</span>的團長與幹部處理。</p>` : ''}
     </section>
 
     <div class="section-h"><h2>分團活動</h2>${teamAllow(tid, 'event') ? `<a class="btn ghost sm" href="#/new?team=${esc(tid)}">＋ 新增</a>` : ''}</div>
@@ -103,8 +103,8 @@ async function teamView(tid, q = '') {
   if (manage) bindTeamRoster(t, roster, q);
 }
 const teamMemberRow = (r) => (m) => `<div class="r">${avatar(m)}
-    <span><b>${esc(m.name)}</b>${m.nickname ? ` <span class="tiny">${esc(m.nickname)}</span>` : ''}
-      <span class="tiny" style="display:block">${esc(m.title || TEAM_ROLE_NAME[m.role])}・${m.dist === 'hm' ? '半馬' : '全馬'} ${esc(m.grp)} 組${m.membership === 'active' ? '・協會會員' : ''}</span></span>
+    <span><b><span translate="no">${esc(m.name)}</span></b>${m.nickname ? ` <span class="tiny"><span translate="no">${esc(m.nickname)}</span></span>` : ''}
+      <span class="tiny" style="display:block"><span translate="no">${esc(m.title || TEAM_ROLE_NAME[m.role])}</span>・${m.dist === 'hm' ? '半馬' : '全馬'} ${esc(m.grp)} 組${m.membership === 'active' ? '・協會會員' : ''}</span></span>
     ${m.status === 'pending'
       ? (r.can.approve ? `<span class="row" style="gap:6px"><button class="btn sm" data-tm="approve" data-id="${m.id}">通過</button><button class="btn ghost sm" data-tm="remove" data-id="${m.id}">婉拒</button></span>` : '')
       : (r.can.appoint && (m.role !== 'lead' || r.can.lead)) || (r.can.approve && m.role === 'member')
@@ -115,9 +115,9 @@ async function loadBoard(t) {
   const box = $('#board'); if (!box) return;
   const { posts, canPost } = await api(`/teams/${t.id}/posts`).catch(() => ({ posts: [] }));
   box.innerHTML = posts.map((p) => `<article class="post ${p.pinned ? 'pinned' : ''}">
-    <div class="row spread"><b>${p.pinned ? '<span class="pill">置頂</span> ' : ''}${esc(p.title)}</b>
+    <div class="row spread"><b>${p.pinned ? '<span class="pill">置頂</span> ' : ''}<span translate="no">${esc(p.title)}</span></b>
       ${p.author_id === me.id || teamAllow(t.id, 'appoint') ? `<button class="btn ghost sm" data-delpost="${p.id}" aria-label="刪除公告">刪除</button>` : ''}</div>
-    ${p.body ? `<p style="margin:0;white-space:pre-wrap">${esc(p.body)}</p>` : ''}
+    ${p.body ? `<p style="margin:0;white-space:pre-wrap"><span translate="no">${esc(p.body)}</span></p>` : ''}
     <span class="tiny">${esc(p.author_name || '')}・${ago(p.created_at)}</span></article>`).join('') || '<p class="muted" style="margin:0">還沒有公告</p>';
   for (const b of box.querySelectorAll('[data-delpost]')) b.onclick = async () => {
     if (!confirm('刪除這則公告？')) return;
@@ -145,7 +145,7 @@ async function loadBoardRank(tid, period) {
   for (const b of document.querySelectorAll('[data-lb]')) { b.setAttribute('aria-pressed', String(b.dataset.lb === period)); b.onclick = () => loadBoardRank(tid, b.dataset.lb); }
   try {
     const r = await api(`/teams/${tid}/leaderboard?period=${period}`);
-    box.innerHTML = r.rows.map((x, i) => `<div class="r rank"><span class="no num">${i + 1}</span>${avatar(x)}<span>${esc(x.nickname || x.name)}<span class="tiny" style="display:block">${x.n} 次</span></span><b class="num">${x.km} km</b></div>`).join('')
+    box.innerHTML = r.rows.map((x, i) => `<div class="r rank"><span class="no num">${i + 1}</span>${avatar(x)}<span><span translate="no">${esc(x.nickname || x.name)}</span><span class="tiny" style="display:block">${x.n} 次</span></span><b class="num">${x.km} km</b></div>`).join('')
       || '<p class="muted" style="margin:0">還沒有人上榜</p>';
     $('#lbHint').textContent = r.me ? '你有出現在排行榜上，可以在「我的 → 隱私」關掉。' : '排行榜只顯示自己同意上榜的人；想參加到「我的 → 隱私」打開。';
   } catch (e) { box.innerHTML = `<p class="muted" style="margin:0">${esc(e.message)}</p>`; }
@@ -161,7 +161,7 @@ function teamRosterCard(t, r, q) {
       ${r.next ? '<button class="btn ghost sm block" id="tmMore">載入更多</button>' : ''}
       <p class="tiny" style="margin:0">團長由理事長指派；團長可以指派分團幹部。分團名冊不顯示電話。</p>
     </section>
-    ${r.can.add ? `<section class="card"><h3>把跑友加進${esc(t.name)}</h3>
+    ${r.can.add ? `<section class="card"><h3>把跑友加進<span translate="no">${esc(t.name)}</span></h3>
       <form id="tmAdd" class="row" style="gap:8px" role="search"><input name="q" placeholder="輸入姓名搜尋（至少 1 個字）" aria-label="搜尋要加入的跑友" style="flex:1" autocomplete="off"><button class="btn ghost sm">搜尋</button></form>
       <div id="tmAddList" class="roster"></div></section>` : ''}`;
 }
@@ -184,7 +184,7 @@ function bindTeamRoster(t, r, q) {
     const opts = Object.entries(TEAM_ROLE_NAME).filter(([k]) => k !== 'lead' || r.can.lead).filter(([k]) => r.can.appoint || k === 'member');
     b.closest('.r').insertAdjacentHTML('afterend', `<form class="card tight" id="tmDlg">
       <div class="grid2"><label>分團身分<select name="role">${opts.map(([k, v]) => `<option value="${k}" ${b.dataset.role === k ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
-        <label>職稱（選填）<input name="title" maxlength="12" value="${b.dataset.title}" placeholder="副團長、活動組"></label></div>
+        <label>職稱（選填）<input name="title" maxlength="12" value="${esc(b.dataset.title || '')}" placeholder="副團長、活動組"></label></div>
       <div class="row"><button class="btn sm">儲存</button><button type="button" class="btn danger sm" id="tmRm">移出分團</button><button type="button" class="btn ghost sm" id="tmX">取消</button></div></form>`);
     $('#tmX').onclick = () => $('#tmDlg').remove();
     $('#tmRm').onclick = () => confirm(`把 ${b.dataset.name} 移出${t.name}？`) && act({ member_id: b.dataset.tmrole, action: 'remove' }, '已移出');
@@ -196,7 +196,7 @@ function bindTeamRoster(t, r, q) {
     const qq = e.target.q.value.trim();
     if (!qq) return toast('請輸入姓名');
     const { members } = await api(`/members?q=${encodeURIComponent(qq)}`);
-    $('#tmAddList').innerHTML = members.map((m) => `<div class="r">${avatar(m)}<span>${esc(m.name)}${m.nickname ? ` <span class="tiny">${esc(m.nickname)}</span>` : ''}</span>
+    $('#tmAddList').innerHTML = members.map((m) => `<div class="r">${avatar(m)}<span><span translate="no">${esc(m.name)}</span>${m.nickname ? ` <span class="tiny"><span translate="no">${esc(m.nickname)}</span></span>` : ''}</span>
       ${m.teams.some((x) => x.t === t.id && x.s === 'active') ? '<span class="tiny">已在團內</span>' : `<button class="btn ghost sm" data-addm="${m.id}">加入</button>`}</div>`).join('') || '<p class="muted" style="margin:0">找不到</p>';
     for (const x of document.querySelectorAll('[data-addm]')) x.onclick = () => act({ member_id: x.dataset.addm, action: 'add' }, '已加入');
   });

@@ -6,6 +6,7 @@ import * as S from './studio.js';
 import * as Run from './run.js';
 import * as Guide from './guide.js';
 import { quote, charges } from './pricing.js';
+import * as I18N from './i18n.js';
 // 用到才下載的模組：管理後台、拍照、報表、活動表單與統計、分團
 // 剛部署的那幾秒可能拿到舊檔：載入失敗就等一下、加版本參數再試一次，仍失敗才顯示錯誤
 const calendarView = (...a) => lazy('./calendar.js', 'calendarView')(...a);
@@ -21,7 +22,7 @@ if (location.pathname === '/privacy' && !location.hash) history.replaceState(nul
 const $ = (sel, root = document) => root.querySelector(sel);
 const view = $('#view');
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-const api = async (path, opt = {}) => {
+const api = async (path, opt = {}, retried = false) => {
   const method = opt.method || 'GET';
   const res = await fetch(`/api${path}`, {
     method,
@@ -31,6 +32,11 @@ const api = async (path, opt = {}) => {
   });
   const data = await res.json().catch(() => ({}));
   if (method === 'GET') offlineBar(res.headers.get('x-cil-offline') === '1');
+  // 高風險操作要先用通行金鑰驗證：跳出 Face ID／指紋，驗證完自動再送一次
+  if (res.status === 403 && data.stepup && !retried && !/新增通行金鑰/.test(data.error || '')) {
+    try { await passkey('stepup'); } catch (e) { throw new Error(e.message === '已取消' ? '已取消驗證' : data.error); }
+    return api(path, opt, true);
+  }
   if (!res.ok) throw new Error(data.error || `錯誤 ${res.status}`);
   return data;
 };
@@ -129,10 +135,10 @@ const TEAM_PERMS = { lead: ['event', 'checkin', 'lottery', 'layout', 'roster', '
 const TEAM_ROLE_NAME = { lead: '團長', officer: '幹部', member: '團員' };
 const teamAllow = (tid, p) => allow(p) || (!!tid && teamOf(tid)?.my_status === 'active' && !!TEAM_PERMS[teamOf(tid).my_role]?.includes(p));
 const anyTeamAllow = (p) => allow(p) || teams().some((t) => teamAllow(t.id, p));
-const teamTag = (t) => (t ? `<span class="pill team" style="--tc:${esc(t.color || '#1C4698')}">${t.icon ? `<img class="ticon xs" src="${esc(t.icon)}" alt="">` : ''}${esc(t.name)}</span>` : '');
+const teamTag = (t) => (t ? `<span class="pill team" style="--tc:${esc(t.color || '#1C4698')}">${t.icon ? `<img class="ticon xs" src="${esc(t.icon)}" alt="">` : ''}<span translate="no">${esc(t.name)}</span></span>` : '');
 // 分團小圖：有上傳就用圖，沒有就用團色＋第一個字
 const teamIcon = (t, cls = '') => (t.icon ? `<img class="ticon ${cls}" src="${esc(t.icon)}" alt="" loading="lazy">`
-  : `<span class="ticon ${cls}" style="background:${esc(t.color || '#1C4698')}" aria-hidden="true">${esc(t.name.slice(0, 1))}</span>`);
+  : `<span class="ticon ${cls}" style="background:${esc(t.color || '#1C4698')}" aria-hidden="true"><span translate="no">${esc(t.name.slice(0, 1))}</span></span>`);
 // 上傳前在手機上縮成 256px 正方形（置中裁切），WebP 不支援就用 JPEG
 async function squareIcon(file) {
   const bmp = await createImageBitmap(file);
@@ -212,7 +218,7 @@ async function passkey(purpose, name) {
   return api('/passkey/verify', { method: 'POST', body: { cid, credential, name } });
 }
 // 幹部開了強制兩步驟、這次登入還沒驗證：顯示提示列
-const mfaBanner = () => (me?.mfaPending ? `<section class="card mfabar"><div><b>請驗證身分</b><span class="tiny" style="display:block">你是${esc(me.realRoleName || '幹部')}，協會規定用通行金鑰再驗證一次才能使用管理功能。</span></div>
+const mfaBanner = () => (me?.mfaPending ? `<section class="card mfabar"><div><b>請驗證身分</b><span class="tiny" style="display:block">你是<span translate="no">${esc(me.realRoleName || '幹部')}</span>，協會規定用通行金鑰再驗證一次才能使用管理功能。</span></div>
   <button class="btn sm" data-stepup>${IC.lock}驗證</button></section>` : '');
 function bindStepup() {
   for (const b of document.querySelectorAll('[data-stepup]')) b.onclick = async () => {
@@ -235,18 +241,22 @@ function loginView() {
   const err = new URLSearchParams(location.hash.split('?')[1] || '').get('err');
   const shared = location.hash.match(/^#\/e\/([\w-]+)/)?.[1];
   const sharedTok = new URLSearchParams(location.hash.split('?')[1] || '').get('t');
+  const feat = [[IC.megaphone, '團練報名', '公告、接龍、候補自動遞補'], [IC.calendar, '分組課表', '照組別換算配速'], [IC.runner, 'GPS 跑步', '自動暫停、分段、GPX'], [ic('<path d="M4 8.2a2 2 0 0 1 2-2h1.9l1.5-2h5.2l1.5 2H18a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2Z"/><circle cx="12" cy="12.6" r="3.6"/>'), '拍照分享', '成績與路線放進照片']];
   view.innerHTML = `
-    <div id="sharedEv"></div>
-    <section class="card hero">
-      <h2>一起練，跑得更遠</h2>
-      <p class="muted" style="margin:0">團練公告、報名接龍和每週課表，都收在這裡。用 Google 登入就會記得你的組別，報名不用再打名字。</p>
-      ${org().parent ? `<p class="tiny" style="margin:0;color:rgba(255,255,255,.78)">${esc(org().parent_note || `${org().parent} 支持`)}</p>` : ''}
+    <section class="welcome">
+      <img class="wmark" src="/icons/icon-192.png" alt="" width="96" height="96">
+      <h1 class="wtitle">${esc(org().short || '耕跑團')}</h1>
+      <p class="wsub" translate="no">CULTIVATION IN LIFE RUN</p>
+      <p class="wlead">一起練，跑得更遠</p>
+      <ul class="wfeat">${feat.map(([i, t, d]) => `<li><span class="wic">${i}</span><b>${t}</b><span class="tiny">${d}</span></li>`).join('')}</ul>
     </section>
+    <div id="sharedEv"></div>
     ${err ? `<div class="notice">${esc(err)}</div>` : ''}
-    <section class="card">
+    <section class="card authcard">
       ${cfg.googleLogin ? `<a class="btn google block" href="${googleHref()}">${GOOGLE_G}<span>${inAppBrowser() === 'line' ? '用瀏覽器開啟並以 Google 登入' : '使用 Google 帳號登入'}</span></a>
       ${inAppBrowser() === 'line' ? '<p class="tiny center" style="margin:0">Google 不允許在 LINE 裡登入，按上面的按鈕會改用 Safari 或 Chrome 打開這個網站。</p>' : ''}
       ${inAppBrowser() === 'meta' ? '<p class="notice" style="margin:0">Google 不允許在 Facebook／Instagram 裡登入：請點右上角「⋯」選「在瀏覽器開啟」。</p>' : ''}
+      ${pkSupported() ? `<button class="btn ghost block iconbtn" id="pkLogin">${IC.lock}用通行金鑰登入</button>` : ''}
       <p class="tiny center">只取得你的 Google 名稱和大頭貼，不會取得 Email、不會讀取你的信件或雲端資料。<br>登入即表示你已閱讀並同意<a href="#/privacy">隱私權政策</a>。</p>` : ''}
       <details ${cfg.googleLogin ? '' : 'open'}>
         <summary class="muted" style="cursor:pointer">用邀請碼加入</summary>
@@ -262,11 +272,14 @@ function loginView() {
         </form>
       </details>
     </section>
+    ${org().parent ? `<p class="tiny center" style="margin:0">${esc(org().parent_note || `${org().parent} 支持`)}</p>` : ''}
     <section class="card">
-      <h3>台灣耕跑團協會</h3>
-      <p class="muted" style="margin:0">個人入會申請使用協會的 Google 表單，網站不會存身分證字號等資料。</p>
+      <h3>${esc(org().name || '台灣耕跑團協會')}</h3>
+      <p class="muted" style="margin:0">入會申請使用協會的 Google 表單。</p>
       ${org().join_form ? `<a class="btn ghost block" href="${esc(org().join_form)}" target="_blank" rel="noopener">開啟入會表單</a>` : ''}
-    </section>`;
+    </section>
+    <div class="seg langseg" role="group" aria-label="Language" translate="no"><button data-lang="zh" aria-pressed="${I18N.lang === 'zh'}">中文</button><button data-lang="en" aria-pressed="${I18N.lang === 'en'}">English</button></div>`;
+  for (const b of document.querySelectorAll('[data-lang]')) b.onclick = () => { if (b.dataset.lang !== I18N.lang) I18N.setLang(b.dataset.lang); };
   // 從分享連結進來：記住要去的活動，登入後直接帶過去
   if (shared) {
     try { sessionStorage.setItem('cil-after-login', `#/e/${shared}${sharedTok ? `?t=${encodeURIComponent(sharedTok)}` : ''}`); } catch {}
@@ -274,8 +287,8 @@ function loginView() {
       $('#sharedEv').innerHTML = `<section class="card shared">
         <span class="tiny">${e.visibility === 'invite' ? `${IC.lock} 你收到一個邀請制活動的邀請` : `有人邀請你${e.kind === 'survey' ? '填寫問卷' : '報名'}`}</span>
         <div class="row" style="gap:6px">${e.team ? `<span class="pill">${esc(e.team)}</span>` : ''}<span class="pill ${e.kind}">${KIND_NAME[e.kind] || '活動'}</span></div>
-        <h2 style="margin:0">${esc(e.title)}</h2>
-        <p class="muted" style="margin:0">${dstr(e.date)}${e.gather_time ? ` ${e.gather_time}` : ''}${e.place ? `・${esc(e.place)}` : ''}</p>
+        <h2 style="margin:0"><span translate="no">${esc(e.title)}</span></h2>
+        <p class="muted" style="margin:0">${dstr(e.date)}${e.gather_time ? ` ${e.gather_time}` : ''}${e.place ? `・<span translate="no">${esc(e.place)}</span>` : ''}</p>
         <p class="tiny" style="margin:0">先登入，登入後會直接回到這個活動。</p></section>`;
     }).catch(() => {});
   }
@@ -340,11 +353,11 @@ async function countdownPicker() {
   sheet.innerHTML = `<div class="sheet-bg" data-close></div><section class="card sheet-card">
     <div class="row spread"><h3>倒數哪一場比賽</h3><button class="btn ghost sm" data-close>完成</button></div>
     <div class="cdlist">
-      ${upcoming.map((r) => `<button class="cdopt ${d.mode === 'mine' && r.is_primary ? 'on' : ''}" data-race="${r.id}"><span><b>${esc(r.name)}</b><span class="tiny">${esc(r.date)}${r.dist ? `・${esc(r.dist)}` : ''}${r.goal ? `・目標 ${esc(r.goal)}` : ''}</span></span><span class="num">${days(r.date)} 天</span></button>`).join('')}
-      ${d.club ? `<button class="cdopt ${d.mode === 'club' ? 'on' : ''}" data-mode="club"><span><b>${esc(d.club.name)}</b><span class="tiny">協會預設・${esc(d.club.date)}</span></span><span class="num">${days(d.club.date)} 天</span></button>` : ''}
+      ${upcoming.map((r) => `<button class="cdopt ${d.mode === 'mine' && r.is_primary ? 'on' : ''}" data-race="${r.id}"><span><b><span translate="no">${esc(r.name)}</span></b><span class="tiny">${esc(r.date)}${r.dist ? `・${esc(r.dist)}` : ''}${r.goal ? `・目標 ${esc(r.goal)}` : ''}</span></span><span class="num">${days(r.date)} 天</span></button>`).join('')}
+      ${d.club ? `<button class="cdopt ${d.mode === 'club' ? 'on' : ''}" data-mode="club"><span><b><span translate="no">${esc(d.club.name)}</span></b><span class="tiny">協會預設・${esc(d.club.date)}</span></span><span class="num">${days(d.club.date)} 天</span></button>` : ''}
       <button class="cdopt ${d.mode === 'off' ? 'on' : ''}" data-mode="off"><span><b>不顯示倒數</b></span></button>
     </div>
-    ${d.presets.filter((p) => !mineIds.has(`${p.name}|${p.date}`)).length ? `<h3 style="margin-top:6px">常用賽事</h3><div class="cdlist">${d.presets.filter((p) => !mineIds.has(`${p.name}|${p.date}`)).map((p, i) => `<button class="cdopt" data-preset="${i}"><span><b>${esc(p.name)}</b><span class="tiny">${esc(p.date)}${p.dist ? `・${esc(p.dist)}` : ''}</span></span><span class="tiny">加入並倒數</span></button>`).join('')}</div>` : ''}
+    ${d.presets.filter((p) => !mineIds.has(`${p.name}|${p.date}`)).length ? `<h3 style="margin-top:6px">常用賽事</h3><div class="cdlist">${d.presets.filter((p) => !mineIds.has(`${p.name}|${p.date}`)).map((p, i) => `<button class="cdopt" data-preset="${i}"><span><b><span translate="no">${esc(p.name)}</span></b><span class="tiny">${esc(p.date)}${p.dist ? `・${esc(p.dist)}` : ''}</span></span><span class="tiny">加入並倒數</span></button>`).join('')}</div>` : ''}
     <details><summary class="tiny" style="cursor:pointer">自己新增一場</summary>
       <form id="cdAdd" class="filters" style="margin-top:8px">
         <input name="name" maxlength="30" placeholder="比賽名稱，例如 2027 東京馬拉松" required aria-label="比賽名稱">
@@ -450,7 +463,7 @@ async function listView() {
   const chips = mine.length ? `<div class="chipbar" role="tablist" aria-label="依分團篩選">
       <button role="tab" data-tf="" aria-selected="${!pick}">全部</button>
       <button role="tab" data-tf="assoc" aria-selected="${pick === 'assoc'}">全協會</button>
-      ${mine.map((t) => `<button role="tab" data-tf="${esc(t.id)}" aria-selected="${pick === t.id}" style="--tc:${esc(t.color)}">${t.icon ? `<img class="ticon xs" src="${esc(t.icon)}" alt="">` : '<i></i>'}${esc(t.name)}</button>`).join('')}
+      ${mine.map((t) => `<button role="tab" data-tf="${esc(t.id)}" aria-selected="${pick === t.id}" style="--tc:${esc(t.color)}">${t.icon ? `<img class="ticon xs" src="${esc(t.icon)}" alt="">` : '<i></i>'}<span translate="no">${esc(t.name)}</span></button>`).join('')}
     </div>` : '';
   // 第二次打開以後才提示安裝，不要一進來就打擾
   let visits = 0;
@@ -495,7 +508,7 @@ async function todayCard(events) {
     <div class="row spread"><span class="tiny">今天・${me.dist === 'hm' ? '半馬' : '全馬'} ${esc(me.grp)} 組</span>${done ? `<span class="pill solid">${LOG_ICON[done.status]}${LOG_STATUS_NAME[done.status]}</span>` : ''}</div>
     ${day ? (day.kind === 'rest' ? '<h2>今天休息</h2><p class="muted" style="margin:0">好好睡、補充水分，明天再練。</p>'
       : `<h2 class="${day.kind}">${esc(fixText(day.t))}</h2><p class="muted" style="margin:0">${P.KIND_LABEL[day.kind]}${P.paceHint(day.t, me.dist, me.grp) ? `・${P.paceHint(day.t, me.dist, me.grp)}` : ''}</p>`) : ''}
-    ${todays.map((e) => `<a class="todayev" href="#/e/${e.id}">${IC.calendar}<span><b>${esc(e.title)}</b><span class="tiny" style="display:block">${e.gather_time ? `${e.gather_time} 集合` : ''}${e.place ? `・${esc(e.place)}` : ''}${e.mine === 'wait' ? '・候補中' : ''}</span></span><span class="tiny">›</span></a>`).join('')}
+    ${todays.map((e) => `<a class="todayev" href="#/e/${e.id}">${IC.calendar}<span><b><span translate="no">${esc(e.title)}</span></b><span class="tiny" style="display:block">${e.gather_time ? `${e.gather_time} 集合` : ''}${e.place ? `・<span translate="no">${esc(e.place)}</span>` : ''}${e.mine === 'wait' ? '・候補中' : ''}</span></span><span class="tiny">›</span></a>`).join('')}
     ${day && day.kind !== 'rest' ? (done ? `<a class="btn ghost sm" href="#/log?id=${done.id}">看今天的紀錄</a>`
       : `<div class="grid2">${feat('gps') ? `<a class="btn iconbtn" href="#/run" style="justify-content:center">${IC.runner}開始跑步</a>` : ''}<a class="btn ${feat('gps') ? 'ghost ' : ''}iconbtn" href="#/log?w=${w}&i=${idx}" style="justify-content:center${feat('gps') ? '' : ';grid-column:1/-1'}">${IC.check}練完了，記錄</a></div>`) : ''}
   </section>`;
@@ -522,11 +535,11 @@ function heroCard(e) {
   return `<a class="card hero" href="#/e/${e.id}">
     <span class="sweep" aria-hidden="true"></span>
     <div class="row spread">
-      <span class="row" style="gap:6px"><span class="pill" style="background:rgba(255,255,255,.22);color:#fff">${KIND_NAME[e.kind]}</span>${e.team_id && teamOf(e.team_id) ? `<span class="pill" style="background:rgba(255,255,255,.14);color:#fff">${esc(teamOf(e.team_id).name)}</span>` : ''}</span>
+      <span class="row" style="gap:6px"><span class="pill" style="background:rgba(255,255,255,.22);color:#fff">${KIND_NAME[e.kind]}</span>${e.team_id && teamOf(e.team_id) ? `<span class="pill" style="background:rgba(255,255,255,.14);color:#fff"><span translate="no">${esc(teamOf(e.team_id).name)}</span></span>` : ''}</span>
       <span class="tiny">${days <= 0 ? '就是今天' : days === 1 ? '明天' : `${days} 天後`}</span>
     </div>
-    <h2>${esc(e.title)}</h2>
-    <p class="muted" style="margin:0">${dstr(e.date)}${e.gather_time ? ` ${e.gather_time} 集合` : ''}${e.place ? `・${esc(e.place)}` : ''}</p>
+    <h2><span translate="no">${esc(e.title)}</span></h2>
+    <p class="muted" style="margin:0">${dstr(e.date)}${e.gather_time ? ` ${e.gather_time} 集合` : ''}${e.place ? `・<span translate="no">${esc(e.place)}</span>` : ''}</p>
     <div class="row spread">
       <span class="row" style="gap:8px">${avatarStack(e.peek || [], e.signed)}<span class="tiny">${e.signed} 人報名${e.waiting ? `・候補 ${e.waiting}` : ''}${e.capacity ? `／${e.capacity}` : ''}</span></span>
       ${e.mine === 'in' ? '<span class="pill" style="background:#fff;color:#1C4698">已報名</span>'
@@ -541,8 +554,8 @@ function eventCard(e) {
       <span class="cal"><u>${d2(e.date).getMonth() + 1}月</u><b class="num">${e.date.slice(8)}</b><span>週${WD[d2(e.date).getDay()]}</span></span>
       <span class="body">
         <span class="pills"><span class="pill ${e.kind}">${KIND_NAME[e.kind] || '活動'}</span>${teamTag(teamOf(e.team_id))}${e.visibility === 'invite' ? `<span class="pill lock">${IC.lock}邀請制</span>` : ''}</span>
-        <span class="t">${esc(e.title)}</span>
-        <span class="tiny">${e.gather_time ? `${e.gather_time}　` : ''}${esc(e.place || '')}${(() => { const ps = [...(e.options || []), ...(e.kind === 'buy' ? e.items || [] : [])].map((o) => o.price).filter(Boolean); return ps.length ? `　${money(Math.min(...ps))} 起` : e.fee ? `　${money(e.fee)}` : ''; })()}</span>
+        <span class="t"><span translate="no">${esc(e.title)}</span></span>
+        <span class="tiny">${e.gather_time ? `${e.gather_time}　` : ''}<span translate="no">${esc(e.place || '')}</span>${(() => { const ps = [...(e.options || []), ...(e.kind === 'buy' ? e.items || [] : [])].map((o) => o.price).filter(Boolean); return ps.length ? `　${money(Math.min(...ps))} 起` : e.fee ? `　${money(e.fee)}` : ''; })()}</span>
         ${e.capacity ? `<span class="bar"><i style="width:${pct}%"></i></span>` : ''}
       </span>
       <span class="evright">${e.mine === 'in' ? `<span class="mine">${IC.check}已報名</span>` : e.mine === 'wait' ? '<span class="mine wait">候補中</span>' : ''}
@@ -591,18 +604,18 @@ async function eventView(id) {
   view.innerHTML = `
     <section class="card hero">
       <div class="row spread">
-        <span class="row" style="gap:6px"><span class="pill" style="background:rgba(255,255,255,.22);color:#fff">${KIND_NAME[ev.kind]}</span>${ev.team ? `<a class="pill" style="background:rgba(255,255,255,.14);color:#fff" href="#/t/${esc(ev.team.id)}">${esc(ev.team.name)}</a>` : ''}${inviteOnly ? `<span class="pill" style="background:rgba(255,255,255,.14);color:#fff">${IC.lock}邀請制</span>` : ''}</span>
+        <span class="row" style="gap:6px"><span class="pill" style="background:rgba(255,255,255,.22);color:#fff">${KIND_NAME[ev.kind]}</span>${ev.team ? `<a class="pill" style="background:rgba(255,255,255,.14);color:#fff" href="#/t/${esc(ev.team.id)}"><span translate="no">${esc(ev.team.name)}</span></a>` : ''}${inviteOnly ? `<span class="pill" style="background:rgba(255,255,255,.14);color:#fff">${IC.lock}邀請制</span>` : ''}</span>
         <span class="tiny">${survey ? `${dstr(ev.date)} 前` : dstr(ev.date)}</span>
       </div>
-      <h2>${esc(ev.title)}</h2>
-      <p class="muted" style="margin:0">${ev.gather_time ? `${ev.gather_time} 集合` : ''}${ev.end_time ? `－${ev.end_time}` : ''}${ev.place ? `　${esc(ev.place)}` : ''}${ev.lead ? `　帶團：${esc(ev.lead)}` : ''}</p>
-      ${(ev.options || []).length || (ev.items || []).length ? `<div class="pricechips">${[...(ev.options || []), ...(ev.items || [])].map((o) => `<span><b>${esc(o.name)}</b>${o.price ? `<span class="num">${money(o.price)}</span>` : ''}</span>`).join('')}</div>`
+      <h2><span translate="no">${esc(ev.title)}</span></h2>
+      <p class="muted" style="margin:0">${ev.gather_time ? `${ev.gather_time} 集合` : ''}${ev.end_time ? `－${ev.end_time}` : ''}${ev.place ? `　<span translate="no">${esc(ev.place)}</span>` : ''}${ev.lead ? `　帶團：<span translate="no">${esc(ev.lead)}</span>` : ''}</p>
+      ${(ev.options || []).length || (ev.items || []).length ? `<div class="pricechips">${[...(ev.options || []), ...(ev.items || [])].map((o) => `<span><b><span translate="no">${esc(o.name)}</span></b>${o.price ? `<span class="num">${money(o.price)}</span>` : ''}</span>`).join('')}</div>`
         : ev.fee ? `<div class="pricechips"><span><b>費用</b><span class="num">${money(ev.fee)}</span></span></div>` : ''}
       ${ev.pricing?.early_off && ev.pricing.early_until >= ymd(new Date()) ? `<p class="tiny" style="margin:0;color:rgba(255,255,255,.9)">早鳥 ${esc(ev.pricing.early_until.slice(5).replace('-', '/'))} 前報名折 ${money(ev.pricing.early_off)}${ev.pricing.member_off ? `・協會會員再折 ${money(ev.pricing.member_off)}` : ''}</p>`
         : ev.pricing?.member_off ? `<p class="tiny" style="margin:0;color:rgba(255,255,255,.9)">協會會員折 ${money(ev.pricing.member_off)}</p>` : ''}
       ${ev.group_reg ? '<p class="tiny" style="margin:0;color:rgba(255,255,255,.85)">由幹部代為團體報名</p>' : ''}
       ${(ev.series || []).length > 1 ? `<div class="serieschips" aria-label="定期揪跑的其他場次">${ev.series.filter((x) => x.date >= ymd(new Date())).slice(0, 8).map((x) => `<a class="${x.id === ev.id ? 'on' : ''}" href="#/e/${esc(x.id)}">${esc(dstr(x.date))}</a>`).join('')}</div>` : ''}
-      ${ev.note ? `<p class="muted" style="margin:0;white-space:pre-wrap">${esc(ev.note)}</p>` : ''}
+      ${ev.note ? `<p class="muted" style="margin:0;white-space:pre-wrap"><span translate="no">${esc(ev.note)}</span></p>` : ''}
       ${ev.link_url ? `<a class="btn block" style="background:#fff;color:#1C4698" href="${esc(ev.link_url)}" target="_blank" rel="noopener">${esc(ev.link_label || '前往登記')} ${IC.external}</a>` : ''}
       ${inviteOnly && !admin ? '' : `<div class="row sharebar">
         <button class="btn sm glassbtn" id="shareEv"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V3.5M7.5 8 12 3.5 16.5 8M5 12.5v6A2.5 2.5 0 0 0 7.5 21h9a2.5 2.5 0 0 0 2.5-2.5v-6"/></svg>分享</button>
@@ -620,7 +633,7 @@ async function eventView(id) {
         <span class="t">${esc(myDay.t)} <span class="hint">${P.paceHint(myDay.t, me.dist, me.grp)}</span></span>
       </div></section>` : ''}
     ${ev.plan_text ? `<section class="card"><h3>課表</h3><pre class="out">${esc(ev.plan_text)}</pre></section>` : ''}
-    ${ev.spot ? `<section class="card"><div class="row spread"><h3>場地天氣</h3><a class="tiny" href="#/map?spot=${esc(ev.spot.id)}">${esc(ev.spot.name)} ›</a></div><div id="evWx"><p class="tiny" style="margin:0">載入中…</p></div></section>` : ''}
+    ${ev.spot ? `<section class="card"><div class="row spread"><h3>場地天氣</h3><a class="tiny" href="#/map?spot=${esc(ev.spot.id)}"><span translate="no">${esc(ev.spot.name)}</span> ›</a></div><div id="evWx"><p class="tiny" style="margin:0">載入中…</p></div></section>` : ''}
     ${ev.route ? `<section class="card"><div class="row spread"><h3>路線・${(ev.route.distance / 1000).toFixed(1)} 公里</h3><a class="tiny" href="#/map?route=${esc(ev.route.id)}">在地圖上看 ›</a></div>
       ${routeSvg(ev.route.points)}<div class="row" style="gap:8px"><button class="btn ghost sm" id="evGpx">下載 GPX</button></div></section>` : ''}
 
@@ -639,9 +652,9 @@ async function eventView(id) {
       ${mine?.status === 'wait' ? '<p class="notice" style="margin:0">你在候補名單，有人取消會自動遞補並通知你。</p>' : ''}
       ${mine && mine.status !== 'cancel' && ev.myAttended ? `<div class="row" style="gap:6px"><span class="pill solid">${IC.check}已出席</span></div>` : ''}
       <div class="roster">
-        ${ins.map((s) => `<div class="r">${avatar(s)}<span>${esc(s.name)}${s.note ? ` <span class="tiny">${esc(s.note)}</span>` : ''}</span><span class="pill">${esc(s.grp)}</span></div>`).join('')
+        ${ins.map((s) => `<div class="r">${avatar(s)}<span><span translate="no">${esc(s.name)}</span>${s.note ? ` <span class="tiny"><span translate="no">${esc(s.note)}</span></span>` : ''}</span><span class="pill">${esc(s.grp)}</span></div>`).join('')
           || '<p class="muted" style="margin:0">還沒有人報名，當第一個吧。</p>'}
-        ${waits.map((s) => `<div class="r">${avatar(s)}<span>${esc(s.name)}</span><span class="pill wait">候補</span></div>`).join('')}
+        ${waits.map((s) => `<div class="r">${avatar(s)}<span><span translate="no">${esc(s.name)}</span></span><span class="pill wait">候補</span></div>`).join('')}
       </div>
       ${admin ? '<button class="btn ghost sm" id="copyRoster">複製名單</button>' : ''}
     </section>
@@ -650,7 +663,7 @@ async function eventView(id) {
     ${party && ev.checkin ? await partyAdmin(ev) : ''}
 
     ${admin ? `<section class="card">
-      <div class="row spread"><h3>管理</h3><span class="tiny">${ev.team ? `${esc(ev.team.name)}的活動` : '全協會活動'}</span></div>
+      <div class="row spread"><h3>管理</h3><span class="tiny">${ev.team ? `<span translate="no">${esc(ev.team.name)}</span>的活動` : '全協會活動'}</span></div>
       <div class="row">
         <a class="btn sm" href="#/e/${ev.id}/stats">報名統計${qs.length ? '與問卷' : ''}</a>
         <a class="btn ghost sm" href="#/edit/${ev.id}">編輯</a>
@@ -865,8 +878,8 @@ const notifRow = (n) => `
         <div class="row" style="gap:12px;align-items:flex-start">
           <span class="nicon" aria-hidden="true">${NICON[n.kind] || '•'}</span>
           <span style="flex:1;min-width:0">
-            <b>${esc(n.title)}</b>
-            ${n.body ? `<span class="muted" style="display:block">${esc(n.body)}</span>` : ''}
+            <b><span translate="no">${esc(n.title)}</span></b>
+            ${n.body ? `<span class="muted" style="display:block"><span translate="no">${esc(n.body)}</span></span>` : ''}
             <span class="tiny">${ago(n.created_at)}</span>
           </span>
         </div>
@@ -957,7 +970,7 @@ function bindInviteCard(ev) {
     // 協會幹部從全體名冊找；分團幹部從自己分團找
     const r = allow('roster') ? await api(`/members?q=${encodeURIComponent(q)}`)
       : ev.team_id ? await api(`/teams/${ev.team_id}/members?q=${encodeURIComponent(q)}`) : { members: [] };
-    $('#invHits').innerHTML = r.members.map((m) => `<div class="r">${avatar(m)}<span>${esc(m.name)}${m.nickname ? ` <span class="tiny">${esc(m.nickname)}</span>` : ''}</span>
+    $('#invHits').innerHTML = r.members.map((m) => `<div class="r">${avatar(m)}<span><span translate="no">${esc(m.name)}</span>${m.nickname ? ` <span class="tiny"><span translate="no">${esc(m.nickname)}</span></span>` : ''}</span>
       <button class="btn ghost sm" data-inv="${m.id}">邀請</button></div>`).join('') || '<p class="muted" style="margin:0">找不到</p>';
     for (const b of document.querySelectorAll('[data-inv]')) b.onclick = () => add({ member_ids: [b.dataset.inv] }, '已邀請');
   };
@@ -970,7 +983,7 @@ function bindInviteCard(ev) {
     if (!e.target.open) return;
     const { invites } = await api(`/events/${ev.id}/invites`);
     $('#invList').innerHTML = invites.map((m) => `<div class="r">${avatar(m)}
-      <span>${esc(m.name)}<span class="tiny" style="display:block">${VIA_NAME[m.via] || ''}${m.status === 'in' ? '・已報名' : m.status === 'wait' ? '・候補' : ''}</span></span>
+      <span><span translate="no">${esc(m.name)}</span><span class="tiny" style="display:block">${VIA_NAME[m.via] || ''}${m.status === 'in' ? '・已報名' : m.status === 'wait' ? '・候補' : ''}</span></span>
       <button class="btn danger sm" data-uninv="${m.id}" data-name="${esc(m.name)}">移出</button></div>`).join('') || '<p class="muted" style="margin:0">還沒有邀請任何人</p>';
     for (const b of document.querySelectorAll('[data-uninv]')) b.onclick = async () => {
       if (!confirm(`把 ${b.dataset.name} 移出受邀名單？他的報名與入場券也會取消。`)) return;
@@ -984,10 +997,10 @@ function signupForm(ev, mine) {
   const party = ev.kind === 'party', survey = ev.kind === 'survey';
   const meals = party ? (ev.meal_options || '').split(',').map((s) => s.trim()).filter(Boolean) : [];
   return `<form id="pform" class="signup">
-    ${!survey ? `<p class="tiny" style="margin:0">以 ${esc(me.name)}${me.nickname ? `（${esc(me.nickname)}）` : ''}・${me.dist === 'hm' ? '半馬' : '全馬'} ${esc(me.grp)} 組報名，<a href="#/me/profile">修改個人資料</a></p>` : ''}
+    ${!survey ? `<p class="tiny" style="margin:0">以 <span translate="no">${esc(me.name)}</span>${me.nickname ? `（<span translate="no">${esc(me.nickname)}</span>）` : ''}・${me.dist === 'hm' ? '半馬' : '全馬'} ${esc(me.grp)} 組報名，<a href="#/me/profile">修改個人資料</a></p>` : ''}
     ${party && ev.guest_max ? `<label>攜伴人數<select name="guests">${Array.from({ length: ev.guest_max + 1 }, (_, i) => `<option value="${i}">${i ? `${i} 位` : '不帶'}</option>`).join('')}</select></label>` : ''}
     ${meals.length ? `<label>餐點<select name="meal">${meals.map((m) => `<option ${m === me.meal_pref ? 'selected' : ''}>${esc(m)}</option>`).join('')}</select></label>` : ''}
-    ${(ev.options || []).length ? `<fieldset class="qset"><legend>報名組別 <span class="req">必填</span></legend><div class="chips">${ev.options.map((o) => `<label class="chip"><input type="radio" name="option" value="${esc(o.name)}" ${ev.myOption === o.name ? 'checked' : ''} required><span>${esc(o.name)}${o.price ? `<small class="num">　${money(o.price)}</small>` : ''}</span></label>`).join('')}</div></fieldset>` : ''}
+    ${(ev.options || []).length ? `<fieldset class="qset"><legend>報名組別 <span class="req">必填</span></legend><div class="chips">${ev.options.map((o) => `<label class="chip"><input type="radio" name="option" value="${esc(o.name)}" ${ev.myOption === o.name ? 'checked' : ''} required><span><span translate="no">${esc(o.name)}</span>${o.price ? `<small class="num">　${money(o.price)}</small>` : ''}</span></label>`).join('')}</div></fieldset>` : ''}
     ${ev.group_reg ? (ev.regProfile === 'ok'
       ? `<label class="inline consent"><input type="checkbox" name="reg_consent" ${ev.myRegConsent ? 'checked' : ''} required> 同意把我的賽事報名資料（含身分證字號）提供給主辦幹部，只用於這場的團體報名</label>`
       : `<p class="notice" style="margin:0">這場由幹部代為團體報名，需要你的報名資料（姓名、身分證字號、生日、緊急聯絡人等）。填一次之後每場都能用。<a href="#/me/reg">去填寫 ›</a></p>`) : ''}
@@ -1005,7 +1018,7 @@ function itemPicker(it, ev) {
   const rows = (it.sizes.length ? it.sizes : ['']).map((z) => `<div class="stepper" data-item="${esc(it.id)}" data-size="${esc(z)}">
       <span>${z ? esc(z) : '數量'}</span><button type="button" data-step="-1" aria-label="${esc(it.name)} ${esc(z)} 減一">−</button>
       <output class="num">${mineQ(z)}</output><button type="button" data-step="1" aria-label="${esc(it.name)} ${esc(z)} 加一">＋</button></div>`).join('');
-  return `<div class="itempick" data-max="${it.max}" data-left="${left ?? ''}"><div class="row spread"><b>${esc(it.name)}</b><span class="tiny"><span class="num">${money(it.price)}</span>${left != null ? `・剩 ${left}` : ''}${it.max < 10 ? `・每人最多 ${it.max}` : ''}</span></div>
+  return `<div class="itempick" data-max="${it.max}" data-left="${left ?? ''}"><div class="row spread"><b><span translate="no">${esc(it.name)}</span></b><span class="tiny"><span class="num">${money(it.price)}</span>${left != null ? `・剩 ${left}` : ''}${it.max < 10 ? `・每人最多 ${it.max}` : ''}</span></div>
     <div class="steppers">${rows}</div></div>`;
 }
 const readItems = (f) => [...f.querySelectorAll('.stepper')].map((s) => ({ id: s.dataset.item, size: s.dataset.size, qty: Number(s.querySelector('output').value || s.querySelector('output').textContent) || 0 })).filter((x) => x.qty > 0);
@@ -1016,7 +1029,7 @@ function bindQuote(f, ev) {
     if (!box) return;
     const signedOn = ev.signups.find((s) => s.member_id === me.id && s.status !== 'cancel')?.created_at?.slice(0, 10) || ymd(new Date());
     const q = quote(ev, { option: f.querySelector('[name=option]:checked')?.value || null, guests: Number(f.guests?.value || 0), items: readItems(f), membership: ev.myMembership, signedOn });
-    box.innerHTML = q.lines.length ? `${q.lines.map((l) => `<div class="ql ${l.amount < 0 ? 'off' : ''}"><span>${esc(l.label)}${l.qty > 1 ? ` × ${l.qty}` : ''}</span><span class="num">${l.amount < 0 ? '−' : ''}${money(Math.abs(l.amount))}</span></div>`).join('')}
+    box.innerHTML = q.lines.length ? `${q.lines.map((l) => `<div class="ql ${l.amount < 0 ? 'off' : ''}"><span><span translate="no">${esc(l.label)}</span>${l.qty > 1 ? ` × ${l.qty}` : ''}</span><span class="num">${l.amount < 0 ? '−' : ''}${money(Math.abs(l.amount))}</span></div>`).join('')}
       <div class="ql total"><span>合計</span><b class="num">${money(q.total)}</b></div>` : '';
   };
   for (const st of f.querySelectorAll('.stepper')) for (const b of st.querySelectorAll('[data-step]')) b.onclick = () => {
@@ -1037,12 +1050,12 @@ function payCard(ev) {
   const M = { transfer: '銀行轉帳', cash: '現金', linepay: 'LINE Pay' };
   return `<section class="card paycard ${paid ? 'paid' : ev.myPayReported ? 'reported' : ''}" id="payCard">
     <div class="row spread"><h3>${paid ? '已完成繳費' : ev.myPayReported ? '已回報，等幹部確認' : '繳費'}</h3><b class="num amount">${money(amount)}</b></div>
-    ${(ev.myLines || []).length ? `<div class="quote">${ev.myLines.map((l) => `<div class="ql ${l.amount < 0 ? 'off' : ''}"><span>${esc(l.label)}${l.qty > 1 ? ` × ${l.qty}` : ''}</span><span class="num">${l.amount < 0 ? '−' : ''}${money(Math.abs(l.amount))}</span></div>`).join('')}</div>` : ''}
-    ${ev.myPaidNote && !paid ? `<p class="notice" style="margin:0">${esc(ev.myPaidNote)}</p>` : ''}
+    ${(ev.myLines || []).length ? `<div class="quote">${ev.myLines.map((l) => `<div class="ql ${l.amount < 0 ? 'off' : ''}"><span><span translate="no">${esc(l.label)}</span>${l.qty > 1 ? ` × ${l.qty}` : ''}</span><span class="num">${l.amount < 0 ? '−' : ''}${money(Math.abs(l.amount))}</span></div>`).join('')}</div>` : ''}
+    ${ev.myPaidNote && !paid ? `<p class="notice" style="margin:0"><span translate="no">${esc(ev.myPaidNote)}</span></p>` : ''}
     ${paid ? `<p class="tiny" style="margin:0">${ev.myPaid === 'waived' ? '這筆免繳。' : '幹部已經確認收到款項，謝謝。'}${ev.myPicked ? '商品已領取。' : (ev.items || []).length ? '商品到貨後幹部會通知領取。' : ''}</p>`
       : ev.myPayReported ? `<p class="tiny" style="margin:0">${M[ev.myPayMethod] || ''}${ev.myPayRef ? `・後五碼 ${esc(ev.myPayRef)}` : ''}・${ago(ev.myPayReported)}回報</p><button class="btn ghost sm" id="payUndo">回報錯了，重新填</button>`
       : `${pi.account ? `<div class="acct"><span class="tiny">收款帳戶</span><pre>${esc(pi.account)}</pre><button type="button" class="btn ghost sm" id="copyAcct">複製</button></div>` : ''}
-        ${pi.due ? `<p class="tiny" style="margin:0">請在 ${esc(pi.due)} 前完成繳費${pi.note ? `・${esc(pi.note)}` : ''}</p>` : pi.note ? `<p class="tiny" style="margin:0">${esc(pi.note)}</p>` : ''}
+        ${pi.due ? `<p class="tiny" style="margin:0">請在 ${esc(pi.due)} 前完成繳費${pi.note ? `・<span translate="no">${esc(pi.note)}</span>` : ''}</p>` : pi.note ? `<p class="tiny" style="margin:0"><span translate="no">${esc(pi.note)}</span></p>` : ''}
         <form id="payForm" class="row" style="gap:8px;align-items:end">
           ${methods.length > 1 ? `<label style="flex:1;min-width:110px">方式<select name="method">${methods.map((m) => `<option value="${m}">${M[m]}</option>`).join('')}</select></label>` : `<input type="hidden" name="method" value="${methods[0]}">`}
           <label style="flex:1;min-width:120px" data-ref>轉帳後五碼<input name="ref" inputmode="numeric" maxlength="6" pattern="\\d{4,6}" autocomplete="off" placeholder="12345"></label>
@@ -1066,9 +1079,9 @@ function bindPayCard(ev) {
 function questionFields(qs, ans) {
   return qs.map((q) => {
     const v = ans[q.id], req = q.required ? '<span class="req">必填</span>' : '';
-    if (q.type === 'text') return `<label>${esc(q.label)} ${req}<input data-q="${esc(q.id)}" maxlength="300" value="${esc(v || '')}" ${q.required ? 'required' : ''}></label>`;
+    if (q.type === 'text') return `<label><span translate="no">${esc(q.label)}</span> ${req}<input data-q="${esc(q.id)}" maxlength="300" value="${esc(v || '')}" ${q.required ? 'required' : ''}></label>`;
     const multi = q.type === 'multi';
-    return `<fieldset class="qset"><legend>${esc(q.label)} ${req}${multi ? '<span class="tiny">可複選</span>' : ''}</legend>
+    return `<fieldset class="qset"><legend><span translate="no">${esc(q.label)}</span> ${req}${multi ? '<span class="tiny">可複選</span>' : ''}</legend>
       <div class="chips">${q.options.map((o) => `<label class="chip"><input type="${multi ? 'checkbox' : 'radio'}" name="q_${esc(q.id)}" value="${esc(o)}"
         ${(multi ? (v || []).includes(o) : v === o) ? 'checked' : ''} ${!multi && q.required ? 'required' : ''}><span>${esc(o)}</span></label>`).join('')}</div></fieldset>`;
   }).join('');
@@ -1084,9 +1097,9 @@ function readQuestionFields(form, qs) {
 }
 function ticketCard(t, ev, title = '我的入場券') {
   return `<section class="card ticket">
-    <div class="row spread"><h3>${esc(title)}</h3>${t.checked_in_at ? '<span class="pill solid">已報到</span>' : '<span class="pill">未報到</span>'}</div>
+    <div class="row spread"><h3><span translate="no">${esc(title)}</span></h3>${t.checked_in_at ? '<span class="pill solid">已報到</span>' : '<span class="pill">未報到</span>'}</div>
     <div class="qrbox" ${title === '我的入場券' ? 'id="qrBox"' : ''} data-code="${esc(t.code)}" data-ev="${esc(ev.id)}"></div>
-    <div class="code num">${esc(t.code)}</div>
+    <div class="code num"><span translate="no">${esc(t.code)}</span></div>
     <div class="trow">
       <span><u>桌次</u>${t.table_no ? `第 ${t.table_no} 桌` : '未排桌'}</span>
       <span><u>餐點</u>${t.meal ? esc(t.meal) : '—'}</span>
@@ -1121,7 +1134,7 @@ async function attendView(id) {
 async function ticketsView() {
   const { tickets } = await api('/my/tickets');
   view.innerHTML = `${largeTitle('我的入場券', tickets.length ? '入場時把 QR Code 給工作人員掃描' : '')}
-    ${tickets.map((t) => `${ticketCard(t, { id: t.event_id }, t.title)}<p class="tiny center" style="margin:-6px 0 8px">${dstr(t.date)}${t.gather_time ? ` ${t.gather_time}` : ''}${t.place ? `・${esc(t.place)}` : ''}　<a href="#/e/${esc(t.event_id)}">活動頁 ›</a></p>`).join('')
+    ${tickets.map((t) => `${ticketCard(t, { id: t.event_id }, t.title)}<p class="tiny center" style="margin:-6px 0 8px">${dstr(t.date)}${t.gather_time ? ` ${t.gather_time}` : ''}${t.place ? `・<span translate="no">${esc(t.place)}</span>` : ''}　<a href="#/e/${esc(t.event_id)}">活動頁 ›</a></p>`).join('')
       || `<div class="card">${emptyState('calendar', '目前沒有入場券。報名春酒等需要入場的活動後，入場券會出現在這裡。')}</div>`}`;
   for (const box of document.querySelectorAll('.qrbox[data-code]')) {
     try { box.innerHTML = await qrSVG(`${location.origin}/#/e/${box.dataset.ev}/in/${box.dataset.code}`, { size: 200, dark: '#0B1B33', light: '#fff' }); }
@@ -1176,7 +1189,7 @@ async function checkinView(eventId, code) {
     const r = await api(`/events/${eventId}/checkin`, { method: 'POST', body: { code } });
     view.innerHTML = `<section class="card ${r.already ? '' : 'ok'}">
       <h2>${r.already ? '這張票已經報到過' : '報到完成'}</h2>
-      <p style="font-size:30px;font-weight:700;margin:4px 0">${esc(r.name)}</p>
+      <p style="font-size:30px;font-weight:700;margin:4px 0"><span translate="no">${esc(r.name)}</span></p>
       <p class="muted" style="margin:0">${r.table_no ? `第 ${r.table_no} 桌・` : ''}${r.guests ? `攜伴 ${r.guests} 位・` : ''}${r.meal ? esc(r.meal) : ''}</p>
       <a class="btn block" href="#/e/${esc(eventId)}/scan">繼續掃下一位</a>
       <a class="btn ghost block" href="#/e/${esc(eventId)}">回活動頁</a></section>`;
@@ -1242,7 +1255,7 @@ async function partyAdmin(ev) {
       </form>
       <div class="roster">${tickets.map((t) => `
         <div class="r">${avatar(t)}
-          <span>${esc(t.name)}${t.nickname ? ` <span class="tiny">${esc(t.nickname)}</span>` : ''}<span class="tiny" style="display:block">${esc(t.code)}${t.table_no ? `・第 ${t.table_no} 桌` : ''}${t.guests ? `・攜伴 ${t.guests}` : ''}${t.meal ? `・${esc(t.meal)}` : ''}</span></span>
+          <span><span translate="no">${esc(t.name)}</span>${t.nickname ? ` <span class="tiny"><span translate="no">${esc(t.nickname)}</span></span>` : ''}<span class="tiny" style="display:block"><span translate="no">${esc(t.code)}</span>${t.table_no ? `・第 ${t.table_no} 桌` : ''}${t.guests ? `・攜伴 ${t.guests}` : ''}${t.meal ? `・${esc(t.meal)}` : ''}</span></span>
           ${t.checked_in_at ? '<span class="pill solid">到</span>' : `<button class="btn ghost sm" data-ci="${esc(t.code)}">報到</button>`}
         </div>`).join('') || '<p class="muted">還沒有人報名。</p>'}</div>
     </section>
@@ -1252,8 +1265,8 @@ async function partyAdmin(ev) {
       ${prizes.map((p) => {
         const w = draws.filter((d) => d.prize_id === p.id);
         return `<div class="prize">
-          <div class="row spread"><b>${p.stage ? `<span class="pill">${esc(p.stage)}</span> ` : ''}${esc(p.name)}</b><span class="tiny">${w.length}/${p.qty}${p.sponsor ? `・${esc(p.sponsor)}` : ''}</span></div>
-          ${w.length ? `<div class="winners">${w.map((d) => `<button class="pill ${d.claimed_at ? 'solid' : 'wait'}" data-claim="${d.id}" title="${d.claimed_at ? '已領獎' : '點一下確認領獎'}">${esc(d.name)}${d.claimed_at ? IC.check : ''}</button>`).join('')}</div>` : ''}
+          <div class="row spread"><b>${p.stage ? `<span class="pill">${esc(p.stage)}</span> ` : ''}<span translate="no">${esc(p.name)}</span></b><span class="tiny">${w.length}/${p.qty}${p.sponsor ? `・${esc(p.sponsor)}` : ''}</span></div>
+          ${w.length ? `<div class="winners">${w.map((d) => `<button class="pill ${d.claimed_at ? 'solid' : 'wait'}" data-claim="${d.id}" title="${d.claimed_at ? '已領獎' : '點一下確認領獎'}"><span translate="no">${esc(d.name)}</span>${d.claimed_at ? IC.check : ''}</button>`).join('')}</div>` : ''}
           ${w.length < p.qty ? `<button class="btn sm" data-draw="${p.id}">抽出 1 位</button>` : '<span class="tiny">已抽完</span>'}
         </div>`;
       }).join('') || '<p class="muted" style="margin:0">還沒有獎項。</p>'}
@@ -1312,7 +1325,7 @@ async function lotteryStage(ev) {
       const { tickets } = await api(`/events/${ev.id}/tickets`).catch(() => ({ tickets: [] }));
       await Party.spin($('#lName'), tickets.map((t) => t.name), w.name);
       $('#lSub').textContent = `${r.prize}${w.nickname ? `・${w.nickname}` : ''}${w.table_no ? `・第 ${w.table_no} 桌` : ''}`;
-      $('#lLog').insertAdjacentHTML('afterbegin', `<div class="lrow"><span>${esc(w.name)}</span><span class="tiny">${esc(r.prize)}</span></div>`);
+      $('#lLog').insertAdjacentHTML('afterbegin', `<div class="lrow"><span><span translate="no">${esc(w.name)}</span></span><span class="tiny">${esc(r.prize)}</span></div>`);
       confetti();
       // 這個獎項抽完了：自動切到下一個還有名額的獎項
       const p = prizes.find((x) => x.id === prizeId);
@@ -1390,8 +1403,8 @@ async function planView(n) {
       ${canPublishPlan() ? '<a class="btn ghost sm" href="#/plan/new">發布這週課表</a>' : ''}
     </section>
     ${posts.map((po) => `<section class="card">
-      <div class="row spread"><h3>${esc(po.title)}</h3>${po.team_id ? teamTag(teamOf(po.team_id)) : '<span class="pill">教練發布</span>'}</div>
-      <p class="tiny">${esc(po.author || '')}・${ago(po.created_at)}</p>
+      <div class="row spread"><h3><span translate="no">${esc(po.title)}</span></h3>${po.team_id ? teamTag(teamOf(po.team_id)) : '<span class="pill">教練發布</span>'}</div>
+      <p class="tiny"><span translate="no">${esc(po.author || '')}</span>・${ago(po.created_at)}</p>
       <pre class="out">${esc(po.body)}</pre>
       ${allow('plan') || (po.team_id && teamAllow(po.team_id, 'appoint')) ? `<button class="btn danger sm" data-delplan="${po.id}">刪除</button>` : ''}
     </section>`).join('')}
@@ -1416,7 +1429,7 @@ async function planView(n) {
           : canLog ? `<a class="logbtn" href="#/log?w=${week}&i=${i}" aria-label="記錄${esc(d.d)}">記錄</a>` : ''}
       </div>`; }).join('') : '<div class="card"><p class="muted">這週沒有課表資料。</p></div>'}</div>
     ${extras.length ? `<section class="card"><h3>自主加練</h3><div class="roster">${extras.map((l) => `<a class="r" href="#/log?id=${l.id}"><span class="av">＋</span>
-      <span>${esc(dstr(l.date))}${l.km ? `・${l.km} km` : ''}${l.seconds ? `・${S.fmtDuration(l.seconds)}` : ''}<span class="tiny" style="display:block">${esc(l.note || '')}</span></span><span class="tiny">›</span></a>`).join('')}</div></section>` : ''}
+      <span>${esc(dstr(l.date))}${l.km ? `・${l.km} km` : ''}${l.seconds ? `・${S.fmtDuration(l.seconds)}` : ''}<span class="tiny" style="display:block"><span translate="no">${esc(l.note || '')}</span></span></span><span class="tiny">›</span></a>`).join('')}</div></section>` : ''}
     <section class="setgroup"><h3 class="sgt">工具</h3><div class="card setcard">
       ${feat('coach') ? `<a class="setrow" href="/coach.html"><span class="sic">${IC.runner}</span><span class="st"><b>課表教練</b><span class="tiny">逐週課表、配速換算、年齡分級、補給試算</span></span><span class="chev" aria-hidden="true"></span></a>` : ''}
       <a class="setrow" href="#/report"><span class="sic">${MI.report}</span><span class="st"><b>訓練報表</b><span class="tiny">週里程、完成率、個人最佳</span></span><span class="chev" aria-hidden="true"></span></a>
@@ -1567,7 +1580,7 @@ function bindComments() {
   for (const d of document.querySelectorAll('details[data-cm]')) {
     const load = async () => {
       const { comments } = await api(`/logs/${d.dataset.cm}/comments`);
-      d.querySelector('.cmts').innerHTML = comments.map((c) => `<div class="cmt"><b>${esc(c.author_name || '教練')}</b><span>${esc(c.body)}</span><span class="tiny">${ago(c.created_at)}</span></div>`).join('');
+      d.querySelector('.cmts').innerHTML = comments.map((c) => `<div class="cmt"><b>${esc(c.author_name || '教練')}</b><span><span translate="no">${esc(c.body)}</span></span><span class="tiny">${ago(c.created_at)}</span></div>`).join('');
     };
     d.ontoggle = () => d.open && load();
     const f = d.querySelector('form');
@@ -1799,9 +1812,9 @@ async function meHome(welcome) {
     ${mfaBanner()}
     <a class="card mecard" href="#/me/profile">
       ${avatar(me)}
-      <span class="mi"><b>${esc(me.name)}</b>${me.nickname ? ` <span class="tiny">${esc(me.nickname)}</span>` : ''}
-        <span class="tiny" style="display:block">${esc(me.title || me.roleName || ROLE_NAME[me.role] || '團員')}・${me.dist === 'hm' ? '半馬' : '全馬'} ${esc(me.grp)} 組</span></span>
-      ${main ? `<span class="pill team" style="--tc:${esc(main.color)}">${teamIcon(main, 'xs')}${esc(main.name)}</span>` : '<span class="pill">主團未設定</span>'}
+      <span class="mi"><b><span translate="no">${esc(me.name)}</span></b>${me.nickname ? ` <span class="tiny"><span translate="no">${esc(me.nickname)}</span></span>` : ''}
+        <span class="tiny" style="display:block">${me.title ? `<span translate="no">${esc(me.title)}</span>` : esc(me.roleName || ROLE_NAME[me.role] || '團員')}・${me.dist === 'hm' ? '半馬' : '全馬'} ${esc(me.grp)} 組</span></span>
+      ${main ? `<span class="pill team" style="--tc:${esc(main.color)}">${teamIcon(main, 'xs')}<span translate="no">${esc(main.name)}</span></span>` : '<span class="pill">主團未設定</span>'}
     </a>
     ${group('我的跑步', [
       row('#/report', MI.report, '訓練報表', '週里程、完成率、個人最佳'),
@@ -1809,9 +1822,9 @@ async function meHome(welcome) {
       row('#/me/reg', MI.idcard, '賽事報名資料', '幹部代為團體報名時使用', regRow?.complete ? '<span class="pill solid">已填好</span>' : regRow?.profile ? '<span class="pill wait">未填完</span>' : ''),
       row('#/tickets', MI.ticket, '我的入場券與中獎紀錄'),
     ])}
-    ${group('分團', [row('#/me/teams', MI.team, '主團與分團', main ? `主團：${esc(main.name)}` : '主團由管理員設定')])}
+    ${group('分團', [row('#/me/teams', MI.team, '主團與分團', main ? `主團：<span translate="no">${esc(main.name)}</span>` : '主團由管理員設定')])}
     ${group('設定', [
-      row('#/me/notify', MI.bell, '通知與裝置', '推播、加到主畫面、行事曆、分頁列'),
+      row('#/me/notify', MI.bell, '通知與裝置', '推播、加到主畫面、行事曆、分頁列、語言 Language'),
       row('#/me/security', MI.shield, '帳號與安全', `${me.google ? 'Google 已綁定' : '綁定 Google'}、通行金鑰、登出`),
       row('#/me/privacy', MI.eye, '隱私', '分享給教練、排行榜、下載或刪除資料'),
     ])}
@@ -1828,13 +1841,13 @@ async function meHome(welcome) {
 function meProfile() {
   view.innerHTML = `${subTitle('個人資料', '報名時會直接帶入，不用每次重填')}
     <section class="card">
-      <div class="row">${avatar(me)}<div style="flex:1"><b>${esc(me.name)}</b><div class="tiny">${esc(me.title || me.roleName || ROLE_NAME[me.role] || '團員')}</div></div></div>
+      <div class="row">${avatar(me)}<div style="flex:1"><b><span translate="no">${esc(me.name)}</span></b><div class="tiny">${me.title ? `<span translate="no">${esc(me.title)}</span>` : esc(me.roleName || ROLE_NAME[me.role] || '團員')}</div></div></div>
       <form id="mf">
         <div class="grid2"><label>姓名<input name="name" value="${esc(me.name)}" maxlength="20"></label>
           <label>暱稱<input name="nickname" value="${esc(me.nickname || '')}" maxlength="20" placeholder="團裡怎麼叫你"></label></div>
         <div class="grid2"><label>項目<select name="dist"><option value="fm" ${me.dist === 'fm' ? 'selected' : ''}>全馬</option><option value="hm" ${me.dist === 'hm' ? 'selected' : ''}>半馬</option></select></label>
           <label>組別<select name="grp"></select></label></div>
-        <div class="field"><span class="flabel">所屬跑團</span><span class="fvalue">${esc(teamOf(me.main_team)?.name || '等待管理員設定')}</span><span class="tiny">跟著主團，由管理員設定</span></div>
+        <div class="field"><span class="flabel">所屬跑團</span><span class="fvalue"><span translate="no">${esc(teamOf(me.main_team)?.name || '等待管理員設定')}</span></span><span class="tiny">跟著主團，由管理員設定</span></div>
         <div class="grid2"><label>餐點偏好<select name="meal_pref"><option value="" ${!me.meal_pref ? 'selected' : ''}>未指定</option>
             <option ${me.meal_pref === '葷食' ? 'selected' : ''}>葷食</option><option ${me.meal_pref === '素食' ? 'selected' : ''}>素食</option></select></label>
           <label>電話（選填）<input name="phone" value="${esc(me.phone || '')}" maxlength="20" inputmode="tel" placeholder="餐會聯絡用"></label></div>
@@ -1871,7 +1884,7 @@ async function meRaces() {
     $('#raceList').innerHTML = races.map((r) => {
       const d = Math.round((new Date(`${r.date}T00:00:00`) - new Date().setHours(0, 0, 0, 0)) / 864e5);
       return `<div class="r"><span class="av num" style="font-size:11px">${d >= 0 ? d : IC.check}</span>
-        <span><b>${esc(r.name)}</b>${r.is_primary ? ' <span class="pill solid">倒數中</span>' : ''}
+        <span><b><span translate="no">${esc(r.name)}</span></b>${r.is_primary ? ' <span class="pill solid">倒數中</span>' : ''}
           <span class="tiny" style="display:block">${esc(r.date)}・${esc(r.dist || '')}${r.goal ? `・目標 ${esc(r.goal)}` : ''}${d >= 0 ? `・還有 ${d} 天` : '・已完賽'}</span></span>
         <span class="row" style="gap:6px">${r.is_primary ? '' : `<button class="btn ghost sm" data-prim="${r.id}">倒數這場</button>`}<button class="btn danger sm" data-delrace="${r.id}" aria-label="刪除">刪除</button></span></div>`;
     }).join('') || '<p class="tiny" style="margin:0">還沒有賽事，加一場吧。</p>';
@@ -1926,9 +1939,9 @@ function meTeams() {
   view.innerHTML = `${subTitle('主團與分團', '主團由管理員設定；想加入其他分團，申請後由該團幹部核准')}
     <section class="card">
       <h3>主團</h3>
-      ${main ? `<a class="teamchip active" href="#/t/${esc(main.id)}" style="--tc:${esc(main.color)}">${teamIcon(main, 'xs')}<span>${esc(main.name)}</span><span class="tiny">主團</span></a>`
+      ${main ? `<a class="teamchip active" href="#/t/${esc(main.id)}" style="--tc:${esc(main.color)}">${teamIcon(main, 'xs')}<span><span translate="no">${esc(main.name)}</span></span><span class="tiny">主團</span></a>`
         : '<p class="notice" style="margin:0">管理員還沒幫你設定主團，設定好之後就會收到分團的活動與公告。</p>'}
-      ${led.length ? `<h3>其他分團</h3><div class="teamrow">${led.map((t) => `<a class="teamchip ${t.my_status}" href="#/t/${esc(t.id)}" style="--tc:${esc(t.color)}">${teamIcon(t, 'xs')}<span>${esc(t.name)}</span><span class="tiny">${t.my_status === 'pending' ? '申請中' : esc(t.my_title || TEAM_ROLE_NAME[t.my_role])}</span></a>`).join('')}</div>` : ''}
+      ${led.length ? `<h3>其他分團</h3><div class="teamrow">${led.map((t) => `<a class="teamchip ${t.my_status}" href="#/t/${esc(t.id)}" style="--tc:${esc(t.color)}">${teamIcon(t, 'xs')}<span><span translate="no">${esc(t.name)}</span></span><span class="tiny">${t.my_status === 'pending' ? '申請中' : esc(t.my_title || TEAM_ROLE_NAME[t.my_role])}</span></a>`).join('')}</div>` : ''}
     </section>
     <a class="btn ghost block" href="#/teams">看全部分團</a>`;
 }
@@ -1950,11 +1963,14 @@ async function meNotify() {
       <div id="calBox" class="row" style="gap:8px">${cfg.calendarOn ? '<button class="btn ghost sm" id="calNew">重新產生網址</button><button class="btn ghost sm" id="calOff">停用</button>' : '<button class="btn sm" id="calNew">產生訂閱網址</button>'}</div>
     </section>
     <section class="card"><h3>顯示</h3>
-      <label class="switch"><span>分頁列只顯示圖示<span class="tiny" style="display:block">隱藏下方圖示底下的文字</span></span><input type="checkbox" id="iconsOnly" ${iconsOnly.get() ? 'checked' : ''}><i></i></label></section>`;
+      <label class="switch"><span>分頁列只顯示圖示<span class="tiny" style="display:block">隱藏下方圖示底下的文字</span></span><input type="checkbox" id="iconsOnly" ${iconsOnly.get() ? 'checked' : ''}><i></i></label>
+      <div class="row spread"><span>語言<span class="tiny" style="display:block" translate="no">Language</span></span>
+        <div class="seg" role="group" aria-label="Language" translate="no"><button data-lang="zh" aria-pressed="${I18N.lang === 'zh'}">中文</button><button data-lang="en" aria-pressed="${I18N.lang === 'en'}">English</button></div></div></section>`;
   $('#pushBtn')?.addEventListener('click', () => togglePush(sub));
   $('#pushTest')?.addEventListener('click', async () => { try { await api('/push/test', { method: 'POST' }); toast('已送出測試通知'); } catch (e) { toast(e.message); } });
   bindInstall();
   $('#iconsOnly').onchange = (e) => { iconsOnly.set(e.target.checked); applyTabs(); };
+  for (const b of document.querySelectorAll('[data-lang]')) b.onclick = () => { if (b.dataset.lang !== I18N.lang) I18N.setLang(b.dataset.lang); };
   $('#calNew').onclick = async () => {
     if (cfg.calendarOn && !confirm('重新產生後，已經訂閱的舊網址會失效，要在行事曆重新訂閱。確定？')) return;
     try {
@@ -1971,7 +1987,8 @@ async function meNotify() {
 }
 async function meSecurity(googleMsg) {
   view.innerHTML = `${subTitle('帳號與安全')}
-    ${googleMsg === 'linked' ? '<div class="notice">已綁定 Google，之後可以直接用 Google 登入。</div>' : googleMsg === 'taken' ? '<div class="notice">這個 Google 帳號已經綁定另一個帳號了。如果那個帳號也是你的，請聯絡行政人員合併。</div>' : ''}
+    ${googleMsg === 'linked' ? '<div class="notice">已綁定 Google，之後可以直接用 Google 登入。</div>' : googleMsg === 'taken' ? '<div class="notice">這個 Google 帳號已經綁定另一個帳號了。如果那個帳號也是你的，請聯絡行政人員合併。</div>'
+      : googleMsg === 'stepup' ? '<div class="notice">綁定 Google 前，請先按下方「驗證一次」用通行金鑰確認是你本人，再重新綁定。</div>' : ''}
     ${mfaBanner()}
     ${cfg.googleLogin ? `<section class="card"><div class="row spread"><div><h3>Google 帳號</h3><span class="tiny">${me.google ? '已綁定，可以用 Google 登入' : '綁定後換手機或清掉瀏覽器資料，也能用 Google 回到同一個帳號'}</span></div>
       ${me.google ? '<span class="pill solid">已綁定</span>' : `<a class="btn google sm" href="${googleHref(true)}">${GOOGLE_G}<span>綁定</span></a>`}</div></section>` : ''}
@@ -1990,9 +2007,9 @@ async function meSecurity(googleMsg) {
   const loadPk = async () => {
     const { passkeys } = await api('/passkeys');
     if (!$('#pkList')) return;
-    $('#pkList').innerHTML = passkeys.map((p) => `<div class="r">${IC.lock}<span>${esc(p.name || '通行金鑰')}<span class="tiny" style="display:block">新增於 ${esc(p.created_at.slice(0, 10))}${p.last_used_at ? `・上次使用 ${ago(p.last_used_at)}` : ''}</span></span>
+    $('#pkList').innerHTML = passkeys.map((p) => `<div class="r">${IC.lock}<span><span translate="no">${esc(p.name || '通行金鑰')}</span><span class="tiny" style="display:block">新增於 ${esc(p.created_at.slice(0, 10))}${p.last_used_at ? `・上次使用 ${ago(p.last_used_at)}` : ''}</span></span>
       <button class="btn ghost sm" data-pkdel="${esc(p.id)}">移除</button></div>`).join('');
-    $('#pkTest').hidden = !passkeys.length || me.mfa;
+    $('#pkTest').hidden = !passkeys.length || (me.mfa && googleMsg !== 'stepup');
     for (const b of document.querySelectorAll('[data-pkdel]')) b.onclick = async () => { if (!confirm('移除這把通行金鑰？之後這台裝置就不能用它登入。')) return; await api(`/passkeys/${encodeURIComponent(b.dataset.pkdel)}`, { method: 'DELETE' }); toast('已移除'); loadPk(); };
   };
   loadPk().catch(() => {});
@@ -2038,7 +2055,7 @@ function meAssoc() {
     ${(cfg.settings?.docs || []).length || org().contact || org().parent ? `<section class="card"><h3>協會資訊</h3>
       ${org().parent ? `<p class="tiny" style="margin:0">所屬企業：${org().parent_url ? `<a href="${esc(org().parent_url)}" target="_blank" rel="noopener">${esc(org().parent)} ${IC.external}</a>` : esc(org().parent)}${org().parent_note ? `・${esc(org().parent_note)}` : ''}</p>` : ''}
       ${org().contact ? `<p class="tiny" style="margin:0">聯絡方式：${esc(org().contact)}</p>` : ''}
-      <div class="doclist">${(cfg.settings?.docs || []).map((d) => `<a class="docrow" href="${esc(d.url)}" target="_blank" rel="noopener"><span class="docic">${IC.doc}</span><span><b>${esc(d.title)}</b>${d.note ? `<span class="tiny" style="display:block">${esc(d.note)}</span>` : ''}</span><span class="tiny">${IC.external}</span></a>`).join('')}</div>
+      <div class="doclist">${(cfg.settings?.docs || []).map((d) => `<a class="docrow" href="${esc(d.url)}" target="_blank" rel="noopener"><span class="docic">${IC.doc}</span><span><b><span translate="no">${esc(d.title)}</span></b>${d.note ? `<span class="tiny" style="display:block"><span translate="no">${esc(d.note)}</span></span>` : ''}</span><span class="tiny">${IC.external}</span></a>`).join('')}</div>
     </section>` : ''}`;
   $('#applyBtn')?.addEventListener('click', async () => { try { me = (await api('/me/apply', { method: 'POST' })).member; toast('已送出申請'); meAssoc(); } catch (e) { toast(e.message); } });
 }
@@ -2105,6 +2122,7 @@ async function renderOnce() {
   paintCountdown();
   applyFeatures();
   $('#bell').hidden = !me;
+  document.body.classList.toggle('guest', !me);
   if (hash === '/privacy') { if (!me) { try { const r = await api('/me'); me = r.member; cfg = r; } catch {} } return privacyView(); }
   if (!me) return loginView();
   if (cfg.needConsent) {
@@ -2228,7 +2246,8 @@ addEventListener('hashchange', () => {
   const t = document.startViewTransition(go);
   for (const p of [t.ready, t.updateCallbackDone, t.finished]) p.catch(() => {});
 });
-render();
+// 英文介面：先載入字典再畫第一個畫面，避免先閃一下中文
+I18N.init().catch(() => {}).finally(() => render());
 // Service Worker：新版本裝好後先等待，跳出提示讓使用者決定什麼時候更新
 if ('serviceWorker' in navigator) {
   const hadController = !!navigator.serviceWorker.controller;

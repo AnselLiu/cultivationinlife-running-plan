@@ -6,8 +6,11 @@
 //   底圖：內政部國土測繪中心電子地圖與正射影像（政府資料開放授權）、OpenStreetMap；Leaflet 放在 /vendor（不從外部載入程式）
 import { $, api, esc, IC, largeTitle, toast, view } from './app.js';
 import * as W from './weather.js';
+import { lang } from './i18n.js';
 
 const KIND = { track: '田徑場', river: '河濱', park: '公園', trail: '山徑', road: '道路', other: '其他' };
+// 地圖圖釘上的字：中文取類型第一個字，英文用縮寫
+const GLYPH = lang === 'en' ? { track: 'T', river: 'R', park: 'P', trail: 'M', road: 'S', other: '·' } : Object.fromEntries(Object.entries(KIND).map(([k, v]) => [k, v.slice(0, 1)]));
 const INFO = { lap: '一圈', surface: '路面', light: '夜間照明', water: '飲水', toilet: '廁所', parking: '停車', hours: '開放時間' };
 const REP = { crowd: ['人潮', ['少', '普通', '多']], surface: ['路況', ['乾燥', '濕滑', '積水', '施工', '封閉']], light: ['照明', ['充足', '偏暗', '沒有']], weather: ['天氣', ['晴', '陰', '小雨', '大雨', '悶熱', '強風']] };
 const BASES = {
@@ -117,7 +120,7 @@ async function loadSpots() {
   spotsLayer.clearLayers();
   for (const s of data.spots) {
     const warn = s.latest && (['積水', '施工', '封閉'].includes(s.latest.surface) || s.latest.crowd === '多');
-    const icon = window.L.divIcon({ className: '', iconSize: [0, 0], html: `<div class="pin k-${s.kind} ${s.status !== 'approved' ? 'pending' : ''}"><span>${esc(KIND[s.kind]?.slice(0, 1) || '跑')}</span>${s.reports ? `<i class="${warn ? 'warn' : ''}"></i>` : ''}</div>` });
+    const icon = window.L.divIcon({ className: '', iconSize: [0, 0], html: `<div class="pin k-${s.kind} ${s.status !== 'approved' ? 'pending' : ''}"><span>${esc(GLYPH[s.kind] || GLYPH.other)}</span>${s.reports ? `<i class="${warn ? 'warn' : ''}"></i>` : ''}</div>` });
     window.L.marker([s.lat, s.lng], { icon, title: s.name, keyboard: true, alt: s.name }).addTo(spotsLayer)
       .bindTooltip(esc(s.name), { direction: 'right', offset: [14, 0], className: 'pintip' })
       .on('click', () => openSpot(s.id));
@@ -151,14 +154,14 @@ async function listPanel() {
   const { routes } = await api('/routes').catch(() => ({ routes: [] }));
   const pend = data.spots.filter((s) => s.status === 'pending');
   $('#panel').innerHTML = `
-    ${pend.length && data.editor ? `<section class="card"><h3>待審核的地點</h3><div class="roster">${pend.map((s) => `<button class="r spotrow" data-open="${esc(s.id)}"><span class="pin k-${s.kind} pending small"><span>${esc(KIND[s.kind].slice(0, 1))}</span></span><span><b>${esc(s.name)}</b></span><span class="tiny">審核 ›</span></button>`).join('')}</div></section>` : ''}
+    ${pend.length && data.editor ? `<section class="card"><h3>待審核的地點</h3><div class="roster">${pend.map((s) => `<button class="r spotrow" data-open="${esc(s.id)}"><span class="pin k-${s.kind} pending small"><span>${esc(GLYPH[s.kind] || GLYPH.other)}</span></span><span><b><span translate="no">${esc(s.name)}</span></b></span><span class="tiny">審核 ›</span></button>`).join('')}</div></section>` : ''}
     <section class="card"><div class="row spread"><h3>練跑地點</h3><span class="tiny">${data.spots.filter((s) => s.status === 'approved').length} 個</span></div>
-      ${data.spots.length ? `<div class="roster">${data.spots.filter((s) => s.status === 'approved').map((s) => `<button class="r spotrow" data-open="${esc(s.id)}"><span class="pin k-${s.kind} small"><span>${esc(KIND[s.kind].slice(0, 1))}</span></span>
-        <span><b>${esc(s.name)}</b><span class="tiny" style="display:block">${KIND[s.kind]}${s.reports ? `・24 小時內 ${s.reports} 則回報${s.latest ? `：${esc(Object.entries(s.latest).filter(([k, v]) => v && k !== 'note').map(([, v]) => v).join('、'))}` : ''}` : ''}</span></span><span class="tiny">›</span></button>`).join('')}</div>`
+      ${data.spots.length ? `<div class="roster">${data.spots.filter((s) => s.status === 'approved').map((s) => `<button class="r spotrow" data-open="${esc(s.id)}"><span class="pin k-${s.kind} small"><span>${esc(GLYPH[s.kind] || GLYPH.other)}</span></span>
+        <span><b><span translate="no">${esc(s.name)}</span></b><span class="tiny" style="display:block">${KIND[s.kind]}${s.reports ? `・24 小時內 ${s.reports} 則回報${s.latest ? `：${esc(Object.entries(s.latest).filter(([k, v]) => v && k !== 'note').map(([, v]) => v).join('、'))}` : ''}` : ''}</span></span><span class="tiny">›</span></button>`).join('')}</div>`
         : `<p class="muted" style="margin:0">還沒有地點。${data.editor ? '按地圖右上的地標按鈕，在地圖上點位置新增。' : '按地圖右上的地標按鈕，提議一個常跑的地方，幹部審核後就會出現。'}</p>`}
     </section>
     <section class="card"><div class="row spread"><h3>路線</h3><button class="btn ghost sm iconbtn" id="newRoute">${IC.plus}畫一條</button></div>
-      ${routes.length ? `<div class="roster">${routes.map((r) => `<button class="r spotrow" data-route="${esc(r.id)}"><span class="av num" style="font-size:11px">${(r.distance / 1000).toFixed(1)}</span><span><b>${esc(r.name)}</b><span class="tiny" style="display:block">${esc(r.author || '')}${r.shared ? '' : '・只有我看得到'}</span></span><span class="tiny">›</span></button>`).join('')}</div>`
+      ${routes.length ? `<div class="roster">${routes.map((r) => `<button class="r spotrow" data-route="${esc(r.id)}"><span class="av num" style="font-size:11px">${(r.distance / 1000).toFixed(1)}</span><span><b><span translate="no">${esc(r.name)}</span></b><span class="tiny" style="display:block"><span translate="no">${esc(r.author || '')}</span>${r.shared ? '' : '・只有我看得到'}</span></span><span class="tiny">›</span></button>`).join('')}</div>`
         : '<p class="muted" style="margin:0">還沒有路線。畫一條常跑的路線，分享給大家或拿來開揪跑。</p>'}
     </section>`;
   for (const b of document.querySelectorAll('[data-open]')) b.onclick = () => openSpot(b.dataset.open, true);
@@ -178,9 +181,9 @@ async function openSpot(id, fly) {
   else if (fly) map.flyTo([s.lat, s.lng], Math.max(map.getZoom(), 15), { duration: 0.6 });
   const nav = `https://www.google.com/maps/dir/?api=1&destination=${s.lat},${s.lng}&travelmode=walking`;
   $('#panel').innerHTML = `<section class="card spotcard">
-      <div class="row spread"><div><span class="pill">${KIND[s.kind]}</span>${s.status === 'pending' ? ' <span class="pill wait">審核中</span>' : ''}<h2 style="margin:6px 0 0">${esc(s.name)}</h2></div>
+      <div class="row spread"><div><span class="pill">${KIND[s.kind]}</span>${s.status === 'pending' ? ' <span class="pill wait">審核中</span>' : ''}<h2 style="margin:6px 0 0"><span translate="no">${esc(s.name)}</span></h2></div>
         <button class="btn ghost sm" id="backList" aria-label="回地點清單">全部</button></div>
-      ${s.intro ? `<p class="muted" style="margin:0;white-space:pre-wrap">${esc(s.intro)}</p>` : ''}
+      ${s.intro ? `<p class="muted" style="margin:0;white-space:pre-wrap"><span translate="no">${esc(s.intro)}</span></p>` : ''}
       ${Object.keys(s.info || {}).length ? `<div class="infochips">${Object.entries(INFO).filter(([k]) => s.info[k]).map(([k, v]) => `<span><span class="tiny">${v}</span><b>${esc(s.info[k])}</b></span>`).join('')}</div>` : ''}
       <div class="row" style="gap:8px"><a class="btn sm" href="${nav}" target="_blank" rel="noopener">導航 ${IC.external}</a>${s.status === 'approved' ? `<a class="btn ghost sm" href="#/new?spot=${esc(s.id)}">在這裡開揪跑</a>` : ''}
         ${data.editor || (s.mine && s.status === 'pending') ? '<button class="btn ghost sm" id="editSpot">編輯</button>' : ''}</div>
@@ -190,12 +193,12 @@ async function openSpot(id, fly) {
     ${s.status === 'approved' ? `<section class="card"><div class="row spread"><h3>現場回報</h3><button class="btn sm" id="repBtn">回報現場</button></div>
       <div id="repForm"></div>
       ${d.reports.length ? `<div class="reports">${d.reports.map((r) => `<div class="rep"><div>${Object.keys(REP).filter((k) => r[k]).map((k) => `<span class="pill ${['積水', '施工', '封閉', '多', '大雨', '沒有'].includes(r[k]) ? 'wait' : ''}">${REP[k][0]} ${esc(r[k])}</span>`).join('')}</div>
-        ${r.note ? `<p style="margin:4px 0 0">${esc(r.note)}</p>` : ''}<span class="tiny">${agoShort(r.at)}${r.mine ? '・我' : ''}</span>${r.mine || d.editor ? ` <button class="linkbtn tiny" data-delrep="${esc(r.id)}">刪除</button>` : ''}</div>`).join('')}</div>`
+        ${r.note ? `<p style="margin:4px 0 0"><span translate="no">${esc(r.note)}</span></p>` : ''}<span class="tiny">${agoShort(r.at)}${r.mine ? '・我' : ''}</span>${r.mine || d.editor ? ` <button class="linkbtn tiny" data-delrep="${esc(r.id)}">刪除</button>` : ''}</div>`).join('')}</div>`
         : '<p class="muted" style="margin:0">24 小時內還沒有人回報。剛跑完？告訴大家現在的狀況。</p>'}
       ${d.week.length ? `<p class="tiny" style="margin:0">最近 7 天共 ${d.week.reduce((n, x) => n + x.n, 0)} 則回報</p>` : ''}</section>` : ''}
-    ${d.events.length ? `<section class="card"><h3>接下來在這裡</h3>${d.events.map((e) => `<a class="todayev" href="#/e/${esc(e.id)}">${IC.calendar}<span><b>${esc(e.title)}</b><span class="tiny" style="display:block">${esc(e.date)}${e.gather_time ? ` ${esc(e.gather_time)}` : ''}</span></span><span class="tiny">›</span></a>`).join('')}</section>` : ''}
+    ${d.events.length ? `<section class="card"><h3>接下來在這裡</h3>${d.events.map((e) => `<a class="todayev" href="#/e/${esc(e.id)}">${IC.calendar}<span><b><span translate="no">${esc(e.title)}</span></b><span class="tiny" style="display:block">${esc(e.date)}${e.gather_time ? ` ${esc(e.gather_time)}` : ''}</span></span><span class="tiny">›</span></a>`).join('')}</section>` : ''}
     <section class="card"><div class="row spread"><h3>這裡的路線</h3><button class="btn ghost sm iconbtn" id="drawHere">${IC.plus}畫一條</button></div>
-      ${d.routes.length ? `<div class="roster">${d.routes.map((r) => `<button class="r spotrow" data-route="${esc(r.id)}"><span class="av num" style="font-size:11px">${(r.distance / 1000).toFixed(1)}</span><span><b>${esc(r.name)}</b></span><span class="tiny">›</span></button>`).join('')}</div>` : '<p class="muted" style="margin:0">還沒有路線。</p>'}</section>`;
+      ${d.routes.length ? `<div class="roster">${d.routes.map((r) => `<button class="r spotrow" data-route="${esc(r.id)}"><span class="av num" style="font-size:11px">${(r.distance / 1000).toFixed(1)}</span><span><b><span translate="no">${esc(r.name)}</span></b></span><span class="tiny">›</span></button>`).join('')}</div>` : '<p class="muted" style="margin:0">還沒有路線。</p>'}</section>`;
   $('#backList').onclick = () => { history.replaceState(null, '', '#/map'); listPanel(); };
   $('#editSpot')?.addEventListener('click', () => spotForm(s, [s.lat, s.lng]));
   for (const [b, ok] of [[$('#approve'), true], [$('#reject'), false]]) b?.addEventListener('click', async () => {
@@ -287,7 +290,7 @@ async function showRoute(id, fly) {
   window.L.circleMarker(r.points[0], { radius: 7, color: '#fff', weight: 2, fillColor: '#34C759', fillOpacity: 1 }).addTo(routeLayer);
   window.L.circleMarker(r.points[r.points.length - 1], { radius: 7, color: '#fff', weight: 2, fillColor: '#FF3B30', fillOpacity: 1 }).addTo(routeLayer);
   if (fly) map.fitBounds(line.getBounds(), { padding: [30, 30], animate: fly !== 'jump' });
-  $('#panel').innerHTML = `<section class="card"><div class="row spread"><div><span class="pill">路線</span><h2 style="margin:6px 0 0">${esc(r.name)}</h2></div><button class="btn ghost sm" id="backList">全部</button></div>
+  $('#panel').innerHTML = `<section class="card"><div class="row spread"><div><span class="pill">路線</span><h2 style="margin:6px 0 0"><span translate="no">${esc(r.name)}</span></h2></div><button class="btn ghost sm" id="backList">全部</button></div>
     <div class="lstats"><span><b class="num">${(r.distance / 1000).toFixed(2)}</b> 公里</span><span>${r.points.length} 個點</span>${r.shared ? '' : '<span>只有我看得到</span>'}</div>
     <div class="row" style="gap:8px"><a class="btn sm" href="#/new?route=${esc(r.id)}${r.spot_id ? `&spot=${esc(r.spot_id)}` : ''}">用這條路線開揪跑</a><button class="btn ghost sm" id="gpxBtn">下載 GPX</button>
       <button class="btn ghost sm" id="shareRt">分享</button>${r.mine || data.editor ? '<button class="btn danger sm" id="delRt">刪除</button>' : ''}</div>

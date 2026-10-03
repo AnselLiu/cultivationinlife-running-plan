@@ -52,7 +52,7 @@ async function overviewPanel() {
         <input name="title" maxlength="60" placeholder="標題，例如：週六團練改到河濱" required>
         <textarea name="body" maxlength="300" placeholder="內容（選填）"></textarea>
         <fieldset class="qset"><legend>對象（不選就是全部跑友）</legend>
-          <div class="chips">${teams().map((t) => `<label class="chip"><input type="checkbox" name="teams" value="${esc(t.id)}"><span>${esc(t.name)}</span></label>`).join('')}</div>
+          <div class="chips">${teams().map((t) => `<label class="chip"><input type="checkbox" name="teams" value="${esc(t.id)}"><span><span translate="no">${esc(t.name)}</span></span></label>`).join('')}</div>
           <div class="chips">${Object.entries(ROLE_NAME).filter(([r]) => r !== 'member').map(([r, v]) => `<label class="chip"><input type="checkbox" name="roles" value="${r}"><span>${v}</span></label>`).join('')}
             <label class="chip"><input type="checkbox" name="membership" value="active"><span>協會會員</span></label></div></fieldset>
         <input name="url" placeholder="點通知後開啟的頁面（選填，例如 /#/e/活動代碼）">
@@ -145,8 +145,8 @@ async function membersPanel(meta) {
 }
 const memberRow = (m) => `<div class="r mrow">
     <label class="pick"><input type="checkbox" data-pick="${m.id}" aria-label="選取 ${esc(m.name)}"><i>${IC.check}</i></label>
-    <span><b>${esc(m.name)}</b>${m.nickname ? ` <span class="tiny">${esc(m.nickname)}</span>` : ''}
-      <span class="tiny" style="display:block">${esc(m.club || '未填跑團')}・${m.roleName}${(m.teams || []).filter((x) => x.s === 'active').map((x) => `・${esc(teamOf(x.t)?.name || x.t)}`).join('')}${m.member_no ? `・編號 ${esc(m.member_no)}` : ''}${m.paid_until ? `・繳費至 ${esc(m.paid_until)}` : ''}</span></span>
+    <span><b><span translate="no">${esc(m.name)}</span></b>${m.nickname ? ` <span class="tiny"><span translate="no">${esc(m.nickname)}</span></span>` : ''}
+      <span class="tiny" style="display:block">${esc(m.club || '未填跑團')}・${m.roleName}${(m.teams || []).filter((x) => x.s === 'active').map((x) => `・<span translate="no">${esc(teamOf(x.t)?.name || x.t)}</span>`).join('')}${m.member_no ? `・編號 ${esc(m.member_no)}` : ''}${m.paid_until ? `・繳費至 ${esc(m.paid_until)}` : ''}</span></span>
     <span class="mact"><select data-main="${m.id}" aria-label="${esc(m.name)} 的主團" class="mainsel" ${teamOf(m.main_team)?.self_managed && !teamAllow(m.main_team, 'approve') ? 'disabled title="由該團幹部處理"' : ''}>${['<option value="">未設定主團</option>', ...teams().filter((t) => !t.self_managed || teamAllow(t.id, 'approve') || t.id === m.main_team).map((t) => `<option value="${esc(t.id)}" ${m.main_team === t.id ? 'selected' : ''}>${esc(t.name)}</option>`)].join('')}</select>
       <button class="btn ghost sm" data-ms="${m.id}">${MEMBERSHIP_NAME[m.membership]}</button></span>
   </div>`;
@@ -175,7 +175,7 @@ async function membershipDialog(id) {
   if (!m) return;
   $('#msd')?.remove();
   view.insertAdjacentHTML('afterbegin', `<section class="card" id="msd">
-    <h3>${esc(m.name)} 的會籍</h3>
+    <h3><span translate="no">${esc(m.name)}</span> 的會籍</h3>
     <form id="msf">
       <div class="grid2">
         <label>狀態<select name="membership">${Object.entries(MEMBERSHIP_NAME).map(([k, v]) => `<option value="${k}" ${m.membership === k ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
@@ -221,7 +221,7 @@ function rolesPanel(data) {
     ${order.filter((r) => byRole[r]?.length).map((r) => `<section class="card">
       <div class="row spread"><h3>${data.roles[r]}</h3><span class="tiny">${byRole[r].length} 人</span></div>
       <div class="roster">${byRole[r].map((m) => `<div class="r">${avatar(m)}
-        <span><b>${esc(m.name)}</b>${m.title ? ` <span class="tiny">${esc(m.title)}</span>` : ''}</span>
+        <span><b><span translate="no">${esc(m.name)}</span></b>${m.title ? ` <span class="tiny"><span translate="no">${esc(m.title)}</span></span>` : ''}</span>
         ${allow('roles') ? `<button class="btn ghost sm" data-role="${m.id}" data-name="${esc(m.name)}" data-cur="${m.role}">變更</button>` : ''}</div>`).join('')}</div>
     </section>`).join('')}
     ${me.role === 'chair' ? `<section class="card" id="handover">
@@ -237,17 +237,17 @@ function bindHandover() {
     e.preventDefault();
     const { members } = await api(`/members?q=${encodeURIComponent(f.q.value.trim())}`).catch((err) => { toast(err.message); return { members: [] }; });
     const list = members.filter((m) => m.id !== me.id).slice(0, 10);
-    $('#hoList').innerHTML = list.map((m) => `<div class="r">${avatar(m)}<span><b>${esc(m.name)}</b><span class="tiny" style="display:block">${esc(ROLE_NAME[m.role] || '')}</span></span>
+    $('#hoList').innerHTML = list.map((m) => `<div class="r">${avatar(m)}<span><b><span translate="no">${esc(m.name)}</span></b><span class="tiny" style="display:block">${esc(ROLE_NAME[m.role] || '')}</span></span>
       <button class="btn sm" data-ho="${esc(m.id)}" data-name="${esc(m.name)}">移交給這位</button></div>`).join('') || '<p class="tiny" style="margin:0">找不到符合的跑友。</p>';
     for (const b of document.querySelectorAll('[data-ho]')) b.onclick = () => handoverDialog(b.dataset.ho, b.dataset.name);
   };
 }
 function handoverDialog(id, name) {
   $('#hoList').innerHTML = `<form id="hoForm" class="regform" style="display:grid;gap:12px">
-    <p class="notice" style="margin:0">把理事長移交給 <b>${esc(name)}</b>。移交後你就沒有指派身分的權限了，要改回來得請新任理事長處理。</p>
+    <p class="notice" style="margin:0">把理事長移交給 <b><span translate="no">${esc(name)}</span></b>。移交後你就沒有指派身分的權限了，要改回來得請新任理事長處理。</p>
     <div class="grid2"><label>你移交後的身分<select name="my_role">${Object.entries(ROLE_NAME).filter(([k]) => k !== 'chair').map(([k, v]) => `<option value="${k}" ${k === 'director' ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
       <label>你的職稱（選填）<input name="my_title" maxlength="12" placeholder="例如 前理事長、顧問"></label></div>
-    <label>輸入「${esc(name)}」確認<input name="confirm" autocomplete="off" required></label>
+    <label>輸入「<span translate="no">${esc(name)}</span>」確認<input name="confirm" autocomplete="off" required></label>
     <div class="row"><button class="btn danger sm">確定移交</button><button type="button" class="btn ghost sm" id="hoCancel">取消</button></div></form>`;
   $('#hoCancel').onclick = () => { $('#hoList').innerHTML = ''; };
   $('#hoForm').onsubmit = async (e) => {
@@ -362,10 +362,10 @@ async function loadPending(box, { hideEmpty = false } = {}) {
   box.hidden = false;
   const byTeam = (tid) => teamOf(tid);
   box.innerHTML = `<div class="row spread"><h3>待審核的入團申請</h3>${pending.length ? `<span class="pill solid">${pending.length}</span>` : ''}</div>
-    ${needLead.map((tid) => `<p class="notice" style="margin:0">${esc(byTeam(tid)?.name || tid)}還沒有團長，申請只能由該團幹部核准。請先到<a href="#/t/${esc(tid)}">分團頁</a>指派團長。</p>`).join('')}
+    ${needLead.map((tid) => `<p class="notice" style="margin:0"><span translate="no">${esc(byTeam(tid)?.name || tid)}</span>還沒有團長，申請只能由該團幹部核准。請先到<a href="#/t/${esc(tid)}">分團頁</a>指派團長。</p>`).join('')}
     ${pending.length ? `<div class="roster">${pending.map((r) => `<div class="r">${avatar(r)}
-      <span><b>${esc(r.name)}</b>${r.nickname ? ` <span class="tiny">${esc(r.nickname)}</span>` : ''}
-        <span class="tiny" style="display:block">申請加入 ${esc(r.team_name)}・${r.dist === 'hm' ? '半馬' : '全馬'} ${esc(r.grp)} 組・${ago(r.created_at)}${r.main_team ? '' : '・還沒有主團，核准後就是主團'}</span></span>
+      <span><b><span translate="no">${esc(r.name)}</span></b>${r.nickname ? ` <span class="tiny"><span translate="no">${esc(r.nickname)}</span></span>` : ''}
+        <span class="tiny" style="display:block">申請加入 <span translate="no">${esc(r.team_name)}</span>・${r.dist === 'hm' ? '半馬' : '全馬'} ${esc(r.grp)} 組・${ago(r.created_at)}${r.main_team ? '' : '・還沒有主團，核准後就是主團'}</span></span>
       <span class="row" style="gap:6px"><button class="btn sm" data-pa="approve" data-t="${esc(r.team_id)}" data-m="${esc(r.id)}">核准</button><button class="btn ghost sm" data-pa="remove" data-t="${esc(r.team_id)}" data-m="${esc(r.id)}">婉拒</button></span></div>`).join('')}</div>`
       : '<p class="tiny" style="margin:0">目前沒有待審核的申請。</p>'}`;
   for (const b of box.querySelectorAll('[data-pa]')) b.onclick = async () => {
@@ -381,7 +381,7 @@ function adminTeamsPanel() {
       <h3>分團</h3>
       <p class="tiny" style="margin:0">每個分團有自己的團長、幹部與 LINE 群組。團長由理事長在分團頁指派，團長再指派分團幹部。</p>
       <div class="roster">${teams().map((t) => `<a class="r" href="#/t/${esc(t.id)}">${teamIcon(t, 'av')}
-        <span><b>${esc(t.name)}</b><span class="tiny" style="display:block">${t.count} 人${t.private ? '・私密' : ''}${t.line_url ? '・已設 LINE 群組' : ''}</span></span><span class="tiny">›</span></a>`).join('')}</div>
+        <span><b><span translate="no">${esc(t.name)}</span></b><span class="tiny" style="display:block">${t.count} 人${t.private ? '・私密' : ''}${t.line_url ? '・已設 LINE 群組' : ''}</span></span><span class="tiny">›</span></a>`).join('')}</div>
     </section>
     ${allow('settings') ? `<section class="card"><h3>新增分團</h3>
       <form id="newTeam">
@@ -533,7 +533,7 @@ function bindSettings() {
     try {
       const r = await api('/holidays/import', { method: 'POST', body: { year: Number(b.dataset.holy) } });
       $('#holOut').innerHTML = `<p class="notice" style="margin:0">已匯入 ${r.year} 年：${r.total} 天（含週末），節日 ${r.holidays.length} 天、補班 ${r.workdays} 天。</p>
-        <div class="chips" style="margin-top:8px">${r.holidays.filter((h, i, a) => a.findIndex((x) => x.name === h.name) === i).map((h) => `<span class="pill">${esc(h.date.slice(5).replace('-', '/'))} ${esc(h.name)}</span>`).join('')}</div>`;
+        <div class="chips" style="margin-top:8px">${r.holidays.filter((h, i, a) => a.findIndex((x) => x.name === h.name) === i).map((h) => `<span class="pill">${esc(h.date.slice(5).replace('-', '/'))} <span translate="no">${esc(h.name)}</span></span>`).join('')}</div>`;
       toast(`已匯入 ${r.year} 年假日`); loadHol();
     } catch (err) { toast(err.message); }
     b.disabled = false; b.textContent = t;
@@ -593,7 +593,7 @@ async function rosterView() {
     ${largeTitle('團員名冊', '輸入條件查詢')}
     <section class="card">${memberFilterForm('rf2', { membership: false })}<div class="roster" id="rlist"></div></section>`;
   const row = (m) => `<div class="r">${avatar(m)}
-      <span>${esc(m.name)}${m.title ? ` <span class="tiny">${esc(m.title)}</span>` : ''}
+      <span><span translate="no">${esc(m.name)}</span>${m.title ? ` <span class="tiny"><span translate="no">${esc(m.title)}</span></span>` : ''}
         <span class="tiny" style="display:block">${esc(m.roleName)}・${m.dist === 'hm' ? '半馬' : '全馬'} ${esc(m.grp)} 組</span></span>
       ${allow('roles') ? `<button class="btn ghost sm" data-role="${m.id}" data-name="${esc(m.name)}" data-cur="${m.role}">變更</button>` : ''}
     </div>`;
@@ -605,7 +605,7 @@ function roleDialog(id, name, cur) {
   const opts = Object.entries(ROLE_NAME).map(([k, v]) => `<option value="${k}" ${k === cur ? 'selected' : ''}>${v}</option>`).join('');
   $('#rd')?.remove();
   view.insertAdjacentHTML('afterbegin', `<section class="card" id="rd">
-    <h3>變更 ${esc(name)} 的身分</h3>
+    <h3>變更 <span translate="no">${esc(name)}</span> 的身分</h3>
     <form id="rf">
       <label>身分<select name="role">${opts}</select></label>
       <label>職稱（選填）<input name="title" maxlength="12" placeholder="例如 副理事長、活動組長"></label>

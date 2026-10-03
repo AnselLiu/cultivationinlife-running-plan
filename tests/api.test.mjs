@@ -7,7 +7,8 @@ const BASE = process.env.BASE || 'http://localhost:8799';
 const cookies = {};
 async function as(id) {
   if (!cookies[id]) {
-    const r = await fetch(`${BASE}/api/dev/login?id=${id}`, { redirect: 'manual' });
+    const [uid, flag] = id.split(':');   // 't_chair:mfa'＝用通行金鑰驗證過的工作階段
+    const r = await fetch(`${BASE}/api/dev/login?id=${uid}${flag === 'mfa' ? '&mfa=1' : ''}`, { redirect: 'manual' });
     cookies[id] = r.headers.get('set-cookie').split(';')[0];
   }
   return cookies[id];
@@ -248,12 +249,15 @@ test('代為團體報名：要先填好賽事報名資料並同意；組別價�
   assert.equal(st.byOption['全馬'], 1);
   assert.equal((await call('t_runner', `/events/${id}/registrations.csv`)).status, 403, '跑友不能下載');
   assert.equal((await call('t_super', `/events/${id}/registrations.csv`)).status, 403, '監事唯讀');
-  const csv = await call('t_chair', `/events/${id}/registrations.csv`);
+  const nopk = await call('t_chair', `/events/${id}/registrations.csv`);
+  assert.equal(nopk.status, 403, '含身分證字號：沒有通行金鑰驗證不能下載');
+  assert.equal(nopk.json.stepup, true);
+  const csv = await call('t_chair:mfa', `/events/${id}/registrations.csv`);
   assert.equal(csv.status, 200);
   assert.ok(csv.text.includes('A123456789') && csv.text.includes('全馬'));
   // 刪除後，已同意的也一起撤回
   await call('t_runner', '/me/race-profile', { method: 'DELETE' });
-  assert.ok(!(await call('t_chair', `/events/${id}/registrations.csv`)).text.includes('A123456789'));
+  assert.ok(!(await call('t_chair:mfa', `/events/${id}/registrations.csv`)).text.includes('A123456789'));
   assert.equal((await call('t_runner', '/me/race-profile')).json.profile, null);
 });
 
@@ -382,4 +386,26 @@ test('練跑地圖：幹部新增直接上架、團員提議要審核；現場�
   assert.equal(e.route.points.length, 3);
   assert.equal((await call('t_super', `/routes/${rt.json.id}`, { method: 'DELETE' })).status, 403);
   assert.equal((await call('t_runner', '/weather?lat=999&lng=0')).status, 400);
+});
+
+test('資安：刪除帳號會清乾淨新功能的資料；跨站請求與偽裝的 JSON 被擋；理事長移交要驗證；分團幹部不能自己加幹部', async () => {
+  // 偽裝 content-type、跨站 fetch metadata
+  const r1 = await fetch(`${BASE}/api/races`, { method: 'POST', headers: { cookie: await as('t_runner'), 'content-type': 'text/plain; x=application/json' }, body: '{}' });
+  assert.equal(r1.status, 415);
+  const r2 = await fetch(`${BASE}/api/races`, { method: 'POST', headers: { cookie: await as('t_runner'), 'content-type': 'application/json', 'sec-fetch-site': 'cross-site' }, body: '{}' });
+  assert.equal(r2.status, 403);
+  // 分團幹部不能自己指派幹部（要理事長或團長）
+  await call('t_chair', '/teams/kids/members', { method: 'POST', body: { member_id: 't_coach', action: 'add', role: 'officer' } });
+  assert.equal((await call('t_coach', '/teams/kids/members', { method: 'POST', body: { member_id: 't_super', action: 'add', role: 'officer' } })).status, 403);
+  // 建一個新帳號，留下各種資料後刪除
+  const j = await fetch(`${BASE}/api/join`, { method: 'POST', headers: { origin: BASE, 'content-type': 'application/json' }, body: JSON.stringify({ code: 'test-join', name: '刪除測試', dist: 'fm', grp: 'D', consent: true }) });
+  const ck = j.headers.get('set-cookie').split(';')[0];
+  const as2 = (path, body, method = 'POST') => fetch(`${BASE}/api${path}`, { method, headers: { cookie: ck, origin: BASE, 'content-type': 'application/json' }, body: JSON.stringify(body) }).then((r) => r.json().then((x) => ({ status: r.status, json: x })));
+  const spots = (await call('t_runner', '/spots')).json.spots;
+  await as2(`/spots/${spots[0].id}/reports`, { crowd: '少' });
+  const rt = await as2('/routes', { name: '我的路線', points: [[25, 121], [25.01, 121]] });
+  await as2('/races', { name: '測試賽', date: plus(30), dist: '全馬' });
+  const del = await fetch(`${BASE}/api/me`, { method: 'DELETE', headers: { cookie: ck, origin: BASE } });
+  assert.equal(del.status, 200);
+  assert.equal((await call('t_runner', `/routes/${rt.json.id}`)).status, 404, '分享出去的路線也一起刪除');
 });
