@@ -588,8 +588,9 @@ test('通知：跨會員一律 404；計數與看過；全部已讀有上界；�
 test('群發一律是公告、不能偽裝成安全通知；推播偏好只收可以關的類別', async () => {
   const r = await call('t_chair', '/admin/broadcast', { method: 'POST', body: { title: '週末颱風停課', body: '本週六團練取消', teams: ['youth'] } });
   assert.equal(r.status, 200, r.text);
-  const n = (await call('t_runner', '/notifications')).json.items[0];
-  assert.deepEqual([n.title, n.category, n.kind, n.url], ['週末颱風停課', 'announce', 'broadcast', null]);
+  // 用標題找：前一個測試可能在同一秒寫了別的通知，同一秒內的順序看隨機代碼，不能假設是第一則
+  const n = (await call('t_runner', '/notifications')).json.items.find((x) => x.title === '週末颱風停課');
+  assert.deepEqual([n?.title, n?.category, n?.kind, n?.url], ['週末颱風停課', 'announce', 'broadcast', null]);
   assert.equal((await call('t_chair', '/admin/broadcast', { method: 'POST', body: { title: '新裝置登入通知', teams: ['youth'], dryRun: true } })).status, 400);
   assert.equal((await call('t_chair', '/admin/broadcast', { method: 'POST', body: { title: '請登入 App 更新資料', teams: ['youth'], dryRun: true } })).status, 200);
   // 零寬字元、空白、異體字繞不過；內文也不能冒充安全通知
