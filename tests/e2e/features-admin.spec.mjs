@@ -116,3 +116,17 @@ test('群發：標題用了系統安全通知的保留字會就近顯示錯誤�
   await page.locator('#bcCount').click();
   await expect(page.locator('#bcOut')).toContainText('這個標題保留給系統安全通知');
 });
+
+test('活動報名預設：設定活動前 7 天 20:00，預覽跟著更新', async ({ page, request }) => {
+  await enter(page, 't_chair');
+  await page.goto('/#/admin?tab=settings');
+  const f = page.locator('#signupDefForm');
+  const before = await page.locator('#sdPreview').innerText();
+  await f.locator('[name=open_days]').selectOption('7');
+  await f.locator('[name=open_time]').fill('20:00');
+  await expect(page.locator('#sdPreview')).not.toHaveText(before);
+  await expect(page.locator('#sdPreview')).toContainText('20:00 開放');
+  await f.getByRole('button', { name: '儲存報名預設' }).click();
+  await expect(page.getByText('已儲存活動報名預設')).toBeVisible();
+  await apiAs(request, 't_chair', '/settings/signup', { method: 'POST', body: { approval: false, notify: true, open_days: null, close_days: null } });
+});

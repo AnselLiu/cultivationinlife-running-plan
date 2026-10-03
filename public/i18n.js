@@ -15,6 +15,19 @@ const MON = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'Au
 const MO3 = MON.map((m) => m.slice(0, 3));
 // 動態句型：數字、日期、倒數等（先於片段替換）
 const PATTERNS = [
+  // 報名期間：台北時間 10/5（日）20:00 → Sun 10/5 20:00（要在一般日期句型之前，避免時間黏在日期後面）
+  [/(\d{1,2})\/(\d{1,2})（([日一二三四五六])）(\d\d:\d\d)/g, (_, m, d, w, hm) => `${WD[w]} ${m}/${d} ${hm}`],
+  [/^報名將於 (.+) 開始$/, 'Signup opens $1'], [/^尚未開放報名・(.+) 開始$/, 'Signup not open yet · opens $1'],
+  [/^報名期間 (.+?) – (.+?)(・需主辦審核)?$/, (_, a, b, c) => `Signup ${a === '即日起' ? 'now' : a} – ${b}${c ? ' · organizer approval required' : ''}`],
+  [/^報名期間：(.+?) – (.+?)(（需主辦審核）)?$/, (_, a, b, c) => `Signup period: ${a === '即日起' ? 'now' : a} – ${b}${c ? ' (organizer approval required)' : ''}`],
+  [/^回覆截止 (.+)$/, 'Responses close $1'],
+  [/^還有 (?:(\d+) 天 )?(\d+) 小時開放報名$/, (_, d, h) => `Signup opens in ${d ? `${d} d ` : ''}${h} h`], [/^還有 (\d+) 分鐘開放報名$/, 'Signup opens in $1 min'],
+  [/(\d{1,2}\/\d{1,2} \d\d:\d\d) 開放/g, 'opens $1'],
+  [/^你在候補第 (\d+) 位，有人取消會自動遞補並通知你。$/, "You're number $1 on the waitlist and will be moved up automatically if someone cancels."],
+  [/^人數已滿，已排入候補第 (\d+) 位，有人取消會自動遞補並通知你$/, "Event is full. You're number $1 on the waitlist and will be moved up automatically if someone cancels."],
+  [/候補第 (\d+) 位/g, 'waitlist #$1'], [/^待審核 (\d+)( ›)?$/, 'Pending $1$2'], [/(\d+) 筆待審核/g, '$1 pending'],
+  [/剩 (\d+) 個?名額/g, '$1 spots left'], [/^尚有 (\d+) 個名額可核准$/, '$1 spots can still be approved'],
+  [/^已核准 (\d+) 人（正取 (\d+)、候補 (\d+)）/, 'Approved $1 (confirmed $2, waitlist $3)'], [/^已選 (\d+) 筆$/, '$1 selected'], [/^全部核准（(\d+)）$/, 'Approve all ($1)'],
   [/^(\d+) 則未讀$/, '$1 unread'], [/^通知，(\d+) 則新通知$/, 'Notifications, $1 new'], [/^(\d{1,2}) 月$/, (_, m) => MON[m - 1]],
   [/^(\d{4}) 年 (\d{1,2}) 月$/, (_, y, m) => `${MON[m - 1]} ${y}`],
   [/^(\d{1,2}) 月 (\d{1,2}) 日・週(.)$/, (_, m, d, w) => `${WD[w]}, ${MO3[m - 1]} ${d}`],
