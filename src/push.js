@@ -1,8 +1,5 @@
 // 耕跑團 — Web Push（RFC 8291 aes128gcm 加密＋RFC 8292 VAPID），只用 WebCrypto，不需要外部套件
 // 金鑰放在 secrets：VAPID_PUBLIC_KEY（未壓縮公鑰 base64url）、VAPID_PRIVATE_JWK（私鑰 JWK JSON）
-// 通知分類
-export const NOTIFY_KINDS = { event: '新活動公告', signup: '報名與候補提醒', plan: '課表更新' };
-
 const enc = new TextEncoder();
 const b64u = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 const unb64u = (s) => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((s.length + 3) % 4)), (c) => c.charCodeAt(0));
@@ -37,10 +34,10 @@ async function encrypt(sub, payload) {
   return concat(salt, rs, new Uint8Array([asPub.length]), asPub, cipher);
 }
 
-async function sendOne(env, sub, msg) {
+async function sendOne(env, sub, msg, { ttl = 86400, urgency = 'normal' } = {}) {
   const res = await fetch(sub.endpoint, {
     method: 'POST',
-    headers: { authorization: await vapidAuth(env, sub.endpoint), 'content-encoding': 'aes128gcm', 'content-type': 'application/octet-stream', ttl: '86400', urgency: 'normal' },
+    headers: { authorization: await vapidAuth(env, sub.endpoint), 'content-encoding': 'aes128gcm', 'content-type': 'application/octet-stream', ttl: String(ttl), urgency },
     body: await encrypt(sub, JSON.stringify(msg)),
   });
   if (res.status === 404 || res.status === 410) await env.DB.prepare('DELETE FROM push_subs WHERE endpoint = ?').bind(sub.endpoint).run();
@@ -63,24 +60,33 @@ export async function subscribe(env, memberId, { endpoint, p256dh, auth }) {
 export const unsubscribe = (env, memberId, endpoint) =>
   env.DB.prepare('DELETE FROM push_subs WHERE endpoint = ? AND member_id = ?').bind(endpoint, memberId).run();
 
-// 送給指定成員；memberIds 為 null 時送給全部有訂閱的人。回傳成功送出的裝置數
-export async function push(env, memberIds, msg) {
-  if (!env.VAPID_PRIVATE_JWK || !env.VAPID_PUBLIC_KEY) return 0;
-  let subs;
-  if (memberIds === null) subs = (await env.DB.prepare('SELECT endpoint, p256dh, auth FROM push_subs').all()).results;
-  else {
-    const ids = [...new Set(memberIds)].filter(Boolean).slice(0, 400);
-    if (!ids.length) return 0;
-    subs = [];
-    for (let i = 0; i < ids.length; i += 90) {
-      const part = ids.slice(i, i + 90), q = part.map(() => '?').join(',');
-      subs.push(...(await env.DB.prepare(`SELECT endpoint, p256dh, auth FROM push_subs WHERE member_id IN (${q})`).bind(...part).all()).results);
-    }
+// 送給指定成員；payload 的 id 是收件人自己那一列通知的 id（隨機值，不是會員 id）
+// 裝置數超過上限（低於 Workers 每次呼叫的 subrequest 上限）就截掉，回傳 dropped 讓呼叫端寫稽核
+// 上限以一次請求為單位：env.pushBudget 由入口每次請求重設，同一請求裡的多次推播共用
+export async function push(env, memberIds, msg, { rowIds, ttl = 86400, urgency = 'normal' } = {}) {
+  if (!env.VAPID_PRIVATE_JWK || !env.VAPID_PUBLIC_KEY) return { sent: 0, dropped: 0 };
+  const ids = [...new Set(memberIds || [])].filter(Boolean);
+  if (!ids.length) return { sent: 0, dropped: 0 };
+  let subs = [];
+  for (let i = 0; i < ids.length; i += 90) {
+    const part = ids.slice(i, i + 90), q = part.map(() => '?').join(',');
+    subs.push(...(await env.DB.prepare(`SELECT endpoint, p256dh, auth, member_id FROM push_subs WHERE member_id IN (${q})`).bind(...part).all()).results);
   }
-  let n = 0;
-  for (let i = 0; i < subs.length; i += 6) {
-    const res = await Promise.allSettled(subs.slice(i, i + 6).map((s) => sendOne(env, s, msg)));
-    n += res.filter((r) => r.status === 'fulfilled' && r.value < 300).length;
+  const max = Math.max(50, Number(env.PUSH_MAX_DEVICES) || 900), budget = env.pushBudget;
+  // 讀剩餘額度和扣掉額度在同一段同步程式裡，同時進行的推播不會重複使用
+  if (budget && budget.left == null) budget.left = max;
+  const cap = budget ? Math.min(max, budget.left) : max, devices = subs.length;
+  if (budget) budget.left -= Math.min(devices, cap);
+  let dropped = 0;
+  if (devices > cap) {
+    dropped = devices - cap; subs = subs.slice(0, cap);
+    console.warn('push truncated', { cat: msg.cat, devices, cap });
   }
-  return n;
+  let sent = 0, failed = 0;
+  for (let i = 0; i < subs.length; i += 10) {
+    const res = await Promise.allSettled(subs.slice(i, i + 10).map((s) => sendOne(env, s, { ...msg, id: rowIds?.get(s.member_id) || undefined }, { ttl, urgency })));
+    sent += res.filter((r) => r.status === 'fulfilled' && r.value < 300).length;
+    failed += res.filter((r) => r.status === 'rejected').length;
+  }
+  return { sent, dropped, failed };
 }

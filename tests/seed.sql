@@ -16,3 +16,12 @@ UPDATE settings SET value = json_set(value, '$.version', '2026-10-03.1') WHERE k
 UPDATE members SET main_team = 'main', club = '耕跑團' WHERE id IN ('t_other', 't_chair', 't_staff', 't_super');
 UPDATE members SET main_team = 'youth', club = '耕跑青年' WHERE id IN ('t_runner', 't_lead');
 UPDATE members SET main_team = 'geng', club = '耕建築' WHERE id = 't_coach';
+-- 通知中心：同一秒的 35 則（測複合游標），加上一則未讀的安全通知、同一個 ref 的待辦（依活動已讀不能標掉）
+WITH RECURSIVE k(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM k WHERE i < 35)
+INSERT INTO notifications (id, member_id, kind, category, ref, title, url, created_at)
+  SELECT printf('nseed%011d', i), 't_other', 'event', 'event', 'e:seed', printf('測試活動 %d', i), '/#/', datetime('now', '-2 days') FROM k;
+INSERT INTO notifications (id, member_id, kind, category, title, url, created_at)
+  VALUES ('nseedsec00000001', 't_other', 'system', 'security', '新裝置登入', '/#/me/security', datetime('now', '-1 hour'));
+INSERT INTO notifications (id, member_id, kind, category, ref, title, url, created_at) VALUES
+  ('nseedtodo0000001', 't_other', 'event', 'todo', 'e:seed', '要不要調整：測試活動', '/#/e/seed', datetime('now', '-3 days')),
+  ('nseedtodo0000002', 't_lead', 'event', 'todo', 'wx:seed', '要不要調整：測試活動', '/#/e/seed', datetime('now', '-3 days'));

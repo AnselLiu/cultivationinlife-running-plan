@@ -1,6 +1,6 @@
 // 耕跑團 PWA — admin.js：從 app.js 拆出來、用到才載入的畫面（第一次開 App 不用下載）
 import * as Party from './party.js';
-import { $, latest, scanSheet, ago, allow, api, applyFeatures, avatar, barChart, bars, bindStepup, cfg, esc, group, IC, largeTitle, me, mfaBanner, org, pad2, paintCountdown, passkey, refreshMe, render, ROLE_NAME, row, studio, TAB_DEFAULT, TEAM_PERMS, teamAllow, teamIcon, teamOf, teams, toast, view } from './app.js';
+import { $, latest, scanSheet, ago, allow, api, applyFeatures, avatar, barChart, bars, bindStepup, cfg, esc, group, IC, largeTitle, me, mfaBanner, nrow, org, pad2, paintCountdown, passkey, refreshMe, render, ROLE_NAME, row, studio, TAB_DEFAULT, TEAM_PERMS, teamAllow, teamIcon, teamOf, teams, toast, view } from './app.js';
 
 // ---------- 管理介面（RBAC、會籍、座位圖）----------
 let adminSeq = 0;
@@ -73,9 +73,11 @@ async function overviewPanel() {
           <div class="chips">${teams().map((t) => `<label class="chip"><input type="checkbox" name="teams" value="${esc(t.id)}"><span><span translate="no">${esc(t.name)}</span></span></label>`).join('')}</div>
           <div class="chips">${Object.entries(ROLE_NAME).filter(([r]) => r !== 'member').map(([r, v]) => `<label class="chip"><input type="checkbox" name="roles" value="${r}"><span>${v}</span></label>`).join('')}
             <label class="chip"><input type="checkbox" name="membership" value="active"><span>協會會員</span></label></div></fieldset>
-        <input name="url" placeholder="點通知後開啟的頁面（選填，例如 /#/e/活動代碼）">
-        <div class="row"><button type="button" class="btn ghost sm" id="bcCount">算一下人數</button><button class="btn sm">送出</button><span class="tiny" id="bcOut"></span></div>
+        <input name="url" placeholder="點通知後開啟的頁面，例如 /#/e/活動代碼" aria-describedby="bcUrlHint">
+        <span class="tiny" id="bcUrlHint">選填。沒填的話，點通知會打開完整內容</span>
+        <div class="row"><button type="button" class="btn ghost sm" id="bcCount">算一下人數</button><button class="btn sm">送出</button><span class="tiny" id="bcOut" role="status"></span></div>
       </form>
+      <div id="bcPreview" hidden><h3 class="sgt" style="margin:0 0 6px">會員收到的樣子</h3><div class="card setcard"><ul class="nlist" role="list"></ul></div></div>
       <p class="tiny" style="margin:0">同時勾分團和身分時，要兩個條件都符合。會寫入稽核紀錄；一小時最多 10 次。</p></section>` : ''}`;
 }
 // 開啟速度與前端錯誤：p75＝四分之三的人比這個快；不含身分
@@ -106,13 +108,27 @@ function bindOverview() {
   const body = () => ({ title: f.title.value, body: f.body.value, url: f.url.value.trim(),
     teams: [...f.querySelectorAll('[name=teams]:checked')].map((x) => x.value), roles: [...f.querySelectorAll('[name=roles]:checked')].map((x) => x.value),
     membership: [...f.querySelectorAll('[name=membership]:checked')].map((x) => x.value) });
-  $('#bcCount').onclick = async () => { try { const r = await api('/admin/broadcast', { method: 'POST', body: { ...body(), title: body().title || '試算', dryRun: true } }); $('#bcOut').textContent = `會送給 ${r.count} 人`; } catch (e) { toast(e.message); } };
+  // 伺服器的錯誤（例如標題用了系統安全通知的保留字）就近顯示在按鈕旁
+  const showErr = (e) => { $('#bcOut').textContent = e.message; $('#bcOut').classList.add('err'); };
+  $('#bcCount').onclick = async () => { try { const r = await api('/admin/broadcast', { method: 'POST', body: { ...body(), title: body().title || '試算', dryRun: true } }); $('#bcOut').classList.remove('err'); $('#bcOut').textContent = `會送給 ${r.count} 人`; } catch (e) { showErr(e); } };
+  // 即時預覽：用通知中心同一個 nrow() 畫一列「協會公告」，看到的就是會員收到的樣子
+  const preview = () => {
+    const b = body(), box = $('#bcPreview'); if (!box) return;
+    box.hidden = !b.title.trim();
+    if (box.hidden) return;
+    box.querySelector('ul').innerHTML = nrow({ id: 'bcpreview', category: 'announce', kind: 'broadcast', ref: null, title: b.title.trim(), body: b.body.trim(), url: b.url || null,
+      created_at: new Date().toISOString().replace('T', ' ').slice(0, 19), read_at: null });
+    box.querySelector('.nmore')?.remove();
+    box.querySelector('a.nrow').removeAttribute('href');
+  };
+  f.addEventListener('input', preview);
   f.onsubmit = async (e) => {
     e.preventDefault();
     try { const { count } = await api('/admin/broadcast', { method: 'POST', body: { ...body(), dryRun: true } });
+      $('#bcOut').classList.remove('err');
       if (!confirm(`要送出通知給 ${count} 人嗎？`)) return;
-      const r = await api('/admin/broadcast', { method: 'POST', body: body() }); toast(`已送出給 ${r.count} 人`); f.reset(); $('#bcOut').textContent = '';
-    } catch (err) { toast(err.message); }
+      const r = await api('/admin/broadcast', { method: 'POST', body: body() }); toast(`已送出給 ${r.count} 人`); f.reset(); $('#bcOut').textContent = ''; preview();
+    } catch (err) { showErr(err); }
   };
 }
 

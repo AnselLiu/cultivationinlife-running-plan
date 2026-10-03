@@ -7,6 +7,7 @@ import * as Run from './run.js';
 import * as Guide from './guide.js';
 import { quote, charges } from './pricing.js';
 import * as I18N from './i18n.js';
+import { CATS, CHIPS } from './notif-cats.js';
 // 用到才下載的模組：管理後台、拍照、報表、活動表單與統計、分團
 // 剛部署的那幾秒可能拿到舊檔：載入失敗就等一下、加版本參數再試一次，仍失敗才顯示錯誤
 const calendarView = (...a) => lazy('./calendar.js', 'calendarView')(...a);
@@ -206,20 +207,46 @@ const sendVitals = () => {
 };
 addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') sendVitals(); });
 addEventListener('pagehide', sendVitals);
+// 切回前景：鈴鐺數字馬上更新
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') bell(true); });
 // 登出、刪除帳號：清掉這台裝置暫存的個人資料
 const clearDeviceData = () => {
   navigator.serviceWorker?.controller?.postMessage({ type: 'CLEAR_DATA' });
   try { localStorage.removeItem('cil-log-queue'); } catch {}
   navigator.clearAppBadge?.().catch(() => {});
+  bellAt = 0; bellFor = null; bellState = { badge: 0, unread: 0 };
 };
-function toast(msg) {
-  $('.toast')?.remove();
+// 登出前：這台裝置的推播訂閱先從伺服器刪掉，再取消瀏覽器端的訂閱（登出後不再收到這個帳號的推播）
+async function dropPush(server = true) {
+  try {
+    const reg = await Promise.race([navigator.serviceWorker?.ready, new Promise((r) => setTimeout(() => r(null), 1500))]);
+    const sub = await reg?.pushManager?.getSubscription().catch(() => null);
+    if (!sub) return;
+    if (server) await api('/push/unsubscribe', { method: 'POST', body: { endpoint: sub.endpoint } }).catch(() => {});
+    await sub.unsubscribe().catch(() => {});
+  } catch {}
+}
+// 提示：可以帶一個動作（例如刪除後的「復原」）；focus 把焦點移到動作按鈕
+// 時間到或被下一則提示取代時呼叫 onExpire（參數：焦點當時是否在提示裡）；滑鼠停在上面或焦點在裡面時先不關
+function toast(msg, { action, onAction, onExpire, focus = false, ms = 2600 } = {}) {
+  const prev = $('.toast'); if (prev) { prev.remove(); prev.expire?.(); }
   const el = document.createElement('div');
   el.className = 'toast';
   el.role = 'status';
   el.textContent = msg;
+  let done = false;
+  el.expire = () => { if (done) return; done = true; const had = el.contains(document.activeElement); el.remove(); onExpire?.(had); };
+  let b;
+  if (action) {
+    b = document.createElement('button');
+    b.type = 'button'; b.className = 'toastbtn'; b.textContent = action;
+    b.onclick = () => { if (done) return; done = true; el.remove(); onAction?.(); };
+    el.append(b);
+  }
   document.body.append(el);
-  setTimeout(() => el.remove(), 2600);
+  if (focus) b?.focus();
+  const later = () => { if (done) return; if (el.matches(':hover, :focus-within')) setTimeout(later, 1500); else el.expire(); };
+  setTimeout(later, ms);
 }
 const copy = async (text) => {
   try { await navigator.clipboard.writeText(text); toast('已複製'); }
@@ -369,8 +396,24 @@ const IC = {
   scan: ic('<path d="M4 8V5.5A1.5 1.5 0 0 1 5.5 4H8M16 4h2.5A1.5 1.5 0 0 1 20 5.5V8M20 16v2.5a1.5 1.5 0 0 1-1.5 1.5H16M8 20H5.5A1.5 1.5 0 0 1 4 18.5V16M4 12h16"/>'),
   doc: ic('<path d="M7 3.5h6.5L18 8v11a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 6 19V5a1.5 1.5 0 0 1 1-1.5Z"/><path d="M13.5 3.5V8H18M9 12.5h6M9 16h4"/>'),
   external: ic('<path d="M14 4.5h5.5V10M19.5 4.5 11 13M17 14v4a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 5 18V8.5A1.5 1.5 0 0 1 6.5 7h4"/>'),
+  // 通知分類（放在 IC 裡：MI 宣告得比較晚，頂層物件引用會觸發 TDZ）
+  shieldAlert: ic('<path d="M12 3 5 6v5.5c0 4.4 3 8 7 9.5 4-1.5 7-5.1 7-9.5V6Z"/><path d="M12 8.5v4.3M12 16v.1"/>'),
+  calAlert: ic('<path d="M20.8 11.4V8.2a3.4 3.4 0 0 0-3.4-3.4H6.6a3.4 3.4 0 0 0-3.4 3.4v8.6a3.4 3.4 0 0 0 3.4 3.4h5.6"/><path d="M3.4 9.6h17.2M8 3.2v3.4M16 3.2v3.4"/><path d="M17.6 14.4v3.2M17.6 20.6v.1"/>'),
+  calClock: ic('<path d="M11.2 20.2H6.6a3.4 3.4 0 0 1-3.4-3.4V8.2a3.4 3.4 0 0 1 3.4-3.4h10.8a3.4 3.4 0 0 1 3.4 3.4v2.6"/><path d="M3.4 9.6h17.2M8 3.2v3.4M16 3.2v3.4"/><circle cx="17" cy="17" r="4.2"/><path d="M17 15v2.2l1.5 1"/>'),
+  ticket: ic('<path d="M3 8a2 2 0 0 0 2-2h14a2 2 0 0 0 2 2v2a2 2 0 0 0 0 4v2a2 2 0 0 0-2 2H5a2 2 0 0 0-2-2v-2a2 2 0 0 0 0-4Z"/><path d="M14 6v12" stroke-dasharray="2 2.5"/>'),
+  idcard: ic('<rect x="3" y="5" width="18" height="14" rx="3"/><circle cx="9" cy="11" r="2.2"/><path d="M5.8 16c.6-1.6 1.8-2.4 3.2-2.4s2.6.8 3.2 2.4M14.5 10h4M14.5 13.5h3"/>'),
+  clipCheck: ic('<path d="M9 4.6H7.4A2.4 2.4 0 0 0 5 7v11.6A2.4 2.4 0 0 0 7.4 21h9.2a2.4 2.4 0 0 0 2.4-2.4V7a2.4 2.4 0 0 0-2.4-2.4H15"/><rect x="9" y="3" width="6" height="3.4" rx="1.2"/><path d="M8.8 13.6l2.2 2.2 4.4-4.6"/>'),
+  bell: ic('<path d="M6.4 9.6a5.6 5.6 0 0 1 11.2 0c0 4 1.4 5.4 1.4 5.4H5s1.4-1.4 1.4-5.4Z"/><path d="M10.2 18.4a2 2 0 0 0 3.6 0"/>'),
+  // 介面
+  sliders: ic('<path d="M4 7.5h9M17.5 7.5H20M4 16.5h2.5M11 16.5h9"/><circle cx="15.2" cy="7.5" r="2.2"/><circle cx="8.8" cy="16.5" r="2.2"/>'),
+  more: ic('<circle cx="6" cy="12" r="1.3" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.3" fill="currentColor" stroke="none"/><circle cx="18" cy="12" r="1.3" fill="currentColor" stroke="none"/>'),
+  envOpen: ic('<path d="M3.5 10 12 4.2 20.5 10v8.4a1.6 1.6 0 0 1-1.6 1.6H5.1a1.6 1.6 0 0 1-1.6-1.6Z"/><path d="m3.8 10.3 8.2 5.5 8.2-5.5"/>'),
+  envDot: ic('<path d="M20.5 11v6.4a1.6 1.6 0 0 1-1.6 1.6H5.1a1.6 1.6 0 0 1-1.6-1.6V7.6A1.6 1.6 0 0 1 5.1 6H14"/><path d="m3.8 7.4 8.2 5.6 4-2.7"/><circle cx="19" cy="6" r="2.4" fill="currentColor" stroke="none"/>'),
+  trash: ic('<path d="M4.5 6.6h15M9.6 6.6V4.9a1.1 1.1 0 0 1 1.1-1.1h2.6a1.1 1.1 0 0 1 1.1 1.1v1.7M6.6 6.6l.8 12.2a1.6 1.6 0 0 0 1.6 1.5h6a1.6 1.6 0 0 0 1.6-1.5l.8-12.2M10.2 10.6v5.8M13.8 10.6v5.8"/>'),
+  bellSlash: ic('<path d="M6.4 9.6a5.6 5.6 0 0 1 11.2 0c0 4 1.4 5.4 1.4 5.4H5s1.4-1.4 1.4-5.4Z"/><path d="M10.2 18.4a2 2 0 0 0 3.6 0M4.5 4.5l15 15"/>'),
+  filter: ic('<path d="M4 5.5h16l-6.2 7.3v5.4l-3.6 1.8v-7.2Z"/>'),
 };
-const emptyState = (icon, text) => `<div class="empty">${ICONS[icon] || ''}<span>${text}</span></div>`;
+const emptyState = (icon, text) => `<div class="empty">${String(icon).startsWith('<') ? icon : ICONS[icon] || ''}<span>${text}</span></div>`;
 function avatarStack(peek, total) {
   if (!total) return '<span class="stack empty">還沒有人</span>';
   return `<span class="stack">${peek.slice(0, 3).map((p) => avatar({ name: p.n, avatar: p.a })).join('')}${total > 3 ? `<span class="more">+${total - 3}</span>` : ''}</span>`;
@@ -803,6 +846,8 @@ async function eventView(id) {
     history.replaceState(null, '', `#/e/${id}`);
   }
   const ev = await api(`/events/${id}`);
+  // 打開活動頁＝這個活動的通知都看過了（伺服器會排除幹部待辦與帳號安全）
+  if (bellState.unread > 0) api('/notifications/read', { method: 'POST', body: { ref: `e:${id}` } }).then(applyCounts).catch(() => {});
   const inviteOnly = ev.visibility === 'invite';
   const admin = ev.manage;
   const survey = ev.kind === 'survey', qs = ev.questions || [];
@@ -1116,34 +1161,463 @@ const dayPattern = (date) => { const w = d2(date).getDay(); return w === 0 || w 
 
 
 // ---------- 通知中心 ----------
-async function notificationsView() {
-  const { items, next, unread } = await api('/notifications');
-  view.innerHTML = `
-    ${largeTitle('通知', '', unread ? '<button class="btn ghost sm" id="readAll">全部已讀</button>' : '')}
-    <div id="nlist">${items.length ? items.map(notifRow).join('') : `<div class="card">${emptyState('bell', '還沒有通知，新活動與課表發布時會出現在這裡')}<a class="btn ghost sm" href="#/me/notify" style="justify-self:center">開啟手機推播</a></div>`}</div>
-    ${next ? '<button class="btn ghost sm block" id="nmore">載入更早的通知</button>' : ''}`;
-  let cursor = next;
-  $('#nmore')?.addEventListener('click', async (e) => {
-    const r = await api(`/notifications?before=${encodeURIComponent(cursor)}`);
-    $('#nlist').insertAdjacentHTML('beforeend', r.items.map(notifRow).join(''));
-    cursor = r.next; if (!cursor) e.target.remove();
-  });
-  $('#readAll')?.addEventListener('click', async () => { await api('/notifications/read', { method: 'POST' }); bell(); render(); });
-  // 進到通知頁就當作看過了
-  if (unread) setTimeout(async () => { await api('/notifications/read', { method: 'POST' }); bell(); }, 1200);
+// 分類由伺服器寫入（notif-cats.js 共用登記表）；每類一個實心色磚＋線條圖示＋文字，顏色不是唯一的辨識方式
+const NICON = { security: IC.shieldAlert, change: IC.calAlert, signup: IC.ticket, event: IC.calClock, training: IC.runner,
+  membership: IC.idcard, announce: IC.megaphone, todo: IC.clipCheck, other: IC.bell };
+// 整句都是伺服器範本的標題：英文介面可以翻；夾帶活動或分團名稱的標題、內文一律不翻
+const NFIXED = new Set(['新裝置登入', '新增了一把通行金鑰', '移除了一把通行金鑰', '已登出所有裝置', '幹部需要兩步驟驗證', '你已成為理事長', '你已卸任理事長',
+  '身分更新', '候補遞補成功', '入會完成', '會籍已到期', '會費今天到期', '有人申請入會', '練跑地圖：有新的地點提議', '每季權限檢視', '跑完了嗎？', '這週練得很兇，注意恢復', '教練回饋了你的訓練']);
+// 只接受站內網址；通知中心本身不算（改開詳細內容）
+const safeHref = (u) => (/^\/#\/[\w/?=&.%-]*$/.test(u || '') && u !== '/#/notifications' ? u.slice(1) : null);
+const nDate = (ts) => new Date(`${ts.replace(' ', 'T')}Z`);
+const daysAgo = (d) => Math.round((new Date().setHours(0, 0, 0, 0) - new Date(d).setHours(0, 0, 0, 0)) / 864e5);
+// 日期分段：今天、昨天、最近 7 天、更早的每個月一段（用裝置的當地時間）
+function nGroup(ts) {
+  const d = nDate(ts), k = daysAgo(d);
+  if (k <= 0) return ['today', '今天']; if (k === 1) return ['yday', '昨天']; if (k < 7) return ['week', '最近 7 天'];
+  return [`m${d.getFullYear()}-${d.getMonth()}`, d.getFullYear() === new Date().getFullYear() ? `${d.getMonth() + 1} 月` : `${d.getFullYear()} 年 ${d.getMonth() + 1} 月`];
 }
-const NICON = { event: IC.megaphone, plan: IC.calendar, signup: IC.checkCircle, lottery: IC.gift, system: IC.gear, log: IC.runner };
-const notifRow = (n) => `
-      <a class="card tight notif ${n.read_at ? '' : 'unread'}" href="${esc(n.url || '#/')}">
-        <div class="row" style="gap:12px;align-items:flex-start">
-          <span class="nicon" aria-hidden="true">${NICON[n.kind] || '•'}</span>
-          <span style="flex:1;min-width:0">
-            <b><span translate="no">${esc(n.title)}</span></b>
-            ${n.body ? `<span class="muted" style="display:block"><span translate="no">${esc(n.body)}</span></span>` : ''}
-            <span class="tiny">${ago(n.created_at)}</span>
-          </span>
-        </div>
-      </a>`;
+// 列上的時間：今天用「N 分鐘前」或時刻、昨天用時刻、一週內用星期、更早用日期（ago() 給其他頁面用，不改）
+function ntime(ts) {
+  const d = nDate(ts), k = daysAgo(d), m = Math.floor((Date.now() - d) / 6e4), hm = `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+  if (k <= 0) return m < 1 ? '剛剛' : m < 60 ? `${m} 分鐘前` : hm;
+  if (k === 1) return hm;
+  if (k < 7) return `週${'日一二三四五六'[d.getDay()]}`;
+  return d.getFullYear() === new Date().getFullYear() ? `${d.getMonth() + 1}/${d.getDate()}` : `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`;
+}
+const fullTime = (ts) => { const d = nDate(ts); return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`; };
+const nCat = (n) => (CATS[n.category] ? n.category : 'other');
+// eyebrow 依伺服器寫入的分類與 ref 產生，不讀作者寫的文字：幹部群發標題寫「新裝置登入」，畫面上仍是紫色擴音器加「協會公告」
+const nEye = (n) => {
+  const cat = nCat(n), tid = n.ref?.startsWith('t:') ? n.ref.slice(2) : null, tname = tid ? teamOf(tid)?.name : '';
+  return cat === 'announce' ? (tname ? `<span translate="no">${esc(tname)}</span>・分團公告` : tid ? '分團公告' : '協會公告')
+    : cat === 'security' ? `${IC.lock}系統通知` : '';
+};
+// 一則通知一列；按鈕不放在 <a> 裡面（.nmore、.nack 是 <a> 的兄弟元素）
+const nrow = (n, pinned = false) => {
+  const cat = nCat(n), unread = !n.read_at, href = safeHref(n.url), eye = nEye(n);
+  return `<li class="nitem n-${cat}${unread ? ' unread' : ''}" data-id="${esc(n.id)}" data-cat="${cat}"><div class="nwrap">
+    <a class="nrow" href="${href ? esc(href) : '#/notifications'}"${href ? '' : ' data-detail'}>
+      <span class="ntile" aria-hidden="true">${NICON[cat]}</span>
+      <span class="ntext">
+        <span class="sr">${CATS[cat]?.zh || '其他'}</span>${unread ? '<span class="sr nsru">未讀</span>' : ''}
+        ${eye ? `<span class="neye">${eye}</span>` : ''}
+        <span class="nt" id="nt-${esc(n.id)}"${NFIXED.has(n.title) ? '' : ' translate="no"'}>${esc(n.title)}</span>
+        ${n.body ? `<span class="nb" translate="no">${esc(n.body)}</span>` : ''}
+      </span>
+      <span class="nmeta"><time class="num" datetime="${nDate(n.created_at).toISOString()}" data-ts="${esc(n.created_at)}" title="${fullTime(n.created_at)}">${ntime(n.created_at)}</time><i class="ndot" aria-hidden="true"></i></span>
+    </a>
+    ${pinned && cat === 'security' && unread ? '<div class="nack"><button type="button" class="btn sm" data-ack="me">是我本人</button><button type="button" class="btn ghost sm" data-ack="notme">不是我</button></div>' : ''}
+    <button type="button" class="iconx nmore" data-more aria-label="更多動作" aria-describedby="nt-${esc(n.id)}">${IC.more}</button>
+  </div></li>`;
+};
+const reduceMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
+const lsGet = (k) => { try { return localStorage.getItem(k); } catch { return null; } };
+const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch {} };
+// 通知中心的狀態（同一時間只有一個通知頁）
+const NS = { key: 'all', cursor: null, ids: new Set(), data: new Map(), chips: null, lastKey: '', timer: 0, pendingDeletes: [], cats: {}, unread: 0, offline: false, loading: false, seq: 0 };
+const curChip = () => CHIPS.find((c) => c.key === NS.key) || CHIPS[0];
+const scopeCats = () => { const c = curChip(); return c.q && c.q !== 'unread' ? c.q.split(',') : Object.keys(CATS); };
+const chipU = (c) => (c.key === 'all' ? 0 : c.key === 'unread' ? Object.values(NS.cats).reduce((t, x) => t + (x.u || 0), 0) : c.q.split(',').reduce((t, k) => t + (NS.cats[k]?.u || 0), 0));
+// 哪些 chip 會出現：全部、未讀一定有；待辦要有待辦通知或待處理摘要；其他類別 180 天內有資料。同一頁面只新增、不拿掉
+function addChips(r) {
+  NS.chips ||= new Set(['all', 'unread']);
+  for (const c of CHIPS) if (c.q && c.q !== 'unread' && (c.key === 'todo' ? r.cats?.todo?.n > 0 || r.todo || r.officer : c.q.split(',').some((k) => r.cats?.[k]?.n > 0))) NS.chips.add(c.key);
+}
+const chipHTML = (c) => {
+  const sel = c.key === NS.key, u = chipU(c);
+  return `<button type="button" role="tab" id="nchip-${c.key}" data-nk="${c.key}" aria-selected="${sel}" tabindex="${sel ? 0 : -1}">${c.tc ? `<i${c.key === 'todo' ? ' class="tdot"' : ''} style="--tc:${c.tc}"></i>` : ''}<span>${c.zh}</span>${u ? `<b class="num">${u}</b>` : ''}</button>`;
+};
+function paintChips() {
+  const bar = $('#nchips'); if (!bar) return;
+  const focused = document.activeElement?.dataset?.nk;
+  bar.innerHTML = CHIPS.filter((c) => NS.chips.has(c.key)).map(chipHTML).join('');
+  if (focused) $(`#nchip-${focused}`)?.focus();
+}
+// 數字變動：只改數字，不重畫 chip（焦點不會跳）
+function paintCounts() {
+  for (const b of document.querySelectorAll('#nchips [data-nk]')) {
+    const u = chipU(CHIPS.find((c) => c.key === b.dataset.nk)); let el = b.querySelector('b.num');
+    if (!u) { el?.remove(); continue; }
+    if (!el) { el = document.createElement('b'); el.className = 'num'; b.append(el); }
+    if (el.textContent !== String(u)) el.textContent = u;
+  }
+  const sub = $('#nsub'); if (sub) { const t = NS.unread ? `${NS.unread} 則未讀` : ''; if (sub.textContent !== t) sub.textContent = t; }
+  const ra = $('#readAll'); if (ra) ra.hidden = !scopeCats().some((k) => k !== 'security' && NS.cats[k]?.u > 0);
+}
+// 已讀狀態變動：畫面先改，數字跟著加減（鈴鐺在看過之後只算未讀的帳號安全通知）
+function adjust(cat, d) {
+  const x = NS.cats[cat] ||= { n: 0, u: 0 };
+  x.u = Math.max(0, x.u + d); NS.unread = Math.max(0, NS.unread + d);
+  bellState.unread = Math.max(0, bellState.unread + d);
+  if (cat === 'security' || cat === 'other') bellState.badge = Math.max(0, bellState.badge + d);
+  paintBell(); paintCounts();
+}
+function setUnread(li, unread, count = true) {
+  if (!li || li.classList.contains('unread') === unread) return;
+  li.classList.toggle('unread', unread);
+  const n = NS.data.get(li.dataset.id); if (n) n.read_at = unread ? null : 'now';
+  if (unread) li.querySelector('.ntext .sr')?.insertAdjacentHTML('afterend', '<span class="sr nsru">未讀</span>');
+  else li.querySelector('.nsru')?.remove();
+  if (count) adjust(li.dataset.cat, unread ? 1 : -1);
+}
+const applyCounts = (r) => {
+  if (!r || r.badge == null) return;
+  bellState = { badge: r.badge, unread: r.unread }; NS.unread = r.unread; paintBell(); paintCounts();
+};
+// 單則已讀：畫面立刻改，請求用 keepalive（點了馬上導頁也送得出去）
+function markRead(li) {
+  if (!li?.classList.contains('unread')) return;
+  setUnread(li, false);
+  fetch('/api/notifications/read', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: li.dataset.id }), keepalive: true })
+    .then(() => bell(true)).catch(() => toast('目前沒有網路，連上後再試一次'));
+}
+async function markUnread(li) {
+  try {
+    const r = await api('/notifications/unread', { method: 'POST', body: { id: li.dataset.id } });
+    if (!li.classList.contains('unread')) (NS.cats[li.dataset.cat] ||= { n: 0, u: 0 }).u++;
+    setUnread(li, true, false); applyCounts(r); paintCounts();
+  }
+  catch (e) { toast(e.message); }
+}
+// 刪除：列先收合，4 秒內可以復原，時間到才真的送出；換頁或離開 App 時立刻送出
+const nCommit = (p) => {
+  if (!NS.pendingDeletes.includes(p)) return;
+  NS.pendingDeletes = NS.pendingDeletes.filter((x) => x !== p);
+  fetch(`/api/notifications/${encodeURIComponent(p.id)}`, { method: 'DELETE', credentials: 'same-origin', keepalive: true })
+    .then(() => bell(true)).catch(() => toast('目前沒有網路，連上後再試一次'));
+};
+function nLeave() { clearInterval(NS.timer); for (const p of [...NS.pendingDeletes]) nCommit(p); }
+addEventListener('pagehide', () => { for (const p of [...NS.pendingDeletes]) nCommit(p); });
+// 刪除後焦點的去處：下一列、上一列，都沒有就回到目前的 chip
+const nNeighbor = (li) => {
+  const rows = [...document.querySelectorAll('#nfeed .nitem:not(.gone)')], i = rows.indexOf(li), others = rows.filter((x) => x !== li);
+  return (others[i] || others[i - 1])?.querySelector('.nrow') || $(`#nchip-${NS.key}`);
+};
+function nDelete(li, viaKey = false) {
+  const ul = li.parentElement, next = li.nextElementSibling, sec = li.closest('section'), near = nNeighbor(li);
+  const p = { id: li.dataset.id, cat: li.dataset.cat, unread: li.classList.contains('unread') };
+  li.classList.add('gone');
+  p.hide = setTimeout(() => { li.remove(); if (sec && !sec.querySelector('.nitem')) sec.hidden = true; }, reduceMotion() ? 0 : 240);
+  NS.pendingDeletes.push(p);
+  if (p.unread) adjust(p.cat, -1);
+  if (NS.cats[p.cat]) NS.cats[p.cat].n = Math.max(0, NS.cats[p.cat].n - 1);
+  if (!viaKey) near?.focus();
+  toast('已刪除', { action: '復原', ms: 4000, focus: viaKey, onExpire: (had) => { nCommit(p); if (had && near?.isConnected) near.focus(); }, onAction: () => {
+    if (!NS.pendingDeletes.includes(p)) return;
+    clearTimeout(p.hide); NS.pendingDeletes = NS.pendingDeletes.filter((x) => x !== p);
+    if (!li.isConnected) ul.insertBefore(li, next?.isConnected ? next : null);
+    if (sec) sec.hidden = false;
+    li.classList.remove('gone');
+    if (p.unread) adjust(p.cat, 1);
+    if (NS.cats[p.cat]) NS.cats[p.cat].n++;
+    li.querySelector('.nrow')?.focus();
+  } });
+}
+// 共用 sheet：焦點移到第一個動作、Tab 不會跑出去、Esc 關閉，關閉後焦點回到原本的元素
+// labelledby：用 sheet 裡標題的 id 當名稱（標題是作者寫的內容、不翻譯時用這個，不用 aria-label）
+function openSheet(label, inner, opener, labelledby = '') {
+  const host = document.createElement('div');
+  host.className = 'sheet'; host.setAttribute('role', 'dialog'); host.setAttribute('aria-modal', 'true');
+  if (labelledby) host.setAttribute('aria-labelledby', labelledby); else host.setAttribute('aria-label', I18N.t(label));
+  host.innerHTML = `<div class="sheet-bg" data-close></div><div class="sheet-card card">${inner}</div>`;
+  document.body.append(host);
+  const focusables = () => [...host.querySelectorAll('button:not([disabled]),a[href],input:not([disabled])')];
+  focusables()[0]?.focus();
+  const key = (e) => {
+    if (e.key === 'Escape') { e.preventDefault(); close(); return; }
+    if (e.key !== 'Tab') return;
+    const f = focusables(), i = f.indexOf(document.activeElement);
+    if (e.shiftKey && i <= 0) { e.preventDefault(); f[f.length - 1]?.focus(); } else if (!e.shiftKey && i === f.length - 1) { e.preventDefault(); f[0]?.focus(); }
+  };
+  const close = () => { if (!host.isConnected) return; host.remove(); document.removeEventListener('keydown', key, true); if (opener?.isConnected) opener.focus(); };
+  document.addEventListener('keydown', key, true);
+  host.addEventListener('click', (e) => { if (e.target.closest('[data-close]')) close(); });
+  return { host, close };
+}
+// 動作選單：長按、右鍵、更多按鈕都開這個
+function nActions(li) {
+  if (!li?.isConnected || $('.sheet.nsheet')) return;
+  const n = NS.data.get(li.dataset.id); if (!n) return;
+  const cat = li.dataset.cat, unread = li.classList.contains('unread');
+  const chip = CHIPS.find((c) => c.q && c.q !== 'unread' && c.q.split(',').includes(cat));
+  const acts = [
+    [unread ? 'read' : 'unread', unread ? IC.envOpen : IC.envDot, unread ? '標為已讀' : '標為未讀'],
+    chip ? ['only', IC.filter, '只看這一類'] : null,
+    CATS[cat] && !CATS[cat].locked ? ['mute', IC.bellSlash, '關閉這一類推播'] : null,
+    CATS[cat] && cat !== 'security' && !NS.offline ? ['del', IC.trash, '刪除這則通知'] : null,
+  ].filter(Boolean);
+  const s = openSheet('更多動作', `<div class="nsheethd"><span class="ntile n-${cat}" aria-hidden="true">${NICON[cat]}</span><b${NFIXED.has(n.title) ? '' : ' translate="no"'}>${esc(n.title)}</b></div>
+    <div class="nacts">${acts.map(([k, icon, label]) => `<button type="button" class="nact${k === 'del' ? ' danger' : ''}" data-act="${k}">${icon}<span>${label}</span></button>`).join('')}</div>
+    <button type="button" class="btn ghost block" data-close>取消</button>`, li.querySelector('.nrow'));
+  s.host.classList.add('nsheet');
+  s.host.addEventListener('click', (e) => {
+    const k = e.target.closest('[data-act]')?.dataset.act; if (!k) return;
+    s.close();
+    if (k === 'read') markRead(li);
+    else if (k === 'unread') markUnread(li);
+    else if (k === 'only') { switchChip(chip.key); $(`#nchip-${chip.key}`)?.focus(); }
+    else if (k === 'mute') location.hash = `#/me/notify?cat=${cat}`;
+    else if (k === 'del') nDelete(li, e.detail === 0);   // detail 0＝鍵盤按下
+  });
+}
+// 詳細內容：沒有站內連結、或內文超過兩行時開這個；打開就算已讀
+function nDetail(n, opener) {
+  const cat = nCat(n), href = safeHref(n.url), eye = nEye(n);
+  openSheet(n.title, `<div class="ndetail"><span class="ntile n-${cat}" aria-hidden="true">${NICON[cat]}</span>
+      <span class="neye">${eye || CATS[cat]?.zh || '其他'}</span>
+      <h3 id="ndetailh"${NFIXED.has(n.title) ? '' : ' translate="no"'}>${esc(n.title)}</h3>
+      ${n.body ? `<p class="ndbody" translate="no">${esc(n.body)}</p>` : ''}
+      <time class="tiny num" datetime="${nDate(n.created_at).toISOString()}">${fullTime(n.created_at)}</time></div>
+    <div class="choices">${href ? `<a class="btn block" href="${esc(href)}" data-close>前往</a>` : ''}<button type="button" class="btn ghost block" data-close>關閉</button></div>`, opener, 'ndetailh');
+}
+// 幹部「待處理」摘要（從來源資料表即時計算，不是通知）
+const todoBox = (t) => {
+  const tile = `<span class="ntile n-todo">${IC.clipCheck}</span>`, num = (v) => `<b class="num ntnum">${v}</b>`;
+  return `<section class="setgroup" id="todoBox"><h2 class="sgt">待處理</h2><div class="card setcard">${[
+    t.applied ? row('#/admin?tab=members', tile, '入會申請', '', num(t.applied)) : '',
+    ...t.joins.map((j) => row(`#/t/${esc(j.tid)}`, tile, `<span translate="no">「${esc(j.name)}」</span>入團申請`, '', num(j.n))),
+    ...t.pays.map((p) => row(`#/e/${esc(p.id)}/stats`, tile, `<span translate="no">「${esc(p.title)}」</span>繳費確認`, '', num(p.n))),
+    t.spots ? row('#/map', tile, '地點審核', '', num(t.spots)) : '',
+  ].join('')}</div></section>`;
+};
+const nEmptyCard = (icon, title, desc = '', act = '') => `<div class="card"><div class="empty">${icon}<b class="etitle">${title}</b>${desc ? `<span>${desc}</span>` : ''}${act}</div></div>`;
+function nEmpty() {
+  const c = curChip();
+  if (c.key === 'all') return nEmptyCard(IC.bell, '還沒有通知', '新活動、課表和報名結果會出現在這裡', '<span id="npush"></span>');
+  if (c.key === 'unread') return nEmptyCard(IC.checkCircle, '都看完了', '', '<button type="button" class="linkbtn" data-nall>看全部</button>');
+  if (c.key === 'todo') return nEmptyCard(IC.clipCheck, '目前沒有待辦');
+  return nEmptyCard(NICON[c.q.split(',')[0]], '這一類沒有通知', '', '<button type="button" class="linkbtn" data-nall>看全部</button>');
+}
+const nError = () => nEmptyCard(IC.bell, '通知載入失敗', '', '<button type="button" class="btn ghost sm" data-nretry>重試</button>');
+const nSkel = () => `<div class="card setcard nskelc" role="status" aria-label="載入中">${'<div class="nskel"><i></i><span><b></b><b></b></span></div>'.repeat(4)}</div>`;
+// 依日期分段接上新的列：第一列跟目前最後一段同一組就接在原本的清單後面；用 id 去重（伺服器每頁都排除「需要留意」，這是第二道防線）
+function appendItems(items) {
+  const feed = $('#nfeed'); let head = '', html = '', open = false;
+  const last = [...feed.querySelectorAll('section.nday')].pop();
+  if (!last) NS.lastKey = '';
+  for (const n of items) {
+    if (NS.ids.has(n.id)) continue;
+    NS.ids.add(n.id); NS.data.set(n.id, n);
+    const [k, label] = nGroup(n.created_at);
+    if (!open && k === NS.lastKey) { head += nrow(n); continue; }
+    if (k !== NS.lastKey || !open) {
+      if (open) html += '</ul></div></section>';
+      html += `<section class="setgroup nday" data-g="${k}"><h2 class="sgt">${label}</h2><div class="card setcard"><ul class="nlist" role="list">`;
+      open = true; NS.lastKey = k;
+    }
+    html += nrow(n);
+  }
+  if (open) html += '</ul></div></section>';
+  if (head) { last.hidden = false; last.querySelector('ul').insertAdjacentHTML('beforeend', head); }
+  if (html) { feed.querySelector(':scope > .card > .empty')?.parentElement.remove(); feed.insertAdjacentHTML('beforeend', html); }
+}
+function fillFeed(r) {
+  const feed = $('#nfeed'), k = NS.key;
+  NS.ids = new Set(); NS.data = new Map(); NS.lastKey = ''; NS.cursor = r.next;
+  const pinned = (k === 'all' || k === 'unread') ? r.pinned || [] : [], todo = (k === 'all' || k === 'todo') && r.todo?.total > 0 ? r.todo : null;
+  for (const n of pinned) { NS.ids.add(n.id); NS.data.set(n.id, n); }
+  feed.innerHTML = `${todo ? todoBox(todo) : ''}${pinned.length ? `<section class="setgroup" id="npin"><h2 class="sgt">需要留意</h2><div class="card setcard"><ul class="nlist" role="list">${pinned.map((n) => nrow(n, true)).join('')}</ul></div></section>` : ''}`;
+  appendItems(r.items);
+  if (!feed.querySelector('.nitem') && !todo) feed.innerHTML = nEmpty();
+  feed.setAttribute('aria-labelledby', `nchip-${k}`);
+  paintFoot();
+  pushHint();
+}
+// 空狀態的「開啟手機推播」：只有這台裝置真的沒有推播訂閱時才出現
+async function pushHint() {
+  const box = $('#npush'); if (!box || !cfg.vapid) return;
+  const reg = await Promise.race([navigator.serviceWorker?.ready.catch(() => null), new Promise((r) => setTimeout(() => r(null), 1500))]);
+  const sub = await reg?.pushManager?.getSubscription().catch(() => null);
+  if (!sub && box.isConnected) box.outerHTML = '<a class="btn sm" href="#/me/notify">開啟手機推播</a>';
+}
+function paintFoot() {
+  const foot = $('#nfoot'); if (!foot) return;
+  const readN = Object.entries(NS.cats).reduce((t, [k, x]) => t + (k === 'security' || k === 'other' ? 0 : (x.n || 0) - (x.u || 0)), 0);
+  foot.innerHTML = `${NS.cursor ? '<button type="button" class="btn ghost sm block" id="nmore">載入更早的通知</button>' : ''}
+    ${readN > 0 && !NS.offline ? '<button type="button" class="linkbtn" id="nclear">清除已讀通知</button>' : ''}
+    <p class="nfoot">通知保留 180 天，幹部待辦保留 60 天；帳號安全通知無法刪除。</p>`;
+}
+const nQuery = (before) => { const c = curChip(), p = new URLSearchParams(); if (c.q) p.set('cat', c.q); if (before) p.set('before', before); const s = p.toString(); return `/notifications${s ? `?${s}` : ''}`; };
+// 切換 chip：只重抓清單，不重畫整頁
+async function loadFeed() {
+  const feed = $('#nfeed'); if (!feed) return;
+  const my = ++NS.seq;
+  NS.loading = false;
+  feed.innerHTML = nSkel(); $('#npill')?.replaceChildren();
+  try {
+    const r = await api(nQuery());
+    if (my !== NS.seq || !feed.isConnected) return;
+    NS.cats = r.cats || {}; NS.unread = r.unread || 0;
+    const before = NS.chips.size; addChips(r); if (NS.chips.size !== before) paintChips();
+    fillFeed(r); paintCounts();
+    feed.classList.remove('swap'); void feed.offsetWidth; feed.classList.add('swap');
+  } catch { if (my === NS.seq && feed.isConnected) { feed.innerHTML = nError(); paintFoot(); } }
+}
+function switchChip(key) {
+  if (!CHIPS.some((c) => c.key === key)) return;
+  if (!NS.chips.has(key)) { NS.chips.add(key); paintChips(); }
+  NS.key = key; lsSet('cil-ncat', key);
+  for (const b of document.querySelectorAll('#nchips [data-nk]')) { const on = b.dataset.nk === key; b.setAttribute('aria-selected', String(on)); b.tabIndex = on ? 0 : -1; }
+  $(`#nchip-${key}`)?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+  loadFeed();
+}
+async function nMore(btn) {
+  if (NS.loading || !NS.cursor) return;
+  NS.loading = true; btn.disabled = true; btn.textContent = '載入中…';
+  const my = NS.seq, key = NS.key;
+  try {
+    const r = await api(nQuery(NS.cursor));
+    if (my !== NS.seq || key !== NS.key) return;
+    appendItems(r.items); NS.cursor = r.next;
+    const live = $('#nlive'); if (live) { live.textContent = ''; setTimeout(() => { live.textContent = '已載入更多通知'; }, 50); }
+  } catch (e) { toast(e.message); }
+  NS.loading = false;
+  if (!btn.isConnected) return;
+  if (NS.cursor) { btn.disabled = false; btn.textContent = '載入更早的通知'; btn.focus(); }
+  else { const last = [...document.querySelectorAll('#nfeed .nrow')].pop(); btn.remove(); last?.focus(); }
+}
+// 按鈕消失後焦點的去處（焦點原本在那顆按鈕、或已經掉到 body 時）：清單第一列，沒有就回到目前的 chip
+const nRefocus = (gone) => {
+  const a = document.activeElement;
+  if (a && a !== document.body && a !== gone && a.isConnected) return;
+  ($('#nfeed .nitem:not(.gone) .nrow') || $(`#nchip-${NS.key}`))?.focus();
+};
+// 全部已讀：只到目前載入最新的那一列為止（頁面打開之後才進來的維持未讀），就地更新，捲動位置不動
+async function readAll(btn) {
+  const rows = [...NS.data.values()]; if (!rows.length) return;
+  const top = rows.reduce((a, b) => (b.created_at > a.created_at || (b.created_at === a.created_at && b.id > a.id) ? b : a));
+  const c = curChip(), scope = scopeCats();
+  btn.disabled = true;
+  try {
+    const r = await api('/notifications/read', { method: 'POST', body: { all: true, ...(c.q && c.q !== 'unread' ? { cat: c.q } : {}), upto: `${top.created_at}|${top.id}` } });
+    for (const li of document.querySelectorAll('#nfeed .nitem.unread')) if (scope.includes(li.dataset.cat) && li.dataset.cat !== 'security') setUnread(li, false, false);
+    for (const k of scope) if (k !== 'security' && NS.cats[k]) NS.cats[k].u = 0;
+    applyCounts(r); paintFoot();
+  } catch (e) { toast(e.message); }
+  if (btn.isConnected) btn.disabled = false;
+  if (btn.hidden) nRefocus(btn);
+}
+function clearRead(btn) {
+  const s = openSheet('清除所有已讀通知？', `<h3>清除所有已讀通知？</h3><p class="tiny" style="margin:0">帳號安全通知會保留到期滿。</p>
+    <div class="choices"><button type="button" class="btn danger block" data-yes>清除</button><button type="button" class="btn ghost block" data-close>取消</button></div>`, btn);
+  s.host.addEventListener('click', async (e) => {
+    if (!e.target.closest('[data-yes]')) return;
+    s.close();
+    try {
+      await api('/notifications/clear-read', { method: 'POST' });
+      for (const li of document.querySelectorAll('#nfeed .nitem:not(.unread)')) if (!['security', 'other'].includes(li.dataset.cat)) li.remove();
+      for (const sec of document.querySelectorAll('#nfeed section.nday, #npin')) if (!sec.querySelector('.nitem')) sec.hidden = true;
+      for (const [k, x] of Object.entries(NS.cats)) if (k !== 'security' && k !== 'other') x.n = x.u;
+      if (!$('#nfeed .nitem') && !$('#todoBox')) { $('#nfeed').innerHTML = nEmpty(); NS.lastKey = ''; }
+      paintFoot(); bell(true); nRefocus(btn);
+    } catch (err) { toast(err.message); }
+  });
+}
+// 「今天」那一段的時間每 60 秒重算
+function tickToday() {
+  if (!$('#nfeed')) { clearInterval(NS.timer); return; }
+  for (const t of document.querySelectorAll('#nfeed time[data-ts]')) { const v = ntime(t.dataset.ts); if (t.textContent !== v) t.textContent = v; }
+}
+// 停在通知頁時有新推播：顯示「有新通知」，點了重抓目前篩選的第一頁
+function showNewPill() {
+  const box = $('#npill'); if (!box || box.firstChild) return;
+  box.innerHTML = '<button type="button" class="btn sm npill">有新通知</button>';
+}
+async function notificationsView() {
+  nLeave();
+  NS.chips = null; NS.seq++; NS.loading = false;
+  const my = NS.seq;
+  let chip = CHIPS.find((c) => c.key === lsGet('cil-ncat')) || CHIPS[0], r;
+  NS.key = chip.key;
+  try {
+    r = await api(nQuery());
+    addChips(r);
+    // 記住的 chip 這次沒有出現，就回到「全部」
+    if (!NS.chips.has(chip.key)) { chip = CHIPS[0]; NS.key = 'all'; r = await api(nQuery()); }
+  } catch {
+    view.innerHTML = `${largeTitle('通知')}${nError()}`;
+    view.querySelector('[data-nretry]').onclick = () => render();
+    return;
+  }
+  if (my !== NS.seq) return;
+  NS.cats = r.cats || {}; NS.unread = r.unread || 0; NS.offline = !!$('#offline');
+  const hint = !lsGet('cil-nhint');
+  view.innerHTML = `${largeTitle('通知', `<span id="nsub"></span>`, `<div class="ltact"><button type="button" class="btn ghost sm" id="readAll" hidden${NS.offline ? ' disabled' : ''}>全部已讀</button>
+      <a class="themebtn" href="#/me/notify" aria-label="通知設定" title="通知設定">${IC.sliders}</a></div>`)}
+    <div class="nwrap-page">
+      ${NS.offline ? '<p class="notice" style="margin:0">目前離線，顯示的是上次的通知</p>' : ''}
+      ${hint ? `<p class="tiny nhint" id="nhint">${matchMedia('(pointer:coarse)').matches ? '長按通知可以標為未讀或刪除' : '在通知上按右鍵或右邊的更多按鈕，可以標為未讀或刪除'}<button type="button" class="linkbtn" id="nhintOk">知道了</button></p>` : ''}
+      <div id="npill" class="npillbox"></div>
+      <div class="chipbar" id="nchips" role="tablist" aria-label="通知分類" aria-controls="nfeed"></div>
+      <div id="nfeed" class="nfeed" role="tabpanel"></div>
+      <div id="nfoot" class="nfootbox"></div>
+    </div>`;
+  paintChips(); fillFeed(r); paintCounts();
+  bindNotif($('.nwrap-page'));
+  // 進入通知中心＝看過了：鈴鐺的「新通知」歸零（未讀的帳號安全通知仍然算），每一列的未讀點不變
+  if (!NS.offline) api('/notifications/seen', { method: 'POST' }).then(applyCounts).catch(() => {});
+  NS.timer = setInterval(tickToday, 60000);
+}
+function bindNotif(page) {
+  let lp = null;
+  const cancel = () => { if (lp && !lp.fired) { clearTimeout(lp.t); lp.li.classList.remove('pressing'); lp = null; } };
+  // 觸控裝置長按 500ms 開動作選單；移動超過 8px 或放開就取消
+  page.addEventListener('pointerdown', (e) => {
+    // 長按觸發後 Android 不會送出 click，lp 留著會吞掉下一次點擊：新的一次按下一律先清掉
+    if (lp?.fired) lp = null;
+    const li = e.target.closest('.nitem');
+    if (!li || e.pointerType === 'mouse' || e.target.closest('button')) return;
+    cancel();
+    li.classList.add('pressing');
+    lp = { li, x: e.clientX, y: e.clientY, t: setTimeout(() => { li.classList.remove('pressing'); lp.fired = true; navigator.vibrate?.(10); nActions(li); }, 500) };
+  });
+  page.addEventListener('pointermove', (e) => { if (lp && !lp.fired && Math.hypot(e.clientX - lp.x, e.clientY - lp.y) > 8) cancel(); });
+  page.addEventListener('pointerup', cancel);
+  page.addEventListener('pointercancel', cancel);
+  page.addEventListener('contextmenu', (e) => {
+    const li = e.target.closest('.nitem'); if (!li) return;
+    e.preventDefault();
+    if (lp) { if (lp.fired) return; clearTimeout(lp.t); li.classList.remove('pressing'); lp.fired = true; }
+    nActions(li);
+  });
+  page.addEventListener('click', (e) => {
+    if (lp?.fired) { e.preventDefault(); e.stopPropagation(); lp = null; return; }
+    const t = e.target;
+    const chipBtn = t.closest('[data-nk]'); if (chipBtn) { if (chipBtn.getAttribute('aria-selected') !== 'true') switchChip(chipBtn.dataset.nk); return; }
+    const more = t.closest('[data-more]'); if (more) { nActions(more.closest('.nitem')); return; }
+    const ack = t.closest('[data-ack]');
+    if (ack) {
+      const li = ack.closest('.nitem'); markRead(li); const notme = ack.dataset.ack === 'notme'; ack.parentElement.remove();
+      if (notme) location.hash = '#/me/security'; else li.querySelector('.nrow')?.focus();
+      return;
+    }
+    const a = t.closest('a.nrow');
+    if (a) {
+      const li = a.closest('.nitem'), n = NS.data.get(li.dataset.id), nb = li.querySelector('.nb');
+      markRead(li);
+      if (n && (a.hasAttribute('data-detail') || (nb && nb.scrollHeight > nb.clientHeight + 1))) { e.preventDefault(); nDetail(n, a); }
+      return;
+    }
+    if (t.closest('[data-nall]')) { switchChip('all'); return; }
+    if (t.closest('[data-nretry]')) { loadFeed(); return; }
+    if (t.closest('.npill')) { $(`#nchip-${NS.key}`)?.focus(); loadFeed(); return; }
+    if (t.closest('#nmore')) { nMore(t.closest('#nmore')); return; }
+    if (t.closest('#nclear')) { clearRead(t.closest('#nclear')); return; }
+    if (t.closest('#nhintOk')) { lsSet('cil-nhint', '1'); $('#nhint')?.remove(); }
+  });
+  // 全部已讀在大標題列（.nwrap-page 外面）
+  $('#readAll')?.addEventListener('click', (e) => readAll(e.currentTarget));
+  // chip：左右方向鍵移動焦點（roving tabindex）
+  $('#nchips').addEventListener('keydown', (e) => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return;
+    const bs = [...document.querySelectorAll('#nchips [data-nk]')], i = bs.indexOf(document.activeElement); if (i < 0) return;
+    e.preventDefault();
+    const j = e.key === 'Home' ? 0 : e.key === 'End' ? bs.length - 1 : (i + (e.key === 'ArrowRight' ? 1 : -1) + bs.length) % bs.length;
+    for (const b of bs) b.tabIndex = -1;
+    bs[j].tabIndex = 0; bs[j].focus();
+  });
+}
 function ago(ts) {
   const m = Math.floor((Date.now() - new Date(`${ts.replace(' ', 'T')}Z`)) / 60000);
   if (m < 1) return '剛剛';
@@ -1151,14 +1625,24 @@ function ago(ts) {
   if (m < 1440) return `${Math.floor(m / 60)} 小時前`;
   return `${Math.floor(m / 1440)} 天前`;
 }
-async function bell() {
+// 鈴鐺顯示「新通知」（上次打開通知中心之後的＋未讀的帳號安全通知）；30 秒內不重抓，強制更新用 bell(true)
+// 換了帳號（通行金鑰登入不重新載入頁面）一律重抓，不沿用上一個帳號的數字
+let bellAt = 0, bellFor = null, bellState = { badge: 0, unread: 0 };
+async function bell(force = false) {
+  if (!me || (!force && me.id === bellFor && Date.now() - bellAt < 30000)) return;
+  if (me.id !== bellFor) { bellFor = me.id; bellState = { badge: 0, unread: 0 }; paintBell(); }
+  bellAt = Date.now();
   try {
-    const { unread } = await api('/notifications/count');
-    const b = $('#bellCount');
-    b.textContent = unread > 99 ? '99+' : unread;
-    b.hidden = !unread;
-    if (navigator.setAppBadge) (unread ? navigator.setAppBadge(unread) : navigator.clearAppBadge()).catch(() => {});
+    const r = await api('/notifications/count');
+    bellState = { badge: r.badge ?? r.unread, unread: r.unread };
+    paintBell();
   } catch {}
+}
+function paintBell() {
+  const b = $('#bellCount'), a = $('#bell'), n = bellState.badge;
+  b.textContent = n > 99 ? '99+' : n; b.hidden = !n;
+  a.setAttribute('aria-label', I18N.t(n ? `通知，${n} 則新通知` : '通知'));
+  if (navigator.setAppBadge) (n ? navigator.setAppBadge(n) : navigator.clearAppBadge()).catch(() => {});
 }
 
 // ---------- 教練發布課表 ----------
@@ -2278,16 +2762,36 @@ function meTeams() {
     </section>
     <a class="btn ghost block" href="#/teams">看全部分團</a>`;
 }
+// 推播哪些通知：每個類別一列；帳號安全與活動異動一律推播
+const NPREF = [
+  ['security', '新裝置登入、通行金鑰、身分變更'], ['change', '已報名的活動取消、改時間、改地點、候補轉正'],
+  ['signup', '前一晚與集合前提醒、天氣、到貨、中獎'], ['event', '新團練、揪跑、問卷、邀請與賽事提醒'],
+  ['training', '新課表、教練回饋、跑後記錄提醒、每月里程'], ['membership', '入團結果、主團、入會與會費到期'],
+  ['announce', '協會與分團公告'], ['todo', '入團入會申請、繳費確認、地點審核、天氣調整'],
+];
+const prefRows = (p) => NPREF.filter(([k]) => k !== 'todo' || p.officer).map(([k, desc]) => {
+  const locked = p.locked.includes(k);
+  return `<label class="setrow nprefrow" id="pref-${k}"><span class="ntile n-${k}" aria-hidden="true">${NICON[k]}</span>
+    <span class="st"><b>${CATS[k].zh}</b><span class="tiny">${desc}</span>${locked ? '<span class="tiny">一律推播</span>' : ''}${k === 'todo' && p.reviewForced ? '<span class="tiny">每季權限檢視一律推播</span>' : ''}</span>
+    <span class="switch"><input type="checkbox" data-pref="${k}" ${locked || !p.mute.includes(k) ? 'checked' : ''}${locked ? ' disabled' : ''}><i></i></span></label>`;
+});
 async function meNotify() {
   const reg = await Promise.race([navigator.serviceWorker?.ready.catch(() => null), new Promise((r) => setTimeout(() => r(null), 1500))]);
-  const sub = await reg?.pushManager?.getSubscription().catch(() => null);
+  const [sub, prefs] = await Promise.all([reg?.pushManager?.getSubscription().catch(() => null), api('/me/notify-prefs').catch(() => null)]);
+  const denied = typeof Notification !== 'undefined' && Notification.permission === 'denied';
+  const ios = /iPhone|iPad/.test(navigator.userAgent);
   view.innerHTML = `${subTitle('通知與裝置')}
     <section class="card">
-      <h3>推播通知</h3>
-      ${cfg.vapid ? `<p class="muted" style="margin:0">新團練、候補遞補、教練回饋都會通知你。${isStandalone() ? '' : '在 iPhone 上要先「加到主畫面」，再從主畫面打開才收得到。'}</p>
+      <div class="row spread"><h3>這支手機的推播</h3>${cfg.vapid ? `<span class="pill${sub ? ' solid' : ''}">${sub ? '已開啟' : denied ? '已被封鎖' : '未開啟'}</span>` : ''}</div>
+      ${cfg.vapid ? `<p class="muted" style="margin:0">依照下方類別推播到這支手機，通知中心一律保留紀錄。${isStandalone() ? '' : '在 iPhone 上要先「加到主畫面」，再從主畫面打開才收得到。'}</p>
+        ${denied && !sub ? `<p class="notice" style="margin:0">${ios ? '到 iPhone 設定 → 通知 → 耕跑團，打開「允許通知」' : '長按主畫面的耕跑團圖示 → 應用程式資訊 → 通知'}</p>` : ''}
+        <p class="notice" id="pushStale" style="margin:0" hidden>這支手機的推播已失效，請重新開啟</p>
         <div class="row"><button class="btn sm" id="pushBtn">${sub ? '關閉通知' : '開啟通知'}</button>${sub ? '<button class="btn ghost sm" id="pushTest">發測試通知</button>' : ''}</div>`
         : '<p class="muted" style="margin:0">推播功能尚未啟用。</p>'}
     </section>
+    ${prefs ? `${!sub && cfg.vapid ? '<p class="tiny" style="margin:0 6px">這支手機還沒開啟推播，設定會在開啟後生效</p>' : ''}
+      ${group('推播哪些通知', prefRows(prefs))}
+      <p class="tiny" style="margin:-4px 6px 0">關掉的類別仍會留在通知中心，只是不推播到手機。設定跟著帳號，換手機也一樣。</p>` : ''}
     ${installCard('me')}
     <section class="card" id="calCard">
       <div class="row spread"><h3>訂閱到手機行事曆</h3>${cfg.calendarOn ? '<span class="pill solid">已開啟</span>' : ''}</div>
@@ -2301,6 +2805,24 @@ async function meNotify() {
         <div class="seg" role="group" aria-label="Language" translate="no"><button data-lang="zh" aria-pressed="${I18N.lang === 'zh'}">中文</button><button data-lang="en" aria-pressed="${I18N.lang === 'en'}">English</button></div></div></section>`;
   $('#pushBtn')?.addEventListener('click', () => togglePush(sub));
   $('#pushTest')?.addEventListener('click', async () => { try { await api('/push/test', { method: 'POST' }); toast('已送出測試通知'); } catch (e) { toast(e.message); } });
+  // 切換時先改畫面再存；失敗就切回去
+  for (const inp of document.querySelectorAll('[data-pref]')) inp.onchange = async () => {
+    const mute = [...document.querySelectorAll('[data-pref]:not(:checked):not(:disabled)')].map((x) => x.dataset.pref);
+    try { await api('/me/notify-prefs', { method: 'PUT', body: { mute } }); }
+    catch { inp.checked = !inp.checked; toast('設定沒有存成功'); }
+  };
+  // 從通知的「關閉這一類推播」過來：捲到那一列並亮一下
+  const focusCat = new URLSearchParams(location.hash.split('?')[1] || '').get('cat');
+  const pr = focusCat && /^\w+$/.test(focusCat) && $(`#pref-${focusCat}`);
+  if (pr) { pr.scrollIntoView({ block: 'center', behavior: reduceMotion() ? 'auto' : 'smooth' }); pr.classList.add('flash'); setTimeout(() => pr.classList.remove('flash'), 1200); }
+  // 伺服器已經刪掉這支手機的訂閱（推播服務回 404／410）：權限還在就悄悄重新訂閱
+  if (sub && cfg.vapid) api('/push/check', { method: 'POST', body: { endpoint: sub.endpoint } }).then(async ({ known }) => {
+    if (known) return;
+    if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+      try { const j = sub.toJSON(); await api('/push/subscribe', { method: 'POST', body: { endpoint: j.endpoint, keys: j.keys } }); toast('已重新連上推播'); return; } catch {}
+    }
+    const el = $('#pushStale'); if (el) el.hidden = false;
+  }).catch(() => {});
   bindInstall();
   $('#iconsOnly').onchange = (e) => { iconsOnly.set(e.target.checked); applyTabs(); };
   for (const b of document.querySelectorAll('[data-lang]')) b.onclick = () => { if (b.dataset.lang !== I18N.lang) I18N.setLang(b.dataset.lang); };
@@ -2354,8 +2876,8 @@ async function meSecurity(googleMsg) {
     e.preventDefault();
     try { me = (await api('/me/admin', { method: 'POST', body: { code: e.target.code.value } })).member; toast('已設定為理事長'); render(); } catch (err) { toast(err.message); }
   });
-  $('#logout').onclick = async () => { await api('/logout', { method: 'POST' }); clearDeviceData(); me = null; location.hash = '#/'; render(); };
-  $('#logoutAll').onclick = async () => { if (!confirm('要登出所有裝置嗎？包含這一台。')) return; await api('/logout', { method: 'POST', body: { all: true } }); clearDeviceData(); me = null; location.hash = '#/'; render(); };
+  $('#logout').onclick = async () => { await dropPush(); await api('/logout', { method: 'POST' }); clearDeviceData(); me = null; location.hash = '#/'; render(); };
+  $('#logoutAll').onclick = async () => { if (!confirm('要登出所有裝置嗎？包含這一台。')) return; await api('/logout', { method: 'POST', body: { all: true } }); await dropPush(false); clearDeviceData(); me = null; location.hash = '#/'; render(); };
 }
 function mePrivacy() {
   view.innerHTML = `${subTitle('隱私')}
@@ -2431,18 +2953,33 @@ function meAssoc() {
 async function togglePush(sub) {
   try {
     const reg = await Promise.race([navigator.serviceWorker?.ready, new Promise((r) => setTimeout(() => r(null), 3000))]);
-    if (!reg) return toast('這個瀏覽器不支援通知，請用 Safari 或 Chrome 打開，並加到主畫面');
+    if (!reg || typeof Notification === 'undefined') return toast('這個瀏覽器不支援通知，請用 Safari 或 Chrome 打開，並加到主畫面');
     if (sub) {
       await api('/push/unsubscribe', { method: 'POST', body: { endpoint: sub.endpoint } });
       await sub.unsubscribe();
       toast('已關閉通知'); render(); return;
     }
-    if ((await Notification.requestPermission()) !== 'granted') return toast('瀏覽器沒有允許通知');
+    // 第一次開啟前先說明會推播什麼（權限請求要在使用者按下按鈕時發出）
+    const perm = Notification.permission === 'granted' ? 'granted' : await pushExplainer();
+    if (perm === null) return;
+    if (perm !== 'granted') return toast('瀏覽器沒有允許通知');
     const s = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlB64(cfg.vapid) });
     const j = s.toJSON();
     await api('/push/subscribe', { method: 'POST', body: { endpoint: j.endpoint, keys: j.keys } });
     toast('已開啟通知'); render();
   } catch (e) { toast(e.message || '通知設定失敗'); }
+}
+// 開啟推播前的說明 sheet：回傳權限結果；按「先不要」或關掉回傳 null
+function pushExplainer() {
+  return new Promise((done) => {
+    let picked = false;
+    const s = openSheet('要開啟推播嗎？', `<h3>要開啟推播嗎？</h3><p class="muted" style="margin:0">推播會通知你活動異動、報名提醒和帳號安全，類別可以之後在這裡調整。</p>
+      <div class="choices"><button type="button" class="btn block" data-go>開啟推播</button><button type="button" class="btn ghost block" data-close>先不要</button></div>`, $('#pushBtn'));
+    s.host.addEventListener('click', (e) => {
+      if (e.target.closest('[data-go]')) { picked = true; s.close(); Notification.requestPermission().then(done, () => done('denied')); }
+    });
+    new MutationObserver((_, o) => { if (!s.host.isConnected) { o.disconnect(); if (!picked) done(null); } }).observe(document.body, { childList: true });
+  });
 }
 const urlB64 = (s) => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((s.length + 3) % 4)), (c) => c.charCodeAt(0));
 
@@ -2550,6 +3087,7 @@ async function renderOnce() {
     const after = sessionStorage.getItem('cil-after-login');
     if (after) { sessionStorage.removeItem('cil-after-login'); if (after !== location.hash) { location.hash = after; return; } }
   } catch {}
+  nLeave();
   bell();
   paintBack(hash);
   $('#ctitle').textContent = '';
@@ -2571,6 +3109,7 @@ function skeleton(hash) {
     : hash.startsWith('/me/') ? [240, 180]
     : hash.startsWith('/e/') ? [220, 160, 120]
     : hash === '/run' ? [300, 120] : [150, 110, 110];
+  if (hash === '/notifications') return `<div class="skel" role="status" aria-label="載入中"><b></b></div>${nSkel()}`;
   return `<div class="skel" role="status" aria-label="載入中"><b></b>${shape.map((x) => (x === 'u' ? '<u></u>' : box(x))).join('')}</div>`;
 }
 async function route(hash) {
@@ -2701,6 +3240,13 @@ if ('serviceWorker' in navigator) {
       reg.update().catch(() => {}).finally(() => { if (reg.waiting) ask(reg.waiting); hiddenAt = 0; });
     });
   }).catch(() => {});
+  // Service Worker 的訊息：點推播導頁（只接受站內網址）；收到推播只當作「去重抓」的訊號，不顯示 payload 內容
+  navigator.serviceWorker.addEventListener('message', (e) => {
+    const m = e.data || {};
+    if (m.type === 'go' && typeof m.url === 'string' && /^\/(#\/[\w/?=&.%-]*)?$/.test(m.url)) location.hash = m.url.slice(1) || '#/';
+    if (m.type === 'notif') { bell(true); if (location.hash.startsWith('#/notifications')) showNewPill(); }
+  });
+  navigator.serviceWorker.startMessages?.();
   let reloading = false;
   navigator.serviceWorker.addEventListener('controllerchange', () => { if (hadController && !reloading) { reloading = true; location.reload(); } });
 }
@@ -2710,4 +3256,4 @@ addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvt 
 addEventListener('appinstalled', () => { installEvt = null; try { localStorage.setItem('cil-installed', '1'); } catch {} document.querySelectorAll('.installcard').forEach((c) => c.remove()); });
 
 // 拆出去的模組（admin.js、photo.js…）從這裡拿共用的工具與狀態
-export { addrField, bindAddrField, latest, $, cfg, downloadAuthed, scanSheet, FEEL, IC, KIND_NAME, LOG_STATUS_NAME, PAID_NAME, ROLE_NAME, TAB_DEFAULT, TEAM_PERMS, TEAM_ROLE_NAME, ago, allow, api, applyFeatures, avatar, barChart, bars, bindComments, bindStepup, copy, dayLabel, dstr, emptyState, esc, eventCard, feat, fixText, group, largeTitle, me, mfaBanner, money, org, pad2, paintCountdown, passkey, refreshMe, render, route, row, squareIcon, studio, teamAllow, teamIcon, teamOf, teams, toast, view, ymd };
+export { addrField, bindAddrField, latest, $, cfg, downloadAuthed, scanSheet, FEEL, IC, KIND_NAME, LOG_STATUS_NAME, PAID_NAME, ROLE_NAME, TAB_DEFAULT, TEAM_PERMS, TEAM_ROLE_NAME, ago, allow, api, applyFeatures, avatar, barChart, bars, bindComments, bindStepup, copy, dayLabel, dstr, emptyState, esc, eventCard, feat, fixText, group, largeTitle, me, mfaBanner, money, nrow, org, pad2, paintCountdown, passkey, refreshMe, render, route, row, squareIcon, studio, teamAllow, teamIcon, teamOf, teams, toast, view, ymd };

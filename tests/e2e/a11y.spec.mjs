@@ -35,3 +35,21 @@ for (const p of PAGES) {
     expect(over).toEqual([]);
   });
 }
+// 通知中心與通知設定：淺色、深色都要通過；通知頁另外在動作選單打開時再跑一次
+const axeBad = async (page) => (await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21aa']).analyze()).violations
+  .filter((v) => ['critical', 'serious'].includes(v.impact)).map((v) => `${v.id}: ${v.help}｜${v.nodes.slice(0, 3).map((n) => n.target.join(' ')).join(' | ')}`);
+for (const scheme of ['light', 'dark']) for (const p of ['#/notifications', '#/me/notify']) {
+  test(`無障礙 ${p}（${scheme}）`, async ({ page }) => {
+    await page.emulateMedia({ colorScheme: scheme });
+    await login(page, 't_runner'); await acceptPrivacyIfAsked(page);
+    await page.goto(`/${p}`);
+    await page.waitForTimeout(1200);
+    expect(await axeBad(page)).toEqual([]);
+    if (p === '#/notifications' && await page.locator('#nfeed .nmore').count()) {
+      await page.locator('#nfeed .nmore').first().focus();
+      await page.keyboard.press('Enter');
+      await expect(page.getByRole('dialog')).toBeVisible();
+      expect(await axeBad(page)).toEqual([]);
+    }
+  });
+}
