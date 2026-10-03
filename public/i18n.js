@@ -19,6 +19,9 @@ const PATTERNS = [
   [/^還有 (\d+) 筆待審核，關閉審核會依報名順序直接錄取（額滿排候補）並通知他們。確定嗎？$/, '$1 pending requests. Turning off approval admits them in signup order (waitlisted when full) and notifies them. Continue?'],
   [/^只剩 (\d+) 個名額，核准後依報名先後排正取，其餘 (\d+) 人排候補。確定？$/, 'Only $1 spots left. Approved people are confirmed in signup order and the other $2 go to the waitlist. Continue?'],
   [/^其中 (\d+) 人已繳費，會標記待退費。$/, '$1 of them have paid and will be marked for refund.'],
+  // 開放時間的狀態（public/hours.js）：要排在星期與時間的通用句型前面
+  [/^開放中・到 (\d\d:\d\d)$/, 'Open · until $1'], [/^目前未開放・(\d\d:\d\d) 開放$/, 'Closed now · opens $1'],
+  [/^目前未開放・明天 (\d\d:\d\d) 開放$/, 'Closed now · opens tomorrow $1'], [/^目前未開放・週([日一二三四五六]) (\d\d:\d\d) 開放$/, (_, w, t) => `Closed now · opens ${WD[w]} ${t}`],
   [/^還有 (\d+) 筆待審核$/, '$1 pending requests'], [/^還有 (\d+) 筆待審核：/, '$1 pending: '],
   [/^已選 (\d+) 人$/, '$1 selected'], [/^活動前 (\d+) 天$/, '$1 days before the event'], [/^選取 (.+)$/, 'Select $1'],
   // 報名期間：台北時間 10/5（日）20:00 → Sun 10/5 20:00（要在一般日期句型之前，避免時間黏在日期後面）
@@ -50,7 +53,7 @@ const PATTERNS = [
   [/NT\$([\d,]+) 起/g, 'from NT$$$1'],
   [/([\d.]+) 公里/g, '$1 km'], [/([\d.]+) 公尺/g, '$1 m'], [/([\d.]+) 毫秒/g, '$1 ms'], [/([\d.]+) 秒/g, '$1 s'],
   [/(\d+) 人/g, '$1 people'], [/(\d+) 位/g, '$1'], [/(\d+) 堂/g, '$1 sessions'], [/(\d+) 次/g, '$1×'], [/(\d+) 筆/g, '$1'],
-  [/(\d+) 件/g, '$1 pcs'], [/(\d+) 場/g, '$1 events'], [/(\d+) 週/g, '$1 wk'], [/(\d+) 天/g, '$1 days'], [/(\d+) 則/g, '$1'], [/(\d+) 個/g, '$1'],
+  [/(\d+) 件/g, '$1 pcs'], [/(\d+) 處/g, '$1 places'], [/(\d+) 場/g, '$1 events'], [/(\d+) 週/g, '$1 wk'], [/(\d+) 天/g, '$1 days'], [/(\d+) 則/g, '$1'], [/(\d+) 個/g, '$1'],
   [/(?:^|\s)([A-Z]) 組/g, ' group $1'], [/推估：(\d{4}) W(\d+)/g, 'Estimated from $1 W$2'],
   [/([A-Za-z])\s*或\s*([A-Za-z])/g, '$1 or $2'],
   [/第 (\d+) 桌/g, 'Table $1'], [/(\d+) 時/g, '$1:00'], [/(\d+) 年/g, '$1 yr'], [/(\d+) 組/g, 'group $1'],

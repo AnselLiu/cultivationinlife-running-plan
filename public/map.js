@@ -4,6 +4,7 @@
 //   天氣：每個地點的 12 小時預報、空氣品質與跑步建議
 //   畫路線：在地圖上點出路線，即時算距離，可以存起來分享、下載 GPX、直接開揪跑
 //   附近即時影像：1.5 公里內（沒有就 3 公里內最近一支）的政府公開攝影機，畫面由本站轉送、不保存；幹部可以加官方直播的外連；功能開關預設關閉
+//   跑者休息站：飲水、廁所、淋浴置物、補給（reststops.js）；開關收在底圖選單，功能開關預設關閉
 //   底圖：內政部國土測繪中心電子地圖與正射影像（政府資料開放授權）、OpenStreetMap；Leaflet 放在 /vendor（不從外部載入程式）
 import { $, allow, api, camLazy, cfg, esc, IC, largeTitle, openSheet, teamAllow, teams, toast, view } from './app.js';
 // 開揪跑要有建立活動的權限（協會或分團幹部）；團員改成在 LINE 揪人、請幹部開團
@@ -12,6 +13,7 @@ const lineShare = (text) => `https://line.me/R/share?text=${encodeURIComponent(t
 import * as W from './weather.js';
 import { lang } from './i18n.js';
 import { hoursNow } from './hours.js';
+import * as RS from './reststops.js';
 
 const KIND = { track: '田徑場', river: '河濱', park: '公園', trail: '山徑', road: '道路', other: '其他' };
 // 地圖針：水滴形的針頭，裡面是類型的線條圖示（跟系統圖示同一個風格，不用文字）
@@ -94,7 +96,8 @@ async function mapView() {
           <button class="fab" id="addBtn" disabled aria-label="新增地點">${svg('<path d="M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0C18.5 15.4 12 21 12 21Z"/><path d="M12 7.5v5M9.5 10h5"/>')}</button>
         </div>
       </div>
-      <div class="basemenu" id="baseMenu" role="menu" aria-label="底圖" hidden>${Object.entries(BASES).map(([k, v]) => `<button role="menuitemradio" data-base="${k}" aria-checked="${pref.get('base', 'emap') === k}">${v[0]}</button>`).join('')}</div>
+      <div class="basemenu" id="baseMenu" role="menu" aria-label="底圖" hidden>${Object.entries(BASES).map(([k, v]) => `<button role="menuitemradio" data-base="${k}" aria-checked="${pref.get('base', 'emap') === k}">${v[0]}</button>`).join('')}${RS.menuHtml()}</div>
+      ${RS.barHtml()}
       <div class="drawbar dbar" id="drawBar" role="toolbar" aria-label="畫路線" hidden>
         <span class="dlen"><b class="num" id="drawLen">0.00 公里</b><span class="tiny" id="drawPts">點地圖加上路線的點</span></span>
         <span class="dmain"><button class="btn ghost sm" id="drawCancel">取消</button><button class="btn sm" id="drawDone">完成</button></span>
@@ -119,6 +122,9 @@ async function mapView() {
   L.control.attribution({ position: wide() ? 'bottomright' : 'topleft', prefix: '<a href="https://leafletjs.com" target="_blank" rel="noopener">Leaflet</a>' }).addTo(map);
   setBase(pref.get('base', 'emap'));
   spotsLayer = L.layerGroup().addTo(map); routeLayer = L.layerGroup().addTo(map); drawLayer = L.layerGroup().addTo(map);
+  // 跑者休息站圖層（獨立的圖層與群集，不跟練跑地點合併）
+  RS.attach({ map, L, pref, focusOn, setDetent, visRect, fitVisible, drawLayer, startPick, openSpot, closeCard, panel: () => $('#panel'),
+    leave: () => { camReset(); selected = null; paintPins(); }, selected: () => selected, mode: () => mode, mapClick: onMapClick, myPos: () => myPos, editor: () => data.editor });
   map.on('moveend', () => { const c = map.getCenter(); pref.set('view', JSON.stringify([+c.lat.toFixed(4), +c.lng.toFixed(4), map.getZoom()])); });
   map.on('zoomend', paintPins);
   map.on('click', (e) => onMapClick([+e.latlng.lat.toFixed(6), +e.latlng.lng.toFixed(6)]));
@@ -129,6 +135,7 @@ async function mapView() {
   for (const b of menu.querySelectorAll('[data-base]')) b.onclick = () => { setBase(b.dataset.base); for (const x of menu.querySelectorAll('[data-base]')) x.setAttribute('aria-checked', String(x === b)); closeMenu(); baseBtn.focus(); };
   menu.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closeMenu(); baseBtn.focus(); } });
   map.on('movestart', closeMenu);
+  RS.bindMenu(() => { closeMenu(); baseBtn.focus(); });
   $('#locBtn').onclick = locate;
   // 地圖準備好才能按（載入 Leaflet 前點了不會有反應，所以先停用）；新增地點、畫路線要等地點資料回來（才知道是不是幹部）
   $('#baseBtn').disabled = false; $('#locBtn').disabled = false;
@@ -143,11 +150,13 @@ async function mapView() {
   $('#pickCancel').onclick = endPick;
   await loadSpots();
   if (!el.isConnected) return;
+  RS.ready();
   $('#drawBtn').disabled = false; $('#addBtn').disabled = false;
   // 載入期間已經打開新增地點或路線的表單（手快的人）：不要用清單把表單蓋掉
   if ($('#panel form')) return;
   if (q.get('spot')) openSpot(q.get('spot'), 'jump');
   else if (q.get('route')) showRoute(q.get('route'), 'jump');
+  else if (q.get('rest')) RS.openStop(q.get('rest'), { fly: 'jump', focus: false });
   else listPanel();
 }
 
@@ -163,6 +172,21 @@ function focusOn(ll, zoom, how) {
   else cy = (top + (H - (sheetH[detent] || 0))) / 2;
   const pt = map.project(ll, z).subtract([cx - W / 2, cy - H / 2]), target = map.unproject(pt, z);
   if (how === 'jump') map.setView(target, z, { animate: false }); else map.flyTo(target, z, { duration: 0.6 });
+}
+// 看得到的地圖範圍（容器座標）：扣掉上方列、休息站類型列、抽屜（手機）或左側面板（iPad／桌機）
+function visRect() {
+  const amap = $('#amap'), sh = $('#msheet'), W = amap?.clientWidth || map.getSize().x, H = amap?.clientHeight || map.getSize().y;
+  let top = (parseFloat(amap?.style.getPropertyValue('--toph')) || 60) + ($('#restBar') && !$('#restBar').hidden ? 52 : 0), x0 = 0, y1 = H;
+  if (wide() && sh) x0 = Math.max(0, sh.getBoundingClientRect().right - amap.getBoundingClientRect().left);
+  else y1 = Math.max(top + 80, H - (sheetH[detent] || 0));
+  top = Math.min(top, y1 - 80);
+  return { x0, y0: top, x1: W, y1 };
+}
+// 把幾個點一起框進看得到的範圍（地點卡的「在地圖上顯示」）
+function fitVisible(pts) {
+  if (!pts.length) return;
+  const r = visRect(), s = map.getSize(), pad = 28;
+  map.fitBounds(window.L.latLngBounds(pts), { paddingTopLeft: [r.x0 + pad, r.y0 + pad], paddingBottomRight: [s.x - r.x1 + pad, s.y - r.y1 + pad], maxZoom: 17 });
 }
 let sheetH = {}, detent = 'peek';
 function measure() {
@@ -245,6 +269,7 @@ function locate() {
     const ll = [p.coords.latitude, p.coords.longitude];
     me?.remove();
     me = window.L.circleMarker(ll, { radius: 8, color: '#fff', weight: 3, fillColor: '#0A84FF', fillOpacity: 1 }).addTo(map);
+    myPos = ll;   // 只留在這支手機上（休息站卡的「離我多遠」也在這裡算）
     map.flyTo(ll, Math.max(map.getZoom(), 15), { duration: 0.6 });
   }, (e) => toast(e.code === 1 ? '請允許定位權限' : '暫時定位不到'), { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 });
 }
@@ -291,13 +316,14 @@ function paintPins() {
 function onMapClick(pt) {
   if (mode === 'draw') { if (Date.now() < quietUntil) return; strokes.push(draft.length); draft.push(pt); paintDraft(); return; }
   if (mode === 'pick') { const cb = pickCb; endPick(); cb?.(pt); return; }
-  // 一般瀏覽：點空白處關掉地點卡（像 Apple 地圖），清單收合讓地圖露出來
-  if (selected && !$('#panel form')) closeCard();
+  // 一般瀏覽：點空白處關掉地點卡或休息站卡（像 Apple 地圖），清單收合讓地圖露出來
+  if (RS.isOpen() && !$('#panel form')) { RS.close(); closeCard(); }
+  else if (selected && !$('#panel form')) closeCard();
   else if (!wide() && detent !== 'peek' && !$('#panel form')) setDetent('peek');
 }
 // 關掉地點或路線卡，回到清單
 function closeCard() {
-  camReset();
+  camReset(); RS.deselect();
   selected = null; history.replaceState(null, '', '#/map');
   paintPins(); listPanel(); setDetent(wide() ? 'half' : 'peek');
 }
@@ -346,7 +372,7 @@ function simplify(from) {
   draft = out;
 }
 function startDraw(seed = []) {
-  endPick(); mode = 'draw'; draft = [...seed]; strokes = []; routeLayer.clearLayers();
+  endPick(); RS.deselect(); mode = 'draw'; draft = [...seed]; strokes = []; routeLayer.clearLayers();
   $('#drawBar').hidden = false; $('#map').classList.add('picking'); paintDraft(); setDetent('peek');
   $('#panel').innerHTML = `<section class="card"><h3>畫路線</h3><p class="tiny" style="margin:0">沿著要跑的路依序點地圖，轉彎處多點幾下比較準；iPad 可以用 Apple Pencil 直接畫，或打開「手繪」用手指畫。完成後可以存起來分享、下載 GPX，或直接開揪跑。</p></section>`;
 }
@@ -442,7 +468,7 @@ function bindSpotFilters() {
 
 // 地點卡片：說明、天氣、現場回報、路線、接下來在這裡的活動
 async function openSpot(id, fly) {
-  endDraw(); endPick(); camReset();
+  endDraw(); endPick(); camReset(); RS.deselect();
   const d = await api(`/spots/${id}`).catch((e) => { toast(e.message); return null; });
   if (!d) return listPanel();
   const s = d.spot;
@@ -459,13 +485,14 @@ async function openSpot(id, fly) {
       ${(() => { const o = s.info?.hours ? hoursNow(s.info.hours) : null; return s.info?.hours ? `<p class="ohours"><span class="ostat ${o ? (o.open ? 'on' : 'off') : ''}">${o ? esc(o.label) : '開放時間'}</span><span class="tiny"><span translate="no">${esc(s.info.hours)}</span></span></p>` : ''; })()}
       ${camSection(d.editor)}
       ${s.intro ? `<p class="muted" style="margin:0;white-space:pre-wrap"><span translate="no">${esc(s.intro)}</span></p>` : ''}
-      ${Object.keys(s.info || {}).length ? `<div class="infochips">${Object.entries(INFO).filter(([k]) => s.info[k]).map(([k, v]) => `<span><span class="tiny">${v}</span><b>${esc(s.info[k])}</b></span>`).join('')}</div>` : ''}
+      ${Object.keys(s.info || {}).length ? `<div class="infochips">${Object.entries(INFO).filter(([k]) => s.info[k]).map(([k, v]) => `<span data-info="${k}"><span class="tiny">${v}</span><b>${esc(s.info[k])}</b></span>`).join('')}</div>` : ''}
       <div class="row" style="gap:8px"><a class="btn sm" href="${nav}" target="_blank" rel="noopener">導航 ${IC.external}</a><button class="btn ghost sm" id="offBtn">下載離線地圖</button>${s.status !== 'approved' ? '' : canCreate() ? `<a class="btn ghost sm" href="#/new?spot=${esc(s.id)}">在這裡開揪跑</a>`
         : `<a class="btn ghost sm" href="${lineShare(`我想在「${s.name}」揪跑，有人要一起嗎？ ${location.origin}/#/map?spot=${s.id}`)}" target="_blank" rel="noopener">在 LINE 揪人</a>`}
         ${data.editor || (s.mine && s.status === 'pending') ? '<button class="btn ghost sm" id="editSpot">編輯</button>' : ''}</div>
       ${s.status === 'pending' && d.editor ? '<div class="row" style="gap:8px"><button class="btn sm" id="approve">通過</button><button class="btn danger sm" id="reject">不通過</button></div>' : ''}
     </section>
     <section class="card"><h3>天氣</h3><div id="wxBox"><p class="tiny" style="margin:0">載入中…</p></div></section>
+    ${RS.nearHtml()}
     ${s.status === 'approved' ? `<section class="card"><div class="row spread"><h3>現場回報</h3><button class="btn sm" id="repBtn">回報現場</button></div>
       <div id="repForm"></div>
       ${d.reports.length ? `<div class="reports">${d.reports.map((r) => `<div class="rep"><div>${Object.keys(REP).filter((k) => r[k]).map((k) => `<span class="pill ${['積水', '施工', '封閉', '多', '大雨', '沒有'].includes(r[k]) ? 'wait' : ''}">${REP[k][0]} ${esc(r[k])}</span>`).join('')}</div>
@@ -486,6 +513,7 @@ async function openSpot(id, fly) {
   for (const b of document.querySelectorAll('[data-route]')) b.onclick = () => showRoute(b.dataset.route, true);
   $('#drawHere').onclick = () => { startDraw([[s.lat, s.lng]]); spotForRoute = s.id; };
   bindCams(s, d.editor);
+  RS.loadNear(s, d.editor);
   W.load(s.lat, s.lng).then((w) => { if ($('#wxBox')) $('#wxBox').innerHTML = W.strip(w); }).catch((e) => { if ($('#wxBox')) $('#wxBox').innerHTML = `<p class="tiny" style="margin:0">${esc(e.message)}</p>`; });
 }
 // ---- 附近即時影像 ----
@@ -753,6 +781,7 @@ async function saveOffline(s) {
       done++; if (btn.isConnected) btn.textContent = `下載中 ${Math.round((done / urls.length) * 100)}%`;
     }));
   }
+  await RS.prefetchNear(s.id);   // 附近休息站也存一份（Service Worker 的離線資料）
   if (btn.isConnected) { btn.textContent = fail ? `完成（${fail} 張失敗）` : '已存離線地圖'; }
   toast(`已存 ${urls.length - fail} 張地圖，沒有網路也看得到這附近`);
 }
@@ -831,7 +860,7 @@ function routeForm() {
 }
 
 async function showRoute(id, fly) {
-  endDraw();
+  endDraw(); RS.deselect();
   const { route: r } = await api(`/routes/${id}`).catch((e) => { toast(e.message); return {}; });
   if (!r) return listPanel();
   history.replaceState(null, '', `#/map?route=${id}`);

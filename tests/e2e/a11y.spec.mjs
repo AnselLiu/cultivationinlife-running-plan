@@ -76,3 +76,35 @@ for (const scheme of ['light', 'dark']) test(`無障礙 報名設定與審核（
   await page.locator('.sheet [data-x]').last().click();
 });
 
+// 跑者休息站：底圖選單（menuitemcheckbox）、類型 chip（aria-pressed）、地圖針、地點卡的附近休息站、休息站卡、資料來源清單；淺色與深色
+for (const scheme of ['light', 'dark']) test(`無障礙 跑者休息站（${scheme}）`, async ({ page, request }) => {
+  const f = (await apiAs(request, 't_chair', '/me')).settings?.features || {};
+  await apiAs(request, 't_chair', '/settings/features', { method: 'POST', body: { ...f, rest: true } });
+  for (const k of ['twd', 'tpt', 'tprv']) await request.get(`/api/dev/rest-sync?source=${k}`);
+  await page.emulateMedia({ colorScheme: scheme });
+  await page.addInitScript(() => { try { if (sessionStorage.getItem('rv')) return; sessionStorage.setItem('rv', '1'); localStorage.setItem('cil-map-rest', '1'); localStorage.setItem('cil-map-view', '[25.0736,121.5401,16]'); } catch {} });
+  await login(page, 't_runner'); await acceptPrivacyIfAsked(page);
+  const axe = async () => (await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21aa']).exclude('.leaflet-tile-pane').analyze()).violations
+    .filter((v) => ['critical', 'serious'].includes(v.impact)).map((v) => `${v.id}: ${v.help}｜${v.nodes.slice(0, 3).map((n) => n.target.join(' ')).join(' | ')}`);
+  await page.goto('/#/map');
+  await expect(page.locator('.rpin').first()).toBeVisible();
+  expect(await axe()).toEqual([]);
+  // 類型 chip 至少 44 px 高的點擊範圍（按鈕 36 px＋上下各 4 px 的透明延伸）
+  const h = await page.locator('#restChips .rchip').first().evaluate((el) => el.getBoundingClientRect().height + 2 * Math.max(0, -parseFloat(getComputedStyle(el, '::after').top)));
+  expect(h).toBeGreaterThanOrEqual(44);
+  await page.locator('#baseBtn').click();
+  expect(await axe()).toEqual([]);
+  await page.keyboard.press('Escape');
+  await page.goto('/#/map?spot=seed07');
+  await expect(page.locator('#restNear .rnitem').first()).toBeVisible();
+  expect(await axe()).toEqual([]);
+  await page.locator('#restNear .rnitem').first().click();
+  await expect(page.locator('.restcard')).toBeVisible();
+  expect(await axe()).toEqual([]);
+  await page.locator('#baseBtn').click();
+  await page.locator('#restSrc').click();
+  await expect(page.getByRole('dialog', { name: '休息站資料來源' })).toBeVisible();
+  expect(await axe()).toEqual([]);
+  await page.keyboard.press('Escape');
+  await expect(page.locator('#baseBtn')).toBeFocused();
+});

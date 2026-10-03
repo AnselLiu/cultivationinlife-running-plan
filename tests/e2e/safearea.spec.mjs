@@ -2,7 +2,7 @@
 //   1. 可以點的東西不能在瀏海或手勢條底下
 //   2. 捲到最底時，最後一個可以點的東西不能被浮動分頁列蓋住
 import { test, expect } from '@playwright/test';
-import { login, acceptPrivacyIfAsked } from './helpers.mjs';
+import { login, apiAs, acceptPrivacyIfAsked } from './helpers.mjs';
 
 const TOP = 59, BOTTOM = 34;
 test.use({ viewport: { width: 393, height: 852 } });
@@ -57,4 +57,27 @@ test('安全區域：瀏海、手勢條、浮動分頁列不會擋到內容', as
   }
   console.log(JSON.stringify(problems, null, 1));
   expect(problems).toEqual({});
+});
+
+// 跑者休息站的類型 chip：在上方列底下、不在瀏海裡，也不會蓋住右邊的地圖工具；手勢條上沒有可以點的東西
+test('安全區域：練跑地圖打開休息站圖層', async ({ page, context, request }) => {
+  const cdp = await context.newCDPSession(page);
+  await cdp.send('Emulation.setSafeAreaInsetsOverride', { insets: { top: TOP, bottom: BOTTOM, left: 0, right: 0 } });
+  const f = (await apiAs(request, 't_chair', '/me')).settings?.features || {};
+  await apiAs(request, 't_chair', '/settings/features', { method: 'POST', body: { ...f, rest: true } });
+  await page.addInitScript(() => { try { localStorage.setItem('cil-map-rest', '1'); localStorage.setItem('cil-map-view', '[25.0736,121.5401,16]'); } catch {} });
+  await login(page, 't_chair'); await acceptPrivacyIfAsked(page);
+  await page.goto('/#/map');
+  await expect(page.locator('#restChips')).toBeVisible();
+  const r = await page.evaluate(() => {
+    const top = document.querySelector('.top').getBoundingClientRect().bottom, ctl = document.querySelector('.mapctl').getBoundingClientRect();
+    return [...document.querySelectorAll('#restChips .rchip')].map((b) => b.getBoundingClientRect()).filter((x) => x.right > 0 && x.left < innerWidth)
+      .map((x) => ({ top: x.top, bottom: x.bottom, right: x.right, underTop: x.top < top - 1, overCtl: x.right > ctl.left + 1 && x.bottom > ctl.top }));
+  });
+  expect(r.length).toBeGreaterThan(0);
+  for (const x of r) { expect(x.top).toBeGreaterThanOrEqual(TOP); expect(x.underTop).toBe(false); expect(x.overCtl).toBe(false); }
+  // 圖資版權往下讓開，不被 chip 蓋住
+  const attr = await page.locator('.leaflet-control-attribution').boundingBox();
+  const chips = await page.locator('#restChips').boundingBox();
+  expect(attr.y).toBeGreaterThanOrEqual(chips.y + chips.height - 4);
 });

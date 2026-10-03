@@ -338,3 +338,129 @@ test('附近即時影像：捲到才載縮圖、點開大圖有顯名、省流�
   await page.goto('/#/me/notify');
   await expect(page.locator('#camLazy')).toBeChecked();
 });
+
+// ---- 跑者休息站（REST_MOCK 不連外）----
+// 功能開關預設關閉：測試前打開（其他開關照目前的值送回去），用開發端點同步所有來源（不受「立即同步」每小時 3 次的限制）
+async function restOn(request) {
+  const f = (await apiAs(request, 't_chair', '/me')).settings?.features || {};
+  await apiAs(request, 't_chair', '/settings/features', { method: 'POST', body: { ...f, rest: true } });
+  for (const k of ['twd', 'tpt', 'tprv', 'ntrv', 'tpbk', 'cpct', 'sav']) await request.get(`/api/dev/rest-sync?source=${k}`);
+}
+// 地圖的初始位置：只在這個分頁第一次載入時設定（之後重新整理要保留測試裡改的值）
+const restView = (view, on = '0') => () => { try { if (sessionStorage.getItem('rv')) return; sessionStorage.setItem('rv', '1'); localStorage.setItem('cil-map-view', view); localStorage.setItem('cil-map-rest', on); localStorage.removeItem('cil-map-rest-types'); } catch {} };
+
+test('跑者休息站：底圖選單打開圖層、13 級以下不抓、類型 chip 會記住、跟練跑地點分開群集', async ({ page, request }) => {
+  await restOn(request);
+  await page.addInitScript(restView('[25.07,121.54,12]'));
+  await enter(page);
+  const cells = [];
+  page.on('request', (r) => { if (r.url().includes('/api/rest/cell/')) cells.push(r.url()); });
+  await page.goto('/#/map');
+  await expect(page.locator('#baseBtn')).toBeEnabled();
+  // 預設關閉；開關收在底圖選單（menuitemcheckbox），不另外加浮動按鈕
+  await page.locator('#baseBtn').click();
+  await expect(page.locator('#restTog')).toHaveAttribute('role', 'menuitemcheckbox');
+  await expect(page.locator('#restTog')).toHaveAttribute('aria-checked', 'false');
+  await expect(page.locator('#restBar')).toBeHidden();
+  await page.locator('#restTog').click();
+  await expect(page.locator('#baseMenu')).toBeHidden();
+  await expect(page.locator('#baseBtn')).toBeFocused();
+  // 12 級：只顯示提示，不抓任何格子
+  await expect(page.locator('#restHint')).toBeVisible();
+  await expect(page.locator('#restChips')).toBeHidden();
+  await page.waitForTimeout(800);
+  expect(cells).toEqual([]);
+  // 放大到 16 級：抓得到、一次最多 16 格、網址帶版本
+  await page.evaluate(() => localStorage.setItem('cil-map-view', '[25.0736,121.5401,16]'));
+  await page.reload();
+  await expect(page.locator('.rpin').first()).toBeVisible();
+  expect(cells.length).toBeGreaterThan(0);
+  expect(cells.length).toBeLessThanOrEqual(16);
+  for (const u of cells) expect(u).toMatch(/\/api\/rest\/cell\/\d{3,4}_\d{4,5}\?v=\d+$/);
+  await expect(page.locator('#restChips')).toHaveAttribute('role', 'group');
+  await expect(page.locator('#restChips')).toHaveAttribute('aria-label', '休息站類型');
+  // chip 多選、重新整理後還在
+  await page.locator('#restChips [data-rt="water"]').click();
+  await page.locator('#restChips [data-rt="toilet"]').click();
+  await page.reload();
+  await expect(page.locator('#restChips [data-rt="water"]')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('#restChips [data-rt="toilet"]')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('#restChips [data-rt="shower"]')).toHaveAttribute('aria-pressed', 'false');
+  await expect(page.locator('.rpin.t-shower')).toHaveCount(0);
+  for (const k of ['water', 'toilet']) await page.locator(`#restChips [data-rt="${k}"]`).click();
+  // 群集：休息站與練跑地點各自合併（休息站是灰色泡泡 .rclus，練跑地點是 .mclus），不會混在同一顆
+  await page.evaluate(() => localStorage.setItem('cil-map-view', '[25.0736,121.5401,14]'));
+  await page.reload();
+  await expect(page.locator('.rpin-host').first()).toBeAttached();
+  await expect(page.locator('.mclus .rpin, .mclus .rclus, .rclus .mpin')).toHaveCount(0);
+  expect(await page.locator('.rpin-host').count()).toBe(await page.locator('.rpin, .rclus').count());
+  // 關掉：針都拿掉
+  await page.locator('#baseBtn').click();
+  await page.locator('#restTog').click();
+  await expect(page.locator('.rpin-host')).toHaveCount(0);
+  await expect(page.locator('#restBar')).toBeHidden();
+});
+
+test('跑者休息站：地點卡的附近休息站、休息站卡（顯名與授權外連、回到地點）、在地圖上顯示', async ({ page, request }) => {
+  await restOn(request);
+  await page.addInitScript(restView('[25.0736,121.5401,15]'));
+  await enter(page);
+  await page.goto('/#/map?spot=seed07');
+  const near = page.locator('#restNear');
+  await expect(near).toBeVisible();
+  await expect(near.locator('#restNearH')).toHaveText('附近休息站');
+  await expect(near.locator('.rng')).toHaveCount(4);
+  await expect(near).toContainText('大佳河濱公園 9號水門');
+  await expect(near).toContainText(/\d+ 公尺/);
+  await expect(near).toContainText('直線距離；資料來自政府開放資料與幹部整理，以現場為準');
+  // 公共廁所 120 m 排在店家 100 m 前面（權重）
+  const toilet = near.locator('.rng').nth(1).locator('.rnitem');
+  await expect(toilet.first()).toContainText('大佳河濱公園');
+  // 休息站卡
+  const first = near.locator('.rnitem').first();
+  const id = await first.getAttribute('data-rest');
+  await first.click();
+  const card = page.locator('.restcard');
+  await expect(card).toBeVisible();
+  await expect(page.locator('#restName')).toBeFocused();
+  await expect(card).toContainText('免費・公共直飲臺');
+  await expect(card).toContainText('資料可能與現況不同，以現場與官方公告為準');
+  await expect(card).toContainText(/從「.+」直線 \d+ 公尺/);
+  const lic = card.locator('.restcredit a').first();
+  await expect(lic).toHaveAttribute('href', 'https://data.gov.tw/license');
+  await expect(lic).toHaveAttribute('rel', 'noopener noreferrer');
+  await expect(card.locator('a', { hasText: '導航' })).toHaveAttribute('href', /travelmode=walking/);
+  expect(page.url()).toContain(`rest=${encodeURIComponent(id)}`);
+  // 地圖上那一處放大顯示
+  await expect(page.locator(`.rpin.sel[data-rid="${id}"]`)).toBeAttached();
+  // 回到地點：焦點回到剛才那一列
+  await page.locator('#restBack').click();
+  await expect(page.locator('.spotcard').first()).toContainText('大佳');
+  await expect(page.locator(`#restNear [data-rest="${id}"]`)).toBeFocused();
+  // 在地圖上顯示：打開圖層
+  await page.locator('#restShow').click();
+  await expect(page.locator('#restBar')).toBeVisible();
+  expect(await page.evaluate(() => localStorage.getItem('cil-map-rest'))).toBe('1');
+  // 點地圖上的針打開卡片，關閉鈕關掉
+  await page.locator(`.rpin[data-rid="${id}"]`).evaluate((el) => el.closest('.leaflet-marker-icon').click());
+  await expect(card).toBeVisible();
+  await page.locator('#restClose').click();
+  await expect(page.locator('.restcard')).toHaveCount(0);
+});
+
+test.describe('跑者休息站：離線', () => {
+  test.use({ serviceWorkers: 'allow' });
+  test('離線時地點卡的附近休息站用上次的資料', async ({ page, context, request }) => {
+    await restOn(request);
+    await enter(page);
+    await page.goto('/#/map?spot=seed07');
+    await page.evaluate(() => navigator.serviceWorker.ready);
+    await page.reload();   // 讓 Service Worker 接手這一頁
+    await expect(page.locator('#restNear .rnitem').first()).toBeVisible();
+    await context.setOffline(true);
+    await page.reload();
+    await expect(page.locator('#restNear .rnitem').first()).toBeVisible();
+    await expect(page.locator('#restNear')).toContainText('大佳河濱公園 9號水門');
+    await context.setOffline(false);
+  });
+});

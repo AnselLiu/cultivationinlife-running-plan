@@ -480,9 +480,9 @@ function bindEventsPanel() {
 
 
 // ---------- 系統設定（理事長、行政人員）----------
-const FEATURE_NAME = { gps: '跑步記錄（計時＋GPS）', studio: '拍照分享', health: 'Apple 健康匯入', file: 'GPX／TCX 檔匯入', coach: '課表教練', party: '餐敘活動（春酒、慶功宴、尾牙）', cams: '附近即時影像（政府公開攝影機）' };
+const FEATURE_NAME = { gps: '跑步記錄（計時＋GPS）', studio: '拍照分享', health: 'Apple 健康匯入', file: 'GPX／TCX 檔匯入', coach: '課表教練', party: '餐敘活動（春酒、慶功宴、尾牙）', cams: '附近即時影像（政府公開攝影機）', rest: '跑者休息站（飲水、廁所、淋浴置物、補給）' };
 // 預設關閉的功能（要明確打開才有）
-const FEATURE_OFF = new Set(['cams']);
+const FEATURE_OFF = new Set(['cams', 'rest']);
 function settingsPanel() {
   const o = org(), f = cfg.settings?.features || {}, docs = cfg.settings?.docs || [], pv = cfg.settings?.privacy || {};
   const sd = { ...SIGNUP_DEFAULTS, ...(cfg.settings?.signup || {}) };
@@ -548,6 +548,11 @@ function settingsPanel() {
     <h3>附近即時影像</h3>
     <p class="tiny" style="margin:0">地點卡會列出 1.5 公里內的政府公開攝影機（沒有就列 3 公里內最近一支），畫面由本站轉送、不保存，跑友的 IP 不會送到影像來源。功能開關打開後，鏡頭清單每天清晨 04:00 起自動同步（每小時只同步一個來源，依序是水利署、公路局、水利處）。關掉來源後立即不再顯示，也不再連線。</p>
     <div id="camSrcList" class="toggles"><p class="tiny" style="margin:0">載入中…</p></div>
+  </section>
+  <section class="card" id="restSrcCard">
+    <h3>休息站資料來源</h3>
+    <p class="tiny" style="margin:0">練跑地圖的「休息站」圖層與地點卡的「附近休息站」：政府開放資料加上幹部整理的清單，每筆都標出處與授權。小的來源由排程在清晨自動同步；檔案大或很多檔的來源（Workers 免費方案每次執行只有 10 ms CPU，跑不完）要在電腦上同步。關掉來源後立即不再顯示，也不再連線。</p>
+    <div id="restSrcList" class="toggles"><p class="tiny" style="margin:0">載入中…</p></div>
   </section>
   <section class="card">
     <h3>分頁列名稱</h3>
@@ -661,6 +666,35 @@ function bindSettings() {
     if (refocus) (box.querySelector(refocus) || box.querySelector('[data-camsrc]'))?.focus();
   };
   loadCamSrc();
+  // 跑者休息站：來源開關、上次同步、筆數、資料日期、錯誤；小來源可以立即同步，大的要在電腦上同步（tools/rest-sync.mjs）
+  const EVERY = { day: 1, week: 7, month: 31 };
+  const loadRestSrc = async (refocus) => {
+    const r = await api('/rest/sources').catch(() => null);
+    const box = $('#restSrcList');
+    if (!box) return;
+    if (!r) { box.innerHTML = '<p class="tiny" style="margin:0">讀不到來源狀態</p>'; return; }
+    const stale = (x) => x.local && x.enabled && x.last_ok_at && (Date.now() - Date.parse(`${x.last_ok_at.replace(' ', 'T')}Z`) > 2 * (EVERY[x.every] || 31) * 864e5);
+    box.innerHTML = (r.feature ? '' : '<p class="notice" style="margin:0 0 6px">功能開關的「跑者休息站」目前關閉：跑友看不到，排程也不會同步。可以先設定來源、同步資料。</p>') + r.sources.map((x) => `<div class="camsrc">
+      <label class="switch"><span>${esc(x.source_name)}<span class="tiny" style="display:block">${x.manual ? `${x.source === 'cur' ? '幹部整理的跑站與寄物點' : '幹部在地圖上新增'}，目前 ${x.active} 處${x.hidden ? `（隱藏 ${x.hidden} 處）` : ''}`
+        : `${x.last_ok_at ? `上次同步 ${camTime(x.last_ok_at)}・${x.active} 處${x.hidden ? `（隱藏 ${x.hidden} 處）` : ''}${x.data_date ? `・資料日期 ${esc(x.data_date)}` : ''}` : '還沒有同步過'}${x.page ? `・同步到第 ${x.page} 頁` : ''}${x.last_error ? `・最近一次失敗（${camTime(x.last_sync_at)}）：${esc(x.last_error)}` : ''}`}</span>
+        <span class="tiny" style="display:block">${esc(x.attribution)}</span></span>
+        <input type="checkbox" data-restsrc="${esc(x.source)}" ${x.enabled ? 'checked' : ''} ${r.editable ? '' : 'disabled'}><i></i></label>
+      ${!x.manual ? `<div class="row restsrcrow">${x.dataset ? `<a class="btn ghost sm" href="${esc(x.dataset)}" target="_blank" rel="noopener noreferrer">資料集 ${IC.external}</a>` : ''}
+        ${x.local ? `<span class="tiny">在電腦上同步：<code translate="no">node tools/rest-sync.mjs ${esc(x.source)} --apply=remote</code>${stale(x) ? '・<span class="ostat off">已經很久沒有同步</span>' : ''}</span>`
+          : x.enabled && r.editable ? `<button type="button" class="btn ghost sm" data-restsync="${esc(x.source)}">立即同步</button>` : ''}</div>` : ''}</div>`).join('');
+    for (const c of box.querySelectorAll('[data-restsrc]')) c.onchange = async () => {
+      const x = r.sources.find((s) => s.source === c.dataset.restsrc);
+      try { await api('/rest/sources', { method: 'POST', body: { source: x.source, enabled: c.checked } }); toast(c.checked ? `已開啟${x.source_name}` : `已關閉${x.source_name}`); loadRestSrc(`[data-restsrc="${x.source}"]`); }
+      catch (err) { c.checked = !c.checked; toast(err.message); }
+    };
+    for (const b of box.querySelectorAll('[data-restsync]')) b.onclick = async () => {
+      b.disabled = true; b.textContent = '同步中…';
+      try { const s = await api('/rest/sync', { method: 'POST', body: { source: b.dataset.restsync } }); toast(s.same ? '資料沒有變動' : `已同步 ${s.count} 處`); } catch (err) { toast(err.message); }
+      loadRestSrc(`[data-restsync="${b.dataset.restsync}"]`);
+    };
+    if (refocus) (box.querySelector(refocus) || box.querySelector('[data-restsrc]'))?.focus();
+  };
+  loadRestSrc();
   const reload = async (msg) => { await refreshMe(); toast(msg); applyFeatures(); paintCountdown(); adminView('settings'); };
   const save = async (key, body, msg) => { try { await api(`/settings/${key}`, { method: 'POST', body }); await reload(msg); } catch (e) { toast(e.message); } };
   $('#orgForm').onsubmit = (e) => { e.preventDefault(); const f = e.target;
