@@ -1245,6 +1245,14 @@ body.fullmap .top .brand span{opacity:0}
 body.fullmap .top .ctitle{opacity:1;transform:translate(-50%,0)}
 body.fullmap .top .countdown{opacity:0;pointer-events:none}
 @media (min-width:1024px){body.fullmap .top{left:var(--side)}}
+/* 手機：抽屜的內容在浮動分頁列上方淡出（Apple 地圖式），不會從分頁列底下透出來；拉到全開一樣捲得到最後一行（下方留了分頁列的高度）
+   --hid＝抽屜在畫面下緣外的高度（JS 跟著 transform 設定），所以淡出的位置一直對齊分頁列，切換高度時跟著動畫一起移動 */
+@property --hid{syntax:"<length>";inherits:true;initial-value:0px}
+@media (max-width:819.98px){
+  .msheet.anim{transition:transform .42s cubic-bezier(.2,.9,.25,1.05),--hid .42s cubic-bezier(.2,.9,.25,1.05)}
+  .msheet-scroll{--fade:linear-gradient(to top,transparent calc(var(--hid) + var(--below) - 10px),#000 calc(var(--hid) + var(--below) + 18px));-webkit-mask-image:var(--fade);mask-image:var(--fade)}
+}
+@media (max-width:819.98px) and (prefers-reduced-motion:reduce){.msheet.anim{transition:none}}
 /* 抽屜收合時只露出第一塊（清單的搜尋列，或地點卡的標題），其他淡出，不會從分頁列底下透出來 */
 .msheet #panel > :not(:first-child){transition:opacity .2s}
 .msheet[data-detent="peek"] #panel > :not(:first-child){opacity:0;pointer-events:none}
@@ -1425,9 +1433,15 @@ html.fullmap{background:var(--sheet-solid)}
 .basemenu button{min-height:44px}
 .basemenu button[role="menuitem"]::before{background:none}
 /* 類型 chip：地圖上方一排，可以左右滑；縮太小時只顯示提示 */
-.restbar{position:absolute;left:0;right:66px;top:calc(var(--toph) + 6px);z-index:590;pointer-events:none}
+/*   chip 列用整個寬度（跟 Google 地圖一樣），右側的地圖工具整排往下移到 chip 列下面：chip 不會跟工具並排、也不會鑽到按鈕底下 */
+.restbar{position:absolute;left:0;right:0;top:calc(var(--toph) + 6px);z-index:590;pointer-events:none}
+.amap.rest-on{--chiph:48px}
+.amap:has(#drawBar:not([hidden])),.amap:has(#pickBar:not([hidden])){--chiph:0px}
+.mapctl{transform:translateY(var(--chiph,0px));transition:transform .28s var(--tap)}
+.basemenu{transform:translateY(var(--chiph,0px))}
+@media (prefers-reduced-motion:reduce){.mapctl{transition:none}}
 .restchips{display:flex;gap:8px;overflow-x:auto;scrollbar-width:none;padding:4px 12px;pointer-events:auto;
-  -webkit-mask:linear-gradient(90deg,transparent,#000 10px,#000 calc(100% - 14px),transparent);mask:linear-gradient(90deg,transparent,#000 10px,#000 calc(100% - 14px),transparent)}
+  -webkit-mask:linear-gradient(90deg,transparent,#000 10px,#000 calc(100% - 22px),transparent);mask:linear-gradient(90deg,transparent,#000 10px,#000 calc(100% - 22px),transparent)}
 .restchips::-webkit-scrollbar{display:none}
 .rchip{position:relative;flex:none;display:inline-flex;align-items:center;gap:6px;height:36px;padding:0 14px 0 11px;border:0;border-radius:999px;font:inherit;font-size:14px;font-weight:600;color:var(--ink);cursor:pointer;
   background:var(--glass-hi);-webkit-backdrop-filter:var(--blur);backdrop-filter:var(--blur);box-shadow:0 2px 10px rgba(11,27,51,.16),inset 0 0 0 .5px var(--stroke);transition:transform .15s var(--tap)}

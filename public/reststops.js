@@ -355,6 +355,13 @@ export const nearHtml = () => (feat() ? `<section class="card restnear" id="rest
     <div class="row spread"><h3 id="restNearH" tabindex="-1">附近休息站</h3><button type="button" class="btn ghost sm" id="restShow" hidden>在地圖上顯示</button></div>
     <div id="restNearBox"><p class="tiny" style="margin:0">載入中…</p></div>
   </section>` : '');
+// 只有「有／沒有」意思的值（有、是、無、yes、true、✓…）：不是補充說明；「有，在 9 號水門旁」只留後面的說明（已經放在這一類底下）
+const BARE = /^(?:有|是|有的|對|可|可以|可用|提供|有提供|無|沒有|否|不|不可|無提供|未提供|y|yes|true|ok|available|n|no|false|none|n\/a|na|[01✓✔☑✗✘×xvo○◯-])$/i;
+const noteOf = (v) => {
+  const t = String(v ?? '').trim();
+  if (!t || BARE.test(t.replace(/[\s。．.!！~～]+$/u, ''))) return '';
+  return t.replace(/^(?:有|是|有的|有提供|yes|y|✓|✔)\s*[，,、:：；;]\s*(?=\S)/i, '');
+};
 let nearP = null;
 export const loadNear = (s, editor) => (nearP = nearLoad(s, editor));
 async function nearLoad(s, editor) {
@@ -371,8 +378,9 @@ async function nearLoad(s, editor) {
   if (!card.isConnected || ctx.selected() !== s.id) return;
   card.hidden = false;
   const g = r.groups || {}, all = Object.values(g).flat();
-  // 地點自己的「飲水」「廁所」說明：當成幹部補充，放在對應的類型下面（上面的說明卡片就不重複列）
-  const notes = { water: s.info?.water || '', toilet: s.info?.toilet || '' };
+  // 地點自己的「飲水」「廁所」說明：有實際內容的才當成幹部補充，放在對應的類型下面（上面的說明卡片就不重複列）
+  //   只寫「有」「無」「yes」這類的不算補充：留在地點卡上面的說明卡片（「廁所　有」讀起來才通順），這裡不重複
+  const notes = { water: noteOf(s.info?.water), toilet: noteOf(s.info?.toilet) };
   for (const k of ['water', 'toilet']) if (notes[k]) document.querySelector(`.infochips [data-info="${k}"]`)?.remove();
   if (document.querySelector('.infochips') && !document.querySelector('.infochips > span')) document.querySelector('.infochips').remove();
   // 分隔點用 .rsep（CSS 畫，中文「・」、英文「 · 」）：文字節點各自翻譯時前後的空白會被修掉，點不能跟文字黏在同一個節點

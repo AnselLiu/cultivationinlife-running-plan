@@ -210,6 +210,7 @@ function setDetent(d, opt = {}) {
   sh.style.height = `${sheetH.full}px`;
   sh.classList.toggle('anim', !opt.instant);
   sh.style.transform = `translateY(${sheetH.full - sheetH[d]}px)`;
+  sh.style.setProperty('--hid', `${sheetH.full - sheetH[d]}px`);   // 抽屜在畫面外的高度：內容在分頁列上方淡出（style.css）
   if (d !== 'full') $('#msheetScroll').scrollTop = 0;
   if (map && map.getContainer() === $('#map')) RS.viewChanged();   // 抽屜收起來露出的地圖：休息站補抓那幾格（畫面重建時舊的地圖不算）
 }
@@ -235,6 +236,7 @@ function bindSheet() {
     }
     const y = Math.min(sheetH.full - sheetH.peek + 40, Math.max(-20, base + dy));
     sh.style.transform = `translateY(${y}px)`;
+    sh.style.setProperty('--hid', `${Math.max(0, y)}px`);
     last.push([performance.now(), e.clientY]); if (last.length > 5) last.shift();
     e.preventDefault();
   });
