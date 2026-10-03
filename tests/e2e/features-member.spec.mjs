@@ -129,8 +129,8 @@ test('我的：個人資料、賽事、賽事報名資料、隱私、分享 App�
   const dl = page.waitForEvent('download');
   await page.getByRole('link', { name: '下載我的資料' }).click();
   expect((await dl).suggestedFilename()).toContain('json');
-  // 行事曆訂閱
-  await page.goto('/#/me/notify');
+  // 行事曆訂閱（從「通知設定」搬到自己的子頁）
+  await page.goto('/#/me/calendar');
   await page.locator('#calNew').click();
   await expect(page.locator('input[aria-label="行事曆訂閱網址"]')).toHaveValue(/\/api\/cal\/.+\.ics$/);
   // 分享 App
@@ -238,13 +238,20 @@ test('通知全部已讀、入場券與領取、每月挑戰、使用說明導�
   await page.goto('/#/me');
   await page.locator('#openGuide').click();
   await expect(page.locator('#gTitle')).toBeVisible();
+  let sawStudio = false;
   for (let i = 0; i < 12 && await page.locator('#guide').isVisible(); i++) {
     const t = await page.locator('#gTitle').innerText();
+    // 總步數 12 步以內（「1 / N」的 N 不含開頭與結尾）
+    const n = Number((await page.locator('#gCount').innerText()).split('/')[1] || 0);
+    expect(n + 2).toBeLessThanOrEqual(12);
+    // GPS 開著時，拍照步驟帶到「跑步」並聚光「拍照分享」那一列
+    if (t === '拍照分享') { sawStudio = true; await expect(page).toHaveURL(/#\/run$/); await expect(page.locator('.runshare')).toBeVisible(); }
     await page.locator('#gNext').click();
     if (t === '準備好了') break;
     await page.waitForTimeout(600);
   }
   await expect(page.locator('#guide')).toBeHidden();
+  expect(sawStudio, '拍照分享那一步有出現').toBe(true);
 });
 
 test('練跑地圖：搜尋、類型、縣市篩選，地圖上的針跟著篩', async ({ page }) => {
@@ -333,8 +340,8 @@ test('附近即時影像：捲到才載縮圖、點開大圖有顯名、省流�
   await expect(page.locator('#camBox')).toContainText('點一下才載入');
   await page.waitForTimeout(500);
   expect(frames.length).toBe(before);
-  // 「我的 → 通知與裝置」的省流量開關（存在這支手機）
+  // 「我的 → 外觀與語言」的省流量開關（存在這支手機）
   await page.evaluate(() => localStorage.setItem('cil-cam-lazy', '1'));
-  await page.goto('/#/me/notify');
+  await page.goto('/#/me/display');
   await expect(page.locator('#camLazy')).toBeChecked();
 });
