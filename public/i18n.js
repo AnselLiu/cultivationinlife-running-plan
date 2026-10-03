@@ -49,9 +49,9 @@ const PATTERNS = [
   [/(\d+) 分鐘前/g, '$1 min ago'], [/(\d+) 小時前/g, '$1 h ago'], [/(\d+) 天前/g, '$1 d ago'],
   [/NT\$([\d,]+) 起/g, 'from NT$$$1'],
   [/([\d.]+) 公里/g, '$1 km'], [/([\d.]+) 公尺/g, '$1 m'], [/([\d.]+) 毫秒/g, '$1 ms'], [/([\d.]+) 秒/g, '$1 s'],
-  [/(\d+) 人/g, '$1 people'], [/(\d+) 位/g, '$1'], [/(\d+) 堂/g, '$1 sessions'], [/(\d+) 次/g, '$1×'], [/(\d+) 筆/g, '$1'],
+  [/(^|[^\d.,])1 人/g, (_, p) => `${p}1 person`], [/(\d+) 人/g, '$1 people'], [/(\d+) 位/g, '$1'], [/(\d+) 堂/g, '$1 sessions'], [/(\d+) 次/g, '$1×'], [/(\d+) 筆/g, '$1'],
   [/(\d+) 件/g, '$1 pcs'], [/(\d+) 場/g, '$1 events'], [/(\d+) 週/g, '$1 wk'], [/(\d+) 天/g, '$1 days'], [/(\d+) 則/g, '$1'], [/(\d+) 個/g, '$1'],
-  [/(?:^|\s)([A-Z]) 組/g, ' group $1'], [/推估：(\d{4}) W(\d+)/g, 'Estimated from $1 W$2'],
+  [/(?:^|\s)([A-Z]) 組/g, ' Group\u00a0$1'], [/推估：(\d{4}) W(\d+)/g, 'Estimated from $1 W$2'],
   [/([A-Za-z])\s*或\s*([A-Za-z])/g, '$1 or $2'],
   [/第 (\d+) 桌/g, 'Table $1'], [/(\d+) 時/g, '$1:00'], [/(\d+) 年/g, '$1 yr'], [/(\d+) 組/g, 'group $1'],
 ];
@@ -71,7 +71,11 @@ const tr = (s) => {
     .replace(/，/g, ', ').replace(/。/g, '. ').replace(/：/g, ': ').replace(/；/g, '; ').replace(/（/g, ' (').replace(/）/g, ') ').replace(/、/g, ', ')
     .replace(/[「『]/g, ' “').replace(/[」』]/g, '” ').replace(/・/g, ' · ').replace(/？/g, '? ').replace(/！/g, '! ')
     .replace(/\s{2,}/g, ' ').replace(/ ([,.;:!?)”])/g, '$1').replace(/([(“]) /g, '$1');
-  return lead + out.trim() + tail;
+  // 長句子換完還剩一堆中文：整句保留中文，不要輸出中英夾雜、看不懂的句子（例如隱私權政策）
+  if (core.length >= 10 && (out.match(/[㐀-鿿]/g) || []).length >= 3) return s;
+  // 句尾是轉換過的標點（・，：）而後面接著連結或不翻譯的名稱：保留一個空格，不會黏在一起
+  const body = out.trim();
+  return lead + (!lead && /^·/.test(body) ? ' ' : '') + body + (!tail && /[,.;:·]$/.test(body) ? ' ' : '') + tail;
 };
 const SKIP = 'script,style,textarea,code,[translate="no"],[contenteditable]';
 const ATTRS = ['placeholder', 'aria-label', 'title', 'alt'];
