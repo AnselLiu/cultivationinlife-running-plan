@@ -31,5 +31,5 @@ for (let i = 0; ; i++) {
   if (i > 120) { console.error(log); stop(); process.exit(1); }
   await new Promise((r) => setTimeout(r, 500));
 }
-const t = spawn(process.execPath, ['--test', '--test-concurrency=1', 'tests/hours.test.mjs', 'tests/sql-limits.test.mjs', 'tests/signup-window.test.mjs', 'tests/api.test.mjs', 'tests/passkey.test.mjs'], { stdio: 'inherit', env: { ...process.env, BASE: base } });
+const t = spawn(process.execPath, ['--test', '--test-concurrency=1', 'tests/hours.test.mjs', 'tests/sql-limits.test.mjs', 'tests/sw-shell.test.mjs', 'tests/signup-window.test.mjs', 'tests/api.test.mjs', 'tests/passkey.test.mjs'], { stdio: 'inherit', env: { ...process.env, BASE: base } });
 t.on('exit', (code) => { stop(); process.exit(code ?? 1); });
