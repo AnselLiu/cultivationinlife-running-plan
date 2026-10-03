@@ -280,7 +280,7 @@ pre.out{white-space:pre-wrap;word-break:break-word;background:var(--glass-hi);bo
 
 /* 底部浮動分頁（iOS 26 Liquid Glass 分頁列）／側邊欄（macOS，寬螢幕）
    --n 看得到的分頁數、--i 選到第幾格（applyFeatures／paintTabs 設定）；選取膠囊用這兩個值算位置，不用量尺寸 */
-:root{--n:5;--tabw:min(400px,calc(100vw - 32px));--tabh:62px;--tabb:calc(14px + env(safe-area-inset-bottom,0px))}
+:root{--n:5;--tabw:min(400px,calc(100vw - 32px));--tabh:62px;--tabminih:48px;--tabb:calc(14px + env(safe-area-inset-bottom,0px))}
 .tabs{position:fixed;left:50%;transform:translateX(-50%);bottom:var(--tabb);z-index:30;--pad:6px;
   display:flex;padding:var(--pad);border-radius:999px;width:var(--tabw);height:var(--tabh);
   transition:transform .4s var(--tap),opacity .25s,width .38s var(--tap),height .38s var(--tap),padding .38s var(--tap);
@@ -295,7 +295,7 @@ pre.out{white-space:pre-wrap;word-break:break-word;background:var(--glass-hi);bo
   -webkit-touch-callout:none;-webkit-user-select:none;user-select:none}
 .tabs > a[data-tab] .ic{line-height:0;transition:transform .3s var(--tap)}
 .tabs > a[data-tab] .ic svg{width:24px;height:24px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
-.tabs > a[data-tab] .tl{display:block;height:13px;max-width:100%;overflow:hidden;white-space:nowrap;transition:opacity .2s,height .38s var(--tap),max-width .38s var(--tap),transform .38s var(--tap)}
+.tabs > a[data-tab] .tl{display:block;height:13px;max-width:100%;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;transition:opacity .2s,height .38s var(--tap),max-width .38s var(--tap),transform .38s var(--tap)}
 .tabs > a[aria-current]{color:var(--accent)}
 .tabs > a[aria-current] .ic svg{stroke-width:2.1}
 .tabs > a[data-tab]:active .ic{transform:scale(.88)}
@@ -307,11 +307,15 @@ pre.out{white-space:pre-wrap;word-break:break-word;background:var(--glass-hi);bo
 .tabs > a[data-live="paused"] .tdot{background:#FF9F0A;animation:none}
 @keyframes breathe{50%{opacity:.35;transform:scale(.75)}}
 /* 往下捲時縮小：文字淡出、高度收合，圖示仍然可以點（每格 52×44） */
-.tabs.mini{--pad:2px;height:48px;width:calc(var(--n) * 52px + 4px)}
+.tabs.mini{--pad:2px;height:var(--tabminih);width:calc(var(--n) * 52px + 4px)}
 .tabs.mini > a[data-tab]{gap:0}
 .tabs.mini > a[data-tab] .tl{opacity:0;height:0;transform:scale(.8)}
-/* 畫路線、選地點、觸控鍵盤打開時：分頁列與配件收到畫面下方（不用 display:none，地圖的 measure() 才量得到） */
-body.tasking .tabs,body.typing .tabs{transform:translateX(-50%) translateY(calc(100% + var(--tabb) + 24px));opacity:0;pointer-events:none}
+/* 畫路線、選地點、觸控鍵盤打開時：分頁列與配件收到畫面下方（不用 display:none，地圖的 measure() 才量得到）。
+   只限下方分頁列（1024 以上是側邊欄，不收）；滑出去之後 visibility:hidden，鍵盤與 VoiceOver 也不會停在看不到的連結上 */
+@media (max-width:1023px){
+  body.tasking .tabs,body.typing .tabs{transform:translateX(-50%) translateY(calc(100% + var(--tabb) + 24px));opacity:0;pointer-events:none;visibility:hidden;
+    transition:transform .4s var(--tap),opacity .25s,visibility 0s .4s}
+}
 /* 分頁列後面的捲動邊緣：內容捲到下面時淡一點，分頁列上的字比較清楚 */
 body::before{content:"";position:fixed;left:0;right:0;bottom:0;height:calc(90px + env(safe-area-inset-bottom,0px));z-index:29;pointer-events:none;
   background:linear-gradient(to top,color-mix(in srgb,var(--bg-2) 80%,transparent),color-mix(in srgb,var(--bg-2) 36%,transparent) 55%,transparent)}
@@ -332,7 +336,7 @@ body.guest::before,body.consent::before,body.fullmap::before{display:none}
   .tabs.mini > a[data-tab] .tl{height:auto;max-width:0}
   body.iconsonly .tabs{width:calc(var(--n) * 60px + 6px)}
 }
-@media (max-height:500px) and (max-width:1023px){:root{--tabh:44px}.tabs{--pad:0px}}
+@media (max-height:500px) and (max-width:1023px){:root{--tabh:44px;--tabminih:44px}.tabs{--pad:0px}}
 
 @media (min-width:1024px){
   :root{--side:252px}
@@ -342,6 +346,7 @@ body.guest::before,body.consent::before,body.fullmap::before{display:none}
     border-radius:var(--r-xl);padding:14px 10px 18px;gap:2px;overflow-y:auto;overscroll-behavior:contain;scrollbar-width:none;
     background:var(--glass);-webkit-backdrop-filter:var(--blur);backdrop-filter:var(--blur)}
   .tabs::-webkit-scrollbar{display:none}
+  .tabs::before{display:none}   /* 側邊欄自己會捲動：漸層邊框會跟著內容捲走，改用 .tabs 本身的 inset 陰影當邊緣 */
   .tabs .tabsel{display:none}
   .tabs .navbrand{display:flex;flex:none;align-items:center;gap:10px;padding:4px 8px 16px;color:var(--ink)}
   .tabs .navbrand img{width:38px;height:38px;border-radius:11px}
@@ -360,6 +365,7 @@ body.guest::before,body.consent::before,body.fullmap::before{display:none}
   .navmore a{display:flex;align-items:center;gap:12px;min-height:40px;padding:0 12px;border-radius:11px;font-size:14px;font-weight:500;color:var(--ink-2);transition:background .2s,color .2s}
   .navmore a svg{width:19px;height:19px;flex:none;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
   .navmore a[aria-current]{font-weight:600}
+  @media (pointer:coarse){.navmore a{min-height:44px}}   /* iPad 橫向用手指點側邊欄 */
   .tabs a:not([aria-current]):hover{background:color-mix(in srgb,var(--ink) 5%,transparent)}
   .top,.wrap{margin-left:var(--side)}
   .top .brand{visibility:hidden}
@@ -786,9 +792,13 @@ h3 svg.ic{width:18px;height:18px}
 .runbar b:last-child{margin-left:auto}
 .runbar i{width:10px;height:10px;flex:none;border-radius:50%;background:#34C759;animation:pulse 1.4s ease-in-out infinite}
 .runbar i.paused{background:#FF9F0A;animation:none}
-.tabs.mini ~ .runbar{transform:translateX(-50%) translateY(14px)}
-body.tasking .runbar,body.typing .runbar{transform:translateX(-50%) translateY(calc(var(--tabh) + 100% + var(--tabb) + 32px));opacity:0;pointer-events:none}
-@media (max-width:1023px){body.runbar-on{padding-bottom:calc(160px + env(safe-area-inset-bottom,0px))}}
+.tabs.mini ~ .runbar{transform:translateX(-50%) translateY(calc(var(--tabh) - var(--tabminih)))}
+@media (max-width:1023px){
+  body.tasking .runbar,body.typing .runbar{transform:translateX(-50%) translateY(calc(var(--tabh) + 100% + var(--tabb) + 32px));opacity:0;pointer-events:none;visibility:hidden;
+    transition:transform .4s var(--tap),opacity .25s,visibility 0s .4s}
+  body.runbar-on{padding-bottom:calc(160px + env(safe-area-inset-bottom,0px))}
+  body.fullmap .runbar{display:none}   /* 地圖頁的抽屜貼著分頁列，計時列會蓋住類型列；記錄中看「跑步」分頁的小點 */
+}
 @media (min-width:1024px){.runbar,.tabs.mini ~ .runbar{bottom:24px;left:calc(50% + var(--side) / 2);width:auto;height:44px}.runbar b:last-child{margin-left:0}}
 @media (prefers-reduced-motion:reduce){.runbar i{animation:none}}
 .goalbar{display:grid;gap:6px;width:100%}
@@ -839,7 +849,7 @@ details.card > summary::after{margin-left:auto}
 /* 安裝提示：一行，步驟收起來 */
 .installcard{gap:8px}
 .installcard.sheetinstall{display:grid;border:0;margin-bottom:6px}
-.themeseg button{min-height:40px}
+.themeseg button{min-height:44px}
 .dispcard > .switch:last-child{border-bottom:0;padding-bottom:0}
 .instrow{display:grid;grid-template-columns:40px 1fr auto;gap:12px;align-items:center}
 .instrow img{border-radius:10px;box-shadow:var(--shadow-s)}

@@ -734,13 +734,15 @@ const iconsOnly = { get() { try { return localStorage.getItem('cil-tab-icons') =
 // 改成 5 格後清掉一次舊的「只顯示圖示」（那是 6 格太擠時選的）：每個人先看到一次有文字的版本，想要可以再打開
 try { if (!localStorage.getItem('cil-nav-v2')) { localStorage.removeItem('cil-tab-icons'); localStorage.setItem('cil-nav-v2', '1'); } } catch {}
 // 分頁的 aria-label：名稱，加上小點的狀態（跑步記錄中、我的需要處理）；值沒變就不重設（英文介面翻好的不會被蓋回中文）
+//   英文介面一律用預設名稱：管理員改的名稱只有中文，逐段翻出來會很長（例如「Training training plan」）而且放不下
+const tabNames = () => (I18N.lang === 'en' ? TAB_DEFAULT : { ...TAB_DEFAULT, ...(cfg.settings?.tabs || {}) });
 function tabLabel(a) {
-  const n = { ...TAB_DEFAULT, ...(cfg.settings?.tabs || {}) }[a.querySelector('.tl')?.dataset.tl] || '';
-  const v = a.dataset.live ? `${n}，記錄中` : a.hasAttribute('data-alert') ? `${n}，需要處理` : n;
+  const n = tabNames()[a.querySelector('.tl')?.dataset.tl] || '';
+  const v = a.dataset.live === 'paused' ? `${n}，已暫停` : a.dataset.live ? `${n}，記錄中` : a.hasAttribute('data-alert') ? `${n}，需要處理` : n;
   if (a.dataset.lbl !== v) { a.dataset.lbl = v; a.setAttribute('aria-label', I18N.t(v)); }
 }
 function applyTabs() {
-  const names = { ...TAB_DEFAULT, ...(cfg.settings?.tabs || {}) };
+  const names = tabNames();
   for (const el of document.querySelectorAll('.tabs .tl')) el.textContent = names[el.dataset.tl] || el.textContent;
   document.querySelector('.tabs a[data-tab="/me"]')?.toggleAttribute('data-alert', !!me?.mfaPending);
   for (const a of document.querySelectorAll('.tabs > a[data-tab]')) tabLabel(a);
@@ -765,6 +767,7 @@ function applyNav() {
 }
 // 分頁的選取狀態：1024 以下用 tabOf；側邊欄在主要與次要項目裡找最精確的那一個（沿著上一層往上找，例如 /t/youth 亮「分團」）。
 //   通知頁沿用上一次亮著的分頁；選取膠囊用 --i 滑過去；換頁時縮小的分頁列展開
+//   aria-current：這一項就是目前這一頁才用 "page"；子頁的上一層、通知頁沿用的分頁用 "true"（仍唸「目前」，樣式一樣）
 const wideNav = matchMedia('(min-width:1024px)');
 const curHash = () => location.hash.replace(/^#/, '').split('?')[0] || '/';
 let lastHash = '/';
@@ -778,12 +781,13 @@ function paintTabs(hash = curHash()) {
     cur = null;
     for (let h = hash, k = 0; k < 5 && !cur; k++, h = parentOf(h)[0].slice(1)) cur = links.find((a) => (a.dataset.tab || a.dataset.nav) === h);
   }
-  for (const a of nav.querySelectorAll('a[data-tab], a[data-nav]')) { if (a === cur) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); }
+  const real = curHash();
+  for (const a of nav.querySelectorAll('a[data-tab], a[data-nav]')) { if (a === cur) a.setAttribute('aria-current', (a.dataset.tab || a.dataset.nav) === real ? 'page' : 'true'); else a.removeAttribute('aria-current'); }
   nav.style.setProperty('--i', Math.max(i, 0));
   nav.classList.toggle('nosel', i < 0);
   nav.classList.remove('mini');
   document.body.classList.remove('tasking');   // 地圖畫路線到一半就換頁：分頁列回來
-  if (!textField(document.activeElement)) document.body.classList.remove('typing');
+  untype();
 }
 wideNav.addEventListener?.('change', () => paintTabs());
 
@@ -2976,7 +2980,7 @@ async function runView() {
       </section>
       ${group('跑完之後', [
         feat('studio') ? row('#/studio', MI.camera, '拍照分享', '距離、時間和路線放進照片，分享到 IG').replace('class="setrow"', 'class="setrow runshare"') : '',
-        row('#/log?extra=1', IC.check, '手動記一筆', '沒帶手機跑？手動記錄這次訓練'),
+        row('#/log?extra=1&from=run', IC.check, '手動記一筆', '沒帶手機跑？手動記錄這次訓練'),
       ])}
       <section class="card"><h3>小提醒</h3><ol class="steps">
         <li>到戶外等「GPS 良好」再開始，距離會比較準</li><li>練間歇或在操場跑，可以按「計圈」把每一趟分開記</li>
@@ -3072,11 +3076,11 @@ function runBar() {
   document.body.classList.toggle('runbar-on', !!live && !onRun);
   if (!me || !Run.active() || onRun) { bar?.remove(); return; }
   if (!bar) {
-    bar = document.createElement('a'); bar.id = 'runbar'; bar.className = 'runbar'; bar.href = '#/run'; bar.setAttribute('aria-label', '回到跑步記錄');
+    bar = document.createElement('a'); bar.id = 'runbar'; bar.className = 'runbar'; bar.href = '#/run';
     document.body.append(bar);
   }
   const y = Run.session();
-  bar.innerHTML = `<i class="${y.status}"></i><span>${y.status === 'paused' ? '已暫停' : '記錄中'}</span><b class="num">${hms(Run.elapsed() / 1000)}</b><b class="num">${(y.dist / 1000).toFixed(2)} km</b>`;
+  bar.innerHTML = `<i class="${y.status}"></i><span>${y.status === 'paused' ? '已暫停' : '記錄中'}</span><b class="num">${hms(Run.elapsed() / 1000)}</b><b class="num">${(y.dist / 1000).toFixed(2)} km</b><span class="sr">，回到跑步記錄</span>`;
 }
 setInterval(runBar, 1000);
 
@@ -3579,6 +3583,8 @@ function parentOf(h) {
   if (h === '/studio') return feat('gps') ? ['#/run', '跑步'] : ['#/', '團練'];
   const p = h.split('/');
   if (h.startsWith('/me/')) return ['#/me', '我的'];
+  // 從跑步頁進來的記錄（手動記一筆、跑完存到訓練紀錄）：留在「跑步」分頁，不跳到課表
+  if (h === '/log' && /[?&](from=run|src=gps)(&|$)/.test(location.hash)) return ['#/run', '跑步'];
   if (h.startsWith('/e/') && p.length > 3) return [`#/e/${p[2]}`, '活動'];
   if (h.startsWith('/edit/')) return [`#/e/${p[2]}`, '活動'];
   if (['/challenge', '/report', '/log', '/plan/new', '/logs/team'].includes(h) || h.startsWith('/plan/')) return ['#/plan', '課表'];
@@ -3682,6 +3688,7 @@ async function renderOnce() {
   const before = view.innerHTML;
   const skel = setTimeout(() => { if (view.innerHTML === before) view.innerHTML = skeleton(hash); }, 150);
   try { await route(hash); } finally { clearTimeout(skel); }
+  untype();   // iPhone Safari 移除還有焦點的欄位時不送 focusout：換完畫面馬上再檢查一次，分頁列才不會一直收著
   // 第一個畫面畫好了：記下開啟到可用的時間，20 秒後（或離開時）送出
   if (vitals.ready == null) { vitals.ready = performance.now(); vitals.page = hash.replace(/\/[\w-]{8,}/g, '/:id').slice(0, 40); setTimeout(sendVitals, 20000); }
   $('.top').classList.toggle('titled', false);
@@ -3790,11 +3797,12 @@ let navFromTab = false;
 $('#tabs').addEventListener('click', (e) => {
   const a = e.target.closest('a[data-tab], a[data-nav]'); if (!a) return;
   if (matchMedia('(pointer:coarse)').matches) navigator.vibrate?.(8);   // Android 才有；iPhone 網頁沒有震動 API
-  const h = curHash();
+  const h = curHash(), full = location.hash.replace(/^#/, '') || '/';
   if (a.dataset.tab && h !== '/notifications' && a.dataset.tab === tabOf(h)) {
     e.preventDefault();
-    if (!isTop(h)) { navStack.length = 0; navFromTab = true; location.hash = a.getAttribute('href'); }
-    else if (h === '/map') dispatchEvent(new Event('tabreselect'));
+    // 只有剛好在分頁本身（沒有子路徑、沒有 ?）才捲回頂端；全季課表、賽事準備、?c=club 這類都回到分頁的第一層
+    if (h === '/map') dispatchEvent(new Event('tabreselect'));
+    else if (full !== a.dataset.tab) { navStack.length = 0; navFromTab = true; location.hash = a.getAttribute('href'); }
     else scrollTo({ top: 0, behavior: reduceMotion() ? 'instant' : 'smooth' });
     return;
   }
@@ -3802,11 +3810,21 @@ $('#tabs').addEventListener('click', (e) => {
 });
 // 跳到主要分頁（鍵盤）：網址用 # 當路由，所以不讓連結改網址，直接把焦點移到目前的分頁
 $('#skipTabs').addEventListener('click', (e) => { e.preventDefault(); ($('.tabs a[aria-current]') || $('.tabs > a[data-tab]:not([hidden])'))?.focus(); });
-// 觸控裝置打開鍵盤時收起分頁列，避免浮在鍵盤上面擋住欄位
-const textField = (el) => el?.matches?.('textarea, select, [contenteditable], input:not([type=checkbox]):not([type=radio]):not([type=button]):not([type=submit]):not([type=range]):not([type=file]):not([type=color])');
+// 觸控裝置打開鍵盤時收起下方分頁列，避免浮在鍵盤上面擋住欄位（1024 以上是側邊欄，不收）
+//   只算會叫出鍵盤的欄位：下拉選單、日期時間用系統選擇器，不收分頁列
+const textField = (el) => !!el?.isConnected && !!el.matches?.('textarea, [contenteditable]:not([contenteditable=false]), input:not([type]), input[type=text], input[type=search], input[type=email], input[type=tel], input[type=url], input[type=number], input[type=password]');
+function untype() { if (!textField(document.activeElement)) document.body.classList.remove('typing'); }
+//   iPhone Safari 移除還有焦點的欄位時不送 focusout（送出表單後畫面重畫）：收著的時候每 0.4 秒檢查一次焦點還在不在欄位上
+let typeTimer = 0;
 if (matchMedia('(pointer:coarse)').matches) {
-  document.addEventListener('focusin', (e) => { if (textField(e.target)) document.body.classList.add('typing'); });
-  document.addEventListener('focusout', () => setTimeout(() => { if (!textField(document.activeElement)) document.body.classList.remove('typing'); }, 150));
+  document.addEventListener('focusin', (e) => {
+    if (!textField(e.target) || wideNav.matches) return;
+    document.body.classList.add('typing');
+    clearInterval(typeTimer);
+    typeTimer = setInterval(() => { untype(); if (!document.body.classList.contains('typing')) clearInterval(typeTimer); }, 400);
+  });
+  document.addEventListener('focusout', () => setTimeout(untype, 150));
+  wideNav.addEventListener?.('change', () => { if (wideNav.matches) document.body.classList.remove('typing'); });
 }
 
 // 滑鼠反光：只在有游標的裝置，追蹤游標在卡片上的位置

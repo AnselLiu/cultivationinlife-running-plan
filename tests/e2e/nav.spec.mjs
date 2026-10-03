@@ -52,13 +52,13 @@ test('拍照收進跑步：分頁列亮「跑步」、返回鍵是「‹ 跑步�
   await expect(page.locator('.maplink')).toHaveCount(0);
   await page.locator('.runshare').click();
   await expect(page).toHaveURL(/#\/studio$/);
-  await expect(tab(page, '/run')).toHaveAttribute('aria-current', 'page');
+  await expect(tab(page, '/run')).toHaveAttribute('aria-current', 'true');   // 上一層的分頁：「目前」但不是 page
   await expect(page.locator('#backBtn')).toBeVisible();
   // 直接打開（從捷徑或分享進來，App 裡沒有上一頁）：返回鍵回到上一層「跑步」
   await page.goto('/#/studio?km=5');
   await page.reload();
   await expect(page.locator('#backLabel')).toHaveText('跑步');
-  await expect(tab(page, '/run')).toHaveAttribute('aria-current', 'page');
+  await expect(tab(page, '/run')).toHaveAttribute('aria-current', 'true');
 });
 
 test.describe('功能開關', () => {
@@ -90,10 +90,14 @@ test('再點一次目前的分頁：子頁回到第一層；第一層捲回頂�
   await enter(page);
   await page.goto('/#/me');
   await page.goto('/#/me/profile');
-  await expect(tab(page, '/me')).toHaveAttribute('aria-current', 'page');
+  await expect(tab(page, '/me')).toHaveAttribute('aria-current', 'true');
   await tab(page, '/me').click();
   await expect(page).toHaveURL(/#\/me$/);
   await expect(page.locator('#backBtn')).toBeHidden();
+  // 課表的分段（全季課表）、帶 ? 的課表：再點「課表」回到 #/plan，不是只捲回頂端
+  await page.goto('/#/plan/season');
+  await tab(page, '/plan').click();
+  await expect(page).toHaveURL(/#\/plan$/);
   await page.goto('/#/');
   await page.evaluate(() => { document.body.style.minHeight = '4000px'; scrollTo(0, 2000); });
   await page.waitForTimeout(200);
@@ -124,7 +128,7 @@ test('從地圖按鈴鐺：分頁列還是亮「地圖」，只有一個 aria-cu
   await expect(tab(page, '/map')).toHaveAttribute('aria-current', 'page');
   await page.locator('#bell').click();
   await expect(page).toHaveURL(/#\/notifications/);
-  await expect(tab(page, '/map')).toHaveAttribute('aria-current', 'page');
+  await expect(tab(page, '/map')).toHaveAttribute('aria-current', 'true');   // 通知頁沿用的分頁不是目前這一頁
   await expect(page.locator('.tabs [aria-current]')).toHaveCount(1);
 });
 
@@ -138,7 +142,7 @@ test('側邊欄（1280×800）：訓練、跑團分區；報表亮「訓練報�
   await expect(page.locator('.navmore a[data-nav="/report"]')).toHaveAttribute('aria-current', 'page');
   await expect(page.locator('.tabs [aria-current]')).toHaveCount(1);
   await page.goto('/#/t/youth');
-  await expect(page.locator('.navmore a[data-nav="/teams"]')).toHaveAttribute('aria-current', 'page');
+  await expect(page.locator('.navmore a[data-nav="/teams"]')).toHaveAttribute('aria-current', 'true');
 });
 
 test('側邊欄：理事長看得到幹部分區，側邊欄可以捲到最後一列', async ({ page }) => {
@@ -227,4 +231,90 @@ test('鍵盤：跳到主要分頁', async ({ page }) => {
   await page.keyboard.press('Enter');
   await expect(page).toHaveURL(/#\/plan$/);
   await expect(tab(page, '/plan')).toBeFocused();
+});
+
+const RUN = () => {
+  try { localStorage.setItem('cil-run-session', JSON.stringify({ status: 'running', startedAt: Date.now() - 60000, elapsedMs: 0, resumedAt: Date.now() - 60000, points: [], dist: 1200, gain: 0, laps: [],
+    useGps: false, gps: 'off', acc: null, goal: null, goalAsked: false, auto: false, lastMoveAt: Date.now(), anchor: null, askedAt: Date.now() })); } catch {}
+};
+
+test('暫停：跑步分頁唸「跑步，已暫停」；計時列的名稱包含畫面上的文字（沒有 aria-label 蓋掉）', async ({ page }) => {
+  await page.addInitScript(({ s }) => { try { localStorage.setItem('cil-run-session', s); } catch {} }, { s: JSON.stringify({ status: 'paused', startedAt: Date.now() - 60000, elapsedMs: 60000, resumedAt: null, points: [], dist: 1200, gain: 0, laps: [],
+    useGps: false, gps: 'off', acc: null, goal: null, goalAsked: false, auto: false, lastMoveAt: Date.now(), anchor: null, askedAt: Date.now() }) });
+  await enter(page);
+  await page.goto('/#/plan');
+  await expect(tab(page, '/run')).toHaveAttribute('data-live', 'paused');
+  await expect(tab(page, '/run')).toHaveAttribute('aria-label', '跑步，已暫停');
+  await expect(page.locator('#runbar')).not.toHaveAttribute('aria-label', /./);
+  await expect(page.getByRole('link', { name: /已暫停.*1\.20 km.*回到跑步記錄/ })).toBeVisible();
+});
+
+test('iPhone 橫向（852×393）記錄中往下捲：縮小的分頁列不變高，計時列不蓋到分頁', async ({ page }) => {
+  await page.addInitScript(RUN);
+  await page.setViewportSize({ width: 852, height: 393 });
+  await enter(page);
+  await page.goto('/#/me');
+  await page.evaluate(() => { document.body.style.minHeight = '4000px'; });
+  const h0 = (await box(page.locator('#tabs'))).h;
+  await page.evaluate(() => scrollTo(0, 200)); await page.waitForTimeout(50);
+  await page.evaluate(() => scrollTo(0, 400));
+  await expect(page.locator('.tabs.mini')).toHaveCount(1);
+  await page.waitForTimeout(500);
+  const t = await box(page.locator('#tabs')), r = await box(page.locator('#runbar'));
+  expect(t.h).toBeLessThanOrEqual(h0);
+  expect(r.b).toBeLessThanOrEqual(t.y);
+});
+
+test('跑步頁的「手動記一筆」：分頁列還是亮「跑步」，返回鍵「‹ 跑步」', async ({ page }) => {
+  await enter(page);
+  await page.goto('/#/run');
+  await page.locator('#view a[href^="#/log?extra=1"]').click();
+  await expect(page).toHaveURL(/#\/log\?/);
+  await expect(tab(page, '/run')).toHaveAttribute('aria-current', 'true');
+  await expect(page.locator('#backLabel')).toHaveText('跑步');
+});
+
+test('打字時欄位被換掉（iPhone Safari 不送 focusout）：換完畫面分頁列回來', async ({ page }) => {
+  await enter(page);
+  await page.goto('/#/me/profile');
+  const f = page.locator('#view input[type=text], #view input:not([type])').first();
+  await f.focus();
+  await expect(page.locator('body.typing')).toHaveCount(1);
+  await expect(page.locator('#tabs')).toHaveCSS('visibility', 'hidden');   // 收起來時鍵盤與 VoiceOver 也不會停在看不到的分頁上
+  // 模擬 WebKit：欄位移除時不送 focusout
+  await page.evaluate(() => addEventListener('focusout', (e) => e.stopPropagation(), true));
+  await page.evaluate(() => { location.hash = '#/plan'; });
+  await expect(page.locator('body.typing')).toHaveCount(0);
+  await expect(page.locator('#tabs')).toHaveCSS('opacity', '1');
+});
+
+test('下拉選單不收分頁列（沒有鍵盤）', async ({ page }) => {
+  await enter(page);
+  await page.goto('/#/map');
+  const sel = page.locator('#spotCity');
+  await expect(sel).toBeAttached({ timeout: 15000 });
+  await sel.focus();
+  await expect(page.locator('body.typing')).toHaveCount(0);
+});
+
+test.describe('iPad 橫向 1180×820（觸控、側邊欄）', () => {
+  test.use({ viewport: { width: 1180, height: 820 }, hasTouch: true, isMobile: false });
+  test('打字、畫路線時側邊欄都還在', async ({ page }) => {
+    await enter(page);
+    await page.goto('/#/me/profile');
+    await page.locator('#view input[type=text], #view input:not([type])').first().focus();
+    await expect(page.locator('body.typing')).toHaveCount(0);
+    await expect(page.locator('#tabs')).toHaveCSS('opacity', '1');
+    let b = await box(page.locator('#tabs'));
+    expect(b.x).toBeGreaterThanOrEqual(0); expect(b.y).toBeLessThan(100);
+    await page.goto('/#/map');
+    await expect(page.locator('#drawBtn')).toBeEnabled({ timeout: 15000 });
+    await page.locator('#drawBtn').click();
+    await expect(page.locator('#drawBar')).toBeVisible();
+    await page.waitForTimeout(500);
+    await expect(page.locator('#tabs')).toHaveCSS('opacity', '1');
+    await expect(page.locator('#tabs')).toHaveCSS('visibility', 'visible');
+    b = await box(page.locator('#tabs'));
+    expect(b.x).toBeGreaterThanOrEqual(0); expect(b.y).toBeLessThan(100);
+  });
 });
