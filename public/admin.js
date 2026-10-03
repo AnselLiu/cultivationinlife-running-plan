@@ -343,6 +343,7 @@ const AUDIT_NAME = {
   'passkey.add': '新增通行金鑰', 'passkey.remove': '移除通行金鑰', 'passkey.denied': '通行金鑰驗證失敗', 'mfa.verify': '兩步驟驗證', 'login.new_device': '新裝置登入',
   'settings.security': '修改兩步驟驗證設定', 'audit.verify': '稽核完整性檢查',
   'google.link': '綁定 Google', 'login.denied': '登入驗證失敗', 'team.post': '發布分團公告', 'team.post_delete': '刪除分團公告', 'privacy.show_rank': '排行榜設定', broadcast: '群發通知', 'retention.cleanup': '資料保存期限清理', 'event.invite_denied': '邀請連結無效', 'privacy.share_logs': '訓練紀錄分享設定', 'settings.shortcut': '修改捷徑連結',
+  'settings.cams': '附近即時影像來源開關', 'settings.cams_sync': '同步攝影機清單', 'cam.link.add': '新增直播連結', 'cam.link.delete': '刪除直播連結',
 };
 // 稽核紀錄：一定要選時間區間（預設最近 7 天），再依類型、操作者、對象縮小；一次 50 筆
 const AUDIT_GROUPS = { '': '所有類型', role: '身分變更', membership: '會籍', team: '分團', event: '活動', checkin: '報到', lottery: '抽獎',
@@ -522,6 +523,11 @@ function settingsPanel() {
     </form>
     <p class="tiny" style="margin:0">關掉後，跑友的畫面上就看不到這個功能；已存的資料不會刪除。</p>
   </section>
+  <section class="card" id="camSrcCard">
+    <h3>附近即時影像</h3>
+    <p class="tiny" style="margin:0">地點卡會列出 1.5 公里內的政府公開攝影機，畫面由本站轉送、不保存，跑友的 IP 不會送到影像來源。鏡頭清單每天清晨自動同步（水利署與水利處 04:00、公路局 05:00）。關掉來源後立即不再顯示，也不再連線。</p>
+    <div id="camSrcList" class="toggles"><p class="tiny" style="margin:0">載入中…</p></div>
+  </section>
   <section class="card">
     <h3>分頁列名稱</h3>
     <form id="tabsForm" class="grid3">${Object.entries(TAB_DEFAULT).map(([k, v]) => `<label>${v}<input name="${k}" maxlength="4" placeholder="${v}" value="${esc(cfg.settings?.tabs?.[k] || '')}"></label>`).join('')}
@@ -605,6 +611,33 @@ function bindSettings() {
     } catch (err) { toast(err.message); }
     b.disabled = false; b.textContent = t;
   };
+  // 附近即時影像：來源開關、上次同步、鏡頭數；臺北市水利處要先確認取得書面同意
+  const camTime = (t) => { if (!t) return ''; const d = new Date(`${t.replace(' ', 'T')}Z`); return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
+  const loadCamSrc = async () => {
+    const r = await api('/cams/sources').catch(() => null);
+    const box = $('#camSrcList');
+    if (!box) return;
+    if (!r) { box.innerHTML = '<p class="tiny" style="margin:0">讀不到來源狀態</p>'; return; }
+    box.innerHTML = r.sources.map((x) => `<div class="camsrc">
+      <label class="switch"><span>${esc(x.name)}<span class="tiny" style="display:block">${x.manual ? `幹部在地點卡新增的官方直播外連，目前 ${x.active} 個`
+        : `${x.last_ok_at ? `上次同步 ${camTime(x.last_ok_at)}・${x.active} 支鏡頭${x.down ? `（${x.down} 支暫時抓不到）` : ''}` : '還沒有同步過'}${x.last_error ? `・最近一次失敗（${camTime(x.last_sync_at)}）：${esc(x.last_error)}` : ''}`}</span>
+        <span class="tiny" style="display:block">${esc(x.attribution)}</span></span>
+        <input type="checkbox" data-camsrc="${esc(x.source)}" ${x.enabled ? 'checked' : ''} ${r.editable ? '' : 'disabled'}><i></i></label>
+      ${x.consent ? '<p class="tiny" style="margin:0 0 6px">這個來源沒有開放授權聲明，要先取得臺北市水利處的書面同意才能開啟；關閉時不會對水利處發出任何連線。</p>' : ''}
+      ${!x.manual && x.enabled && r.editable ? `<button type="button" class="btn ghost sm" data-camsync="${esc(x.source)}" style="margin:0 0 8px">立即同步</button>` : ''}</div>`).join('');
+    for (const c of box.querySelectorAll('[data-camsrc]')) c.onchange = async () => {
+      const x = r.sources.find((s) => s.source === c.dataset.camsrc);
+      if (c.checked && x.consent && !confirm(`開啟「${x.name}」前，請確認協會已經取得對方的書面同意。確定已取得嗎？`)) { c.checked = false; return; }
+      try { await api('/cams/sources', { method: 'POST', body: { source: x.source, enabled: c.checked, consent: c.checked && x.consent } }); toast(c.checked ? `已開啟${x.name}` : `已關閉${x.name}`); loadCamSrc(); }
+      catch (err) { c.checked = !c.checked; toast(err.message); }
+    };
+    for (const b of box.querySelectorAll('[data-camsync]')) b.onclick = async () => {
+      b.disabled = true; b.textContent = '同步中…';
+      try { const s = await api('/cams/sync', { method: 'POST', body: { source: b.dataset.camsync } }); toast(`已同步 ${s.count} 支鏡頭`); } catch (err) { toast(err.message); }
+      loadCamSrc();
+    };
+  };
+  loadCamSrc();
   const reload = async (msg) => { await refreshMe(); toast(msg); applyFeatures(); paintCountdown(); adminView('settings'); };
   const save = async (key, body, msg) => { try { await api(`/settings/${key}`, { method: 'POST', body }); await reload(msg); } catch (e) { toast(e.message); } };
   $('#orgForm').onsubmit = (e) => { e.preventDefault(); const f = e.target;
