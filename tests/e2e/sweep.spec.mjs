@@ -39,7 +39,8 @@ for (const scheme of ['light', 'dark']) test(`逐頁檢查・${scheme === 'dark'
   for (const r of routes) {
     errs = [];
     await page.goto(`/${r}`);
-    // 只換 # 不會重新載入頁面：等骨架消失才算畫好
+    // 只換 # 不會重新載入頁面：先等骨架有機會出現（150 毫秒後才會畫），再等它消失才算畫好
+    await page.waitForTimeout(300);
     const ok = await page.waitForFunction(() => document.querySelector('#view') && !document.querySelector('#view .skel'), null, { timeout: 8000 }).then(() => true, () => false);
     if (!ok) { problems[r] = ['8 秒後還在載入']; continue; }
     await page.waitForLoadState('networkidle').catch(() => {});

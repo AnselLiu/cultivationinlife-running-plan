@@ -628,3 +628,141 @@ test('個人課表週期：儲存、記錄、去重、修改保留週期、教�
   await call('t_other', `/races/${other.json.id}`, { method: 'DELETE' });
   await call('t_lead', '/me/plan', { method: 'PUT', body: { cycle: 'club' } });
 });
+
+// ---- 通知中心：分類、游標、已讀模型、隱私 ----
+test('通知分類登記表：8 類，chip 只用合法分類；worker 不再用舊的 kind 當分類', async () => {
+  const { CATS, CHIPS, isCat, MUTABLE } = await import('../public/notif-cats.js');
+  assert.deepEqual(Object.keys(CATS).sort(), ['announce', 'change', 'event', 'membership', 'security', 'signup', 'todo', 'training']);
+  for (const c of Object.values(CATS)) assert.ok(c.zh && c.urgency && c.ttl > 0);
+  for (const c of CHIPS) if (c.q && c.q !== 'unread') assert.ok(c.q.split(',').every(isCat), c.q);
+  assert.ok(!MUTABLE.includes('security') && !MUTABLE.includes('change'));
+  const { readFileSync } = await import('node:fs');
+  const src = readFileSync(new URL('../src/worker.js', import.meta.url), 'utf8');
+  const bad = src.split('\n').filter((l) => /notify\(env/.test(l) && /'(system|log|plan|lottery)'/.test(l.replace(/kind: '\w+'/g, '')));
+  assert.deepEqual(bad, [], '分類參數不能是舊的 kind');
+});
+
+test('通知列表：複合游標不漏列、篩選白名單、舊格式游標相容', async () => {
+  const seen = new Set();
+  let next = null, pages = 0;
+  do {
+    const r = await call('t_other', `/notifications${next ? `?before=${encodeURIComponent(next)}` : ''}`);
+    assert.equal(r.status, 200, r.text);
+    for (const n of [...r.json.items, ...(next ? [] : r.json.pinned)]) { assert.ok(!seen.has(n.id), `重複 ${n.id}`); seen.add(n.id); }
+    if (!next) assert.ok(r.json.cats && 'badge' in r.json && 'unread' in r.json && 'todo' in r.json, '第一頁帶計數');
+    next = r.json.next; pages++;
+  } while (next && pages < 20);
+  for (let i = 1; i <= 35; i++) assert.ok(seen.has(`nseed${String(i).padStart(11, '0')}`), `漏了第 ${i} 則`);
+  assert.ok(seen.has('nseedsec00000001') && seen.has('nseedtodo0000001'));
+  const first = await call('t_other', '/notifications');
+  assert.ok(first.json.pinned.some((n) => n.id === 'nseedsec00000001'), '未讀的安全通知在「需要留意」');
+  assert.ok(!first.json.items.some((n) => n.id === 'nseedsec00000001'), '需要留意的不會在清單重複出現');
+  assert.equal((await call('t_other', `/notifications?before=${encodeURIComponent(first.json.items[0].created_at)}`)).status, 200, '舊版只送時間戳');
+  assert.equal((await call('t_other', '/notifications?cat=foo')).status, 400);
+  assert.equal((await call('t_other', '/notifications?cat=event,signup,change,todo')).status, 400);
+  assert.equal((await call('t_other', '/notifications?before=x')).status, 400);
+  const mine = await call('t_other', '/notifications?cat=signup,change');
+  assert.equal(mine.status, 200);
+  assert.ok(mine.json.items.every((n) => ['signup', 'change'].includes(n.category)));
+  const un = await call('t_other', '/notifications?cat=unread');
+  assert.ok(un.json.items.length > 0 && un.json.items.every((n) => n.read_at === null));
+});
+
+test('通知：跨會員一律 404；計數與看過；全部已讀有上界；依活動已讀不動待辦；安全通知受保護', async () => {
+  // 翻完所有頁找某一則（含「需要留意」）
+  const row = async (id) => {
+    let next = null;
+    do {
+      const r = (await call('t_other', `/notifications${next ? `?before=${encodeURIComponent(next)}` : ''}`)).json;
+      const hit = [...r.items, ...(r.pinned || [])].find((n) => n.id === id);
+      if (hit) return hit;
+      next = r.next;
+    } while (next);
+    return null;
+  };
+  // 跨會員
+  assert.equal((await call('t_runner', '/notifications/read', { method: 'POST', body: { id: 'nseed00000000001' } })).status, 200);
+  assert.equal((await call('t_runner', '/notifications/unread', { method: 'POST', body: { id: 'nseed00000000001' } })).status, 404);
+  assert.equal((await call('t_runner', '/notifications/nseed00000000001', { method: 'DELETE' })).status, 404);
+  assert.equal((await row('nseed00000000001')).read_at, null, '別人的列沒有變');
+  // 計數
+  const c = await call('t_other', '/notifications/count');
+  assert.ok(['badge', 'unseen', 'unread'].every((k) => typeof c.json[k] === 'number'));
+  assert.equal(c.headers.get('cache-control'), 'private, no-store');
+  assert.deepEqual((await call(null, '/notifications/count')).json, { badge: 0, unseen: 0, unread: 0 });
+  const s = await call('t_other', '/notifications/seen', { method: 'POST' });
+  const secUnread = (await call('t_other', '/notifications?cat=security')).json.items.filter((n) => !n.read_at).length;
+  assert.ok(secUnread >= 1);
+  assert.equal(s.json.badge, secUnread, '看過之後鈴鐺只剩未讀的安全通知');
+  // 全部已讀的上界：同一秒的列，id 比上界大的維持未讀
+  const ts = (await row('nseed00000000010')).created_at;
+  await call('t_other', '/notifications/read', { method: 'POST', body: { all: true, cat: 'event', upto: `${ts}|nseed00000000010` } });
+  assert.ok((await row('nseed00000000010')).read_at);
+  assert.equal((await row('nseed00000000011')).read_at, null);
+  assert.equal((await call('t_other', '/notifications/read', { method: 'POST', body: { all: true } })).status, 400, 'upto 必填');
+  // 依活動已讀：同一個 ref 的待辦不動
+  await call('t_other', '/notifications/read', { method: 'POST', body: { ref: 'e:seed' } });
+  assert.ok((await row('nseed00000000035')).read_at);
+  assert.equal((await call('t_other', '/notifications?cat=todo')).json.items.find((n) => n.id === 'nseedtodo0000001').read_at, null);
+  assert.equal((await call('t_other', '/notifications/read', { method: 'POST', body: { ref: 'pay:x:y' } })).status, 400);
+  // 標為未讀
+  assert.equal((await call('t_other', '/notifications/unread', { method: 'POST', body: { id: 'nseed00000000001' } })).status, 200);
+  assert.equal((await row('nseed00000000001')).read_at, null);
+  assert.equal((await call('t_other', '/notifications/nseed00000000001', { method: 'DELETE' })).status, 200, '一般通知可以刪');
+  assert.equal((await call('t_other', '/notifications/nseed00000000001', { method: 'DELETE' })).status, 404);
+  // 安全通知：不能刪、清除已讀與全部已讀都不動，只有單則已讀可以
+  assert.equal((await call('t_other', '/notifications/nseedsec00000001', { method: 'DELETE' })).status, 404);
+  const newest = (await call('t_other', '/notifications')).json.items[0];
+  await call('t_other', '/notifications/read', { method: 'POST', body: { all: true, upto: `${newest.created_at}|${newest.id}` } });
+  await call('t_other', '/notifications/read', { method: 'POST', body: {} });
+  const cr = await call('t_other', '/notifications/clear-read', { method: 'POST' });
+  assert.ok(cr.json.removed > 0);
+  assert.equal((await call('t_other', '/notifications?cat=event')).json.items.length, 0, '已讀的都清掉了');
+  const sec = (await call('t_other', '/notifications')).json.pinned.find((n) => n.id === 'nseedsec00000001');
+  assert.ok(sec && sec.read_at === null, '安全通知還在而且未讀');
+  await call('t_other', '/notifications/read', { method: 'POST', body: { id: 'nseedsec00000001' } });
+  assert.ok((await call('t_other', '/notifications?cat=security')).json.items.find((n) => n.id === 'nseedsec00000001').read_at);
+});
+
+test('群發一律是公告、不能偽裝成安全通知；推播偏好只收可以關的類別', async () => {
+  const r = await call('t_chair', '/admin/broadcast', { method: 'POST', body: { title: '週末颱風停課', body: '本週六團練取消', teams: ['youth'] } });
+  assert.equal(r.status, 200, r.text);
+  const n = (await call('t_runner', '/notifications')).json.items[0];
+  assert.deepEqual([n.title, n.category, n.kind, n.url], ['週末颱風停課', 'announce', 'broadcast', null]);
+  assert.equal((await call('t_chair', '/admin/broadcast', { method: 'POST', body: { title: '新裝置登入通知', teams: ['youth'], dryRun: true } })).status, 400);
+  assert.equal((await call('t_chair', '/admin/broadcast', { method: 'POST', body: { title: '請登入 App 更新資料', teams: ['youth'], dryRun: true } })).status, 200);
+  // 零寬字元、空白、異體字繞不過；內文也不能冒充安全通知
+  for (const body of [{ title: '新\u200b裝置登入' }, { title: '身份 更新' }, { title: '活動提醒', body: '請點開確認是不是你本人' }])
+    assert.equal((await call('t_chair', '/admin/broadcast', { method: 'POST', body: { ...body, teams: ['youth'], dryRun: true } })).status, 400, JSON.stringify(body));
+  const p = await call('t_runner', '/me/notify-prefs', { method: 'PUT', body: { mute: ['security', 'change', 'training', 'bogus'] } });
+  assert.deepEqual(p.json.mute, ['training']);
+  assert.deepEqual((await call('t_runner', '/me/notify-prefs')).json.mute, ['training']);
+  assert.equal((await call(null, '/me/notify-prefs', { method: 'PUT', body: { mute: [] } })).status, 401);
+  const x = await fetch(`${BASE}/api/me/notify-prefs`, { method: 'PUT', headers: { cookie: await as('t_runner'), origin: 'https://evil.example', 'content-type': 'application/json' }, body: '{"mute":[]}' });
+  assert.equal(x.status, 403);
+  await call('t_runner', '/me/notify-prefs', { method: 'PUT', body: { mute: [] } });
+});
+
+test('身分變更寫安全通知；入會申請不能重複；待處理摘要只含自己分團', async () => {
+  delete cookies['t_chair:mfa'];
+  assert.equal((await call('t_chair:mfa', '/members/t_other/role', { method: 'POST', body: { role: 'member' } })).status, 200);
+  delete cookies.t_other;
+  const sec = (await call('t_other', '/notifications?cat=security')).json.items;
+  assert.ok(sec.some((n) => n.title === '身分更新'));
+  assert.equal((await call('t_other', '/me/apply', { method: 'POST' })).status, 200);
+  assert.equal((await call('t_other', '/me/apply', { method: 'POST' })).status, 409);
+  const todo = (await call('t_staff', '/notifications?cat=todo')).json.items.find((n) => n.title === '有人申請入會');
+  assert.ok(todo && !todo.body.includes('路人跑友'), '待辦不放本名');
+  assert.equal(todo.url, '/#/admin?tab=members');
+  // 入團申請：通知該團團長，連到分團頁
+  assert.equal((await call('t_other', '/teams/youth/join', { method: 'POST' })).json.status, 'pending');
+  const lead = await call('t_lead', '/notifications');
+  assert.ok(lead.json.todo && lead.json.todo.joins.length >= 1);
+  assert.ok(lead.json.todo.joins.every((j) => j.tid === 'youth'), '只含自己分團');
+  const jn = (await call('t_lead', '/notifications?cat=todo')).json.items.find((n) => n.title.endsWith('有人申請加入'));
+  assert.equal(jn.url, '/#/t/youth');
+  assert.equal((await call('t_runner', '/notifications')).json.todo, null);
+  // 核准後，同一則待辦一起結束
+  await call('t_lead', '/teams/youth/members', { method: 'POST', body: { member_id: 't_other', action: 'approve' } });
+  assert.ok((await call('t_lead', '/notifications?cat=todo')).json.items.find((n) => n.id === jn.id).read_at);
+});

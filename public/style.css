@@ -7,7 +7,7 @@
   color-scheme:light dark;
   --navy:#0B1B33; --blue:#1C4698; --yellow:#FDF36D; --lime:#B9D04C;
 
-  --bg:#E9EEF7; --bg-2:#DFE6F3;
+  --bg:#E9EEF7; --bg-2:#DFE6F3; --sheet-solid:#FAFBFD;
   --ink:#0B1B33; --ink-2:#4E5C74; --ink-3:#5A6578;
   /* 玻璃材質：底色要夠透，背景才看得到；邊緣用亮線模擬折射 */
   --glass:rgba(255,255,255,.52); --glass-2:rgba(255,255,255,.66); --glass-hi:rgba(255,255,255,.88);
@@ -16,6 +16,10 @@
   --accent:#1C4698; --on-accent:#fff; --accent-soft:rgba(28,70,152,.10);
   --easy:#456B0F; --q:#B64400; --long:#1C4698; --rest:#55637A; --str:#6D45B0; --race:#C41E3A; --ok:#34C759; --mid:#FF9F0A; --ok-ink:#1E7E34;
   --warn:#6B5B00; --warn-bg:rgba(253,243,109,.5);
+  /* 通知分類色磚：白色圖形對比都在 4.6:1 以上，深色模式沿用同一組值 */
+  --tile-red:#DE2B44; --tile-orange:#BB5716; --tile-teal:#1A808E; --tile-blue:#346EDF; --tile-green:#278241;
+  --tile-indigo:#6764E8; --tile-purple:#855DD0; --tile-gray:#68768D;
+  --ndot:#1C4698;   /* 未讀點：深色模式的 --accent 是黃色，跟待辦色磚撞色，所以另外定義 */
   --shadow-s:0 1px 1px rgba(11,27,51,.04), 0 2px 8px -2px rgba(11,27,51,.10);
   --shadow-l:0 1px 2px rgba(11,27,51,.05), 0 12px 32px -14px rgba(11,27,51,.30);
   --blur:saturate(190%) blur(26px);
@@ -24,25 +28,25 @@
   --side:0px;
 }
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
-  --bg:#050C18; --bg-2:#02060D;
+  --bg:#050C18; --bg-2:#02060D; --sheet-solid:#1E3150;
   --ink:#EEF3FB; --ink-2:#A3B1C8; --ink-3:#8F9EB6;
   --glass:rgba(20,38,64,.46); --glass-2:rgba(24,44,72,.62); --glass-hi:rgba(34,58,92,.85);
   --rim:rgba(255,255,255,.22); --rim-2:rgba(255,255,255,.04);
   --stroke:rgba(255,255,255,.08);
   --accent:#FDF36D; --on-accent:#0B1B33; --accent-soft:rgba(253,243,109,.14);
   --easy:#C9E36A; --q:#FFB347; --long:#8FB2F5; --rest:#A3B1C8; --str:#C9A8FF; --race:#FF7A85; --ok:#30D158; --mid:#FF9F0A; --ok-ink:#30D158;
-  --warn:#FDF36D; --warn-bg:rgba(253,243,109,.14);
+  --warn:#FDF36D; --warn-bg:rgba(253,243,109,.14); --ndot:#4D8DFF;
   --shadow-s:0 1px 2px rgba(0,0,0,.4); --shadow-l:0 18px 44px -20px rgba(0,0,0,.85);
 }}
 :root[data-theme="dark"]{
-  --bg:#050C18; --bg-2:#02060D;
+  --bg:#050C18; --bg-2:#02060D; --sheet-solid:#1E3150;
   --ink:#EEF3FB; --ink-2:#A3B1C8; --ink-3:#8F9EB6;
   --glass:rgba(20,38,64,.46); --glass-2:rgba(24,44,72,.62); --glass-hi:rgba(34,58,92,.85);
   --rim:rgba(255,255,255,.22); --rim-2:rgba(255,255,255,.04);
   --stroke:rgba(255,255,255,.08);
   --accent:#FDF36D; --on-accent:#0B1B33; --accent-soft:rgba(253,243,109,.14);
   --easy:#C9E36A; --q:#FFB347; --long:#8FB2F5; --rest:#A3B1C8; --str:#C9A8FF; --race:#FF7A85; --ok:#30D158; --mid:#FF9F0A; --ok-ink:#30D158;
-  --warn:#FDF36D; --warn-bg:rgba(253,243,109,.14);
+  --warn:#FDF36D; --warn-bg:rgba(253,243,109,.14); --ndot:#4D8DFF;
   --shadow-s:0 1px 2px rgba(0,0,0,.4); --shadow-l:0 18px 44px -20px rgba(0,0,0,.85);
 }
 
@@ -117,8 +121,8 @@ body::after{content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;opa
   border:0;background:var(--glass-2);-webkit-backdrop-filter:var(--blur);backdrop-filter:var(--blur);
   box-shadow:var(--shadow-s),inset 0 1px 0 var(--rim);font-size:15px;line-height:1;position:relative}
 .bell svg{width:19px;height:19px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
-.bell b{position:absolute;top:-3px;right:-3px;min-width:17px;height:17px;border-radius:9px;background:var(--race);color:#fff;
-  font-size:11px;font-weight:700;display:grid;place-items:center;padding:0 4px;border:2px solid var(--bg)}
+.bell b{position:absolute;top:-3px;right:-3px;min-width:17px;height:17px;border-radius:9px;background:var(--tile-red);color:#fff;
+  font-size:11px;font-weight:700;display:grid;place-items:center;padding:0 4px;border:0;box-shadow:0 0 0 2px var(--glass-hi)}
 .bell b[hidden]{display:none}
 
 .wrap{max-width:760px;margin:0 auto;padding:0 max(16px,env(safe-area-inset-left,0px)) 24px;display:flex;flex-direction:column;gap:14px}
@@ -315,10 +319,6 @@ pre.out{white-space:pre-wrap;word-break:break-word;background:var(--glass-hi);bo
 @keyframes vt-out{to{opacity:0}}
 @keyframes vt-in{from{opacity:0;transform:translateY(8px)}}
 @media (max-width:400px){.day{grid-template-columns:62px 1fr;gap:10px;padding:11px 13px}.day .t{font-size:14.5px}h1{font-size:30px}}
-
-/* 通知中心 */
-.notif.unread b::after{content:"";display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--accent);margin-left:7px;vertical-align:middle}
-.nicon{width:36px;height:36px;border-radius:11px;display:grid;place-items:center;background:var(--accent-soft);font-size:17px;flex:none}
 
 /* 入場券 */
 .ticket{background:linear-gradient(150deg,#132E58,#1C4698 60%,#2E66C8);color:#fff;position:relative;overflow:hidden}
@@ -587,8 +587,6 @@ svg.ic{width:1.15em;height:1.15em;flex:none;fill:none;stroke:currentColor;stroke
 .pill svg.ic{width:13px;height:13px;stroke-width:2.2}
 .themebtn svg.ic{width:19px;height:19px}
 .btn.iconbtn{display:inline-flex;align-items:center;gap:6px}
-.nicon{display:grid;place-items:center;width:34px;height:34px;border-radius:10px;background:var(--accent-soft);color:var(--accent);flex:none}
-.nicon svg.ic{width:19px;height:19px}
 .docic{display:grid;place-items:center;width:32px;height:32px;border-radius:9px;background:var(--accent-soft);color:var(--accent)}
 .docic svg.ic{width:18px;height:18px}
 .day .logbtn svg.ic{width:19px;height:19px;stroke-width:2.4}
@@ -1272,3 +1270,92 @@ body.fullmap .top .countdown{opacity:0;pointer-events:none}
 .spotrow.closed .ktile{filter:grayscale(1);opacity:.55}
 .spotrow.closed b{color:var(--ink-2)}
 #spotOpen[aria-pressed="true"]{background:var(--accent);color:var(--on-accent)}
+
+/* 地圖頁：iPhone 主畫面 App 的手勢條區域畫的是 html 的底色，設成跟抽屜一樣，不會露出一條淡紫色 */
+html.fullmap{background:var(--sheet-solid)}
+.amap{bottom:auto;height:100lvh}
+@supports not (height:100lvh){.amap{height:100%;bottom:0}}
+/* ---------- 通知中心 ---------- */
+.n-security{--nc:var(--tile-red)}.n-change{--nc:var(--tile-orange)}.n-signup{--nc:var(--tile-teal)}.n-event{--nc:var(--tile-blue)}
+.n-training{--nc:var(--tile-green)}.n-membership{--nc:var(--tile-indigo)}.n-announce{--nc:var(--tile-purple)}
+.n-todo{--nc:var(--yellow);--ng:var(--navy)}.n-other{--nc:var(--tile-gray)}
+.ntile{width:36px;height:36px;border-radius:10px;display:grid;place-items:center;flex:none;color:var(--ng,#fff);
+  background:radial-gradient(120% 60% at 50% 0%,rgba(255,255,255,.16),transparent 55%),var(--nc,var(--tile-gray));
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.28),inset 0 -1px 0 rgba(0,0,0,.10)}
+.ntile svg.ic{width:20px;height:20px;stroke-width:1.9}
+.n-todo .ntile,.ntile.n-todo{box-shadow:inset 0 0 0 1px rgba(11,27,51,.14),inset 0 1px 0 rgba(255,255,255,.28)}
+.ltact{display:flex;gap:8px;align-items:center}
+.nwrap-page{display:grid;gap:14px;width:100%;min-width:0}
+.nfeed{display:grid;gap:14px}.nfeed.swap{animation:nfade .22s var(--tap)}
+@keyframes nfade{from{opacity:0;transform:translateY(6px)}}
+.nlist{list-style:none;margin:0;padding:0}
+.nitem{position:relative;display:grid;grid-template-rows:1fr;transition:grid-template-rows .24s var(--tap),opacity .24s}
+.nitem.gone{grid-template-rows:0fr;opacity:0}
+.nwrap{min-height:0;overflow:hidden;position:relative}
+.nitem+.nitem::before{content:"";position:absolute;top:0;left:64px;right:0;height:1px;background:var(--stroke);z-index:1}
+.nrow{display:grid;grid-template-columns:36px minmax(0,1fr) auto;column-gap:12px;align-items:start;padding:12px 16px;min-height:64px;
+  color:inherit;text-decoration:none;-webkit-touch-callout:none;-webkit-user-select:none;user-select:none;transition:transform .2s var(--tap)}
+.nrow:active,.nitem.pressing .nrow{background:color-mix(in srgb,var(--ink) 6%,transparent)}
+.nitem.pressing .nrow{transform:scale(.97)}
+@media (hover:hover){.nrow:hover{background:color-mix(in srgb,var(--ink) 4%,transparent)}}
+.nlist .nitem:first-child .nrow{border-radius:var(--r-xl) var(--r-xl) 0 0}
+.nlist .nitem:last-child .nrow{border-radius:0 0 var(--r-xl) var(--r-xl)}
+.nlist .nitem:only-child .nrow{border-radius:var(--r-xl)}
+/* .nwrap 會裁切（刪除收合用），焦點框畫在列的內側才看得到 */
+.nrow:focus-visible{outline-offset:-3px}
+.ntext{min-width:0;display:grid;gap:2px}
+.neye{display:flex;align-items:center;gap:4px;font-size:12px;font-weight:600;color:var(--ink-3)}
+.neye svg.ic{width:12px;height:12px}
+.nt,.nb{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
+.nt{font-size:16px;line-height:1.35;font-weight:500;color:var(--ink)}
+.nitem.unread .nt{font-weight:650}
+.nb{font-size:15px;line-height:1.4;color:var(--ink-2)}
+.nmeta{display:grid;justify-items:end;gap:8px;padding-top:2px}
+.nmeta time{font-size:13px;color:var(--ink-3);white-space:nowrap}
+.ndot{width:8px;height:8px;border-radius:50%;background:var(--ndot);transition:transform .18s var(--tap),opacity .18s}
+.nitem:not(.unread) .ndot{transform:scale(0);opacity:0}
+.nmore{position:absolute;top:10px;right:12px}
+@media (pointer:fine){.nmore{opacity:0}.nitem:hover .nmore,.nitem:focus-within .nmore{opacity:1}
+  .nitem:hover .nmeta,.nitem:focus-within .nmeta{opacity:0}}
+@media (pointer:coarse){.nmore:not(:focus-visible){position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);padding:0}}
+.nack{display:flex;gap:8px;padding:0 16px 12px 64px}
+.chipbar button b.num{font-size:12px;font-weight:700;color:var(--ink-3)}
+.chipbar button[aria-selected="true"] b.num{color:inherit;opacity:.75}
+.chipbar button i.tdot{box-shadow:inset 0 0 0 1px rgba(11,27,51,.25)}
+.nprefrow{grid-template-columns:36px 1fr auto}
+.nprefrow .switch{padding:0;border:0}
+.nprefrow .st .tiny{white-space:normal;overflow:visible}
+/* 待處理與推播設定的列：按下與滑過用中性灰，不用強調色的黃 */
+#todoBox .setrow:active,.nprefrow:active{background:color-mix(in srgb,var(--ink) 6%,transparent)}
+@media (hover:hover){#todoBox .setrow:hover,.nprefrow:hover{background:color-mix(in srgb,var(--ink) 4%,transparent)}}
+.nprefrow .switch input:disabled + i{opacity:.55}
+.nprefrow.flash{outline:2.5px solid color-mix(in srgb,var(--ndot) 60%,transparent);outline-offset:-2px}
+.nfoot{text-align:center;font-size:13px;color:var(--ink-3)}
+.nfootbox{display:grid;gap:10px;justify-items:center}
+.nfootbox .btn.block{justify-self:stretch}
+.nhint{margin:0 6px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.nhint .linkbtn{min-height:32px;min-width:44px;padding:6px 10px;border-radius:999px}
+.npillbox:empty{display:none}.npillbox{display:flex;justify-content:center}
+.empty svg.ic{width:44px;height:44px}
+.empty .etitle{font-size:17px;font-weight:600;color:var(--ink)}
+.empty .etitle ~ span{font-size:15px;color:var(--ink-2)}
+.sic:has(> .ntile){background:none;box-shadow:none}
+.ntnum{font-size:15px;color:var(--ink-2)}
+.nsheethd{display:flex;align-items:center;gap:12px}
+.nsheethd b{font-size:16px;line-height:1.35;min-width:0}
+.nacts{display:grid;gap:2px}
+.nact{display:flex;align-items:center;gap:12px;border:0;background:none;color:var(--ink);font:inherit;font-size:16px;text-align:left;padding:12px 6px;border-radius:var(--r-m);cursor:pointer}
+.nact:active{background:color-mix(in srgb,var(--ink) 6%,transparent)}
+@media (hover:hover){.nact:hover{background:color-mix(in srgb,var(--ink) 4%,transparent)}}
+.nact.danger{color:var(--race)}
+.ndetail{display:grid;gap:8px;justify-items:start}
+.ndetail h3{margin:0}
+.ndbody{margin:0;white-space:pre-wrap;word-break:break-word;color:var(--ink-2);font-size:16px;line-height:1.5}
+.nskel{display:grid;grid-template-columns:36px 1fr;gap:12px;padding:12px 16px}
+.nskel i{width:36px;height:36px;border-radius:10px;background:color-mix(in srgb,var(--ink) 8%,transparent)}
+.nskel span{display:grid;gap:8px;align-content:center}
+.nskel b{display:block;height:11px;border-radius:6px;background:color-mix(in srgb,var(--ink) 8%,transparent)}
+.nskel b:first-child{width:60%}.nskel b:last-child{width:40%}
+.toast .toastbtn{margin-left:14px;border:0;background:none;color:inherit;font:inherit;font-weight:700;text-decoration:underline;cursor:pointer;padding:0}
+@media (min-width:1024px){.nwrap-page,.lt:has(+ .nwrap-page){max-width:720px}}
+#bcOut.err{color:var(--race)}

@@ -106,3 +106,13 @@ test('新舊版本混在一起（新模組要的東西舊主程式沒有）：�
   expect(first).toBe(false);
   expect(loads, '有自動重新載入一次').toBe(1);
 });
+
+test('群發：標題用了系統安全通知的保留字會就近顯示錯誤；預覽是紫色「協會公告」', async ({ page }) => {
+  await login(page, 't_chair'); await acceptPrivacyIfAsked(page);
+  await page.goto('/#/admin?tab=overview');
+  await page.locator('#bcForm [name=title]').fill('通行金鑰更新提醒');
+  await expect(page.locator('#bcPreview .nitem.n-announce')).toBeVisible();
+  await expect(page.locator('#bcPreview')).toContainText('協會公告');
+  await page.locator('#bcCount').click();
+  await expect(page.locator('#bcOut')).toContainText('這個標題保留給系統安全通知');
+});
