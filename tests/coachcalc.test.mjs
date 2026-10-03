@@ -172,3 +172,87 @@ test('純函式：coachcalc.js 不碰瀏覽器物件與網路', () => {
   const src = read('public/coachcalc.js').replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
   for (const w of ['document', 'window', 'localStorage', 'fetch', 'navigator']) assert.ok(!new RegExp(`\\b${w}\\b`).test(src), `coachcalc.js 不能用 ${w}`);
 });
+
+// ---------- P4：全季統計、分享與匯出 ----------
+test('全季統計：可省略的課不算分母（做了算加練）；本週還沒練完不會中斷連續達標', () => {
+  const season = JSON.parse(read('public/data/season-2026.json'));
+  // 2026-10-03 是 W9 週六：W2–W8 全部完成、W9 還沒練完
+  const c4 = K.createCoach({ dist: 'fm', grp: 'D', prefs: { days: 4 }, weeks: season, now: nowAt('2026-10-03') });
+  const doneAll = (upto) => (n, x) => (n < upto ? 'done' : null);
+  const s = c4.seasonStat(doneAll(9));
+  assert.equal(s.streak, 7, 'W2–W8 連續 7 週（W1 沒有課表，本週 W9 沒練完不算中斷）');
+  // 可省略的列：完成也只算加練，不進分母
+  const w5 = c4.weekStat(5, () => 'done'), opt = w5.list.filter((x) => x.opt && x.k !== 'rest').length;
+  assert.ok(opt > 0, '每週 4 天時有可省略的課');
+  assert.equal(w5.extra, opt);
+  assert.equal(w5.req, w5.list.filter((x) => x.k !== 'rest' && !x.opt).length);
+  assert.equal(w5.done, w5.req);
+  const c6 = K.createCoach({ dist: 'fm', grp: 'D', prefs: { days: 6 }, weeks: season, now: nowAt('2026-10-03') });
+  assert.ok(c6.weekStat(5, () => 'done').req > w5.req, '每週 6 天的分母比較大');
+  // 只有可省略的課做了：完成率是 0，但已完成（total）算進去
+  const onlyOpt = c4.seasonStat((n, x) => (x.opt ? 'done' : null));
+  assert.equal(onlyOpt.done, 0);
+  assert.ok(onlyOpt.total > 0);
+  // 中間有一週沒做滿就中斷
+  const gap = c4.seasonStat((n) => (n < 9 && n !== 6 ? 'done' : null));
+  assert.equal(gap.streak, 2);
+  // 部分完成算 0.5
+  const half = c6.seasonStat((n) => (n < 9 ? 'partial' : null)), full = c6.seasonStat(doneAll(9));
+  assert.equal(half.done * 2, full.done);
+  assert.equal(half.streak, 0);
+});
+
+test('.ics：每行不超過 75 bytes、UID 每次產生都一樣、全天行程數量對得上', () => {
+  const season = JSON.parse(read('public/data/season-2026.json'));
+  const mk = (now) => K.createCoach({ dist: 'fm', grp: 'D', weeks: season, now: nowAt(now) });
+  const a = mk('2026-10-03').buildIcs(), b = mk('2026-10-20').buildIcs();
+  const uids = (x) => x.text.split('\r\n').filter((l) => l.startsWith('UID:'));
+  assert.deepEqual(uids(a), uids(b), 'UID 跟產生的時間無關');
+  assert.equal(new Set(uids(a)).size, a.count, 'UID 不重複');
+  assert.ok(a.text.split('\r\n').every((l) => new TextEncoder().encode(l).length <= 75));
+  assert.equal((a.text.match(/BEGIN:VEVENT/g) || []).length, a.count);
+  // 每一週非休息的課各一個行程（W1 沒有課表）
+  const want = season.reduce((x, w) => x + ((mk('2026-10-03').planDays(w) || []).filter((r) => r.k !== 'rest').length), 0);
+  assert.equal(a.count, want);
+  // 個人週期的 UID 帶比賽日期，不會跟協會賽季的混在一起
+  const p = K.createCoach({ dist: 'fm', grp: 'D', weeks: season, now: nowAt('2026-10-03'), cycle: { kind: 'race', anchor: '2027-03-21', name: '我的比賽' } }).buildIcs();
+  assert.ok(uids(p).every((u) => u.includes('2027-03-21-fmD')));
+});
+
+test('.ics：平日比賽時，賽事週比賽當天以後的課不排', () => {
+  const season = JSON.parse(read('public/data/season-2026.json'));
+  const c = K.createCoach({ dist: 'fm', grp: 'D', weeks: season, now: nowAt('2026-10-03'), cycle: { kind: 'race', anchor: '2027-03-17', name: '週三的比賽' } });
+  const ev = c.buildIcs().text.replace(/\r\n /g, '').split('BEGIN:VEVENT').slice(1);
+  const dates = ev.map((e) => /DTSTART(?:;VALUE=DATE)?:(\d{8})/.exec(e)[1]);
+  const w20 = dates.filter((d) => d >= '20270315' && d <= '20270321');
+  assert.ok(w20.includes('20270317'), '比賽日有排');
+  assert.ok(w20.every((d) => d <= '20270317'), '比賽日之後沒有課');
+  assert.equal(ev.filter((e) => e.includes('SUMMARY:週三的比賽')).length, 1);
+});
+
+test('匯出不含個人數字：沒帶身體資料時 .ics 與全季文字沒有克數、毫克、bpm；帶了才有', () => {
+  const season = JSON.parse(read('public/data/season-2026.json'));
+  const base = { dist: 'fm', grp: 'D', weeks: season, now: nowAt('2026-10-03'), start: '07:00' };
+  const off = K.createCoach({ ...base, body: {} });
+  // 依體重算的克數與毫克（每小時 60–90 g 碳水是一般建議，不算個人數字）、個人心率
+  const personalNum = /碳水 \d+–\d+ g(?!\/kg)|\d+–\d+ mg(?!\/kg)|bpm|你約 \d+/;
+  assert.ok(!personalNum.test(off.buildIcs().text.replace(/\r\n /g, '')), '.ics 沒有個人數字');
+  assert.ok(!personalNum.test(off.copyPayload('all')));
+  assert.ok(!/62|kg[^\/]/.test(off.copyPayload('all').replace(/\d+:\d+|W\d+/g, '')), '不印體重');
+  const on = K.createCoach({ ...base, body: { age: 45, sex: 'M', kg: 62, rest: null, sweat: '中' } });
+  assert.match(on.buildIcs().text.replace(/\r\n /g, ''), /\d+–\d+ mg/);
+});
+
+test('英文 .ics：只翻標題、說明、分類與行事曆名稱，跳脫與折行維持正確', () => {
+  const season = JSON.parse(read('public/data/season-2026.json'));
+  const { text } = K.createCoach({ dist: 'fm', grp: 'D', weeks: season, now: nowAt('2026-10-03') }).buildIcs();
+  assert.equal(K.icsTranslate(text, (s) => s), text, '不翻譯時內容不變');
+  const up = K.icsTranslate(text, (s) => (s ? `[${s}]` : s));
+  const lines = up.split('\r\n');
+  assert.ok(lines.every((l) => new TextEncoder().encode(l).length <= 75));
+  const un = up.replace(/\r\n /g, '');
+  assert.match(un, /SUMMARY:\[[^\r]*\]\r\n/);
+  assert.match(un, /X-WR-CALNAME:\[跑者@臺北馬拉松課表\]/);
+  assert.ok(!/UID:\[|DTSTART[^\r]*\[/.test(un), 'UID 與日期不動');
+  assert.equal((un.match(/BEGIN:VEVENT/g) || []).length, (text.match(/BEGIN:VEVENT/g) || []).length);
+});

@@ -130,6 +130,14 @@ export function icsFold(line){                                  // 每行最多 
   for(const ch of line){const b=enc.encode(ch).length;if(n+b>(out.length?74:75)){out.push(cur);cur='';n=0;}cur+=ch;n+=b;}
   out.push(cur);return out.join('\r\n ');
 }
+// 英文介面：.ics 給人看的欄位（標題、說明、分類、行事曆名稱）逐行翻譯後重新跳脫、折行；tr 由呼叫端傳入（i18n.js 的 t）
+export function icsTranslate(text,tr){
+  const un=s=>s.replace(/\\([\\n,;])/g,(_,c)=>c==='n'?'\n':c);
+  return text.replace(/\r\n /g,'').split('\r\n').map(l=>{
+    const m=/^(SUMMARY|DESCRIPTION|CATEGORIES|X-WR-CALNAME):(.*)$/.exec(l);
+    return m?icsFold(`${m[1]}:${icsEsc(un(m[2]).split('\n').map(x=>tr(x)).join('\n'))}`):l;
+  }).join('\r\n');
+}
 
 /* ---------- 個人化的計算：照課表教練的 S 重建 ---------- */
 // ctx：{ dist, grp, nickname, venue, prefs:{days,club,vol}, pb:{dist,time}, body:{age,sex,kg,rest,sweat},
@@ -385,6 +393,7 @@ export function createCoach(ctx = {}) {
         if(x.k==='rest') return;
         const isRace=isRaceDay(x);
         const d=addDays(ws,dayOffset(x.d,isRace));
+        if(w.n===20&&!isRace&&dayDiff(d,raceDay())>=0) return;   // 平日比賽：賽事週比賽當天以後的課不排（不自己發明減量）
         const p=paceNotes(x.t);
         const desc=[`${wkName(w.n)} ${weekLabel(w)} | ${grpName(g[0])}`,`${dispDay(x)} | ${kindLabel(x)}`, dispText(x)];
         if(p.length) desc.push(L(`配速 ≈ ${p.join('、')}/km`,`Pace ≈ ${p.join(', ')}/km`));
@@ -414,5 +423,5 @@ export function createCoach(ctx = {}) {
   return { S, raceDay, raceName, runnerName, planTitle, distName, grpName, grpInfo, raceKm, targetMin, goalPace,
     w1Monday, weekStart, weekIndex, currentWeek, weekLabel, wkName, md, mdw, planDays, paceNotes, isRaceDay, dispText, dispDay, kindLabel,
     predictedMin, suggestGroup, volTier, warnings, breakfastAt, raceDayPlan, explain, hrZoneText,
-    headerText, weekText, copyPayload, paceRows, dayOffset, buildIcs, weekStat, seasonStat, noteText: noteText_ };
+    headerText, weekText, copyPayload, paceRows, dayOffset, buildIcs, weekStat, seasonStat, noteText: noteText_, weeks: WEEKS };
 }

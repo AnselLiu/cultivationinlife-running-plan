@@ -1504,3 +1504,25 @@ dl.kv dd{margin:0}
 .glist details[open]{gap:8px}
 .glist .pill{justify-self:start;min-height:30px}
 .gtiles label.chip.gtile{display:flex}.gtiles label.chip.gtile > span{flex:1}
+/* ---- 課表教練整合（P4）：全季完成率與熱度、分享與匯出 ---- */
+/* 大標題右邊的分享鈕：44px 圓形玻璃按鈕 */
+.ltshare{flex:none;margin-left:auto;width:44px;height:44px;border-radius:50%;display:grid;place-items:center;padding:0;cursor:pointer;color:var(--accent);
+  background:var(--glass);border:1px solid var(--stroke);box-shadow:var(--shadow-s);-webkit-backdrop-filter:blur(14px) saturate(1.6);backdrop-filter:blur(14px) saturate(1.6)}
+.ltshare:active{transform:scale(.94)}
+.ltshare svg.ic{width:21px;height:21px}
+/* 全季：四格數字、每週完成熱度（等級另外寫在 aria-label，不只靠顏色） */
+.seasonkpis{grid-template-columns:repeat(2,minmax(0,1fr))}
+@media (min-width:620px){.seasonkpis{grid-template-columns:repeat(4,minmax(0,1fr))}}
+.wkn i.heat{width:14px;height:14px;border-radius:4px;flex:none;display:inline-block;background:color-mix(in srgb,var(--ink) 8%,transparent);border:1px solid var(--stroke)}
+.wkn i.heat.fut{background:none;border-style:dashed}
+.wkn i.heat[data-l="1"]{background:color-mix(in srgb,var(--ok) 30%,transparent);border-color:transparent}
+.wkn i.heat[data-l="2"]{background:color-mix(in srgb,var(--ok) 62%,transparent);border-color:transparent}
+.wkn i.heat[data-l="3"]{background:var(--ok);border-color:transparent}
+.wkb .phdot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--ph);margin-right:5px;vertical-align:1px}
+/* 分享與匯出面板 */
+.sharesheet .setcard{background:color-mix(in srgb,var(--ink) 3%,transparent);border-radius:var(--r-xl)}
+.sharesheet .setrow:disabled{opacity:.5;cursor:default}
+.sharesheet .switch{border-bottom:0}
+.sharesheet .switch > span{display:grid;gap:2px}
+textarea.shtext{width:100%;font:inherit;font-size:13px;line-height:1.5;margin-top:6px}
+.icshelp{display:grid;gap:4px;padding:11px 13px;border-radius:var(--r-m);background:var(--accent-soft);font-size:14px}

@@ -32,6 +32,9 @@ const PATTERNS = [
   [/^已選 ([A-Z]) 組，按儲存才會生效$/, 'Group $1 selected — tap Save to apply'],
   [/^本週 (\d+) 堂用到$/, '$1 sessions this week use it'],
   [/^W(\d+) 課表還沒公告$/, 'W$1 plan not posted yet'],
+  // 分享與匯出、全季
+  [/^複製 (W\d+|R) 課表$/, 'Copy $1 plan'], [/^已複製 (W\d+|R) 課表$/, '$1 plan copied'],
+  [/^已產生 (\d+) 個行程$/, '$1 events created'], [/^(W\d+|R) 完成 (\d+)%$/, '$1 $2% done'],
   // 詳細內容的主課：「2 km × 3 趟，再 400 m × 4 趟」
   [/ × ([\d–~-]+) 趟/g, ' × $1'], [/，再 /g, ', then '],
   [/\+(\d+) 加練/g, '+$1 extra'],

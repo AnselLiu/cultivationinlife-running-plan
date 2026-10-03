@@ -17,6 +17,8 @@ const challengeView = (...a) => lazy('./challenge.js', 'challengeView')(...a);
 const coachWeekExtras = (...a) => lazy('./coach.js', 'weekExtras')(...a);
 // 課表的全季、賽事準備、配速與用語、課表設定（回傳離開頁面時要做的清理，例如賽事倒數的計時器）
 const coachView = (...a) => lazy('./coach.js', 'coachView')(...a);
+// 分享與匯出（複製、PDF、行事曆）：按了分享鈕才載入；PDF 的繪製另外放在 coachpdf.js，選 PDF 才下載
+const coachShare = (...a) => lazy('./coach.js', 'shareSheet')(...a);
 // 新舊版本混在一起（畫面還是舊版、用到才載入的模組已經是新版）會 import 失敗：
 //   重新載入整個 App 換成同一版；30 秒內不重複，避免一直重整
 const VERSION_SKEW = /Importing binding name|does not provide an export named|requested module .* does not provide/i;
@@ -2320,7 +2322,8 @@ async function planView(n) {
       ${allow('plan') || (po.team_id && teamAllow(po.team_id, 'appoint')) ? `<button class="btn danger sm" data-delplan="${po.id}">刪除</button>` : ''}
     </section>`).join('');
   view.innerHTML = `
-    ${largeTitle('課表', `${me.dist === 'hm' ? '半馬' : '全馬'} ${me.grp} 組・${pace}${personal ? '・個人週期' : ''}`)}
+    ${largeTitle('課表', `${me.dist === 'hm' ? '半馬' : '全馬'} ${me.grp} 組・${pace}${personal ? '・個人週期' : ''}`,
+      feat('plan_export') ? `<button type="button" class="ltshare" id="planShare" aria-label="分享與匯出">${MI.share}</button>` : '')}
     ${planSeg('/plan')}
     ${coach ? `<nav class="wkline" aria-label="選擇週次">${all.slice(0, 21).map((x, i) => {
       const k = i + 1, d = P.weekStart(k, c);
@@ -2398,6 +2401,7 @@ async function planView(n) {
     if (!confirm('確定刪除這則課表？')) return;
     await api(`/plans/${b.dataset.delplan}`, { method: 'DELETE' }); toast('已刪除'); render();
   };
+  $('#planShare')?.addEventListener('click', (e) => coachShare({ week, cycle: c, from: e.currentTarget }));
   $('#prev').onclick = () => { location.hash = `#/plan/${week - 1}${cq}`; };
   $('#next').onclick = () => { location.hash = `#/plan/${week + 1}${cq}`; };
   // 快速打勾：還沒記錄就記「完成」；已經有紀錄就打開那筆修改

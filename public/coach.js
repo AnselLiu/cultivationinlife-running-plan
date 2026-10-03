@@ -3,10 +3,11 @@
 //   課表頁畫好、閒下來才呼叫 weekExtras：課表用語可以點、每一列的「詳細內容」、全部展開、
 //   每週天數與跑量的提醒、左右滑動換週、?hl=用語 標示本週用到的課
 //   身體資料（年齡、安靜心率）只從這台裝置的 cil-coach 讀，不會送到伺服器
-import { $, api, cfg, choose, coachPrefs, dayLabel, dstr, emptyState, esc, feat, fixText, group, IC, ic, largeTitle, me, MI, myCycle, paintCountdown, planSeg,
+import { $, api, cfg, choose, coachPrefs, dayLabel, dstr, emptyState, esc, feat, fixText, group, IC, ic, largeTitle, me, MI, myCycle, org, paintCountdown, planSeg,
   raceTarget, refreshMe, render, row, setCoachPrefs, startKey, subTitle, toast, view } from './app.js';
 import * as P from './plan.js';
-import { ageGrade, createCoach, EST_LINE, fuelCalc, GL, GL_ORDER, hrCalc, lvl, parseGoal, std100, termSpans, termsIn, verdict, VOL, xdRows } from './coachcalc.js';
+import { ageGrade, createCoach, EST_LINE, fuelCalc, GL, GL_ORDER, hrCalc, icsTranslate, lvl, parseGoal, std100, termSpans, termsIn, verdict, VOL, xdRows } from './coachcalc.js';
+import { lang, t } from './i18n.js';
 
 // 這個人的課表教練計算（組別、每週天數、身體資料、課表週期）
 async function coachOf(cycle, venue) {
@@ -153,6 +154,9 @@ const CI = {
   book: ic('<path d="M12 6.4C10.4 5 8.2 4.4 4.5 4.6v13.6c3.7-.2 5.9.4 7.5 1.8 1.6-1.4 3.8-2 7.5-1.8V4.6C15.8 4.4 13.6 5 12 6.4ZM12 6.4V20"/>'),
   gauge: ic('<path d="M4.6 17.6a8.6 8.6 0 1 1 14.8 0"/><path d="M12 13.2l3.4-4"/><circle cx="12" cy="13.6" r="1.2"/>'),
   person: ic('<circle cx="12" cy="7.6" r="3.4"/><path d="M5.2 20c.8-3.8 3.4-6 6.8-6s6 2.2 6.8 6"/>'),
+  share: ic('<path d="M12 15V3.5M7.5 8 12 3.5 16.5 8M5 12.5v6A2.5 2.5 0 0 0 7.5 21h9a2.5 2.5 0 0 0 2.5-2.5v-6"/>'),
+  copy: ic('<rect x="8.4" y="8.4" width="11.6" height="11.6" rx="2.6"/><path d="M15.6 8.4V6.6A2.6 2.6 0 0 0 13 4H6.6A2.6 2.6 0 0 0 4 6.6V13a2.6 2.6 0 0 0 2.6 2.6h1.8"/>'),
+  calplus: ic('<rect x="3.2" y="4.8" width="17.6" height="15.4" rx="3.4"/><path d="M3.4 9.6h17.2M8 3.2v3.4M16 3.2v3.4M12 12.4v5M9.5 14.9h5"/>'),
 };
 const WDN = ['日', '一', '二', '三', '四', '五', '六'];
 const md = (d) => `${d.getMonth() + 1}/${d.getDate()}`;
@@ -174,7 +178,7 @@ export async function coachView(section) {
   const q = new URLSearchParams(location.hash.split('?')[1] || '');
   if (section === 'race') return raceView(q);
   if (section === 'setup') return setupView(q);
-  if (section === 'season') return seasonView();
+  if (section === 'season') return seasonView(q);
   return guideView(q);
 }
 
@@ -586,25 +590,155 @@ async function setupView(q) {
   return cleanup;
 }
 
-/* ---------- 全季課表 #/plan/season（照我的課表週期） ---------- */
-async function seasonView() {
-  const c = myCycle(), all = await P.weeks(), wi = P.weekIndexOf(todayISO(), c), personal = c.kind !== 'club';
-  const rows = await Promise.all(all.slice(0, 21).map(async (w, i) => {
-    const n = i + 1, s = P.weekStart(n, c), e = P.addDays(s, 6), plan = w.missing ? null : await P.weekPlan(n, me.dist, me.grp);
+/* ---------- 全季課表 #/plan/season（照我的課表週期；?c=club 看協會賽季，只能看） ---------- */
+// 完成率、熱度、連續達標：訓練紀錄一律用 P.logMatches 對到每一列；部分完成算 0.5，「可省略」的課不算進分母（做了算加練）
+async function seasonView(q) {
+  const mine = myCycle(), c = q.get('c') === 'club' && mine.kind !== 'club' ? P.CLUB : mine, other = c !== mine, personal = c.kind !== 'club';
+  const cq = other ? '?c=club' : '', t0 = todayISO(), wi = P.weekIndexOf(t0, c), all = await P.weeks();
+  const coach = createCoach({ dist: me.dist, grp: me.grp, prefs: coachPrefs().plan, weeks: all, cycle: { kind: c.kind, anchor: c.anchor, name: c.name } });
+  // 紀錄範圍：W1 星期一到今天（最晚到 R 週星期日），最多 147 天
+  const end = P.iso(P.addDays(P.weekStart(21, c), 6)), to = t0 < end ? t0 : end;
+  const logs = c.w1ISO <= to ? await api(`/logs?from=${c.w1ISO}&to=${to}`).then((r) => r.logs || []).catch(() => null) : [];
+  const statusOf = (n, row) => {
+    const L = (logs || []).filter((l) => P.logMatches(l, c, n, row));
+    return L.some((l) => l.status === 'done') ? 'done' : L.some((l) => l.status === 'partial') ? 'partial' : null;
+  };
+  const ss = coach.seasonStat(statusOf), num = (x) => (Number.isInteger(x) ? x : x.toFixed(1));
+  const kpi = (k, v) => `<div class="card kpi"><span class="tiny">${k}</span><b class="num">${v}</b></div>`;
+  const kpis = logs === null ? '<p class="tiny muted" style="margin:0">離線中，連上網路後會顯示完成率。</p>'
+    : !logs.length ? '<p class="tiny muted" style="margin:0">開始記錄後這裡會顯示完成率</p>'
+    : `<section class="kpis seasonkpis">${kpi('已完成', `${num(ss.total)}<small> 堂</small>`)}${kpi('至今完成率', wi >= 1 ? `${ss.rate}<small>%</small>` : '—')}${kpi('連續達標', `${ss.streak}<small> 週</small>`)}${kpi('還有', `${num(ss.left)}<small> 堂</small>`)}</section>`;
+  const rows = all.slice(0, 21).map((w) => {
+    const n = w.n || all.indexOf(w) + 1, s = P.weekStart(n, c), e = P.addDays(s, 6), plan = w.missing ? null : coach.planDays(w);
     const key = (plan || []).filter((d) => /週二|週四|週末|週日/.test(d.d)).slice(0, 3);
-    return `<a class="r wkrow" href="#/plan/${n}" data-ph="${P.PHASES[w.phase] || 'base'}"${n === wi ? ' aria-current="date"' : ''}>
-      <span class="wkn"><i aria-hidden="true"></i><b>${n === 21 ? 'R' : `W${n}`}</b></span>
-      <span class="wkb"><span class="tiny">${esc(w.phase || '')}${w.recovery && n !== 21 ? '・恢復週' : ''}・${md(s)}–${md(e)}${n === wi ? '・本週' : ''}</span>
-        ${plan ? key.map((d) => `<span class="wkl"><span class="d">${esc(dayLabel(d.d))}</span> ${P.isRaceDay(d, n) && personal ? `比賽日：<span translate="no">${esc(c.name)}</span>` : esc(fixText(d.t))} <span class="hint">${P.isRaceDay(d, n) && personal ? '' : P.paceHint(d.t, me.dist, me.grp)}</span></span>`).join('')
+    // 熱度：過去與本週才有；0 沒做、1 做了一些、2 一半以上、3 全部
+    const st = coach.weekStat(n, statusOf), r = st.req ? st.done / st.req : 0, past = n <= wi && logs;
+    const lv = !past ? 0 : r >= 1 ? 3 : r >= 0.5 ? 2 : r > 0 ? 1 : 0;
+    const heat = past && st.req ? `<i class="heat" data-l="${lv}" role="img" aria-label="${wkName(n)} 完成 ${Math.round(r * 100)}%"></i>` : '<i class="heat fut" aria-hidden="true"></i>';
+    return `<a class="r wkrow" href="#/plan/${n}${cq}" data-ph="${P.PHASES[w.phase] || 'base'}"${n === wi ? ' aria-current="date"' : ''}>
+      <span class="wkn">${heat}<b>${wkName(n)}</b></span>
+      <span class="wkb"><span class="tiny"><i class="phdot" aria-hidden="true"></i>${esc(w.phase || '')}${w.recovery && n !== 21 ? '・恢復週' : ''}・${md(s)}–${md(e)}${n === wi ? '・本週' : ''}</span>
+        ${plan ? key.map((d) => `<span class="wkl"><span class="d">${esc(dayLabel(d.d))}</span> ${d.race && personal ? `比賽日：<span translate="no">${esc(c.name)}</span>` : esc(fixText(d.t))} <span class="hint">${d.race && personal ? '' : P.paceHint(d.t, me.dist, me.grp)}</span></span>`).join('')
           : `<span class="tiny muted">W${n} 課表還沒公告</span>`}</span>
       ${String(w.src || '').startsWith('推估') ? '<span class="pill">推估</span>' : '<span></span>'}</a>`;
-  }));
-  view.innerHTML = `${largeTitle('課表', `${distName(me.dist)} ${esc(me.grp)} 組・全季${personal ? `・個人週期・<span translate="no">${esc(c.name)}</span>` : ''}`)}
+  });
+  const share = feat('plan_export') ? `<button type="button" class="ltshare" id="planShare" aria-label="分享與匯出">${CI.share}</button>` : '';
+  view.innerHTML = `${largeTitle('課表', `${distName(me.dist)} ${esc(me.grp)} 組・全季${personal ? `・個人週期・<span translate="no">${esc(c.name)}</span>` : ''}`, share)}
     ${planSeg('/plan/season')}
+    ${other ? notice(`<span>這是協會賽季，只能看；你的課表跟著 <span translate="no">${esc(mine.name)}</span>。</span><a href="#/plan/season">回我的全季課表 ›</a>`) : ''}
+    ${kpis}
     <div class="chips phlegend">${[...new Set(all.map((w) => w.phase).filter(Boolean))].map((ph) => `<span class="pill" data-ph="${P.PHASES[ph] || 'base'}"><i aria-hidden="true"></i>${esc(ph)}</span>`).join('')}</div>
     <section class="card"><div class="roster">${rows.join('')}</div></section>
-    <p class="tiny center">實際以教練每週公告為準；標「推估」的週次是依 2025 同期推估。</p>`;
+    <p class="tiny center">實際以教練每週公告為準；標「推估」的週次是依 2025 同期推估。完成率不算「可省略」的課，部分完成算半堂。</p>`;
+  $('#planShare')?.addEventListener('click', (e) => shareSheet({ week: P.currentWeek(new Date(), c), cycle: c, from: e.currentTarget }));
   return () => {};
+}
+
+/* ---------- 分享與匯出（課表頁、全季的分享鈕；功能開關 plan_export，預設開，管理員可以關） ---------- */
+// 複製文字、PDF（精簡／含詳細內容）、行事曆 .ics；預設不含個人數字（補給克數、咖啡因、個人心率），體重從不印出
+const fileName = (s) => String(s).replace(/[\\/:*?"<>|\s]+/g, '_').slice(0, 80);
+const touch = () => matchMedia('(pointer:coarse)').matches;
+// 存檔：手機先用分享選單（存到檔案、傳 LINE、加入行事曆），不行就直接下載，瀏覽器不支援下載就開新分頁
+async function saveFile(blob, name) {
+  const file = typeof File === 'function' ? new File([blob], name, { type: blob.type }) : null;
+  if (file && touch() && navigator.canShare?.({ files: [file] })) {
+    try { await navigator.share({ files: [file], title: name }); return true; }
+    catch (e) { if (e?.name === 'AbortError') return false; }   // 其他錯誤（例如等太久不算點擊）改用下載
+  }
+  const url = URL.createObjectURL(blob);
+  if ('download' in HTMLAnchorElement.prototype) {
+    const a = document.createElement('a'); a.href = url; a.download = name; document.body.append(a); a.click(); a.remove();
+  } else window.open(url, '_blank', 'noopener');
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+  return true;
+}
+// 匯出用的課表：課表原文的 rep3 打錯字跟畫面一樣改成 rpe3（fixText）
+const fixWeeks = (ws) => ws.map((w) => (w.plan ? { ...w, plan: JSON.parse(fixText(JSON.stringify(w.plan))) } : w));
+// 匯出用的課表計算：personal＝true 才帶身體資料（年齡、體重、安靜心率、流汗程度）
+async function exportCoach(cycle, personal) {
+  const p = coachPrefs(), key = `${cycle.anchor}|${cycle.name}`;
+  const start = p.start[key] || Object.entries(p.start).find(([k, v]) => v && k.startsWith(`${cycle.anchor}|`))?.[1] || null;
+  const goal = parseGoal(cycle.goal), goalMin = goal != null && p.ui.goal?.[key] === true ? goal : null;
+  return createCoach({ dist: me.dist, grp: me.grp, nickname: me.nickname || me.name, venue: org().thu_venue || '', prefs: p.plan, pb: p.pb,
+    body: personal ? p.body : {}, start, goalMin, weeks: fixWeeks(await P.weeks()), cycle: { kind: cycle.kind, anchor: cycle.anchor, name: cycle.name } });
+}
+export async function shareSheet({ week, cycle = myCycle(), from = null } = {}) {
+  if (!feat('plan_export')) return;
+  const wk = Math.min(21, Math.max(1, Number(week) || P.currentWeek(new Date(), cycle)));
+  const body = hasBody(coachPrefs().body);
+  const host = document.createElement('div');
+  host.className = 'sheet'; host.setAttribute('role', 'dialog'); host.setAttribute('aria-modal', 'true'); host.setAttribute('aria-label', '分享與匯出');
+  const item = (act, icon, title, sub) => `<button type="button" class="setrow" data-act="${act}"><span class="sic">${icon}</span><span class="st"><b>${title}</b><span class="tiny">${sub}</span></span></button>`;
+  host.innerHTML = `<div class="sheet-bg" data-x></div><div class="sheet-card card sharesheet">
+    <h3>分享與匯出</h3>
+    <div class="setcard">
+      ${item('week', CI.copy, `複製 ${wkName(wk)} 課表`, '貼到 LINE、記事本')}
+      ${item('all', CI.copy, '複製全季課表', 'W1 到賽後恢復週')}
+      ${item('pdf', IC.doc, '下載 PDF（精簡）', '全季課表、比賽日計劃')}
+      ${item('pdfx', IC.doc, '下載 PDF（含詳細內容）', '每一堂的暖身、主課、配速、休息')}
+      ${item('ics', CI.calplus, '加入行事曆（.ics）', '每一堂課一個全天行程')}
+    </div>
+    ${body ? `<label class="switch"><span>包含我的補給與心率數字<span class="tiny" style="display:block">肝醣超補、比賽早餐與咖啡因的克數、個人心率；體重不會印出</span></span><input type="checkbox" id="shPersonal"><i></i></label>` : ''}
+    <p class="tiny" id="shBusy" role="status" aria-live="polite" hidden></p>
+    <div id="shOut" hidden></div>
+    <p class="tiny" style="margin:0">課表來源：耕跑團記事本・以教練每週公告為準</p>
+    <button type="button" class="btn ghost block" data-x>關閉</button></div>`;
+  document.body.append(host);
+  host.querySelector('[data-act]')?.focus();
+  const close = () => { host.remove(); document.removeEventListener('keydown', onKey); from?.focus?.(); };
+  const onKey = (e) => { if (e.key === 'Escape') close(); };
+  document.addEventListener('keydown', onKey);
+  const busy = (msg) => {
+    const el = host.querySelector('#shBusy');
+    el.textContent = msg || ''; el.hidden = !msg;
+    host.querySelectorAll('[data-act]').forEach((b) => { b.disabled = !!msg; });
+  };
+  const out = (html) => { const el = host.querySelector('#shOut'); el.innerHTML = html; el.hidden = !html; };
+  const personal = () => !!host.querySelector('#shPersonal')?.checked;
+  const en = lang === 'en';
+
+  // 複製文字：手機用分享選單，電腦直接複製；複製不了就把文字放在面板裡讓人自己選
+  async function shareText(text, msg) {
+    if (en) text = text.split('\n').map((l) => t(l)).join('\n');
+    if (touch() && navigator.share) {
+      try { await navigator.share({ text }); close(); return; } catch (e) { if (e?.name === 'AbortError') return; }
+    }
+    try { await navigator.clipboard.writeText(text); toast(msg); close(); }
+    catch {
+      out(`<p class="tiny" style="margin:0">沒辦法自動複製，請長按下面的文字全選後複製。</p><textarea class="shtext" readonly rows="8" aria-label="課表文字"></textarea>`);
+      const ta = host.querySelector('.shtext'); ta.value = text; ta.focus(); ta.select();
+    }
+  }
+  host.addEventListener('click', async (e) => {
+    if (e.target.closest('[data-x]')) { close(); return; }
+    const act = e.target.closest('[data-act]')?.dataset.act;
+    if (!act) return;
+    out('');
+    try {
+      const coach = await exportCoach(cycle, personal());
+      if (act === 'week') await shareText(coach.copyPayload('week', wk), `已複製 ${wkName(wk)} 課表`);
+      else if (act === 'all') await shareText(coach.copyPayload('all'), '已複製全季課表');
+      else if (act === 'pdf' || act === 'pdfx') {
+        busy('正在產生 PDF…');
+        await new Promise((r) => setTimeout(r, 30));   // 先讓「正在產生」畫出來
+        const { buildPlanPdf } = await import('./coachpdf.js');
+        const detail = act === 'pdfx', blob = await buildPlanPdf(coach, { detail, personal: personal(), weeks: coach.weeks });
+        const name = `${fileName(en ? `${coach.runnerName()}_${coach.raceName()}_plan` : coach.planTitle())}${detail ? `_${en ? 'detailed' : '詳細版'}` : ''}.pdf`;
+        busy('');
+        if (await saveFile(blob, name)) { toast('已產生 PDF'); close(); }
+      } else if (act === 'ics') {
+        const { text, count } = coach.buildIcs();
+        const ics = en ? icsTranslate(text, t) : text;
+        const name = `${fileName(en ? `${coach.runnerName()}_${coach.raceName()}_plan` : coach.planTitle())}.ics`;
+        if (await saveFile(new Blob([ics], { type: 'text/calendar;charset=utf-8' }), name)) {
+          out(`<div class="icshelp" role="status"><b>已產生 ${count} 個行程</b>
+            <span>iPhone：打開下載的檔案，選「加入全部」。</span>
+            <span>Google 日曆：用電腦打開「設定 → 匯入與匯出」，選這個檔案。</span>
+            <span>建議先建一個新的行事曆再匯入，之後要整批刪除比較方便。</span></div>`);
+        }
+      }
+    } catch (err) { console.error(err); busy(''); toast(act.startsWith('pdf') ? 'PDF 產生失敗，請再試一次' : '沒有成功，請再試一次'); }
+  });
 }
 
 /* ---------- 配速與用語 #/plan/guide ---------- */

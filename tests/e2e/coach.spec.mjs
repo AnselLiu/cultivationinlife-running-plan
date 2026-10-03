@@ -1,6 +1,6 @@
 // 課表教練整合進課表分頁：P1 照課表記錄不必填距離（自主加練仍要填距離或時間）；P2 賽事準備、課表設定、分段與路由
 import { test, expect } from '@playwright/test';
-import { login, acceptPrivacyIfAsked, apiAs } from './helpers.mjs';
+import { login, acceptPrivacyIfAsked, apiAs, BASE } from './helpers.mjs';
 
 const enter = async (page, id) => { await login(page, id); await acceptPrivacyIfAsked(page); };
 
@@ -377,4 +377,91 @@ test('個人週期：打勾記成個人週次、首頁標個人 W、?c=club 只�
     if (post?.id) await apiAs(request, 't_chair', `/plans/${post.id}`, { method: 'DELETE' });
     await apiAs(request, 't_other', `/races/${id}`, { method: 'DELETE' });
   }
+});
+
+// ---------- P4：全季、參考、分享與匯出 ----------
+
+test('全季：每一列打開那一週；完成數字跟訓練紀錄對得上', async ({ page, request }) => {
+  await enter(page, 't_other');
+  await page.clock.install({ time: new Date('2026-10-03T09:00:00+08:00') });   // W9 週六
+  // W3 週二完成、週四部分完成（部分完成算半堂）
+  const made = [];
+  for (const [date, plan_day, status] of [['2026-08-18', '週二', 'done'], ['2026-08-20', '週四', 'partial']]) {
+    const r = await apiAs(request, 't_other', '/logs', { method: 'POST', body: { date, status, week_no: 3, plan_day, source: 'manual', if_absent: true } });
+    if (!r.existed) made.push(r.id);
+  }
+  try {
+    await page.goto('/#/plan/season');
+    await expect(page.locator('.seasonkpis')).toBeVisible();
+    await expect(page.locator('.seasonkpis .kpi').first()).toContainText(/\d/);
+    await expect(page.locator('.wkrow[href="#/plan/3"] i.heat')).toHaveAttribute('aria-label', /W3 完成 \d+%/);
+    await expect(page.locator('.wkrow[aria-current]')).toContainText('W9');
+    await page.locator('.wkrow[href="#/plan/5"]').click();
+    await expect(page).toHaveURL(/#\/plan\/5$/);
+    await expect(page.locator('#view .card h2').first()).toContainText('W5');
+  } finally { for (const id of made) await apiAs(request, 't_other', `/logs/${id}`, { method: 'DELETE' }); }
+});
+
+test('參考：?term=mp 打開那個用語並捲到那裡', async ({ page }) => {
+  await enter(page, 't_other');
+  await page.goto('/#/plan/guide?term=mp');
+  await expect(page.locator('details#t-mp')).toHaveAttribute('open', '');
+  await expect(page.locator('details#t-easy')).not.toHaveAttribute('open', '');
+  await expect(page.locator('details#t-mp')).toBeInViewport();
+});
+
+test('分享與匯出：預設開；複製文字跟課表一樣、.ics 行程數、PDF 是 application/pdf 且不連外；沒打開個人數字就沒有克數與 bpm', async ({ page, context }) => {
+  await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+  const outside = [];
+  page.on('request', (r) => { const u = new URL(r.url()); if (/^https?:$/.test(u.protocol) && u.origin !== new URL(BASE).origin) outside.push(u.href); });
+  await enter(page, 't_other');
+  await page.evaluate(() => localStorage.setItem('cil-coach', JSON.stringify({ v: 1, body: { age: 47, sex: 'M', kg: 63.5, rest: 52, sweat: '中' } })));
+  await page.goto('/#/plan/9');
+  const btn = page.getByRole('button', { name: '分享與匯出' });
+  await expect(btn).toBeVisible();
+  // 複製 W9：剪貼簿內容是課表文字（標題、W9、來源說明）
+  await btn.click();
+  await expect(page.locator('.sharesheet #shPersonal')).not.toBeChecked();
+  await page.locator('.sharesheet [data-act="week"]').click();
+  await expect(page.getByText('已複製 W9 課表')).toBeVisible();
+  const text = await page.evaluate(() => navigator.clipboard.readText());
+  expect(text).toMatch(/^【.+@.+課表】/);
+  expect(text).toContain('■ W9');
+  expect(text).toContain('實際以教練每週發布為準');
+  // .ics：行程數與說明；沒打開個人數字就沒有毫克數
+  await btn.click();
+  const [ics] = await Promise.all([page.waitForEvent('download'), page.locator('.sharesheet [data-act="ics"]').click()]);
+  expect(ics.suggestedFilename()).toMatch(/\.ics$/);
+  const icsText = (await (await ics.createReadStream()).toArray()).join('').replace(/\r\n /g, '');
+  const n = (icsText.match(/BEGIN:VEVENT/g) || []).length;
+  await expect(page.locator('.icshelp')).toContainText(`已產生 ${n} 個行程`);
+  expect(n).toBeGreaterThan(80);
+  expect(icsText).not.toMatch(/\d+–\d+ mg(?!\/kg)|bpm|你約 \d+/);
+  await page.locator('.sharesheet').getByRole('button', { name: '關閉' }).click();
+  // PDF（含詳細內容）：application/pdf，沒有連到其他網站
+  await btn.click();
+  outside.length = 0;
+  const [pdf] = await Promise.all([page.waitForEvent('download', { timeout: 60000 }), page.locator('.sharesheet [data-act="pdfx"]').click()]);
+  expect(pdf.suggestedFilename()).toMatch(/_詳細版\.pdf$/);
+  const head = Buffer.concat(await (await pdf.createReadStream()).toArray()).subarray(0, 8).toString('latin1');
+  expect(head).toBe('%PDF-1.4');
+  expect(outside).toEqual([]);
+  // 打開個人數字：.ics 才有咖啡因的毫克數
+  await btn.click();
+  await page.locator('.sharesheet .switch').click();
+  const [ics2] = await Promise.all([page.waitForEvent('download'), page.locator('.sharesheet [data-act="ics"]').click()]);
+  expect((await (await ics2.createReadStream()).toArray()).join('').replace(/\r\n /g, '')).toMatch(/\d+–\d+ mg/);
+  await page.evaluate(() => localStorage.removeItem('cil-coach'));
+});
+
+test('分享與匯出：管理員關掉後沒有分享鈕', async ({ page, request }) => {
+  await apiAs(request, 't_chair', '/settings/features', { method: 'POST', body: { plan_export: false } });
+  try {
+    await enter(page, 't_other');
+    for (const h of ['/#/plan', '/#/plan/season']) {
+      await page.goto(h);
+      await expect(page.locator('#view .lt')).toBeVisible();
+      await expect(page.getByRole('button', { name: '分享與匯出' })).toHaveCount(0);
+    }
+  } finally { await apiAs(request, 't_chair', '/settings/features', { method: 'POST', body: { plan_export: true } }); }
 });
