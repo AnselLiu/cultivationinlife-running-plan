@@ -1295,7 +1295,7 @@ body.fullmap #view{animation:none}
 .ctlgroup .fab{width:46px;height:44px;border-radius:0;background:none;box-shadow:none;color:var(--accent-ink,var(--accent))}
 .ctlgroup .fab + .fab{border-top:.5px solid var(--stroke)}
 .ctlgroup .fab[aria-expanded="true"]{background:color-mix(in srgb,var(--ink) 8%,transparent)}
-.basemenu{position:absolute;right:66px;top:calc(var(--toph) + 10px);z-index:610;display:grid;min-width:150px;border-radius:14px;overflow:hidden;
+.basemenu{position:absolute;right:66px;top:calc(var(--toph) + 10px);z-index:750;display:grid;min-width:150px;border-radius:14px;overflow:hidden;
   background:var(--glass-hi);-webkit-backdrop-filter:var(--blur);backdrop-filter:var(--blur);box-shadow:0 10px 30px rgba(11,27,51,.25),inset 0 0 0 .5px var(--stroke)}
 .basemenu button{display:flex;align-items:center;gap:10px;padding:12px 14px;border:0;background:none;font:inherit;font-size:15px;color:var(--ink);text-align:left;cursor:pointer}
 .basemenu button + button{border-top:.5px solid var(--stroke)}
@@ -1712,7 +1712,7 @@ textarea.shtext{width:100%;font:inherit;font-size:13px;line-height:1.5;margin-to
 .amap.rest-on{--chiph:48px}
 .amap:has(#drawBar:not([hidden])),.amap:has(#pickBar:not([hidden])){--chiph:0px}
 .mapctl{transform:translateY(var(--chiph,0px));transition:transform .28s var(--tap)}
-.basemenu{transform:translateY(var(--chiph,0px))}
+.basemenu{transform:translateY(var(--chiph,0px))}   /* 選單浮在抽屜（700）上面：休息站 chip 讓控制鈕往下移後，選單下半部不會被半開的抽屜蓋住 */
 @media (prefers-reduced-motion:reduce){.mapctl{transition:none}}
 .restchips{display:flex;gap:8px;overflow-x:auto;scrollbar-width:none;padding:4px 12px;pointer-events:auto;
   -webkit-mask:linear-gradient(90deg,transparent,#000 10px,#000 calc(100% - 22px),transparent);mask:linear-gradient(90deg,transparent,#000 10px,#000 calc(100% - 22px),transparent)}

@@ -354,11 +354,12 @@ async function restOn(request) {
   for (const k of ['twd', 'tpt', 'tprv', 'ntrv', 'tpbk', 'cpct', 'sav']) await request.get(`/api/dev/rest-sync?source=${k}`);
 }
 // 地圖的初始位置：只在這個分頁第一次載入時設定（之後重新整理要保留測試裡改的值）
-const restView = (view, on = '0') => () => { try { if (sessionStorage.getItem('rv')) return; sessionStorage.setItem('rv', '1'); localStorage.setItem('cil-map-view', view); localStorage.setItem('cil-map-rest', on); localStorage.removeItem('cil-map-rest-types'); } catch {} };
+// addInitScript 只會把函式的文字送進頁面，外層變數帶不過去：用第二個參數傳
+const restView = (view, on = '0') => [({ view, on }) => { try { if (sessionStorage.getItem('rv')) return; sessionStorage.setItem('rv', '1'); localStorage.setItem('cil-map-view', view); localStorage.setItem('cil-map-rest', on); localStorage.removeItem('cil-map-rest-types'); } catch {} }, { view, on }];
 
 test('跑者休息站：底圖選單打開圖層、13 級以下不抓、類型 chip 會記住、跟練跑地點分開群集', async ({ page, request }) => {
   await restOn(request);
-  await page.addInitScript(restView('[25.07,121.54,12]'));
+  await page.addInitScript(...restView('[25.07,121.54,12]'));
   await enter(page);
   const cells = [];
   page.on('request', (r) => { if (r.url().includes('/api/rest/cell/')) cells.push(r.url()); });
@@ -410,7 +411,7 @@ test('跑者休息站：底圖選單打開圖層、13 級以下不抓、類型 c
 
 test('跑者休息站：地點卡的附近休息站、休息站卡（顯名與授權外連、回到地點）、在地圖上顯示', async ({ page, request }) => {
   await restOn(request);
-  await page.addInitScript(restView('[25.0736,121.5401,15]'));
+  await page.addInitScript(...restView('[25.0736,121.5401,15]'));
   await enter(page);
   await page.goto('/#/map?spot=seed07');
   const near = page.locator('#restNear');
@@ -462,7 +463,7 @@ test.describe('跑者休息站：手機', () => {
   test.use({ viewport: { width: 393, height: 852 } });
   test('抽屜全開時按「在地圖上顯示」：抽屜降到半開、地圖上看得到休息站的針', async ({ page, request }) => {
     await restOn(request);
-    await page.addInitScript(restView('[25.0736,121.5401,15]'));
+    await page.addInitScript(...restView('[25.0736,121.5401,15]'));
     await enter(page);
     await page.goto('/#/map?spot=seed07');
     await expect(page.locator('#restNear .rnitem').first()).toBeVisible();
