@@ -1359,3 +1359,18 @@ html.fullmap{background:var(--sheet-solid)}
 .toast .toastbtn{margin-left:14px;border:0;background:none;color:inherit;font:inherit;font-weight:700;text-decoration:underline;cursor:pointer;padding:0}
 @media (min-width:1024px){.nwrap-page,.lt:has(+ .nwrap-page){max-width:720px}}
 #bcOut.err{color:var(--race)}
+
+/* 活動報名：待審核、未通過、整批審核 */
+.pill.no{background:color-mix(in srgb,var(--race) 12%,var(--glass-2));color:color-mix(in srgb,var(--race) 70%,var(--ink-2))}
+.mine.no{color:color-mix(in srgb,var(--race) 70%,var(--ink-2))}
+.chip[aria-checked="true"]{background:var(--accent);color:var(--on-accent);font-weight:650}
+.chip .num{opacity:.75;font-weight:500}
+.r.prow.rv{grid-template-columns:22px 36px minmax(0,1fr) auto}
+.prow .sel{width:20px;height:20px;margin:0;accent-color:var(--accent)}
+.prow[data-st="pending"]{box-shadow:inset 3px 0 0 var(--warn);border-radius:12px}
+.prow .rvbtns{margin-top:6px;flex-wrap:wrap}
+.bulkbar{position:sticky;bottom:calc(env(safe-area-inset-bottom,0px) + 72px);z-index:5;display:flex;flex-wrap:wrap;align-items:center;gap:8px;
+  padding:10px 12px;border-radius:var(--r-l);background:var(--glass-hi);-webkit-backdrop-filter:var(--blur);backdrop-filter:var(--blur);box-shadow:var(--shadow-l)}
+.bulkbar[hidden]{display:none}
+.bulkbar #selN{font-weight:650;margin-right:auto}
+@media (min-width:1024px){.bulkbar{bottom:16px}}

@@ -1,6 +1,7 @@
 // 耕跑團 PWA — admin.js：從 app.js 拆出來、用到才載入的畫面（第一次開 App 不用下載）
 import * as Party from './party.js';
-import { $, latest, scanSheet, ago, allow, api, applyFeatures, avatar, barChart, bars, bindStepup, cfg, esc, group, IC, largeTitle, me, mfaBanner, nrow, org, pad2, paintCountdown, passkey, refreshMe, render, ROLE_NAME, row, studio, TAB_DEFAULT, TEAM_PERMS, teamAllow, teamIcon, teamOf, teams, toast, view } from './app.js';
+import { defaultWindow, SIGNUP_DEFAULTS, tpText } from './signup-window.js';
+import { $, latest, nowTp, scanSheet, ago, allow, api, applyFeatures, avatar, barChart, bars, bindStepup, cfg, esc, group, IC, largeTitle, me, mfaBanner, nrow, org, pad2, paintCountdown, passkey, refreshMe, render, ROLE_NAME, row, studio, TAB_DEFAULT, TEAM_PERMS, teamAllow, teamIcon, teamOf, teams, toast, view } from './app.js';
 
 // ---------- 管理介面（RBAC、會籍、座位圖）----------
 let adminSeq = 0;
@@ -342,11 +343,13 @@ const AUDIT_NAME = {
   'calendar.on': '產生行事曆訂閱', 'calendar.off': '停用行事曆訂閱',
   'passkey.add': '新增通行金鑰', 'passkey.remove': '移除通行金鑰', 'passkey.denied': '通行金鑰驗證失敗', 'mfa.verify': '兩步驟驗證', 'login.new_device': '新裝置登入',
   'settings.security': '修改兩步驟驗證設定', 'audit.verify': '稽核完整性檢查',
+  'settings.signup': '修改活動報名預設', 'event.signup_review': '審核報名', 'event.signup_reject': '婉拒或移出報名', 'event.reopen': '恢復活動',
+  'signup.expire': '待審核逾期失效', 'event.orders_export': '下載訂購單',
   'google.link': '綁定 Google', 'login.denied': '登入驗證失敗', 'team.post': '發布分團公告', 'team.post_delete': '刪除分團公告', 'privacy.show_rank': '排行榜設定', broadcast: '群發通知', 'retention.cleanup': '資料保存期限清理', 'event.invite_denied': '邀請連結無效', 'privacy.share_logs': '訓練紀錄分享設定', 'settings.shortcut': '修改捷徑連結',
 };
 // 稽核紀錄：一定要選時間區間（預設最近 7 天），再依類型、操作者、對象縮小；一次 50 筆
 const AUDIT_GROUPS = { '': '所有類型', role: '身分變更', membership: '會籍', team: '分團', event: '活動', checkin: '報到', lottery: '抽獎',
-  settings: '系統設定', privacy: '個資', login: '登入', passkey: '通行金鑰', mfa: '兩步驟驗證', account: '帳號', 'join.denied': '邀請碼錯誤', bootstrap: '初始設定', plan: '課表' };
+  settings: '系統設定', signup: '報名審核', privacy: '個資', login: '登入', passkey: '通行金鑰', mfa: '兩步驟驗證', account: '帳號', 'join.denied': '邀請碼錯誤', bootstrap: '初始設定', plan: '課表' };
 function auditPanel() {
   const to = new Date().toISOString().slice(0, 10), from = new Date(Date.now() - 6 * 864e5).toISOString().slice(0, 10);
   return `<section class="card">
@@ -479,6 +482,7 @@ function bindEventsPanel() {
 const FEATURE_NAME = { gps: '跑步記錄（計時＋GPS）', studio: '拍照分享', health: 'Apple 健康匯入', file: 'GPX／TCX 檔匯入', coach: '課表教練', party: '餐敘活動（春酒、慶功宴、尾牙）' };
 function settingsPanel() {
   const o = org(), f = cfg.settings?.features || {}, docs = cfg.settings?.docs || [], pv = cfg.settings?.privacy || {};
+  const sd = { ...SIGNUP_DEFAULTS, ...(cfg.settings?.signup || {}) };
   return `
   <h3 class="sgt">協會</h3>
   <section class="card">
@@ -521,6 +525,21 @@ function settingsPanel() {
       <button class="btn sm">儲存功能開關</button>
     </form>
     <p class="tiny" style="margin:0">關掉後，跑友的畫面上就看不到這個功能；已存的資料不會刪除。</p>
+  </section>
+  <section class="card"><h3>活動報名預設</h3>
+    <form id="signupDefForm" class="toggles">
+      <label class="switch"><span>新活動預設需要審核<span class="tiny" style="display:block">報名後由主辦幹部核准；問卷不適用</span></span><input type="checkbox" name="approval" ${sd.approval ? 'checked' : ''}><i></i></label>
+      <label class="switch"><span>新活動預設通知報名者<span class="tiny" style="display:block">報名成功、排入候補、確認收款時推播給本人</span></span><input type="checkbox" name="notify" ${sd.notify ? 'checked' : ''}><i></i></label>
+      <div class="grid2">
+        <label>報名開始<select name="open_days"><option value="">建立後立即開放</option>${[1, 2, 3, 5, 7, 10, 14, 21, 30].map((n) => `<option value="${n}" ${sd.open_days === n ? 'selected' : ''}>活動前 ${n} 天</option>`).join('')}</select></label>
+        <label>開始時間<input type="time" name="open_time" value="${esc(sd.open_time || '20:00')}"></label>
+        <label>報名截止<select name="close_days"><option value="">活動開始時（集合時間）</option><option value="0" ${sd.close_days === 0 ? 'selected' : ''}>活動當天</option>${[1, 2, 3, 5, 7, 14].map((n) => `<option value="${n}" ${sd.close_days === n ? 'selected' : ''}>活動前 ${n} 天</option>`).join('')}</select></label>
+        <label>截止時間<input type="time" name="close_time" value="${esc(sd.close_time || '22:00')}"></label>
+      </div>
+      <p class="tiny" id="sdPreview" aria-live="polite" style="margin:0"></p>
+      <button class="btn sm">儲存報名預設</button>
+    </form>
+    <p class="tiny" style="margin:0">只影響之後新增的活動；已建立的活動不會改，幹部建立時也可以逐場調整。</p>
   </section>
   <section class="card">
     <h3>分頁列名稱</h3>
@@ -617,6 +636,21 @@ function bindSettings() {
   });
   $('#tabsForm').onsubmit = (e) => { e.preventDefault(); const f = e.target;
     save('tabs', Object.fromEntries(Object.keys(TAB_DEFAULT).map((k) => [k, f[k].value.trim()])), '已儲存分頁列名稱'); };
+  // 活動報名預設：即時預覽「下個週六 07:00 的團練」會怎麼算
+  const sdf = $('#signupDefForm');
+  if (sdf) {
+    const readSd = () => ({ approval: sdf.approval.checked, notify: sdf.notify.checked, open_days: sdf.open_days.value === '' ? null : Number(sdf.open_days.value), open_time: sdf.open_time.value || '20:00',
+      close_days: sdf.close_days.value === '' ? null : Number(sdf.close_days.value), close_time: sdf.close_time.value || '22:00' });
+    const preview = () => {
+      const v = readSd(), now = nowTp(), wd = new Date(`${now.slice(0, 10)}T00:00:00Z`).getUTCDay();
+      const sat = new Date(Date.parse(`${now.slice(0, 10)}T00:00:00Z`) + ((6 - wd + 7) % 7 || 7) * 864e5).toISOString().slice(0, 10);
+      const ev = { date: sat, gather_time: '07:00', kind: 'track' }, w = defaultWindow(ev, v, now);
+      sdf.open_time.disabled = v.open_days == null; sdf.close_time.disabled = v.close_days == null;
+      $('#sdPreview').textContent = `例：${tpText(`${sat}T07:00`)} 的團練 → ${w.start ? `${tpText(w.start)} 開放` : '建立後立即開放'}、${w.end ? `${tpText(w.end)} 截止` : '集合時截止'}${v.approval ? '，需要審核' : ''}`;
+    };
+    sdf.addEventListener('input', preview); sdf.addEventListener('change', preview); preview();
+    sdf.onsubmit = (e) => { e.preventDefault(); save('signup', readSd(), '已儲存活動報名預設'); };
+  }
   $('#featForm').onsubmit = (e) => { e.preventDefault(); const f = e.target, body = {};
     for (const k of Object.keys(FEATURE_NAME)) body[k] = f[k].checked;
     save('features', body, '已儲存功能開關'); };

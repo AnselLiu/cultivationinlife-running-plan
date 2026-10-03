@@ -1145,7 +1145,7 @@ async function api(req, env, path, method) {
     const from = `${mo}-01`, to = `${mo}-31`;
     const [events, hol, items, races] = await Promise.all([
       env.DB.prepare(`SELECT events.id, events.title, events.date, events.gather_time, events.place, events.kind, events.team_id, events.series_id,
-          (SELECT s.status FROM signups s WHERE s.event_id = events.id AND s.member_id = ?1) AS mine,
+          (SELECT CASE WHEN s.status = 'cancel' AND s.review = 'rejected' THEN 'rejected' ELSE s.status END FROM signups s WHERE s.event_id = events.id AND s.member_id = ?1) AS mine,
           (SELECT COUNT(*) FROM signups s WHERE s.event_id = events.id AND s.status = 'in') AS signed
         FROM events WHERE events.date BETWEEN ?3 AND ?4 AND ${seeSQL} ORDER BY events.date, events.gather_time LIMIT 300`).bind(member.id, can(member, 'event') ? 1 : 0, from, to).all(),
       env.DB.prepare('SELECT date, name, is_holiday, category FROM holidays WHERE date BETWEEN ? AND ? AND (name IS NOT NULL OR is_holiday = 0)').bind(from, to).all(),
