@@ -63,3 +63,7 @@ UPDATE notifications SET body = '有一筆繳費回報待確認，請到活動�
 UPDATE notifications SET body = '有人' || substr(body, instr(body, '提議「')) WHERE category = 'todo' AND title = '練跑地圖：有新的地點提議' AND instr(body, '提議「') > 1;
 UPDATE notifications SET body = '有人申請加入，點開審核' WHERE category = 'todo' AND title LIKE '%：有人申請加入';
 UPDATE notifications SET body = '有人送出入會申請' WHERE category = 'todo' AND title = '有人申請入會';
+-- 其他會員的本名：課表發布者、教練回饋、理事長移交（新資料已不放本名，舊資料一起清掉，匯出也不會帶出去）
+UPDATE notifications SET body = '教練發布了' || substr(body, instr(body, ' 發布了') + 4) WHERE kind = 'plan' AND title LIKE '新課表：%' AND instr(body, ' 發布了') > 1;
+UPDATE notifications SET title = '教練回饋了你的訓練' WHERE kind = 'log' AND title LIKE '% 回饋了你的訓練';
+UPDATE notifications SET body = '理事長已移交給你，請重新登入後到管理後台確認幹部名單' WHERE title = '你已成為理事長' AND instr(body, ' 把理事長移交給你') > 1;

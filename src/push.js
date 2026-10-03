@@ -62,6 +62,7 @@ export const unsubscribe = (env, memberId, endpoint) =>
 
 // 送給指定成員；payload 的 id 是收件人自己那一列通知的 id（隨機值，不是會員 id）
 // 裝置數超過上限（低於 Workers 每次呼叫的 subrequest 上限）就截掉，回傳 dropped 讓呼叫端寫稽核
+// 上限以一次請求為單位：env.pushBudget 由入口每次請求重設，同一請求裡的多次推播共用
 export async function push(env, memberIds, msg, { rowIds, ttl = 86400, urgency = 'normal' } = {}) {
   if (!env.VAPID_PRIVATE_JWK || !env.VAPID_PUBLIC_KEY) return { sent: 0, dropped: 0 };
   const ids = [...new Set(memberIds || [])].filter(Boolean);
@@ -71,16 +72,21 @@ export async function push(env, memberIds, msg, { rowIds, ttl = 86400, urgency =
     const part = ids.slice(i, i + 90), q = part.map(() => '?').join(',');
     subs.push(...(await env.DB.prepare(`SELECT endpoint, p256dh, auth, member_id FROM push_subs WHERE member_id IN (${q})`).bind(...part).all()).results);
   }
-  const cap = Math.max(50, Number(env.PUSH_MAX_DEVICES) || 900), devices = subs.length;
+  const max = Math.max(50, Number(env.PUSH_MAX_DEVICES) || 900), budget = env.pushBudget;
+  // 讀剩餘額度和扣掉額度在同一段同步程式裡，同時進行的推播不會重複使用
+  if (budget && budget.left == null) budget.left = max;
+  const cap = budget ? Math.min(max, budget.left) : max, devices = subs.length;
+  if (budget) budget.left -= Math.min(devices, cap);
   let dropped = 0;
   if (devices > cap) {
     dropped = devices - cap; subs = subs.slice(0, cap);
     console.warn('push truncated', { cat: msg.cat, devices, cap });
   }
-  let sent = 0;
+  let sent = 0, failed = 0;
   for (let i = 0; i < subs.length; i += 10) {
     const res = await Promise.allSettled(subs.slice(i, i + 10).map((s) => sendOne(env, s, { ...msg, id: rowIds?.get(s.member_id) || undefined }, { ttl, urgency })));
     sent += res.filter((r) => r.status === 'fulfilled' && r.value < 300).length;
+    failed += res.filter((r) => r.status === 'rejected').length;
   }
-  return { sent, dropped };
+  return { sent, dropped, failed };
 }

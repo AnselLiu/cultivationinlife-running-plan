@@ -228,7 +228,9 @@ test('通知中心：減少動態效果時，刪除的列馬上從畫面移除',
 test('通知全部已讀、入場券與領取、每月挑戰、使用說明導覽', async ({ page }) => {
   await enter(page);
   await page.goto('/#/notifications');
-  if (await page.locator('#readAll').count()) { await page.locator('#readAll').click(); }
+  // 全部已讀按鈕一律存在，沒有可以標已讀的通知時是 hidden
+  await expect(page.locator('#nfeed')).toBeVisible();
+  if (await page.locator('#readAll').isVisible()) { await page.locator('#readAll').click(); }
   await page.goto('/#/tickets');
   await expect(page.locator('h1')).toContainText('入場券');
   await page.goto('/#/challenge');

@@ -214,22 +214,39 @@ const clearDeviceData = () => {
   navigator.serviceWorker?.controller?.postMessage({ type: 'CLEAR_DATA' });
   try { localStorage.removeItem('cil-log-queue'); } catch {}
   navigator.clearAppBadge?.().catch(() => {});
+  bellAt = 0; bellFor = null; bellState = { badge: 0, unread: 0 };
 };
-// 提示：可以帶一個動作（例如刪除後的「復原」）
-function toast(msg, { action, onAction, ms = 2600 } = {}) {
-  $('.toast')?.remove();
+// 登出前：這台裝置的推播訂閱先從伺服器刪掉，再取消瀏覽器端的訂閱（登出後不再收到這個帳號的推播）
+async function dropPush(server = true) {
+  try {
+    const reg = await Promise.race([navigator.serviceWorker?.ready, new Promise((r) => setTimeout(() => r(null), 1500))]);
+    const sub = await reg?.pushManager?.getSubscription().catch(() => null);
+    if (!sub) return;
+    if (server) await api('/push/unsubscribe', { method: 'POST', body: { endpoint: sub.endpoint } }).catch(() => {});
+    await sub.unsubscribe().catch(() => {});
+  } catch {}
+}
+// 提示：可以帶一個動作（例如刪除後的「復原」）；focus 把焦點移到動作按鈕
+// 時間到或被下一則提示取代時呼叫 onExpire（參數：焦點當時是否在提示裡）；滑鼠停在上面或焦點在裡面時先不關
+function toast(msg, { action, onAction, onExpire, focus = false, ms = 2600 } = {}) {
+  const prev = $('.toast'); if (prev) { prev.remove(); prev.expire?.(); }
   const el = document.createElement('div');
   el.className = 'toast';
   el.role = 'status';
   el.textContent = msg;
+  let done = false;
+  el.expire = () => { if (done) return; done = true; const had = el.contains(document.activeElement); el.remove(); onExpire?.(had); };
+  let b;
   if (action) {
-    const b = document.createElement('button');
+    b = document.createElement('button');
     b.type = 'button'; b.className = 'toastbtn'; b.textContent = action;
-    b.onclick = () => { el.remove(); onAction?.(); };
+    b.onclick = () => { if (done) return; done = true; el.remove(); onAction?.(); };
     el.append(b);
   }
   document.body.append(el);
-  setTimeout(() => el.remove(), ms);
+  if (focus) b?.focus();
+  const later = () => { if (done) return; if (el.matches(':hover, :focus-within')) setTimeout(later, 1500); else el.expire(); };
+  setTimeout(later, ms);
 }
 const copy = async (text) => {
   try { await navigator.clipboard.writeText(text); toast('已複製'); }
@@ -1149,7 +1166,7 @@ const NICON = { security: IC.shieldAlert, change: IC.calAlert, signup: IC.ticket
   membership: IC.idcard, announce: IC.megaphone, todo: IC.clipCheck, other: IC.bell };
 // 整句都是伺服器範本的標題：英文介面可以翻；夾帶活動或分團名稱的標題、內文一律不翻
 const NFIXED = new Set(['新裝置登入', '新增了一把通行金鑰', '移除了一把通行金鑰', '已登出所有裝置', '幹部需要兩步驟驗證', '你已成為理事長', '你已卸任理事長',
-  '身分更新', '候補遞補成功', '入會完成', '會籍已到期', '會費今天到期', '有人申請入會', '練跑地圖：有新的地點提議', '每季權限檢視', '跑完了嗎？', '這週練得很兇，注意恢復']);
+  '身分更新', '候補遞補成功', '入會完成', '會籍已到期', '會費今天到期', '有人申請入會', '練跑地圖：有新的地點提議', '每季權限檢視', '跑完了嗎？', '這週練得很兇，注意恢復', '教練回饋了你的訓練']);
 // 只接受站內網址；通知中心本身不算（改開詳細內容）
 const safeHref = (u) => (/^\/#\/[\w/?=&.%-]*$/.test(u || '') && u !== '/#/notifications' ? u.slice(1) : null);
 const nDate = (ts) => new Date(`${ts.replace(' ', 'T')}Z`);
@@ -1256,39 +1273,53 @@ function markRead(li) {
     .then(() => bell(true)).catch(() => toast('目前沒有網路，連上後再試一次'));
 }
 async function markUnread(li) {
-  try { applyCounts(await api('/notifications/unread', { method: 'POST', body: { id: li.dataset.id } })); setUnread(li, true, false); }
+  try {
+    const r = await api('/notifications/unread', { method: 'POST', body: { id: li.dataset.id } });
+    if (!li.classList.contains('unread')) (NS.cats[li.dataset.cat] ||= { n: 0, u: 0 }).u++;
+    setUnread(li, true, false); applyCounts(r); paintCounts();
+  }
   catch (e) { toast(e.message); }
 }
 // 刪除：列先收合，4 秒內可以復原，時間到才真的送出；換頁或離開 App 時立刻送出
 const nCommit = (p) => {
-  NS.pendingDeletes = NS.pendingDeletes.filter((x) => x !== p); clearTimeout(p.timer);
+  if (!NS.pendingDeletes.includes(p)) return;
+  NS.pendingDeletes = NS.pendingDeletes.filter((x) => x !== p);
   fetch(`/api/notifications/${encodeURIComponent(p.id)}`, { method: 'DELETE', credentials: 'same-origin', keepalive: true })
     .then(() => bell(true)).catch(() => toast('目前沒有網路，連上後再試一次'));
 };
 function nLeave() { clearInterval(NS.timer); for (const p of [...NS.pendingDeletes]) nCommit(p); }
 addEventListener('pagehide', () => { for (const p of [...NS.pendingDeletes]) nCommit(p); });
-function nDelete(li) {
-  const ul = li.parentElement, next = li.nextElementSibling, sec = li.closest('section');
+// 刪除後焦點的去處：下一列、上一列，都沒有就回到目前的 chip
+const nNeighbor = (li) => {
+  const rows = [...document.querySelectorAll('#nfeed .nitem:not(.gone)')], i = rows.indexOf(li), others = rows.filter((x) => x !== li);
+  return (others[i] || others[i - 1])?.querySelector('.nrow') || $(`#nchip-${NS.key}`);
+};
+function nDelete(li, viaKey = false) {
+  const ul = li.parentElement, next = li.nextElementSibling, sec = li.closest('section'), near = nNeighbor(li);
   const p = { id: li.dataset.id, cat: li.dataset.cat, unread: li.classList.contains('unread') };
   li.classList.add('gone');
   p.hide = setTimeout(() => { li.remove(); if (sec && !sec.querySelector('.nitem')) sec.hidden = true; }, reduceMotion() ? 0 : 240);
-  p.timer = setTimeout(() => nCommit(p), 4000);
   NS.pendingDeletes.push(p);
   if (p.unread) adjust(p.cat, -1);
   if (NS.cats[p.cat]) NS.cats[p.cat].n = Math.max(0, NS.cats[p.cat].n - 1);
-  toast('已刪除', { action: '復原', ms: 4000, onAction: () => {
-    clearTimeout(p.timer); clearTimeout(p.hide); NS.pendingDeletes = NS.pendingDeletes.filter((x) => x !== p);
+  if (!viaKey) near?.focus();
+  toast('已刪除', { action: '復原', ms: 4000, focus: viaKey, onExpire: (had) => { nCommit(p); if (had && near?.isConnected) near.focus(); }, onAction: () => {
+    if (!NS.pendingDeletes.includes(p)) return;
+    clearTimeout(p.hide); NS.pendingDeletes = NS.pendingDeletes.filter((x) => x !== p);
     if (!li.isConnected) ul.insertBefore(li, next?.isConnected ? next : null);
     if (sec) sec.hidden = false;
     li.classList.remove('gone');
     if (p.unread) adjust(p.cat, 1);
     if (NS.cats[p.cat]) NS.cats[p.cat].n++;
+    li.querySelector('.nrow')?.focus();
   } });
 }
 // 共用 sheet：焦點移到第一個動作、Tab 不會跑出去、Esc 關閉，關閉後焦點回到原本的元素
-function openSheet(label, inner, opener) {
+// labelledby：用 sheet 裡標題的 id 當名稱（標題是作者寫的內容、不翻譯時用這個，不用 aria-label）
+function openSheet(label, inner, opener, labelledby = '') {
   const host = document.createElement('div');
-  host.className = 'sheet'; host.setAttribute('role', 'dialog'); host.setAttribute('aria-modal', 'true'); host.setAttribute('aria-label', I18N.t(label));
+  host.className = 'sheet'; host.setAttribute('role', 'dialog'); host.setAttribute('aria-modal', 'true');
+  if (labelledby) host.setAttribute('aria-labelledby', labelledby); else host.setAttribute('aria-label', I18N.t(label));
   host.innerHTML = `<div class="sheet-bg" data-close></div><div class="sheet-card card">${inner}</div>`;
   document.body.append(host);
   const focusables = () => [...host.querySelectorAll('button:not([disabled]),a[href],input:not([disabled])')];
@@ -1325,9 +1356,9 @@ function nActions(li) {
     s.close();
     if (k === 'read') markRead(li);
     else if (k === 'unread') markUnread(li);
-    else if (k === 'only') switchChip(chip.key);
+    else if (k === 'only') { switchChip(chip.key); $(`#nchip-${chip.key}`)?.focus(); }
     else if (k === 'mute') location.hash = `#/me/notify?cat=${cat}`;
-    else if (k === 'del') nDelete(li);
+    else if (k === 'del') nDelete(li, e.detail === 0);   // detail 0＝鍵盤按下
   });
 }
 // 詳細內容：沒有站內連結、或內文超過兩行時開這個；打開就算已讀
@@ -1335,10 +1366,10 @@ function nDetail(n, opener) {
   const cat = nCat(n), href = safeHref(n.url), eye = nEye(n);
   openSheet(n.title, `<div class="ndetail"><span class="ntile n-${cat}" aria-hidden="true">${NICON[cat]}</span>
       <span class="neye">${eye || CATS[cat]?.zh || '其他'}</span>
-      <h3${NFIXED.has(n.title) ? '' : ' translate="no"'}>${esc(n.title)}</h3>
+      <h3 id="ndetailh"${NFIXED.has(n.title) ? '' : ' translate="no"'}>${esc(n.title)}</h3>
       ${n.body ? `<p class="ndbody" translate="no">${esc(n.body)}</p>` : ''}
       <time class="tiny num" datetime="${nDate(n.created_at).toISOString()}">${fullTime(n.created_at)}</time></div>
-    <div class="choices">${href ? `<a class="btn block" href="${esc(href)}" data-close>前往</a>` : ''}<button type="button" class="btn ghost block" data-close>關閉</button></div>`, opener);
+    <div class="choices">${href ? `<a class="btn block" href="${esc(href)}" data-close>前往</a>` : ''}<button type="button" class="btn ghost block" data-close>關閉</button></div>`, opener, 'ndetailh');
 }
 // 幹部「待處理」摘要（從來源資料表即時計算，不是通知）
 const todoBox = (t) => {
@@ -1363,6 +1394,8 @@ const nSkel = () => `<div class="card setcard nskelc" role="status" aria-label="
 // 依日期分段接上新的列：第一列跟目前最後一段同一組就接在原本的清單後面；用 id 去重（伺服器每頁都排除「需要留意」，這是第二道防線）
 function appendItems(items) {
   const feed = $('#nfeed'); let head = '', html = '', open = false;
+  const last = [...feed.querySelectorAll('section.nday')].pop();
+  if (!last) NS.lastKey = '';
   for (const n of items) {
     if (NS.ids.has(n.id)) continue;
     NS.ids.add(n.id); NS.data.set(n.id, n);
@@ -1376,8 +1409,8 @@ function appendItems(items) {
     html += nrow(n);
   }
   if (open) html += '</ul></div></section>';
-  if (head) { const last = [...feed.querySelectorAll('section.nday')].pop(); last.hidden = false; last.querySelector('ul').insertAdjacentHTML('beforeend', head); }
-  if (html) feed.insertAdjacentHTML('beforeend', html);
+  if (head) { last.hidden = false; last.querySelector('ul').insertAdjacentHTML('beforeend', head); }
+  if (html) { feed.querySelector(':scope > .card > .empty')?.parentElement.remove(); feed.insertAdjacentHTML('beforeend', html); }
 }
 function fillFeed(r) {
   const feed = $('#nfeed'), k = NS.key;
@@ -1410,6 +1443,7 @@ const nQuery = (before) => { const c = curChip(), p = new URLSearchParams(); if 
 async function loadFeed() {
   const feed = $('#nfeed'); if (!feed) return;
   const my = ++NS.seq;
+  NS.loading = false;
   feed.innerHTML = nSkel(); $('#npill')?.replaceChildren();
   try {
     const r = await api(nQuery());
@@ -1431,8 +1465,10 @@ function switchChip(key) {
 async function nMore(btn) {
   if (NS.loading || !NS.cursor) return;
   NS.loading = true; btn.disabled = true; btn.textContent = '載入中…';
+  const my = NS.seq, key = NS.key;
   try {
     const r = await api(nQuery(NS.cursor));
+    if (my !== NS.seq || key !== NS.key) return;
     appendItems(r.items); NS.cursor = r.next;
     const live = $('#nlive'); if (live) { live.textContent = ''; setTimeout(() => { live.textContent = '已載入更多通知'; }, 50); }
   } catch (e) { toast(e.message); }
@@ -1441,6 +1477,12 @@ async function nMore(btn) {
   if (NS.cursor) { btn.disabled = false; btn.textContent = '載入更早的通知'; btn.focus(); }
   else { const last = [...document.querySelectorAll('#nfeed .nrow')].pop(); btn.remove(); last?.focus(); }
 }
+// 按鈕消失後焦點的去處（焦點原本在那顆按鈕、或已經掉到 body 時）：清單第一列，沒有就回到目前的 chip
+const nRefocus = (gone) => {
+  const a = document.activeElement;
+  if (a && a !== document.body && a !== gone && a.isConnected) return;
+  ($('#nfeed .nitem:not(.gone) .nrow') || $(`#nchip-${NS.key}`))?.focus();
+};
 // 全部已讀：只到目前載入最新的那一列為止（頁面打開之後才進來的維持未讀），就地更新，捲動位置不動
 async function readAll(btn) {
   const rows = [...NS.data.values()]; if (!rows.length) return;
@@ -1454,6 +1496,7 @@ async function readAll(btn) {
     applyCounts(r); paintFoot();
   } catch (e) { toast(e.message); }
   if (btn.isConnected) btn.disabled = false;
+  if (btn.hidden) nRefocus(btn);
 }
 function clearRead(btn) {
   const s = openSheet('清除所有已讀通知？', `<h3>清除所有已讀通知？</h3><p class="tiny" style="margin:0">帳號安全通知會保留到期滿。</p>
@@ -1466,8 +1509,8 @@ function clearRead(btn) {
       for (const li of document.querySelectorAll('#nfeed .nitem:not(.unread)')) if (!['security', 'other'].includes(li.dataset.cat)) li.remove();
       for (const sec of document.querySelectorAll('#nfeed section.nday, #npin')) if (!sec.querySelector('.nitem')) sec.hidden = true;
       for (const [k, x] of Object.entries(NS.cats)) if (k !== 'security' && k !== 'other') x.n = x.u;
-      if (!$('#nfeed .nitem') && !$('#todoBox')) $('#nfeed').innerHTML = nEmpty();
-      paintFoot(); bell(true);
+      if (!$('#nfeed .nitem') && !$('#todoBox')) { $('#nfeed').innerHTML = nEmpty(); NS.lastKey = ''; }
+      paintFoot(); bell(true); nRefocus(btn);
     } catch (err) { toast(err.message); }
   });
 }
@@ -1483,7 +1526,7 @@ function showNewPill() {
 }
 async function notificationsView() {
   nLeave();
-  NS.chips = null; NS.seq++;
+  NS.chips = null; NS.seq++; NS.loading = false;
   const my = NS.seq;
   let chip = CHIPS.find((c) => c.key === lsGet('cil-ncat')) || CHIPS[0], r;
   NS.key = chip.key;
@@ -1504,7 +1547,7 @@ async function notificationsView() {
       <a class="themebtn" href="#/me/notify" aria-label="通知設定" title="通知設定">${IC.sliders}</a></div>`)}
     <div class="nwrap-page">
       ${NS.offline ? '<p class="notice" style="margin:0">目前離線，顯示的是上次的通知</p>' : ''}
-      ${hint ? '<p class="tiny nhint" id="nhint">長按通知可以標為未讀或刪除<button type="button" class="linkbtn" id="nhintOk">知道了</button></p>' : ''}
+      ${hint ? `<p class="tiny nhint" id="nhint">${matchMedia('(pointer:coarse)').matches ? '長按通知可以標為未讀或刪除' : '在通知上按右鍵或右邊的更多按鈕，可以標為未讀或刪除'}<button type="button" class="linkbtn" id="nhintOk">知道了</button></p>` : ''}
       <div id="npill" class="npillbox"></div>
       <div class="chipbar" id="nchips" role="tablist" aria-label="通知分類" aria-controls="nfeed"></div>
       <div id="nfeed" class="nfeed" role="tabpanel"></div>
@@ -1521,6 +1564,8 @@ function bindNotif(page) {
   const cancel = () => { if (lp && !lp.fired) { clearTimeout(lp.t); lp.li.classList.remove('pressing'); lp = null; } };
   // 觸控裝置長按 500ms 開動作選單；移動超過 8px 或放開就取消
   page.addEventListener('pointerdown', (e) => {
+    // 長按觸發後 Android 不會送出 click，lp 留著會吞掉下一次點擊：新的一次按下一律先清掉
+    if (lp?.fired) lp = null;
     const li = e.target.closest('.nitem');
     if (!li || e.pointerType === 'mouse' || e.target.closest('button')) return;
     cancel();
@@ -1542,7 +1587,11 @@ function bindNotif(page) {
     const chipBtn = t.closest('[data-nk]'); if (chipBtn) { if (chipBtn.getAttribute('aria-selected') !== 'true') switchChip(chipBtn.dataset.nk); return; }
     const more = t.closest('[data-more]'); if (more) { nActions(more.closest('.nitem')); return; }
     const ack = t.closest('[data-ack]');
-    if (ack) { markRead(ack.closest('.nitem')); const notme = ack.dataset.ack === 'notme'; ack.parentElement.remove(); if (notme) location.hash = '#/me/security'; return; }
+    if (ack) {
+      const li = ack.closest('.nitem'); markRead(li); const notme = ack.dataset.ack === 'notme'; ack.parentElement.remove();
+      if (notme) location.hash = '#/me/security'; else li.querySelector('.nrow')?.focus();
+      return;
+    }
     const a = t.closest('a.nrow');
     if (a) {
       const li = a.closest('.nitem'), n = NS.data.get(li.dataset.id), nb = li.querySelector('.nb');
@@ -1552,7 +1601,7 @@ function bindNotif(page) {
     }
     if (t.closest('[data-nall]')) { switchChip('all'); return; }
     if (t.closest('[data-nretry]')) { loadFeed(); return; }
-    if (t.closest('.npill')) { loadFeed(); return; }
+    if (t.closest('.npill')) { $(`#nchip-${NS.key}`)?.focus(); loadFeed(); return; }
     if (t.closest('#nmore')) { nMore(t.closest('#nmore')); return; }
     if (t.closest('#nclear')) { clearRead(t.closest('#nclear')); return; }
     if (t.closest('#nhintOk')) { lsSet('cil-nhint', '1'); $('#nhint')?.remove(); }
@@ -1577,9 +1626,11 @@ function ago(ts) {
   return `${Math.floor(m / 1440)} 天前`;
 }
 // 鈴鐺顯示「新通知」（上次打開通知中心之後的＋未讀的帳號安全通知）；30 秒內不重抓，強制更新用 bell(true)
-let bellAt = 0, bellState = { badge: 0, unread: 0 };
+// 換了帳號（通行金鑰登入不重新載入頁面）一律重抓，不沿用上一個帳號的數字
+let bellAt = 0, bellFor = null, bellState = { badge: 0, unread: 0 };
 async function bell(force = false) {
-  if (!me || (!force && Date.now() - bellAt < 30000)) return;
+  if (!me || (!force && me.id === bellFor && Date.now() - bellAt < 30000)) return;
+  if (me.id !== bellFor) { bellFor = me.id; bellState = { badge: 0, unread: 0 }; paintBell(); }
   bellAt = Date.now();
   try {
     const r = await api('/notifications/count');
@@ -2721,8 +2772,8 @@ const NPREF = [
 const prefRows = (p) => NPREF.filter(([k]) => k !== 'todo' || p.officer).map(([k, desc]) => {
   const locked = p.locked.includes(k);
   return `<label class="setrow nprefrow" id="pref-${k}"><span class="ntile n-${k}" aria-hidden="true">${NICON[k]}</span>
-    <span class="st"><b>${CATS[k].zh}</b><span class="tiny">${locked ? '一律推播' : desc}</span>${k === 'todo' && p.reviewForced ? '<span class="tiny">每季權限檢視一律推播</span>' : ''}</span>
-    <span class="switch"><input type="checkbox" data-pref="${k}" ${locked || !p.mute.includes(k) ? 'checked' : ''}${locked ? ' disabled' : ''} aria-label="${CATS[k].zh}"><i></i></span></label>`;
+    <span class="st"><b>${CATS[k].zh}</b><span class="tiny">${desc}</span>${locked ? '<span class="tiny">一律推播</span>' : ''}${k === 'todo' && p.reviewForced ? '<span class="tiny">每季權限檢視一律推播</span>' : ''}</span>
+    <span class="switch"><input type="checkbox" data-pref="${k}" ${locked || !p.mute.includes(k) ? 'checked' : ''}${locked ? ' disabled' : ''}><i></i></span></label>`;
 });
 async function meNotify() {
   const reg = await Promise.race([navigator.serviceWorker?.ready.catch(() => null), new Promise((r) => setTimeout(() => r(null), 1500))]);
@@ -2825,8 +2876,8 @@ async function meSecurity(googleMsg) {
     e.preventDefault();
     try { me = (await api('/me/admin', { method: 'POST', body: { code: e.target.code.value } })).member; toast('已設定為理事長'); render(); } catch (err) { toast(err.message); }
   });
-  $('#logout').onclick = async () => { await api('/logout', { method: 'POST' }); clearDeviceData(); me = null; location.hash = '#/'; render(); };
-  $('#logoutAll').onclick = async () => { if (!confirm('要登出所有裝置嗎？包含這一台。')) return; await api('/logout', { method: 'POST', body: { all: true } }); clearDeviceData(); me = null; location.hash = '#/'; render(); };
+  $('#logout').onclick = async () => { await dropPush(); await api('/logout', { method: 'POST' }); clearDeviceData(); me = null; location.hash = '#/'; render(); };
+  $('#logoutAll').onclick = async () => { if (!confirm('要登出所有裝置嗎？包含這一台。')) return; await api('/logout', { method: 'POST', body: { all: true } }); await dropPush(false); clearDeviceData(); me = null; location.hash = '#/'; render(); };
 }
 function mePrivacy() {
   view.innerHTML = `${subTitle('隱私')}

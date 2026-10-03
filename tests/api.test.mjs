@@ -592,6 +592,9 @@ test('群發一律是公告、不能偽裝成安全通知；推播偏好只收�
   assert.deepEqual([n.title, n.category, n.kind, n.url], ['週末颱風停課', 'announce', 'broadcast', null]);
   assert.equal((await call('t_chair', '/admin/broadcast', { method: 'POST', body: { title: '新裝置登入通知', teams: ['youth'], dryRun: true } })).status, 400);
   assert.equal((await call('t_chair', '/admin/broadcast', { method: 'POST', body: { title: '請登入 App 更新資料', teams: ['youth'], dryRun: true } })).status, 200);
+  // 零寬字元、空白、異體字繞不過；內文也不能冒充安全通知
+  for (const body of [{ title: '新\u200b裝置登入' }, { title: '身份 更新' }, { title: '活動提醒', body: '請點開確認是不是你本人' }])
+    assert.equal((await call('t_chair', '/admin/broadcast', { method: 'POST', body: { ...body, teams: ['youth'], dryRun: true } })).status, 400, JSON.stringify(body));
   const p = await call('t_runner', '/me/notify-prefs', { method: 'PUT', body: { mute: ['security', 'change', 'training', 'bogus'] } });
   assert.deepEqual(p.json.mute, ['training']);
   assert.deepEqual((await call('t_runner', '/me/notify-prefs')).json.mute, ['training']);

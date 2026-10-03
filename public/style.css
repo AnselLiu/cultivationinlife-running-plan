@@ -1226,6 +1226,9 @@ input[type="date"]::-webkit-date-and-time-value,input[type="time"]::-webkit-date
 @media (hover:hover){.nrow:hover{background:color-mix(in srgb,var(--ink) 4%,transparent)}}
 .nlist .nitem:first-child .nrow{border-radius:var(--r-xl) var(--r-xl) 0 0}
 .nlist .nitem:last-child .nrow{border-radius:0 0 var(--r-xl) var(--r-xl)}
+.nlist .nitem:only-child .nrow{border-radius:var(--r-xl)}
+/* .nwrap 會裁切（刪除收合用），焦點框畫在列的內側才看得到 */
+.nrow:focus-visible{outline-offset:-3px}
 .ntext{min-width:0;display:grid;gap:2px}
 .neye{display:flex;align-items:center;gap:4px;font-size:12px;font-weight:600;color:var(--ink-3)}
 .neye svg.ic{width:12px;height:12px}
@@ -1239,7 +1242,7 @@ input[type="date"]::-webkit-date-and-time-value,input[type="time"]::-webkit-date
 .nitem:not(.unread) .ndot{transform:scale(0);opacity:0}
 .nmore{position:absolute;top:10px;right:12px}
 @media (pointer:fine){.nmore{opacity:0}.nitem:hover .nmore,.nitem:focus-within .nmore{opacity:1}
-  .nitem:hover .nmeta,.nitem:focus-within .nmeta{visibility:hidden}}
+  .nitem:hover .nmeta,.nitem:focus-within .nmeta{opacity:0}}
 @media (pointer:coarse){.nmore:not(:focus-visible){position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);padding:0}}
 .nack{display:flex;gap:8px;padding:0 16px 12px 64px}
 .chipbar button b.num{font-size:12px;font-weight:700;color:var(--ink-3)}
@@ -1247,6 +1250,10 @@ input[type="date"]::-webkit-date-and-time-value,input[type="time"]::-webkit-date
 .chipbar button i.tdot{box-shadow:inset 0 0 0 1px rgba(11,27,51,.25)}
 .nprefrow{grid-template-columns:36px 1fr auto}
 .nprefrow .switch{padding:0;border:0}
+.nprefrow .st .tiny{white-space:normal;overflow:visible}
+/* 待處理與推播設定的列：按下與滑過用中性灰，不用強調色的黃 */
+#todoBox .setrow:active,.nprefrow:active{background:color-mix(in srgb,var(--ink) 6%,transparent)}
+@media (hover:hover){#todoBox .setrow:hover,.nprefrow:hover{background:color-mix(in srgb,var(--ink) 4%,transparent)}}
 .nprefrow .switch input:disabled + i{opacity:.55}
 .nprefrow.flash{outline:2.5px solid color-mix(in srgb,var(--ndot) 60%,transparent);outline-offset:-2px}
 .nfoot{text-align:center;font-size:13px;color:var(--ink-3)}
@@ -1275,5 +1282,5 @@ input[type="date"]::-webkit-date-and-time-value,input[type="time"]::-webkit-date
 .nskel b{display:block;height:11px;border-radius:6px;background:color-mix(in srgb,var(--ink) 8%,transparent)}
 .nskel b:first-child{width:60%}.nskel b:last-child{width:40%}
 .toast .toastbtn{margin-left:14px;border:0;background:none;color:inherit;font:inherit;font-weight:700;text-decoration:underline;cursor:pointer;padding:0}
-@media (min-width:1024px){.nwrap-page{max-width:720px}}
+@media (min-width:1024px){.nwrap-page,.lt:has(+ .nwrap-page){max-width:720px}}
 #bcOut.err{color:var(--race)}
