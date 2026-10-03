@@ -917,3 +917,30 @@ details.group[open] > summary{margin-bottom:2px}
 .pill.buy{background:color-mix(in srgb,#AF52DE 14%,transparent);color:#8E3BB8}
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .ql.off{color:#5BD07A}:root:not([data-theme="light"]) .payrep{color:#FFB547}}
 :root[data-theme="dark"] .ql.off{color:#5BD07A}:root[data-theme="dark"] .payrep{color:#FFB547}
+
+/* ---------- 行事曆 ---------- */
+.calcard{gap:10px}
+.calhead h2{margin:0;font-size:22px;letter-spacing:.02em}
+.calgrid{display:grid;grid-template-columns:repeat(7,1fr);gap:4px}
+.calgrid .wd{text-align:center;font-size:12px;font-weight:600;color:var(--ink-3);padding:4px 0}
+.calgrid .wd.off{color:var(--race)}
+.cd{display:grid;grid-template-rows:auto auto 1fr;justify-items:center;align-content:start;gap:1px;min-height:58px;padding:6px 2px 4px;border:0;border-radius:14px;
+  background:transparent;color:var(--ink);font:inherit;cursor:pointer;position:relative;transition:background .15s,transform .15s var(--tap)}
+.cd:active{transform:scale(.94)}
+.cd.pad{cursor:default}
+.cd b{font-size:16px;font-weight:600;width:30px;height:30px;display:grid;place-items:center;border-radius:50%}
+.cd small{font-size:10px;line-height:1.1;color:var(--race);max-width:100%;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.cd.off b{color:var(--race)}
+.cd.today b{background:var(--accent);color:var(--on-accent)}
+.cd.sel{background:var(--accent-soft)}
+@media (hover:hover){.cd:not(.pad):hover{background:color-mix(in srgb,var(--accent) 7%,transparent)}}
+.dots{display:flex;gap:3px;justify-content:center;flex-wrap:wrap;min-height:6px}
+.dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--tc,var(--accent));opacity:.8}
+.dot.mine{opacity:1;box-shadow:0 0 0 1.5px var(--glass-hi),0 0 0 3px var(--tc,var(--accent))}
+.dot.item{background:#FF9F0A;opacity:1}
+.dot.race{background:var(--race);opacity:1}
+.legend{display:flex;flex-wrap:wrap;gap:14px;justify-content:center}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.serieschips{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none;padding:2px 0}
+.serieschips a{flex:none;font-size:13px;padding:5px 10px;border-radius:999px;background:rgba(255,255,255,.16);color:#fff;white-space:nowrap}
+.serieschips a.on{background:#fff;color:#1C4698;font-weight:700}

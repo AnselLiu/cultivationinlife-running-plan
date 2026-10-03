@@ -318,3 +318,38 @@ test('團購與收費：尺寸、每人上限、庫存；早鳥與會員優惠�
   const r3 = await call('t_runner', `/events/${ev2.json.id}/signup`, { method: 'POST', body: { option: '全馬' } });
   assert.equal(r3.json.amount, 0, '早鳥 200＋會員 900 超過報名費，折到 0');
 });
+
+test('行事曆：定期揪跑一次建立每一場、刪除之後的場次；月曆與賽事提醒；訂閱包含所有活動', async () => {
+  const start = plus(1), wd = new Date(`${start}T00:00:00Z`).getUTCDay();
+  const r = await call('t_chair', '/events', { method: 'POST', body: { kind: 'long', title: '週末揪跑', date: start, gather_time: '06:00', notify: false,
+    repeat: { weekdays: [wd, (wd + 3) % 7], until: plus(22) } } });
+  assert.equal(r.status, 200);
+  assert.ok(r.json.count >= 6 && r.json.count <= 7, `兩個星期幾、三週：${r.json.count} 場`);
+  const ev = (await call('t_runner', `/events/${r.json.id}`)).json;
+  assert.equal(ev.series.length, r.json.count);
+  assert.equal((await call('t_chair', '/events', { method: 'POST', body: { kind: 'long', title: 'x', date: start, notify: false, repeat: { weekdays: [1], until: plus(-3) } } })).status, 400);
+  // 月曆
+  const mo = start.slice(0, 7), cal = (await call('t_runner', `/calendar?month=${mo}`)).json;
+  assert.ok(cal.events.some((e) => e.series_id === ev.series_id));
+  assert.equal((await call('t_runner', '/calendar?month=2026-13')).status, 400);
+  // 賽事提醒：跑友不能加，幹部可以
+  assert.equal((await call('t_runner', '/calendar/items', { method: 'POST', body: { date: plus(3), title: '臺北馬報名開始' } })).status, 403);
+  const it = await call('t_chair', '/calendar/items', { method: 'POST', body: { date: plus(3), title: '臺北馬報名開始', kind: 'signup', url: 'https://www.taipeicitymarathon.com/' } });
+  assert.equal(it.status, 200);
+  assert.ok((await call('t_runner', `/calendar?month=${plus(3).slice(0, 7)}`)).json.items.some((x) => x.id === it.json.id));
+  // 訂閱：預設包含所有看得到的活動與提醒；切成只有自己的就沒有
+  const { url } = (await call('t_runner', '/me/calendar', { method: 'POST' })).json;
+  const ics = await (await fetch(url.replace(/^https?:\/\/[^/]+/, BASE))).text();
+  assert.ok(ics.includes('週末揪跑') && ics.includes('臺北馬報名開始'));
+  await call('t_runner', '/me/calendar-scope', { method: 'POST', body: { scope: 'mine' } });
+  const ics2 = await (await fetch(url.replace(/^https?:\/\/[^/]+/, BASE))).text();
+  assert.ok(!ics2.includes('週末揪跑'));
+  // 刪除這場以後的同系列場次
+  const third = ev.series[2];
+  const del = await call('t_chair', `/events/${third.id}?series=after`, { method: 'DELETE' });
+  assert.equal(del.json.count, r.json.count - 2);
+  assert.equal((await call('t_runner', `/events/${r.json.id}`)).json.series.length, 2);
+  assert.equal((await call('t_chair', `/calendar/items/${it.json.id}`, { method: 'DELETE' })).status, 200);
+  // 假日匯入只有理事長與行政人員
+  assert.equal((await call('t_runner', '/holidays/import', { method: 'POST', body: { year: 2027 } })).status, 403);
+});

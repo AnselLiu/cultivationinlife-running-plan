@@ -8,7 +8,7 @@ async function formView(id) {
   const src = id ? await api(`/events/${id}`) : from ? await api(`/events/${from}`) : null;
   // 複製活動：沿用內容、問卷與座位圖，日期往後推一年（每年的春酒）或清空
   const d = src ? { ...src, ...(from ? { title: src.title.replace(/20\d\d/, (y) => String(Number(y) + 1)), date: nextYear(src.date), deadline: '' } : {}) }
-    : { kind: 'track', date: new Date().toISOString().slice(0, 10), signup_open: 1, team_id: qp.get('team') || null };
+    : { kind: 'track', date: /^\d{4}-\d{2}-\d{2}$/.test(qp.get('date') || '') ? qp.get('date') : new Date().toISOString().slice(0, 10), signup_open: 1, team_id: qp.get('team') || null };
   // 分團選項：協會幹部可以選全協會與任何分團；分團幹部只能選自己帶的分團
   const teamOpts = [...(allow('event') ? [['', '全協會']] : []), ...teams().filter((t) => teamAllow(t.id, 'event')).map((t) => [t.id, t.name])];
   if (!teamOpts.length) { view.innerHTML = `<div class="card">${emptyState('calendar', '只有幹部與分團幹部可以建立活動')}</div>`; return; }
@@ -42,6 +42,13 @@ async function formView(id) {
         <label>餐點選項（逗號分隔）<input name="meal_options" maxlength="60" value="${esc(d.meal_options || '')}" placeholder="葷食,素食"></label>
       </fieldset>
       <label>報名截止（選填）<input type="datetime-local" name="deadline" value="${esc(d.deadline || '')}"></label>
+      ${id ? ((d.series || []).length > 1 ? `<p class="tiny" style="margin:0">這是定期揪跑的其中一場，這裡只會改這一場。</p>` : '') : `<details class="group" data-when="!survey" id="repBox">
+        <summary>重複（定期揪跑）</summary>
+        <fieldset class="qset"><legend>每週的哪幾天</legend><div class="chips">${['日', '一', '二', '三', '四', '五', '六'].map((w, i) => `<label class="chip"><input type="checkbox" name="rep_wd" value="${i}"><span>週${w}</span></label>`).join('')}</div></fieldset>
+        <div class="grid2"><label>到哪一天為止<input type="date" name="rep_until"></label>
+          <label class="inline" style="align-self:end"><input type="checkbox" name="rep_skip" checked> 遇到國定假日不開</label></div>
+        <p class="tiny" style="margin:0" id="repHint">每一場都是獨立的活動，各自報名與點名；最多一次建立 60 場。</p>
+      </details>`}
 
       <fieldset class="group">
         <legend>組別與價格</legend>
@@ -136,6 +143,7 @@ async function formView(id) {
       options: (r.querySelector('[data-k=options]')?.value || '').split(/[,，、\n]/).map((x) => x.trim()).filter(Boolean),
       required: r.querySelector('[data-k=required]').checked,
     })).filter((q) => q.label);
+    if (f.rep_until && f.querySelector('[name=rep_wd]:checked') && !f.rep_until.value) return toast('定期揪跑要填結束日期');
     const bad = questions.find((q) => q.type !== 'text' && !q.options.length);
     if (bad) return toast(`「${bad.label}」要有選項`);
     const body = {
@@ -151,10 +159,11 @@ async function formView(id) {
       pricing: { early_until: f.early_until.value, early_off: Number(f.early_off.value) || 0, member_off: Number(f.member_off.value) || 0 },
       pay_info: { account: f.pay_account.value.trim(), due: f.pay_due.value, note: f.pay_note.value.trim(), methods: [...f.querySelectorAll('[name=pay_methods]:checked')].map((c) => c.value) },
       notify: f.notify ? f.notify.checked : undefined, copy_from: from || undefined,
+      repeat: f.rep_until && [...f.querySelectorAll('[name=rep_wd]:checked')].length ? { weekdays: [...f.querySelectorAll('[name=rep_wd]:checked')].map((c) => Number(c.value)), until: f.rep_until.value, skip_holidays: f.rep_skip.checked } : undefined,
     };
     try {
       if (id) { await api(`/events/${id}`, { method: 'PUT', body }); location.hash = `#/e/${id}`; }
-      else { location.hash = `#/e/${(await api('/events', { method: 'POST', body })).id}`; }
+      else { const r = await api('/events', { method: 'POST', body }); location.hash = `#/e/${r.id}`; if (r.count > 1) { toast(`已建立 ${r.count} 場定期揪跑`); return; } }
       toast('已儲存');
     } catch (err) { toast(err.message); }
   };

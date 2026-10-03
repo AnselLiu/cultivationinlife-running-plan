@@ -8,6 +8,7 @@ import * as Guide from './guide.js';
 import { quote, charges } from './pricing.js';
 // 用到才下載的模組：管理後台、拍照、報表、活動表單與統計、分團
 // 剛部署的那幾秒可能拿到舊檔：載入失敗就等一下、加版本參數再試一次，仍失敗才顯示錯誤
+const calendarView = (...a) => lazy('./calendar.js', 'calendarView')(...a);
 const lazy = (file, name) => async (...a) => {
   let m;
   try { m = await import(file); } catch { await new Promise((r) => setTimeout(r, 800)); m = await import(`${file}?r=${Date.now()}`); }
@@ -471,7 +472,7 @@ async function listView() {
       ${anyTeamAllow('event') ? `<a class="btn ghost sm iconbtn" href="#/new${pick && pick !== 'assoc' ? `?team=${esc(pick)}` : ''}">${IC.plus}新增活動</a>` : ''}
     </div>
     <div class="evgrid">${events.slice(1).map(eventCard).join('') || `<div class="card">${emptyState('calendar', '目前沒有其他排定的活動')}</div>`}</div>
-    <a class="tiny center" href="#/past" style="padding:4px">看過去的團練 ›</a>
+    <div class="row center" style="gap:18px;justify-content:center"><a class="tiny" href="#/calendar" style="padding:4px">${IC.calendar} 行事曆</a><a class="tiny" href="#/past" style="padding:4px">看過去的團練 ›</a></div>
     </div></div>`;
   for (const b of document.querySelectorAll('[data-tf]')) b.onclick = () => { teamFilter.set(b.dataset.tf); listView(); };
   bindInstall();
@@ -599,6 +600,7 @@ async function eventView(id) {
       ${ev.pricing?.early_off && ev.pricing.early_until >= ymd(new Date()) ? `<p class="tiny" style="margin:0;color:rgba(255,255,255,.9)">早鳥 ${esc(ev.pricing.early_until.slice(5).replace('-', '/'))} 前報名折 ${money(ev.pricing.early_off)}${ev.pricing.member_off ? `・協會會員再折 ${money(ev.pricing.member_off)}` : ''}</p>`
         : ev.pricing?.member_off ? `<p class="tiny" style="margin:0;color:rgba(255,255,255,.9)">協會會員折 ${money(ev.pricing.member_off)}</p>` : ''}
       ${ev.group_reg ? '<p class="tiny" style="margin:0;color:rgba(255,255,255,.85)">由幹部代為團體報名</p>' : ''}
+      ${(ev.series || []).length > 1 ? `<div class="serieschips" aria-label="定期揪跑的其他場次">${ev.series.filter((x) => x.date >= ymd(new Date())).slice(0, 8).map((x) => `<a class="${x.id === ev.id ? 'on' : ''}" href="#/e/${esc(x.id)}">${esc(dstr(x.date))}</a>`).join('')}</div>` : ''}
       ${ev.note ? `<p class="muted" style="margin:0;white-space:pre-wrap">${esc(ev.note)}</p>` : ''}
       ${ev.link_url ? `<a class="btn block" style="background:#fff;color:#1C4698" href="${esc(ev.link_url)}" target="_blank" rel="noopener">${esc(ev.link_label || '前往登記')} ${IC.external}</a>` : ''}
       ${inviteOnly && !admin ? '' : `<div class="row sharebar">
@@ -791,6 +793,12 @@ async function eventView(id) {
   });
   $('#copyRoster')?.addEventListener('click', async () => copy((await api(`/events/${id}/roster`)).text));
   $('#del')?.addEventListener('click', async () => {
+    const later = (ev.series || []).filter((x) => x.date > ev.date).length;
+    if (later) {
+      const all = confirm(`這是定期揪跑，之後還有 ${later} 場。\n按「確定」連同之後的場次一起刪除，按「取消」只刪這一場。`);
+      if (!all && !confirm('只刪除這一場？')) return;
+      const r = await api(`/events/${id}${all ? '?series=after' : ''}`, { method: 'DELETE' }); toast(`已刪除 ${r.count} 場`); location.hash = '#/'; return;
+    }
     if (!confirm('刪除後無法復原，確定刪除這個活動？')) return;
     await api(`/events/${id}`, { method: 'DELETE' }); location.hash = '#/';
   });
@@ -1929,7 +1937,8 @@ async function meNotify() {
     ${installCard('me')}
     <section class="card" id="calCard">
       <div class="row spread"><h3>訂閱到手機行事曆</h3>${cfg.calendarOn ? '<span class="pill solid">已開啟</span>' : ''}</div>
-      <p class="tiny" style="margin:0">報名的團練與活動會自動出現在 iPhone、Google 行事曆，取消報名也會跟著消失。訂閱網址等同你的個人鑰匙，不要分享給別人。</p>
+      <p class="tiny" style="margin:0">團練、揪跑與幹部設定的賽事提醒會自動出現在 iPhone、Google 行事曆，有變動也會跟著更新。訂閱網址等同你的個人鑰匙，不要分享給別人。</p>
+      <label class="switch"><span>包含所有開團活動與賽事提醒<span class="tiny" style="display:block">關掉就只有自己報名的</span></span><input type="checkbox" id="calScope" ${cfg.calScope !== 'mine' ? 'checked' : ''}><i></i></label>
       <div id="calBox" class="row" style="gap:8px">${cfg.calendarOn ? '<button class="btn ghost sm" id="calNew">重新產生網址</button><button class="btn ghost sm" id="calOff">停用</button>' : '<button class="btn sm" id="calNew">產生訂閱網址</button>'}</div>
     </section>
     <section class="card"><h3>顯示</h3>
@@ -1949,6 +1958,7 @@ async function meNotify() {
       $('#calCopy').onclick = () => copy(url);
     } catch (e) { toast(e.message); }
   };
+  $('#calScope').onchange = async (e) => { try { const r = await api('/me/calendar-scope', { method: 'POST', body: { scope: e.target.checked ? 'all' : 'mine' } }); cfg.calScope = r.scope; toast(e.target.checked ? '行事曆會包含所有活動' : '行事曆只放自己報名的'); } catch (err) { e.target.checked = !e.target.checked; toast(err.message); } };
   $('#calOff')?.addEventListener('click', async () => { await api('/me/calendar', { method: 'DELETE' }); cfg.calendarOn = false; toast('已停用行事曆訂閱'); meNotify(); });
 }
 async function meSecurity(googleMsg) {
@@ -2123,6 +2133,7 @@ async function route(hash) {
   try {
     if (hash === '/') return await listView();
     if (hash === '/past') return await pastView();
+    if (hash === '/calendar') return await calendarView();
     if (hash === '/coach') { location.replace('#/plan'); return; }
     if (hash === '/studio') return feat('studio') ? await studioView() : (view.innerHTML = `<div class="card">${emptyState('runner', '這個功能目前沒有開放')}</div>`);
     if (hash === '/notifications') return await notificationsView();

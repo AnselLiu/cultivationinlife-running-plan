@@ -318,7 +318,7 @@ async function openPrivate(env, enc) {
 const maskId = (v) => (v ? `${v.slice(0, 2)}${'*'.repeat(Math.max(0, v.length - 5))}${v.slice(-3)}` : '');
 
 // ---- 活動 ----
-const eventCols = 'id, kind, title, date, gather_time, end_time, place, lead, note, week_no, plan_text, capacity, signup_open, deadline, status, created_at, fee, guest_max, meal_options, link_url, link_label, team_id, questions, visibility, created_by, options, group_reg, items, pricing, pay_info, min_qty';
+const eventCols = 'id, kind, title, date, gather_time, end_time, place, lead, note, week_no, plan_text, capacity, signup_open, deadline, status, created_at, fee, guest_max, meal_options, link_url, link_label, team_id, questions, visibility, created_by, options, group_reg, items, pricing, pay_info, min_qty, series_id';
 
 // 報名問卷：單選、複選、簡答；最多 12 題
 const Q_TYPES = ['single', 'multi', 'text'];
@@ -607,15 +607,108 @@ async function api(req, env, path, method) {
   };
 
   // 行事曆訂閱的 .ics：只列本人有報名（正取或候補）的活動，過去 30 天到未來 180 天
+  // ---- 行事曆 ----
+  // 月曆：看得到的活動、國定假日、賽事提醒、我自己的賽事（每月一次查完）
+  if (path === '/api/calendar' && method === 'GET') {
+    const g = need(); if (g) return g;
+    const mo = url0(req).searchParams.get('month');
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(mo || '')) return fail(400, '月份格式不正確');
+    const from = `${mo}-01`, to = `${mo}-31`;
+    const [events, hol, items, races] = await Promise.all([
+      env.DB.prepare(`SELECT events.id, events.title, events.date, events.gather_time, events.place, events.kind, events.team_id, events.series_id,
+          (SELECT s.status FROM signups s WHERE s.event_id = events.id AND s.member_id = ?1) AS mine,
+          (SELECT COUNT(*) FROM signups s WHERE s.event_id = events.id AND s.status = 'in') AS signed
+        FROM events WHERE events.date BETWEEN ?3 AND ?4 AND ${seeSQL} ORDER BY events.date, events.gather_time LIMIT 300`).bind(member.id, can(member, 'event') ? 1 : 0, from, to).all(),
+      env.DB.prepare('SELECT date, name, is_holiday, category FROM holidays WHERE date BETWEEN ? AND ? AND (name IS NOT NULL OR is_holiday = 0)').bind(from, to).all(),
+      env.DB.prepare(`SELECT id, date, title, kind, url, note, team_id, created_by FROM calendar_items WHERE date BETWEEN ? AND ?
+        AND (team_id IS NULL OR team_id IN (SELECT team_id FROM team_members WHERE member_id = ? AND status = 'active') OR ? = 1) ORDER BY date`).bind(from, to, member.id, can(member, 'event') ? 1 : 0).all(),
+      env.DB.prepare('SELECT id, name, date, dist FROM races WHERE member_id = ? AND date BETWEEN ? AND ?').bind(member.id, from, to).all(),
+    ]);
+    const holidaysLoaded = !!(await env.DB.prepare('SELECT 1 FROM holidays WHERE year = ? LIMIT 1').bind(Number(mo.slice(0, 4))).first());
+    return json({ month: mo, events: events.results, holidays: hol.results, items: items.results.map((it) => ({ ...it, mine: it.created_by === member.id, canEdit: it.created_by === member.id || teamCan(it.team_id, 'event') })),
+      races: races.results, holidaysLoaded, canAdd: teamCan(null, 'event') || Object.keys(myTeams).some((t) => teamCan(t, 'event')) });
+  }
+  if (path === '/api/calendar/items' && method === 'POST') {
+    const g = need(); if (g) return g;
+    const b = await body();
+    const it = { date: str(b.date, 10), title: str(b.title, 60), kind: ['race', 'signup', 'note'].includes(b.kind) ? b.kind : 'race',
+      url: httpsUrl(str(b.url, 300)), note: str(b.note, 300), team_id: str(b.team_id, 16) || null };
+    if (!isDate(it.date) || !it.title) return fail(400, '請填日期與標題');
+    if (!teamCan(it.team_id, 'event')) return fail(403, it.team_id ? '只有這個分團的團長與幹部可以新增' : '只有幹部可以新增全協會的提醒');
+    const id = rid(8);
+    await env.DB.prepare('INSERT INTO calendar_items (id, date, title, kind, url, note, team_id, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .bind(id, it.date, it.title, it.kind, it.url || null, it.note || null, it.team_id, member.id).run();
+    await audit(env, req, member, 'calendar.add', 'calendar', id, `${it.date} ${it.title}`);
+    if (b.notify === true) await notify(env, it.team_id ? await teamMemberIds(it.team_id, member.id) : await allMemberIds(env, member.id), 'event',
+      { title: `行事曆：${it.title}`, body: `${it.date}${it.note ? `　${it.note}` : ''}`, url: `/#/calendar?m=${it.date.slice(0, 7)}` });
+    return json({ id });
+  }
+  const mci = path.match(/^\/api\/calendar\/items\/([\w-]{1,32})$/);
+  if (mci && method === 'DELETE') {
+    const g = need(); if (g) return g;
+    const it = await env.DB.prepare('SELECT * FROM calendar_items WHERE id = ?').bind(mci[1]).first();
+    if (!it) return fail(404, '找不到這筆提醒');
+    if (it.created_by !== member.id && !teamCan(it.team_id, 'event')) return fail(403, '沒有權限刪除');
+    await env.DB.prepare('DELETE FROM calendar_items WHERE id = ?').bind(it.id).run();
+    await audit(env, req, member, 'calendar.delete', 'calendar', it.id, `${it.date} ${it.title}`);
+    return json({ ok: true });
+  }
+  // 國定假日：管理員每年手動匯入（新北市政府資料開放平台「政府行政機關辦公日曆表」）
+  if (path === '/api/holidays' && method === 'GET') {
+    const g = need(); if (g) return g;
+    const years = (await env.DB.prepare('SELECT year, COUNT(*) AS n, SUM(CASE WHEN name IS NOT NULL AND is_holiday = 1 THEN 1 ELSE 0 END) AS named FROM holidays GROUP BY year ORDER BY year DESC LIMIT 10').all()).results;
+    return json({ years });
+  }
+  if (path === '/api/holidays/import' && method === 'POST') {
+    const g = need(); if (g) return g;
+    if (!can(member, 'settings')) return fail(403, '只有理事長與行政人員可以匯入假日');
+    const year = Number((await body()).year);
+    if (!Number.isInteger(year) || year < 2020 || year > 2100) return fail(400, '年份不正確');
+    if (await limited(env, `holiday:${member.id}`, 10, 3600)) return fail(429, '匯入太頻繁，請稍後再試');
+    const rows = [];
+    for (let page = 0; page < 20; page++) {
+      const r = await fetch(`https://data.ntpc.gov.tw/api/datasets/308DCD75-6434-45BC-A95F-584DA4FED251/json?page=${page}&size=1000`, { headers: { accept: 'application/json' }, cf: { cacheTtl: 3600 } });
+      if (!r.ok) return fail(502, `新北市資料開放平台暫時無法連線（${r.status}），請稍後再試`);
+      const list = await r.json().catch(() => null);
+      if (!Array.isArray(list)) return fail(502, '新北市資料開放平台回傳的格式不正確');
+      if (!list.length) break;
+      for (const x of list) if (String(x.year) === String(year) && /^\d{8}$/.test(x.date || '')) rows.push(x);
+      if (list.length < 1000) break;
+    }
+    if (!rows.length) return fail(404, `新北市資料開放平台還沒有 ${year} 年的資料，通常前一年 6 月後公告`);
+    await env.DB.prepare('DELETE FROM holidays WHERE year = ?').bind(year).run();
+    for (let i = 0; i < rows.length; i += 80) await env.DB.batch(rows.slice(i, i + 80).map((x) => env.DB.prepare(
+      'INSERT OR REPLACE INTO holidays (date, year, name, is_holiday, category, description) VALUES (?, ?, ?, ?, ?, ?)').bind(
+      `${x.date.slice(0, 4)}-${x.date.slice(4, 6)}-${x.date.slice(6, 8)}`, year, str(x.name, 40) || null, x.isholiday === '是' ? 1 : 0, str(x.holidaycategory, 40) || null, str(x.description, 120) || null)));
+    const named = rows.filter((x) => x.name && x.isholiday === '是');
+    await audit(env, req, member, 'holiday.import', 'settings', String(year), `${rows.length} 天，節日 ${named.length} 天`);
+    return json({ year, total: rows.length, holidays: named.map((x) => ({ date: `${x.date.slice(0, 4)}-${x.date.slice(4, 6)}-${x.date.slice(6, 8)}`, name: x.name })),
+      workdays: rows.filter((x) => x.isholiday === '否').length });
+  }
+  if (path === '/api/me/calendar-scope' && method === 'POST') {
+    const g = need(); if (g) return g;
+    const scope = (await body()).scope === 'mine' ? 'mine' : 'all';
+    await env.DB.prepare('UPDATE members SET cal_scope = ? WHERE id = ?').bind(scope, member.id).run();
+    return json({ scope });
+  }
   const mcal = path.match(/^\/api\/cal\/([\w]{16,64})\.ics$/);
   if (mcal && method === 'GET') {
     const th = await sha(mcal[1]);
     if (await limited(env, `cal:${th.slice(0, 16)}`, 60, 3600)) return fail(429, '更新太頻繁');
-    const who = await env.DB.prepare('SELECT id FROM members WHERE cal_token_hash = ?').bind(th).first();
+    const who = await env.DB.prepare('SELECT id, role, cal_scope FROM members WHERE cal_token_hash = ?').bind(th).first();
     if (!who) return fail(404, '訂閱網址已失效');
-    const rows = (await env.DB.prepare(`SELECT e.id, e.title, e.date, e.gather_time, e.end_time, e.place, e.note, e.kind, s.status
-      FROM signups s JOIN events e ON e.id = s.event_id WHERE s.member_id = ? AND s.status IN ('in', 'wait')
-      AND e.date BETWEEN date('now', '-30 days') AND date('now', '+180 days') ORDER BY e.date LIMIT 300`).bind(who.id).all()).results;
+    // all：看得到的所有活動（標出自己的報名狀態）＋幹部設定的賽事提醒；mine：只有自己報名的
+    const rows = who.cal_scope === 'mine'
+      ? (await env.DB.prepare(`SELECT e.id, e.title, e.date, e.gather_time, e.end_time, e.place, e.note, e.kind, s.status
+          FROM signups s JOIN events e ON e.id = s.event_id WHERE s.member_id = ? AND s.status IN ('in', 'wait')
+          AND e.date BETWEEN date('now', '-30 days') AND date('now', '+180 days') ORDER BY e.date LIMIT 300`).bind(who.id).all()).results
+      : (await env.DB.prepare(`SELECT events.id, events.title, events.date, events.gather_time, events.end_time, events.place, events.note, events.kind,
+          (SELECT s.status FROM signups s WHERE s.event_id = events.id AND s.member_id = ?1) AS status
+          FROM events WHERE events.date BETWEEN date('now', '-30 days') AND date('now', '+180 days') AND ${seeSQL} ORDER BY events.date LIMIT 400`)
+        .bind(who.id, can(who, 'event') ? 1 : 0).all()).results;
+    const items = who.cal_scope === 'mine' ? [] : (await env.DB.prepare(`SELECT id, date, title, kind, url, note FROM calendar_items
+      WHERE date BETWEEN date('now', '-30 days') AND date('now', '+400 days') AND (team_id IS NULL OR team_id IN (SELECT team_id FROM team_members WHERE member_id = ? AND status = 'active'))
+      ORDER BY date LIMIT 200`).bind(who.id).all()).results;
     const icsEsc = (t) => String(t || '').replace(/\\/g, '\\\\').replace(/\n/g, '\\n').replace(/[,;]/g, (c) => `\\${c}`);
     const fold = (line) => { const out = []; let cur = ''; for (const ch of line) { if (new TextEncoder().encode(cur + ch).length > 73) { out.push(cur); cur = ` ${ch}`; } else cur += ch; } out.push(cur); return out.join('\r\n'); };
     const d8 = (d) => d.replace(/-/g, ''), t6 = (t) => `${t.replace(':', '')}00`;
@@ -628,9 +721,13 @@ async function api(req, env, path, method) {
       return ['BEGIN:VEVENT', `UID:${r.id}@cil-run`, `DTSTAMP:${stamp}`,
         timed ? `DTSTART;TZID=Asia/Taipei:${d8(r.date)}T${t6(r.gather_time)}` : `DTSTART;VALUE=DATE:${d8(r.date)}`,
         timed ? `DTEND;TZID=Asia/Taipei:${d8(r.date)}T${t6(end)}` : `DTEND;VALUE=DATE:${d8(plus1(r.date))}`,
-        `SUMMARY:${icsEsc(`${r.status === 'wait' ? '（候補）' : ''}${r.title}`)}`, r.place ? `LOCATION:${icsEsc(r.place)}` : '',
-        `DESCRIPTION:${icsEsc(`${r.note ? `${r.note}\n` : ''}${origin}/#/e/${r.id}`)}`, `URL:${origin}/#/e/${r.id}`, 'END:VEVENT'].filter(Boolean).map(fold).join('\r\n');
+        `SUMMARY:${icsEsc(`${r.status === 'wait' ? '（候補）' : r.status === 'in' ? '（已報名）' : ''}${r.title}`)}`, r.place ? `LOCATION:${icsEsc(r.place)}` : '',
+        `DESCRIPTION:${icsEsc(`${r.status === 'in' ? '已報名\n' : r.status === 'wait' ? '候補中\n' : '還沒報名，點連結報名\n'}${r.note ? `${r.note}\n` : ''}${origin}/#/e/${r.id}`)}`, `URL:${origin}/#/e/${r.id}`, 'END:VEVENT'].filter(Boolean).map(fold).join('\r\n');
     });
+    const CAL_KIND = { race: '賽事', signup: '報名', note: '提醒' };
+    for (const it of items) ev.push(['BEGIN:VEVENT', `UID:${it.id}@cil-run-item`, `DTSTAMP:${stamp}`, `DTSTART;VALUE=DATE:${d8(it.date)}`, `DTEND;VALUE=DATE:${d8(plus1(it.date))}`,
+      `SUMMARY:${icsEsc(`【${CAL_KIND[it.kind] || '提醒'}】${it.title}`)}`, `DESCRIPTION:${icsEsc(`${it.note || ''}${it.url ? `\n${it.url}` : ''}`)}`, it.url ? `URL:${it.url}` : '',
+      ...(it.kind === 'signup' ? ['BEGIN:VALARM', 'ACTION:DISPLAY', `DESCRIPTION:${icsEsc(it.title)}`, 'TRIGGER:-PT15H', 'END:VALARM'] : []), 'END:VEVENT'].filter(Boolean).map(fold).join('\r\n'));
     const body2 = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Cultivation in Life Run//cil-run//ZH', 'CALSCALE:GREGORIAN', 'METHOD:PUBLISH',
       'X-WR-CALNAME:耕跑團', 'X-WR-TIMEZONE:Asia/Taipei', 'REFRESH-INTERVAL;VALUE=DURATION:PT6H',
       'BEGIN:VTIMEZONE', 'TZID:Asia/Taipei', 'BEGIN:STANDARD', 'DTSTART:19700101T000000', 'TZOFFSETFROM:+0800', 'TZOFFSETTO:+0800', 'TZNAME:CST', 'END:STANDARD', 'END:VTIMEZONE',
@@ -832,7 +929,7 @@ async function api(req, env, path, method) {
     ]);
     return json({ member: member ? pub(member) : null, vapid: env.VAPID_PUBLIC_KEY || null, googleLogin: !!(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET),
       settings: st, privacyVersion: st.privacy.version, needConsent: !!member && member.consent_version !== st.privacy.version,
-      race, teams: teamList, calendarOn: !!member?.cal_token_hash, requireMfa: !!security.require_mfa, shortcut: setting('health_shortcut') || null,
+      race, teams: teamList, calendarOn: !!member?.cal_token_hash, calScope: member?.cal_scope || 'all', requireMfa: !!security.require_mfa, shortcut: setting('health_shortcut') || null,
       ...(boot ? { boot: { events, todayLogs, today: today() } } : {}) });
   }
 
@@ -917,21 +1014,38 @@ async function api(req, env, path, method) {
     if (!e) return fail(400, '活動資料不完整');
     if (e.team_id && !(await teamIds()).includes(e.team_id)) return fail(400, '找不到這個分團');
     if (!teamCan(e.team_id, 'event')) return fail(403, e.team_id ? '只有這個分團的團長與幹部可以建立活動' : '只有幹部可以建立全協會活動');
-    const id = rid(8);
-    await env.DB.prepare(`INSERT INTO events (id, kind, title, date, gather_time, end_time, place, lead, note, week_no, plan_text, capacity, signup_open, deadline, created_by, fee, guest_max, meal_options, link_url, link_label, team_id, questions, visibility, options, group_reg, items, pricing, pay_info, min_qty)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .bind(id, e.kind, e.title, e.date, e.gather_time, e.end_time, e.place, e.lead, e.note, e.week_no, e.plan_text, e.capacity, e.signup_open, e.deadline, member.id, e.fee, e.guest_max, e.meal_options, e.link_url, e.link_label, e.team_id, e.questions, e.visibility, e.options, e.group_reg, e.items, e.pricing, e.pay_info, e.min_qty).run();
+    // 定期揪跑：每週選幾天、到哪一天為止，一次建立每一場（最多 60 場），可選擇遇到國定假日不開
+    const rep = b.repeat && Array.isArray(b.repeat.weekdays) ? { days: [...new Set(b.repeat.weekdays.map(Number).filter((d) => d >= 0 && d <= 6))], until: str(b.repeat.until, 10), skip: b.repeat.skip_holidays === true } : null;
+    let dates = [e.date];
+    if (rep && rep.days.length) {
+      if (!isDate(rep.until) || rep.until < e.date) return fail(400, '重複的結束日期不正確');
+      const end = Math.min(Date.parse(`${rep.until}T00:00:00Z`), Date.parse(`${e.date}T00:00:00Z`) + 366 * 864e5);
+      const off = rep.skip ? new Set((await env.DB.prepare('SELECT date FROM holidays WHERE date BETWEEN ? AND ? AND is_holiday = 1 AND name IS NOT NULL').bind(e.date, rep.until).all()).results.map((r) => r.date)) : new Set();
+      dates = [];
+      for (let t = Date.parse(`${e.date}T00:00:00Z`); t <= end && dates.length < 60; t += 864e5) {
+        const d = new Date(t).toISOString().slice(0, 10);
+        if (rep.days.includes(new Date(t).getUTCDay()) && !off.has(d)) dates.push(d);
+      }
+      if (!dates.length) return fail(400, '這段期間沒有符合的日期');
+    }
+    const series = dates.length > 1 ? rid(8) : null;
+    // 報名截止：跟著每一場往後推（保持跟活動日的距離）
+    const dl = (d) => { if (!e.deadline) return e.deadline; const shift = Date.parse(`${d}T00:00:00Z`) - Date.parse(`${e.date}T00:00:00Z`); const t = new Date(Date.parse(`${e.deadline}:00Z`) + shift); return t.toISOString().slice(0, 16); };
+    const ids = dates.map(() => rid(8)), id = ids[0];
+    await env.DB.batch(dates.map((d, i) => env.DB.prepare(`INSERT INTO events (id, kind, title, date, gather_time, end_time, place, lead, note, week_no, plan_text, capacity, signup_open, deadline, created_by, fee, guest_max, meal_options, link_url, link_label, team_id, questions, visibility, options, group_reg, items, pricing, pay_info, min_qty, series_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .bind(ids[i], e.kind, e.title, d, e.gather_time, e.end_time, e.place, e.lead, e.note, i ? null : e.week_no, e.plan_text, e.capacity, e.signup_open, dl(d), member.id, e.fee, e.guest_max, e.meal_options, e.link_url, e.link_label, e.team_id, e.questions, e.visibility, e.options, e.group_reg, e.items, e.pricing, e.pay_info, e.min_qty, series)));
     // 複製活動：沿用原活動的座位圖（獎項每年不同，不複製）
     const from = str(b.copy_from, 32);
     if (from) {
       const src = await evById(from);
       if (src && await canSee(src)) await env.DB.prepare('UPDATE events SET seat_layout = (SELECT seat_layout FROM events WHERE id = ?) WHERE id = ?').bind(from, id).run();
     }
-    await audit(env, req, member, 'event.create', 'event', id, `${e.title}${e.team_id ? `（${e.team_id}）` : ''}${e.visibility === 'invite' ? '，邀請制' : ''}${from ? `，複製自 ${from}` : ''}`);
+    await audit(env, req, member, 'event.create', 'event', id, `${e.title}${e.team_id ? `（${e.team_id}）` : ''}${e.visibility === 'invite' ? '，邀請制' : ''}${from ? `，複製自 ${from}` : ''}${series ? `，定期 ${dates.length} 場` : ''}`);
     // 邀請制不廣播；之後邀請誰就通知誰
     if (b.notify !== false && e.visibility !== 'invite') await notify(env, e.team_id ? await teamMemberIds(e.team_id, member.id) : await allMemberIds(env, member.id), 'event',
-      { title: `${e.kind === 'survey' ? '新問卷' : '新活動'}：${e.title}`, body: `${e.date}${e.gather_time ? ` ${e.gather_time}` : ''}　${e.place || ''}`, url: `/#/e/${id}` });
-    return json({ id });
+      { title: `${e.kind === 'survey' ? '新問卷' : series ? '定期揪跑' : '新活動'}：${e.title}`, body: series ? `${dates[0]} 起共 ${dates.length} 場${e.gather_time ? `，${e.gather_time} 集合` : ''}　${e.place || ''}` : `${e.date}${e.gather_time ? ` ${e.gather_time}` : ''}　${e.place || ''}`, url: `/#/e/${id}` });
+    return json({ id, count: dates.length, series });
   }
 
   const m1 = path.match(/^\/api\/events\/([\w-]{1,32})$/);
@@ -960,7 +1074,8 @@ async function api(req, env, path, method) {
         myPayReported: mine?.pay_reported_at || null, myPicked: mine?.picked_at || null, myPaidNote: mine?.paid_note || null,
         items: itemDefs, pricing: parseQ(ev.pricing, null), payInfo: parseQ(ev.pay_info, null), sold, myMembership: member.membership,
         options: parseQ(ev.options), regProfile: ev.group_reg ? (regRow ? (regRow.complete ? 'ok' : 'incomplete') : 'none') : null,
-        team, manage, checkin: teamCan(ev.team_id, 'checkin'), invite: inv, attendToken: attendTok });
+        team, manage, checkin: teamCan(ev.team_id, 'checkin'), invite: inv, attendToken: attendTok,
+        series: ev.series_id ? (await env.DB.prepare('SELECT id, date FROM events WHERE series_id = ? ORDER BY date LIMIT 80').bind(ev.series_id).all()).results : null });
     }
     if (method === 'PUT') {
       const e = readEvent(await body());
@@ -975,9 +1090,14 @@ async function api(req, env, path, method) {
     }
     if (method === 'DELETE') {
       if (!teamCan(cur.team_id, 'event')) return fail(403, '沒有刪除這個活動的權限');
-      await env.DB.prepare('DELETE FROM events WHERE id = ?').bind(id).run();
-      await audit(env, req, member, 'event.delete', 'event', id, cur.title);
-      return json({ ok: true });
+      // 定期揪跑：?series=after 連同之後的場次一起刪，已報名的人會收到通知
+      const after = url0(req).searchParams.get('series') === 'after' && cur.series_id;
+      const gone = after ? (await env.DB.prepare('SELECT id, date FROM events WHERE series_id = ? AND date >= ?').bind(cur.series_id, cur.date).all()).results : [{ id, date: cur.date }];
+      const who = (await env.DB.prepare(`SELECT DISTINCT member_id FROM signups WHERE status IN ('in','wait') AND event_id IN (${gone.map(() => '?').join(',')})`).bind(...gone.map((g) => g.id)).all()).results.map((r) => r.member_id).filter((x) => x !== member.id);
+      await env.DB.batch(gone.map((g) => env.DB.prepare('DELETE FROM events WHERE id = ?').bind(g.id)));
+      if (who.length) await notify(env, who, 'event', { title: `活動取消：${cur.title}`, body: gone.length > 1 ? `${gone[0].date} 起 ${gone.length} 場取消` : `${cur.date} 這場取消`, url: '/#/' });
+      await audit(env, req, member, 'event.delete', 'event', id, `${cur.title}${gone.length > 1 ? `（連同之後 ${gone.length} 場）` : ''}`);
+      return json({ ok: true, count: gone.length });
     }
   }
 

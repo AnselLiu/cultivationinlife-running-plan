@@ -493,6 +493,13 @@ function settingsPanel() {
       <button class="btn ghost sm">儲存捷徑</button>
     </form>
   </section>
+  <section class="card" id="holCard">
+    <h3>國定假日</h3>
+    <p class="tiny" style="margin:0">從新北市政府資料開放平台「政府行政機關辦公日曆表」匯入，行事曆會標出放假與補班，定期揪跑可以選擇遇到國定假日不開。每年公告後（通常前一年 6 月）手動匯入一次。</p>
+    <div id="holYears" class="lstats"><span class="tiny">載入中…</span></div>
+    <div class="row" style="gap:8px">${[new Date().getFullYear(), new Date().getFullYear() + 1].map((y) => `<button type="button" class="btn ghost sm" data-holy="${y}">匯入 ${y} 年</button>`).join('')}</div>
+    <div id="holOut"></div>
+  </section>
   <h3 class="sgt">安全與隱私</h3>
   ${(me.realRole || me.role) === 'chair' ? `<section class="card">
     <h3>幹部兩步驟驗證</h3>
@@ -516,6 +523,21 @@ const docRow = (d = {}) => `<div class="drow">
   <input data-k="note" placeholder="說明（選填）" maxlength="80" value="${esc(d.note || '')}">
   <button type="button" class="btn danger sm" data-rmdoc aria-label="移除">移除</button></div>`;
 function bindSettings() {
+  const loadHol = async () => {
+    const { years } = await api('/holidays').catch(() => ({ years: [] }));
+    if ($('#holYears')) $('#holYears').innerHTML = years.length ? years.map((y) => `<span>${y.year} 年 <b class="num">${y.named}</b> 個節日</span>`).join('') : '<span class="tiny">還沒有匯入任何一年</span>';
+  };
+  loadHol();
+  for (const b of document.querySelectorAll('[data-holy]')) b.onclick = async () => {
+    b.disabled = true; const t = b.textContent; b.textContent = '匯入中…';
+    try {
+      const r = await api('/holidays/import', { method: 'POST', body: { year: Number(b.dataset.holy) } });
+      $('#holOut').innerHTML = `<p class="notice" style="margin:0">已匯入 ${r.year} 年：${r.total} 天（含週末），節日 ${r.holidays.length} 天、補班 ${r.workdays} 天。</p>
+        <div class="chips" style="margin-top:8px">${r.holidays.filter((h, i, a) => a.findIndex((x) => x.name === h.name) === i).map((h) => `<span class="pill">${esc(h.date.slice(5).replace('-', '/'))} ${esc(h.name)}</span>`).join('')}</div>`;
+      toast(`已匯入 ${r.year} 年假日`); loadHol();
+    } catch (err) { toast(err.message); }
+    b.disabled = false; b.textContent = t;
+  };
   const reload = async (msg) => { await refreshMe(); toast(msg); applyFeatures(); paintCountdown(); adminView('settings'); };
   const save = async (key, body, msg) => { try { await api(`/settings/${key}`, { method: 'POST', body }); await reload(msg); } catch (e) { toast(e.message); } };
   $('#orgForm').onsubmit = (e) => { e.preventDefault(); const f = e.target;
