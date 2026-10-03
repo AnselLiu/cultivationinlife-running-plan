@@ -36,6 +36,7 @@
 <div class="aurora" aria-hidden="true"><i></i><i></i><i></i></div>
 
 <header class="top">
+  <a class="skiplink" href="#tabs" id="skipTabs">跳到主要分頁</a>
   <button type="button" class="backbtn" id="backBtn" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg><span id="backLabel">返回</span></button>
   <a class="brand" href="#/">
     <img class="mark" src="/icons/icon-192.png" alt="耕跑團" width="36" height="36">
@@ -47,21 +48,42 @@
     <a class="themebtn bell" href="#/notifications" id="bell" title="通知" aria-label="通知">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.4 9.6a5.6 5.6 0 0 1 11.2 0c0 4 1.4 5.4 1.4 5.4H5s1.4-1.4 1.4-5.4Z"/><path d="M10.2 18.4a2 2 0 0 0 3.6 0"/></svg>
       <b id="bellCount" aria-hidden="true" hidden></b></a>
-    <button class="themebtn" id="theme" title="切換深淺色" aria-label="切換深淺色"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="7.6"/><path d="M12 4.4a7.6 7.6 0 0 1 0 15.2Z" fill="currentColor" stroke="none"/></svg></button>
   </span>
 </header>
 
 <div id="nlive" class="sr" aria-live="polite"></div>
 <main id="view" class="wrap"><div class="skel" aria-label="載入中"><i></i><i></i><i></i></div></main>
 
+<!-- 主要分頁：iPhone／iPad 直向是下方浮動的玻璃膠囊，1024 以上是左側側邊欄（主要 5 項與分頁列共用同一組 a[data-tab]）。
+     拍照：GPS 跑步開著時收進「跑步」（data-tab="/studio" 隱藏），關掉 GPS 時才出現在第 3 格 -->
 <nav class="tabs" id="tabs" aria-label="主要分頁">
   <a class="navbrand" href="#/" aria-label="耕跑團首頁"><img src="/icons/icon-192.png" alt=""><span><b>耕跑團</b><small>Cultivation in Life</small></span></a>
-  <a href="#/" data-tab="/"><span class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9h3l7-4v14l-7-4H4a1 1 0 0 1-1-1v-4a1 1 0 0 1 1-1Z"/><path d="M17.5 8.5a5 5 0 0 1 0 7"/><path d="M6.5 15v3.5"/></svg></span><span class="tl" data-tl="home">團練</span></a>
+  <i class="tabsel" aria-hidden="true"></i>
+  <a href="#/" data-tab="/"><span class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9.5" cy="8" r="3.2"/><path d="M3.5 19.5c.6-3.4 3-5.3 6-5.3s5.4 1.9 6 5.3"/><path d="M15.2 4.9a3.2 3.2 0 0 1 0 6.2M17.6 14.4c1.9.6 3 2.3 3.3 5.1"/></svg></span><span class="tl" data-tl="home">團練</span></a>
   <a href="#/plan" data-tab="/plan"><span class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.2" y="4.8" width="17.6" height="15.4" rx="3.4"/><path d="M3.4 9.6h17.2M8 3.2v3.4M16 3.2v3.4"/><path d="M7.6 13.4h3M7.6 16.6h8.8M13.4 13.4h3"/></svg></span><span class="tl" data-tl="plan">課表</span></a>
-  <a href="#/run" data-tab="/run"><span class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13.5 4.6a1.5 1.5 0 1 0 0-.1Z"/><path d="M6 20.5l2.6-5 2.4-1.6-1-4.2 3.6-1.4 1.8 3.2 3.4 1"/><path d="M9.6 13.9 6.8 11l-2.6 1.2"/><path d="M11 13.9l1.3 3.2 3.4 2.6"/></svg></span><span class="tl" data-tl="run">跑步</span></a>
+  <a href="#/run" data-tab="/run"><span class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="14" cy="4.6" r="1.6"/><path d="M6 20.5l2.6-5 2.4-1.6-1-4.2 3.6-1.4 1.8 3.2 3.4 1"/><path d="M9.6 13.9 6.8 11l-2.6 1.2"/><path d="M11 13.9l1.3 3.2 3.4 2.6"/></svg></span><b class="tdot" aria-hidden="true"></b><span class="tl" data-tl="run">跑步</span></a>
+  <a href="#/studio" data-tab="/studio" hidden><span class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8.2a2 2 0 0 1 2-2h1.9l1.5-2h5.2l1.5 2H18a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2Z"/><circle cx="12" cy="12.6" r="3.6"/></svg></span><span class="tl" data-tl="studio">拍照</span></a>
   <a href="#/map" data-tab="/map"><span class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4.5 3.5 6.6v13l5.5-2.1 6 2.1 5.5-2.1v-13L15 6.6Z"/><path d="M9 4.5v13M15 6.6v13"/></svg></span><span class="tl" data-tl="map">地圖</span></a>
-  <a href="#/studio" data-tab="/studio"><span class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8.2a2 2 0 0 1 2-2h1.9l1.5-2h5.2l1.5 2H18a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2Z"/><circle cx="12" cy="12.6" r="3.6"/></svg></span><span class="tl" data-tl="studio">拍照</span></a>
-  <a href="#/me" data-tab="/me"><span class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8.4" r="3.6"/><path d="M4.8 20.2c.7-3.6 3.6-5.6 7.2-5.6s6.5 2 7.2 5.6"/></svg></span><span class="tl" data-tl="me">我的</span></a>
+  <a href="#/me" data-tab="/me"><span class="ic"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="10" r="3"/><path d="M6.6 18.2c1.2-2.2 3.1-3.3 5.4-3.3s4.2 1.1 5.4 3.3"/></svg></span><b class="tdot" aria-hidden="true"></b><span class="tl" data-tl="me">我的</span></a>
+  <!-- 側邊欄才有的次要項目（1024 以下不顯示）：用 data-nav，.tabs a[data-tab] 仍只找得到分頁 -->
+  <div class="navmore">
+    <div class="navgrp" role="group" aria-labelledby="ngTrain"><span class="ngt" id="ngTrain">訓練</span>
+      <a href="#/report" data-nav="/report"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-8M22 20H2"/></svg><span>訓練報表</span></a>
+      <a href="#/challenge" data-nav="/challenge"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="14.5" r="5"/><path d="M8.5 3.5l2 6.5M15.5 3.5l-2 6.5"/></svg><span>里程挑戰</span></a>
+      <a href="#/studio" data-nav="/studio" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8.2a2 2 0 0 1 2-2h1.9l1.5-2h5.2l1.5 2H18a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2Z"/><circle cx="12" cy="12.6" r="3.6"/></svg><span>拍照分享</span></a>
+    </div>
+    <div class="navgrp" role="group" aria-labelledby="ngClub"><span class="ngt" id="ngClub">跑團</span>
+      <a href="#/calendar" data-nav="/calendar"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.2" y="4.8" width="17.6" height="15.4" rx="3.4"/><path d="M3.4 9.6h17.2M8 3.2v3.4M16 3.2v3.4"/></svg><span>行事曆</span></a>
+      <a href="#/teams" data-nav="/teams"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="9" r="3"/><circle cx="16.5" cy="9.5" r="2.5"/><path d="M2.8 19c.5-3 2.6-4.6 5.2-4.6s4.7 1.6 5.2 4.6M14 14.6c2.6-.4 5 .9 5.7 4.4"/></svg><span>分團</span></a>
+      <a href="#/tickets" data-nav="/tickets"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 8a2 2 0 0 0 2-2h14a2 2 0 0 0 2 2v2a2 2 0 0 0 0 4v2a2 2 0 0 0-2 2H5a2 2 0 0 0-2-2v-2a2 2 0 0 0 0-4Z"/><path d="M14 6v12" stroke-dasharray="2 2.5"/></svg><span>入場券</span></a>
+    </div>
+    <div class="navgrp" role="group" aria-labelledby="ngStaff" id="navStaff" hidden><span class="ngt" id="ngStaff">幹部</span>
+      <a href="#/admin" data-nav="/admin" data-perm="admin" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 3.5v2.2M12 18.3v2.2M3.5 12h2.2M18.3 12h2.2M6 6l1.6 1.6M16.4 16.4 18 18M6 18l1.6-1.6M16.4 7.6 18 6"/></svg><span>管理後台</span></a>
+      <a href="#/roster" data-nav="/roster" data-perm="roster" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 6h12M8 12h12M8 18h12"/><circle cx="4" cy="6" r="1"/><circle cx="4" cy="12" r="1"/><circle cx="4" cy="18" r="1"/></svg><span>團員名冊</span></a>
+      <a href="#/logs/team" data-nav="/logs/team" data-perm="logs" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 20h18M4 16l5-5 4 3 7-8"/></svg><span>團員訓練</span></a>
+      <a href="#/plan/new" data-nav="/plan/new" data-perm="publish" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.2" y="4.8" width="17.6" height="15.4" rx="3.4"/><path d="M3.4 9.6h17.2M8 3.2v3.4M16 3.2v3.4M12 12.6v5M9.5 15.1h5"/></svg><span>發布課表</span></a>
+    </div>
+  </div>
 </nav>
 
 <script type="module" src="/app.js"></script>

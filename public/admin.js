@@ -565,7 +565,7 @@ function settingsPanel() {
     <h3>分頁列名稱</h3>
     <form id="tabsForm" class="grid3">${Object.entries(TAB_DEFAULT).map(([k, v]) => `<label>${v}<input name="${k}" maxlength="4" placeholder="${v}" value="${esc(cfg.settings?.tabs?.[k] || '')}"></label>`).join('')}
       <button class="btn sm" style="grid-column:1/-1">儲存名稱</button></form>
-    <p class="tiny" style="margin:0">每個最多 4 個字，留空就用預設。每個人也可以在「我的 → 通知與裝置」選擇只顯示圖示。</p>
+    <p class="tiny" style="margin:0">名稱會顯示在下方分頁列與 iPad／電腦的側邊欄，每個最多 4 個字，留空就用預設。「拍照」只有在關閉 GPS 跑步時才會出現在分頁列。</p>
   </section>
   <section class="card">
     <h3>倒數與捷徑</h3>

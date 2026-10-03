@@ -731,17 +731,65 @@ const TAB_DEFAULT = { home: '團練', plan: '課表', run: '跑步', map: '地�
 // 附近即時影像的省流量：打開後地點卡的影像不自動載入、大圖不自動更新（只存在這支手機）
 const camLazy = { get() { try { return localStorage.getItem('cil-cam-lazy') === '1'; } catch { return false; } }, set(v) { try { v ? localStorage.setItem('cil-cam-lazy', '1') : localStorage.removeItem('cil-cam-lazy'); } catch {} } };
 const iconsOnly = { get() { try { return localStorage.getItem('cil-tab-icons') === '1'; } catch { return false; } }, set(v) { try { v ? localStorage.setItem('cil-tab-icons', '1') : localStorage.removeItem('cil-tab-icons'); } catch {} } };
+// 改成 5 格後清掉一次舊的「只顯示圖示」（那是 6 格太擠時選的）：每個人先看到一次有文字的版本，想要可以再打開
+try { if (!localStorage.getItem('cil-nav-v2')) { localStorage.removeItem('cil-tab-icons'); localStorage.setItem('cil-nav-v2', '1'); } } catch {}
+// 分頁的 aria-label：名稱，加上小點的狀態（跑步記錄中、我的需要處理）；值沒變就不重設（英文介面翻好的不會被蓋回中文）
+//   英文介面一律用預設名稱：管理員改的名稱只有中文，逐段翻出來會很長（例如「Training training plan」）而且放不下
+const tabNames = () => (I18N.lang === 'en' ? TAB_DEFAULT : { ...TAB_DEFAULT, ...(cfg.settings?.tabs || {}) });
+function tabLabel(a) {
+  const n = tabNames()[a.querySelector('.tl')?.dataset.tl] || '';
+  const v = a.dataset.live === 'paused' ? `${n}，已暫停` : a.dataset.live ? `${n}，記錄中` : a.hasAttribute('data-alert') ? `${n}，需要處理` : n;
+  if (a.dataset.lbl !== v) { a.dataset.lbl = v; a.setAttribute('aria-label', I18N.t(v)); }
+}
 function applyTabs() {
-  const names = { ...TAB_DEFAULT, ...(cfg.settings?.tabs || {}) };
-  for (const el of document.querySelectorAll('.tabs .tl')) { el.textContent = names[el.dataset.tl] || el.textContent; el.closest('a').setAttribute('aria-label', names[el.dataset.tl]); }
+  const names = tabNames();
+  for (const el of document.querySelectorAll('.tabs .tl')) el.textContent = names[el.dataset.tl] || el.textContent;
+  document.querySelector('.tabs a[data-tab="/me"]')?.toggleAttribute('data-alert', !!me?.mfaPending);
+  for (const a of document.querySelectorAll('.tabs > a[data-tab]')) tabLabel(a);
   document.body.classList.toggle('iconsonly', iconsOnly.get());
 }
 function applyFeatures() {
   applyTabs();
   const s = document.querySelector('.tabs a[data-tab="/studio"]'), r = document.querySelector('.tabs a[data-tab="/run"]');
-  if (s) s.hidden = !feat('studio');
+  if (s) s.hidden = !feat('studio') || feat('gps');   // GPS 開：拍照收進跑步
   if (r) r.hidden = !feat('gps');
+  applyNav();
+  paintTabs();
 }
+// 側邊欄的次要項目：拍照分享只在 GPS 開時放這裡（關掉 GPS 時拍照已經是主要分頁）；幹部項目各自檢查權限，一列都沒有就整區不顯示
+const canTeamLogs = () => allow('plan') || anyTeamAllow('roster');
+function applyNav() {
+  document.querySelector('.navmore a[data-nav="/studio"]').hidden = !(feat('studio') && feat('gps'));
+  const ok = { admin: allow('members') || allow('roles') || allow('settings'), roster: allow('roster'), logs: !!me && canTeamLogs(), publish: !!me && canPublishPlan() };
+  for (const a of document.querySelectorAll('.navmore a[data-perm]')) a.hidden = !ok[a.dataset.perm];
+  $('#navStaff').hidden = !document.querySelector('.navmore a[data-perm]:not([hidden])');
+  document.documentElement.style.setProperty('--n', document.querySelectorAll('.tabs > a[data-tab]:not([hidden])').length);
+}
+// 分頁的選取狀態：1024 以下用 tabOf；側邊欄在主要與次要項目裡找最精確的那一個（沿著上一層往上找，例如 /t/youth 亮「分團」）。
+//   通知頁沿用上一次亮著的分頁；選取膠囊用 --i 滑過去；換頁時縮小的分頁列展開
+//   aria-current：這一項就是目前這一頁才用 "page"；子頁的上一層、通知頁沿用的分頁用 "true"（仍唸「目前」，樣式一樣）
+const wideNav = matchMedia('(min-width:1024px)');
+const curHash = () => location.hash.replace(/^#/, '').split('?')[0] || '/';
+let lastHash = '/';
+function paintTabs(hash = curHash()) {
+  if (hash === '/notifications') hash = lastHash; else lastHash = hash;
+  const nav = $('#tabs'), tabs = [...nav.querySelectorAll(':scope > a[data-tab]:not([hidden])')];
+  const i = tabs.findIndex((a) => a.dataset.tab === tabOf(hash));
+  let cur = tabs[i];
+  if (wideNav.matches) {
+    const links = [...tabs, ...nav.querySelectorAll('.navmore a:not([hidden])')].filter((a) => !a.closest('[hidden]'));
+    cur = null;
+    for (let h = hash, k = 0; k < 5 && !cur; k++, h = parentOf(h)[0].slice(1)) cur = links.find((a) => (a.dataset.tab || a.dataset.nav) === h);
+  }
+  const real = curHash();
+  for (const a of nav.querySelectorAll('a[data-tab], a[data-nav]')) { if (a === cur) a.setAttribute('aria-current', (a.dataset.tab || a.dataset.nav) === real ? 'page' : 'true'); else a.removeAttribute('aria-current'); }
+  nav.style.setProperty('--i', Math.max(i, 0));
+  nav.classList.toggle('nosel', i < 0);
+  nav.classList.remove('mini');
+  document.body.classList.remove('tasking');   // 地圖畫路線到一半就換頁：分頁列回來
+  untype();
+}
+wideNav.addEventListener?.('change', () => paintTabs());
 
 // 倒數：自己的主要賽事 → 最近的自己的賽事 → 協會預設
 function paintCountdown() {
@@ -2923,13 +2971,17 @@ async function runView() {
   }
   // 開始前
   if (!x) {
-    view.innerHTML = `${largeTitle('跑步記錄', '計時加上 GPS，跑完自動算出今天的成績')}
-      <a class="card tight lit maplink" href="#/map"><div class="row spread"><span class="row" style="gap:10px"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4 3.5 6v14L9 18l6 2 5.5-2V4L15 6Z"/><path d="M9 4v14M15 6v14"/></svg><span><b>練跑地圖</b><span class="tiny" style="display:block">地點、現場回報、天氣，畫路線存 GPX、開揪跑</span></span></span><span class="tiny">›</span></div></a>
+    // 練跑地圖就是隔壁的分頁，這裡不再放連結卡；拍照分享收進「跑完之後」（GPS 開著時拍照不在分頁列）
+    view.innerHTML = `${largeTitle('跑步', '計時加上 GPS，跑完自動算出今天的成績')}
       <section class="card runstart">
         <button class="runbtn go" id="runGo" aria-label="開始跑步記錄"><span>開始</span></button>
         <p class="tiny center" style="margin:0">第一次使用會詢問定位權限。跑步時螢幕會保持亮著；如果鎖上螢幕，iPhone 會暫停定位，解鎖後再接著記錄。</p>
         <button class="btn ghost block" id="runNoGps">不用 GPS，只計時（跑步機、操場）</button>
       </section>
+      ${group('跑完之後', [
+        feat('studio') ? row('#/studio', MI.camera, '拍照分享', '距離、時間和路線放進照片，分享到 IG').replace('class="setrow"', 'class="setrow runshare"') : '',
+        row('#/log?extra=1&from=run', IC.check, '手動記一筆', '沒帶手機跑？手動記錄這次訓練'),
+      ])}
       <section class="card"><h3>小提醒</h3><ol class="steps">
         <li>到戶外等「GPS 良好」再開始，距離會比較準</li><li>練間歇或在操場跑，可以按「計圈」把每一趟分開記</li>
         <li>跑完按「結束」，再按「存到訓練紀錄」，系統會自動對上今天的課表</li></ol>
@@ -3018,13 +3070,17 @@ async function todayGoal() {
 function runBar() {
   let bar = document.getElementById('runbar');
   const onRun = location.hash.split('?')[0] === '#/run';
+  // 分頁列「跑步」的小點：記錄中綠色呼吸燈、暫停橘色（每一頁都看得到，包含跑步頁本身）
+  const rt = document.querySelector('.tabs a[data-tab="/run"]'), live = me && Run.active() ? Run.session()?.status || '' : '';
+  if (rt && (rt.dataset.live || '') !== live) { if (live) rt.dataset.live = live; else delete rt.dataset.live; tabLabel(rt); }
+  document.body.classList.toggle('runbar-on', !!live && !onRun);
   if (!me || !Run.active() || onRun) { bar?.remove(); return; }
   if (!bar) {
     bar = document.createElement('a'); bar.id = 'runbar'; bar.className = 'runbar'; bar.href = '#/run';
     document.body.append(bar);
   }
   const y = Run.session();
-  bar.innerHTML = `<i class="${y.status}"></i><span>${y.status === 'paused' ? '已暫停' : '記錄中'}</span><b class="num">${hms(Run.elapsed() / 1000)}</b><b class="num">${(y.dist / 1000).toFixed(2)} km</b>`;
+  bar.innerHTML = `<i class="${y.status}"></i><span>${y.status === 'paused' ? '已暫停' : '記錄中'}</span><b class="num">${hms(Run.elapsed() / 1000)}</b><b class="num">${(y.dist / 1000).toFixed(2)} km</b><span class="sr">，回到跑步記錄</span>`;
 }
 setInterval(runBar, 1000);
 
@@ -3046,8 +3102,8 @@ const teamsView = lazy('./teams.js', 'teamsView');
 // ---------- 我的 ----------
 // ---------- 我的：像 iPhone 設定一樣分組，每一列點進去是一頁 ----------
 const ME_SECTIONS = {
-  profile: '個人資料', races: '我的賽事與倒數', reg: '賽事報名資料', teams: '主團與分團', notify: '通知與裝置',
-  security: '帳號與安全', privacy: '隱私', assoc: '協會', card: '會籍卡',
+  profile: '個人資料', races: '我的賽事與倒數', reg: '賽事報名資料', teams: '主團與分團', notify: '通知設定',
+  calendar: '行事曆訂閱', display: '外觀與語言', security: '帳號與安全', privacy: '隱私', assoc: '協會', card: '會籍卡',
 };
 const row = (href, icon, title, sub = '', badge = '') => `<a class="setrow" href="${href}"><span class="sic">${icon}</span><span class="st"><b>${title}</b>${sub ? `<span class="tiny">${sub}</span>` : ''}</span>${badge}<span class="chev" aria-hidden="true"></span></a>`;
 const btnRow = (id, icon, title, sub = '') => `<button class="setrow" id="${id}"><span class="sic">${icon}</span><span class="st"><b>${title}</b>${sub ? `<span class="tiny">${sub}</span>` : ''}</span><span class="chev" aria-hidden="true"></span></button>`;
@@ -3066,6 +3122,12 @@ const MI = {
   plan: IC.calendar, help: ic('<circle cx="12" cy="12" r="9"/><path d="M9.6 9.3a2.5 2.5 0 0 1 4.8.9c0 1.7-2.4 2.2-2.4 3.8M12 17.2v.1"/>'),
   share: ic('<path d="M12 15V3.5M7.5 8 12 3.5 16.5 8M5 12.5v6A2.5 2.5 0 0 0 7.5 21h9a2.5 2.5 0 0 0 2.5-2.5v-6"/>'),
   out: ic('<path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3M10 16l4-4-4-4M14 12H4"/>'),
+  form: ic('<rect x="5" y="4" width="14" height="17" rx="2.5"/><path d="M9 4V3h6v1M8.5 10h7M8.5 13.5h7M8.5 17h4"/>'),
+  camera: ic('<path d="M4 8.2a2 2 0 0 1 2-2h1.9l1.5-2h5.2l1.5 2H18a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2Z"/><circle cx="12" cy="12.6" r="3.6"/>'),
+  trend: ic('<path d="M3 20h18M4 16l5-5 4 3 7-8"/>'),
+  calsub: ic('<rect x="3.2" y="4.8" width="17.6" height="15.4" rx="3.4"/><path d="M3.4 9.6h17.2M8 3.2v3.4M16 3.2v3.4M12 12.5v5M9.8 15.3 12 17.5l2.2-2.2"/>'),
+  display: ic('<circle cx="12" cy="12" r="8"/><path d="M12 4v16M12 8h6.5M12 12h8M12 16h6.5"/>'),
+  addhome: ic('<rect x="4" y="4" width="16" height="16" rx="4"/><path d="M12 8.5v7M8.5 12h7"/>'),
 };
 async function meView(section) {
   const welcome = new URLSearchParams(location.hash.split('?')[1] || '').get('welcome');
@@ -3073,11 +3135,20 @@ async function meView(section) {
   if (googleMsg) section = 'security';
   if (!section) return meHome(welcome);
   if (!ME_SECTIONS[section]) { location.hash = '#/me'; return; }
-  return ({ profile: meProfile, races: meRaces, reg: meReg, teams: meTeams, notify: meNotify, security: meSecurity, privacy: mePrivacy, assoc: meAssoc, card: meCard })[section](googleMsg);
+  return ({ profile: meProfile, races: meRaces, reg: meReg, teams: meTeams, notify: meNotify, calendar: meCalendar, display: meDisplay, security: meSecurity, privacy: mePrivacy, assoc: meAssoc, card: meCard })[section](googleMsg);
 }
+// 「我的賽事與倒數」的副標：目前倒數哪一場、還有幾天
+function raceSub() {
+  const r = cfg.race; if (!r?.date) return '選擇右上角倒數哪一場';
+  const days = Math.round((new Date(`${r.date}T00:00:00`) - new Date().setHours(0, 0, 0, 0)) / 864e5);
+  if (days < 0) return '選擇右上角倒數哪一場';
+  return `倒數：<span translate="no">${esc(r.name.replace(/^20\d\d\s*/, '').replace('馬拉松', '馬'))}・</span>${days ? `${days} 天` : '今天'}`;
+}
+// 分組順序：內容類（賽事、分團、幹部）先列，設定類放最後；訓練報表與里程挑戰的上一層是課表，不放這裡（點進去分頁列會跳到課表）
 async function meHome(welcome) {
   const main = teamOf(me.main_team);
-  const staff = allow('members') || allow('roles') || allow('settings') || allow('roster') || canPublishPlan();
+  const admin = allow('members') || allow('roles') || allow('settings');
+  const staff = admin || allow('roster') || canTeamLogs() || canPublishPlan();
   view.innerHTML = `
     ${largeTitle('我的')}
     ${welcome ? '<div class="notice">歡迎加入！先到「個人資料」確認項目和組別；主團會由管理員設定。</div>' : ''}
@@ -3088,30 +3159,38 @@ async function meHome(welcome) {
         <span class="tiny" style="display:block">${me.title ? `<span translate="no">${esc(me.title)}</span>` : esc(me.roleName || ROLE_NAME[me.role] || '團員')}・${me.dist === 'hm' ? '半馬' : '全馬'} ${esc(me.grp)} 組</span></span>
       ${main ? `<span class="pill team" style="--tc:${esc(main.color)}">${teamIcon(main, 'xs')}<span translate="no">${esc(main.name)}</span></span>` : '<span class="pill">主團未設定</span>'}
     </a>
-    ${group('我的跑步', [
-      row('#/report', MI.report, '訓練報表', '週里程、完成率、個人最佳'),
-      row('#/challenge', MI.flag, '每月里程挑戰', '徽章、分團對抗、排行榜'),
-      row('#/me/races', MI.flag, '我的賽事與倒數', '右上角倒數哪一場'),
-      row('#/me/reg', MI.idcard, '賽事報名資料', '幹部代為團體報名時使用', '<span id="regBadge"></span>'),
-      row('#/tickets', MI.ticket, '入場券、團購領取與中獎紀錄'),
+    ${group('賽事與入場券', [
+      row('#/me/races', MI.flag, '我的賽事與倒數', raceSub()),
+      row('#/me/reg', MI.form, '賽事報名資料', '幹部代為團體報名時使用', '<span id="regBadge"></span>'),
+      row('#/tickets', MI.ticket, '入場券與團購', '領取 QR Code、中獎紀錄'),
     ])}
-    ${group('分團', [row('#/me/teams', MI.team, '主團與分團', main ? `主團：<span translate="no">${esc(main.name)}</span>` : '主團由管理員設定')])}
+    ${group('分團與協會', [
+      row('#/me/teams', MI.team, '主團與分團', main ? `主團：<span translate="no">${esc(main.name)}</span>` : '主團由管理員設定'),
+      row('#/me/assoc', MI.building, esc(org().name || '台灣耕跑團協會'), `${esc(me.membershipName || '跑友')}・入會、章程與文件`),
+      me.membership === 'active' ? row('#/me/card', MI.idcard, '會籍卡', me.paid_until ? `會費繳至 ${esc(me.paid_until)}` : '出示給幹部掃描') : '',
+    ])}
+    ${staff ? group('幹部專區', [
+      admin ? row('#/admin', MI.admin, '管理後台', '總覽、會員、權限、分團、系統設定') : '',
+      allow('roster') ? row('#/roster', MI.roster, '團員名冊') : '',
+      canTeamLogs() ? row('#/logs/team', MI.trend, '團員訓練', '分享給教練的團員每週完成率') : '',
+      canPublishPlan() ? row('#/plan/new', MI.plan, '發布課表', allow('plan') ? '教練' : '分團團長') : '',
+    ]) : ''}
     ${group('設定', [
-      row('#/me/notify', MI.bell, '通知與裝置', '推播、加到主畫面、行事曆、分頁列、語言 Language'),
+      row('#/me/notify', MI.bell, '通知設定', '推播類別、加到主畫面'),
+      row('#/me/calendar', MI.calsub, '行事曆訂閱', '團練與賽事自動出現在手機行事曆', cfg.calendarOn ? '<span class="pill solid">已開啟</span>' : ''),
+      row('#/me/display', MI.display, '外觀與語言', '深淺色、分頁列、語言 Language'),
       row('#/me/security', MI.shield, '帳號與安全', `${me.google ? 'Google 已綁定' : '綁定 Google'}、通行金鑰、登出`),
       row('#/me/privacy', MI.eye, '隱私', '分享給教練、排行榜、下載或刪除資料'),
     ])}
-    ${group('協會', [row('#/me/assoc', MI.building, esc(org().name || '台灣耕跑團協會'), `${esc(me.membershipName || '跑友')}・入會、章程與文件`),
-      me.membership === 'active' ? row('#/me/card', MI.idcard, '會籍卡', me.paid_until ? `會費繳至 ${esc(me.paid_until)}` : '出示給幹部掃描') : ''])}
-    ${staff ? group('幹部專區', [
-      (allow('members') || allow('roles') || allow('settings')) ? row('#/admin', MI.admin, '管理後台', '總覽、會員、權限、分團、系統設定') : '',
-      allow('roster') ? row('#/roster', MI.roster, '團員名冊') : '',
-      canPublishPlan() ? row('#/plan/new', MI.plan, '發布課表', allow('plan') ? '教練' : '分團團長') : '',
-    ]) : ''}
-    ${group('', [btnRow('shareApp', MI.share, '分享耕跑團 App', '用 LINE、QR Code 邀朋友一起跑'), btnRow('openGuide', MI.help, '使用說明', '一分鐘帶你看過每個功能')])}`;
+    ${group('', [isStandalone() ? '' : btnRow('addHome', MI.addhome, '加到主畫面', '才收得到團練通知，入場券沒網路也能出示'),
+      btnRow('shareApp', MI.share, '分享耕跑團 App', '用 LINE、QR Code 邀朋友一起跑'), btnRow('openGuide', MI.help, '使用說明', '一分鐘帶你看過每個功能')])}`;
   bindStepup();
   $('#openGuide').onclick = () => Guide.start();
   $('#shareApp').onclick = () => shareApp();
+  $('#addHome')?.addEventListener('click', () => {
+    openSheet('加到主畫面', `${installCard('me').replace('class="card tight installcard"', 'class="installcard sheetinstall"')}<button type="button" class="btn ghost block" data-close>關閉</button>`, $('#addHome'));
+    bindInstall();
+  });
   // 賽事報名資料填好了沒：畫面先出來，狀態晚一點補上（要解密，不要擋住整頁）
   api('/me/race-profile').then((r) => { const b = $('#regBadge'); if (b) b.outerHTML = r?.complete ? '<span class="pill solid">已填好</span>' : r?.profile ? '<span class="pill wait">未填完</span>' : ''; }).catch(() => {});
 }
@@ -3266,7 +3345,7 @@ async function meNotify() {
   const [sub, prefs] = await Promise.all([reg?.pushManager?.getSubscription().catch(() => null), api('/me/notify-prefs').catch(() => null)]);
   const denied = typeof Notification !== 'undefined' && Notification.permission === 'denied';
   const ios = /iPhone|iPad/.test(navigator.userAgent);
-  view.innerHTML = `${subTitle('通知與裝置')}
+  view.innerHTML = `${subTitle('通知設定', '推播類別、加到主畫面')}
     <section class="card">
       <div class="row spread"><h3>這支手機的推播</h3>${cfg.vapid ? `<span class="pill${sub ? ' solid' : ''}">${sub ? '已開啟' : denied ? '已被封鎖' : '未開啟'}</span>` : ''}</div>
       ${cfg.vapid ? `<p class="muted" style="margin:0">依照下方類別推播到這支手機，通知中心一律保留紀錄。${isStandalone() ? '' : '在 iPhone 上要先「加到主畫面」，再從主畫面打開才收得到。'}</p>
@@ -3278,18 +3357,7 @@ async function meNotify() {
     ${prefs ? `${!sub && cfg.vapid ? '<p class="tiny" style="margin:0 6px">這支手機還沒開啟推播，設定會在開啟後生效</p>' : ''}
       ${group('推播哪些通知', prefRows(prefs))}
       <p class="tiny" style="margin:-4px 6px 0">關掉的類別仍會留在通知中心，只是不推播到手機。設定跟著帳號，換手機也一樣。</p>` : ''}
-    ${installCard('me')}
-    <section class="card" id="calCard">
-      <div class="row spread"><h3>訂閱到手機行事曆</h3>${cfg.calendarOn ? '<span class="pill solid">已開啟</span>' : ''}</div>
-      <p class="tiny" style="margin:0">團練、揪跑與幹部設定的賽事提醒會自動出現在 iPhone、Google 行事曆，有變動也會跟著更新。訂閱網址等同你的個人鑰匙，不要分享給別人。</p>
-      <label class="switch"><span>包含所有開團活動與賽事提醒<span class="tiny" style="display:block">關掉就只有自己報名的</span></span><input type="checkbox" id="calScope" ${cfg.calScope !== 'mine' ? 'checked' : ''}><i></i></label>
-      <div id="calBox" class="row" style="gap:8px">${cfg.calendarOn ? '<button class="btn ghost sm" id="calNew">重新產生網址</button><button class="btn ghost sm" id="calOff">停用</button>' : '<button class="btn sm" id="calNew">產生訂閱網址</button>'}</div>
-    </section>
-    <section class="card"><h3>顯示</h3>
-      <label class="switch"><span>分頁列只顯示圖示<span class="tiny" style="display:block">隱藏下方圖示底下的文字</span></span><input type="checkbox" id="iconsOnly" ${iconsOnly.get() ? 'checked' : ''}><i></i></label>
-      ${cfg.settings?.features?.cams === true ? `<label class="switch"><span>省流量：影像不自動載入<span class="tiny" style="display:block">地點卡的附近即時影像點了才載入、不自動更新</span></span><input type="checkbox" id="camLazy" ${camLazy.get() ? 'checked' : ''}><i></i></label>` : ''}
-      <div class="row spread"><span>語言<span class="tiny" style="display:block" translate="no">Language</span></span>
-        <div class="seg" role="group" aria-label="Language" translate="no"><button data-lang="zh" aria-pressed="${I18N.lang === 'zh'}">中文</button><button data-lang="en" aria-pressed="${I18N.lang === 'en'}">English</button></div></div></section>`;
+    ${installCard('me')}`;
   $('#pushBtn')?.addEventListener('click', () => togglePush(sub));
   $('#pushTest')?.addEventListener('click', async () => { try { await api('/push/test', { method: 'POST' }); toast('已送出測試通知'); } catch (e) { toast(e.message); } });
   // 切換時先改畫面再存；失敗就切回去
@@ -3311,9 +3379,16 @@ async function meNotify() {
     const el = $('#pushStale'); if (el) el.hidden = false;
   }).catch(() => {});
   bindInstall();
-  $('#iconsOnly').onchange = (e) => { iconsOnly.set(e.target.checked); applyTabs(); };
-  $('#camLazy')?.addEventListener('change', (e) => camLazy.set(e.target.checked));
-  for (const b of document.querySelectorAll('[data-lang]')) b.onclick = () => { if (b.dataset.lang !== I18N.lang) I18N.setLang(b.dataset.lang); };
+}
+// 行事曆訂閱：從「通知設定」搬出來的子頁（行事曆頁的「訂閱到手機行事曆」也連到這裡）
+function meCalendar() {
+  view.innerHTML = `${subTitle('行事曆訂閱', '團練與賽事自動出現在手機行事曆')}
+    <section class="card" id="calCard">
+      <div class="row spread"><h3>訂閱到手機行事曆</h3>${cfg.calendarOn ? '<span class="pill solid">已開啟</span>' : ''}</div>
+      <p class="tiny" style="margin:0">團練、揪跑與幹部設定的賽事提醒會自動出現在 iPhone、Google 行事曆，有變動也會跟著更新。訂閱網址等同你的個人鑰匙，不要分享給別人。</p>
+      <label class="switch"><span>包含所有開團活動與賽事提醒<span class="tiny" style="display:block">關掉就只有自己報名的</span></span><input type="checkbox" id="calScope" ${cfg.calScope !== 'mine' ? 'checked' : ''}><i></i></label>
+      <div id="calBox" class="row" style="gap:8px">${cfg.calendarOn ? '<button class="btn ghost sm" id="calNew">重新產生網址</button><button class="btn ghost sm" id="calOff">停用</button>' : '<button class="btn sm" id="calNew">產生訂閱網址</button>'}</div>
+    </section>`;
   $('#calNew').onclick = async () => {
     if (cfg.calendarOn && !confirm('重新產生後，已經訂閱的舊網址會失效，要在行事曆重新訂閱。確定？')) return;
     try {
@@ -3326,7 +3401,27 @@ async function meNotify() {
     } catch (e) { toast(e.message); }
   };
   $('#calScope').onchange = async (e) => { try { const r = await api('/me/calendar-scope', { method: 'POST', body: { scope: e.target.checked ? 'all' : 'mine' } }); cfg.calScope = r.scope; toast(e.target.checked ? '行事曆會包含所有活動' : '行事曆只放自己報名的'); } catch (err) { e.target.checked = !e.target.checked; toast(err.message); } };
-  $('#calOff')?.addEventListener('click', async () => { await api('/me/calendar', { method: 'DELETE' }); cfg.calendarOn = false; toast('已停用行事曆訂閱'); meNotify(); });
+  $('#calOff')?.addEventListener('click', async () => { await api('/me/calendar', { method: 'DELETE' }); cfg.calendarOn = false; toast('已停用行事曆訂閱'); meCalendar(); });
+}
+// 外觀與語言：只存在這台裝置（深淺色、分頁列只顯示圖示、語言、省流量）
+function meDisplay() {
+  const t = theme.get() || 'auto';
+  view.innerHTML = `${subTitle('外觀與語言', '只影響這台裝置')}
+    <section class="card dispcard"><h3>外觀</h3>
+      <div class="seg themeseg" role="group" aria-label="外觀">${[['auto', '自動'], ['light', '淺色'], ['dark', '深色']].map(([k, v]) => `<button type="button" data-pick-theme="${k}" aria-pressed="${t === k}">${v}</button>`).join('')}</div>
+      <p class="tiny" style="margin:0">自動會跟著手機的深淺色設定切換</p>
+      <label class="switch"><span>分頁列只顯示圖示<span class="tiny" style="display:block">預設顯示文字；往下捲時也會自動收起文字</span></span><input type="checkbox" id="iconsOnly" ${iconsOnly.get() ? 'checked' : ''}><i></i></label>
+    </section>
+    <section class="card"><div class="row spread"><span>語言<span class="tiny" style="display:block" translate="no">Language</span></span>
+      <div class="seg" role="group" aria-label="Language" translate="no"><button data-lang="zh" aria-pressed="${I18N.lang === 'zh'}">中文</button><button data-lang="en" aria-pressed="${I18N.lang === 'en'}">English</button></div></div></section>
+    ${cfg.settings?.features?.cams === true ? `<section class="card"><label class="switch"><span>省流量：影像不自動載入<span class="tiny" style="display:block">地點卡的附近即時影像點了才載入、不自動更新</span></span><input type="checkbox" id="camLazy" ${camLazy.get() ? 'checked' : ''}><i></i></label></section>` : ''}`;
+  for (const b of document.querySelectorAll('[data-pick-theme]')) b.onclick = () => {
+    theme.set(b.dataset.pickTheme === 'auto' ? null : b.dataset.pickTheme); applyTheme();
+    for (const x of document.querySelectorAll('[data-pick-theme]')) x.setAttribute('aria-pressed', String(x === b));
+  };
+  $('#iconsOnly').onchange = (e) => { iconsOnly.set(e.target.checked); applyTabs(); };
+  $('#camLazy')?.addEventListener('change', (e) => camLazy.set(e.target.checked));
+  for (const b of document.querySelectorAll('[data-lang]')) b.onclick = () => { if (b.dataset.lang !== I18N.lang) I18N.setLang(b.dataset.lang); };
 }
 async function meSecurity(googleMsg) {
   view.innerHTML = `${subTitle('帳號與安全')}
@@ -3485,8 +3580,11 @@ async function render() {
 //   從通知或分享連結直接打開的就回到它的上一層（加到主畫面後沒有瀏覽器的返回鍵）
 const TOP_PAGES = ['/', '/plan', '/plan/season', '/plan/race', '/plan/guide', '/run', '/map', '/studio', '/me'];
 function parentOf(h) {
+  if (h === '/studio') return feat('gps') ? ['#/run', '跑步'] : ['#/', '團練'];
   const p = h.split('/');
   if (h.startsWith('/me/')) return ['#/me', '我的'];
+  // 從跑步頁進來的記錄（手動記一筆、跑完存到訓練紀錄）：留在「跑步」分頁，不跳到課表
+  if (h === '/log' && /[?&](from=run|src=gps)(&|$)/.test(location.hash)) return ['#/run', '跑步'];
   if (h.startsWith('/e/') && p.length > 3) return [`#/e/${p[2]}`, '活動'];
   if (h.startsWith('/edit/')) return [`#/e/${p[2]}`, '活動'];
   if (['/challenge', '/report', '/log', '/plan/new', '/logs/team'].includes(h) || h.startsWith('/plan/')) return ['#/plan', '課表'];
@@ -3496,7 +3594,7 @@ function parentOf(h) {
 }
 // 這一頁屬於哪個分頁：本身是分頁就是自己，不然沿著上一層往上找（最多找 4 層）
 function tabOf(h) {
-  const TOP = ['/', '/plan', '/run', '/map', '/studio', '/me'];
+  const TOP = feat('gps') ? ['/', '/plan', '/run', '/map', '/me'] : ['/', '/plan', '/run', '/map', '/studio', '/me'];
   for (let i = 0; i < 4 && !TOP.includes(h); i++) h = parentOf(h)[0].slice(1);
   return h;
 }
@@ -3512,11 +3610,13 @@ function nameOf(h) {
   if (h.startsWith('/plan/')) return '課表';
   return '返回';
 }
+// GPS 跑步開著時，拍照收進「跑步」：是跑步的子頁（返回鍵「‹ 跑步」、分頁列亮跑步）；關掉 GPS 時拍照才是分頁
+const isTop = (h) => TOP_PAGES.includes(h) && !(h === '/studio' && feat('gps'));
 const navStack = [];
 function paintBack(hash) {
   if (navStack[navStack.length - 2] === hash) navStack.pop(); else if (navStack[navStack.length - 1] !== hash) navStack.push(hash);
   if (navStack.length > 30) navStack.shift();
-  const btn = $('#backBtn'), detail = !!me && !TOP_PAGES.includes(hash) && !cfg.needConsent;
+  const btn = $('#backBtn'), detail = !!me && !isTop(hash) && !cfg.needConsent;
   document.body.classList.toggle('detail', detail);
   btn.hidden = !detail;
   if (!detail) return;
@@ -3537,8 +3637,7 @@ async function renderOnce() {
   document.body.classList.toggle('fullmap', hash === '/map');
   document.documentElement.classList.toggle('fullmap', hash === '/map');
   // 子頁面（管理後台、名冊、活動統計…）也亮起它所屬的分頁
-  const tab = tabOf(hash);
-  for (const a of document.querySelectorAll('.tabs a')) a.toggleAttribute('aria-current', a.dataset.tab === tab);
+  paintTabs(hash);
   paintCountdown();
   if (!me && firstLoad) {
     firstLoad = false;
@@ -3589,6 +3688,7 @@ async function renderOnce() {
   const before = view.innerHTML;
   const skel = setTimeout(() => { if (view.innerHTML === before) view.innerHTML = skeleton(hash); }, 150);
   try { await route(hash); } finally { clearTimeout(skel); }
+  untype();   // iPhone Safari 移除還有焦點的欄位時不送 focusout：換完畫面馬上再檢查一次，分頁列才不會一直收著
   // 第一個畫面畫好了：記下開啟到可用的時間，20 秒後（或離開時）送出
   if (vitals.ready == null) { vitals.ready = performance.now(); vitals.page = hash.replace(/\/[\w-]{8,}/g, '/:id').slice(0, 40); setTimeout(sendVitals, 20000); }
   $('.top').classList.toggle('titled', false);
@@ -3663,7 +3763,7 @@ async function route(hash) {
   }
 }
 
-// 深淺色：跟隨系統，按鈕可以手動覆寫並記住
+// 深淺色：跟隨系統，可以在「我的 › 外觀與語言」手動覆寫並記住（選「自動」就清掉，回到跟隨系統）
 const theme = {
   get() { try { return localStorage.getItem('cil-theme'); } catch { return null; } },
   set(v) { try { v ? localStorage.setItem('cil-theme', v) : localStorage.removeItem('cil-theme'); } catch {} },
@@ -3676,21 +3776,56 @@ const applyTheme = () => {
   for (const m of document.querySelectorAll('meta[name="theme-color"]')) m.content = THEME_COLOR[t || (/dark/.test(m.media) ? 'dark' : 'light')];
 };
 applyTheme();
-$('#theme').onclick = () => {
-  const dark = (document.documentElement.dataset.theme || (matchMedia('(prefers-color-scheme:dark)').matches ? 'dark' : 'light')) === 'dark';
-  theme.set(dark ? 'light' : 'dark');
-  applyTheme();
-};
 
-// 捲動：超過一點點就讓頂部列變成玻璃；大標題捲出畫面就把標題顯示在頂部列；往下捲時分頁列縮小
-let lastY = 0;
+// 捲動：超過一點點就讓頂部列變成玻璃；大標題捲出畫面就把標題顯示在頂部列；
+//   往下捲（超過 120）分頁列縮小，往上捲 24 以上、捲到最底、焦點進到分頁列或換頁時展開；地圖、側邊欄、不到 1.5 個螢幕高的頁面不縮小
+let lastY = 0, peakY = 0;
 addEventListener('scroll', () => {
-  const y = scrollY, top = $('.top'), lt = $('.lt h1');
+  const y = scrollY, top = $('.top'), lt = $('.lt h1'), tabs = $('#tabs'), H = document.documentElement.scrollHeight;
   top.classList.toggle('stuck', y > 4);
   top.classList.toggle('titled', !!lt && lt.getBoundingClientRect().bottom < top.offsetHeight);
-  $('#tabs').classList.toggle('mini', y > lastY && y > 120);
+  if (wideNav.matches || document.body.classList.contains('fullmap') || H < innerHeight * 1.5) tabs.classList.remove('mini');
+  else if (y > lastY) { peakY = y; if (y > 120 && !tabs.contains(document.querySelector(':focus-visible'))) tabs.classList.add('mini'); }
+  else if (peakY - y >= 24) tabs.classList.remove('mini');
+  if (y + innerHeight >= H - 2) tabs.classList.remove('mini');
   lastY = y;
 }, { passive: true });
+// 鍵盤焦點進到分頁列就展開（點擊造成的焦點不算，不然點過分頁後就再也不會縮小）
+$('#tabs').addEventListener('focusin', (e) => { if (e.target.matches(':focus-visible')) $('#tabs').classList.remove('mini'); });
+// 點分頁：換分頁不做整頁轉場（選取膠囊滑過去）；再點一次目前的分頁，在子頁就回到這個分頁的第一層、在第一層就捲回頂端（地圖收回抽屜）
+let navFromTab = false;
+$('#tabs').addEventListener('click', (e) => {
+  const a = e.target.closest('a[data-tab], a[data-nav]'); if (!a) return;
+  if (matchMedia('(pointer:coarse)').matches) navigator.vibrate?.(8);   // Android 才有；iPhone 網頁沒有震動 API
+  const h = curHash(), full = location.hash.replace(/^#/, '') || '/';
+  if (a.dataset.tab && h !== '/notifications' && a.dataset.tab === tabOf(h)) {
+    e.preventDefault();
+    // 只有剛好在分頁本身（沒有子路徑、沒有 ?）才捲回頂端；全季課表、賽事準備、?c=club 這類都回到分頁的第一層
+    if (h === '/map') dispatchEvent(new Event('tabreselect'));
+    else if (full !== a.dataset.tab) { navStack.length = 0; navFromTab = true; location.hash = a.getAttribute('href'); }
+    else scrollTo({ top: 0, behavior: reduceMotion() ? 'instant' : 'smooth' });
+    return;
+  }
+  navFromTab = true; setTimeout(() => { navFromTab = false; }, 400);
+});
+// 跳到主要分頁（鍵盤）：網址用 # 當路由，所以不讓連結改網址，直接把焦點移到目前的分頁
+$('#skipTabs').addEventListener('click', (e) => { e.preventDefault(); ($('.tabs a[aria-current]') || $('.tabs > a[data-tab]:not([hidden])'))?.focus(); });
+// 觸控裝置打開鍵盤時收起下方分頁列，避免浮在鍵盤上面擋住欄位（1024 以上是側邊欄，不收）
+//   只算會叫出鍵盤的欄位：下拉選單、日期時間用系統選擇器，不收分頁列
+const textField = (el) => !!el?.isConnected && !!el.matches?.('textarea, [contenteditable]:not([contenteditable=false]), input:not([type]), input[type=text], input[type=search], input[type=email], input[type=tel], input[type=url], input[type=number], input[type=password]');
+function untype() { if (!textField(document.activeElement)) document.body.classList.remove('typing'); }
+//   iPhone Safari 移除還有焦點的欄位時不送 focusout（送出表單後畫面重畫）：收著的時候每 0.4 秒檢查一次焦點還在不在欄位上
+let typeTimer = 0;
+if (matchMedia('(pointer:coarse)').matches) {
+  document.addEventListener('focusin', (e) => {
+    if (!textField(e.target) || wideNav.matches) return;
+    document.body.classList.add('typing');
+    clearInterval(typeTimer);
+    typeTimer = setInterval(() => { untype(); if (!document.body.classList.contains('typing')) clearInterval(typeTimer); }, 400);
+  });
+  document.addEventListener('focusout', () => setTimeout(untype, 150));
+  wideNav.addEventListener?.('change', () => { if (wideNav.matches) document.body.classList.remove('typing'); });
+}
 
 // 滑鼠反光：只在有游標的裝置，追蹤游標在卡片上的位置
 if (matchMedia('(hover:hover) and (pointer:fine)').matches) {
@@ -3706,8 +3841,8 @@ if (matchMedia('(hover:hover) and (pointer:fine)').matches) {
 // 換頁用 View Transition（支援的瀏覽器才有）
 const go = () => { render(); scrollTo({ top: 0, behavior: 'instant' }); };
 addEventListener('hashchange', () => {
-  // 不支援或使用者設定「減少動態效果」：直接換頁，不做轉場
-  if (!document.startViewTransition || matchMedia('(prefers-reduced-motion: reduce)').matches) return go();
+  // 不支援或使用者設定「減少動態效果」：直接換頁，不做轉場；點分頁列換分頁也不做（選取膠囊滑過去，不被整頁淡入淡出蓋掉）
+  if (navFromTab || !document.startViewTransition || matchMedia('(prefers-reduced-motion: reduce)').matches) { navFromTab = false; return go(); }
   // 連續換頁時前一個轉場會被中斷；三個 promise 都會 reject，全部接住
   const t = document.startViewTransition(go);
   for (const p of [t.ready, t.updateCallbackDone, t.finished]) p.catch(() => {});

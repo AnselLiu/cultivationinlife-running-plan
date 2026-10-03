@@ -11,6 +11,7 @@ test('登入頁沒有嚴重的無障礙問題', async ({ page }) => {
   const bad = r.violations.filter((v) => ['critical', 'serious'].includes(v.impact));
   expect(bad.map((v) => `${v.id}: ${v.nodes.slice(0, 3).map((n) => n.target.join(' ')).join(' | ')}`)).toEqual([]);
 });
+PAGES.push('#/me/calendar', '#/me/display');   // 「我的」的行事曆訂閱、外觀與語言子頁
 for (const p of PAGES) {
   test(`無障礙 ${p}`, async ({ page }) => {
     await login(page, 't_runner'); await acceptPrivacyIfAsked(page);
@@ -38,7 +39,7 @@ for (const p of PAGES) {
 // 通知中心與通知設定：淺色、深色都要通過；通知頁另外在動作選單打開時再跑一次
 const axeBad = async (page) => (await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21aa']).analyze()).violations
   .filter((v) => ['critical', 'serious'].includes(v.impact)).map((v) => `${v.id}: ${v.help}｜${v.nodes.slice(0, 3).map((n) => n.target.join(' ')).join(' | ')}`);
-for (const scheme of ['light', 'dark']) for (const p of ['#/notifications', '#/me/notify']) {
+for (const scheme of ['light', 'dark']) for (const p of ['#/notifications', '#/me/notify', '#/me/display']) {
   test(`無障礙 ${p}（${scheme}）`, async ({ page }) => {
     await page.emulateMedia({ colorScheme: scheme });
     await login(page, 't_runner'); await acceptPrivacyIfAsked(page);

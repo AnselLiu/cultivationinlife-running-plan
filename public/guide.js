@@ -24,6 +24,9 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const shown = (el) => { if (!el || !el.isConnected) return false; const r = el.getBoundingClientRect(), cs = getComputedStyle(el); return r.width > 2 && r.height > 2 && cs.display !== 'none' && cs.visibility !== 'hidden' && !el.closest('[hidden]'); };
 const pick = (...sels) => sels.map((s) => (typeof s === 'string' ? document.querySelector(s) : s)).find(shown) || null;
 const tab = (t) => document.querySelector(`.tabs a[data-tab="${t}"]`);
+// 功能開關看分頁列就知道（app.js 的 applyFeatures 設好的）：GPS 開著時跑步分頁看得到；拍照開著時，不是分頁就是側邊欄的「拍照分享」
+const gpsOn = () => !tab('/run')?.hidden;
+const studioOn = () => !tab('/studio')?.hidden || !document.querySelector('.navmore a[data-nav="/studio"]')?.hidden;
 const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
 const isIOS = () => /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 
@@ -53,8 +56,9 @@ const STEPS = [
     need: () => shown(tab('/run')), go: () => go('#/run', ['.runstart', '.runlive', '.kpis']), at: () => pick('.runstart', '.runlive', '.kpis'), ring: () => pick('#runGo') },
   { id: 'map', icon: I.map, t: '練跑地圖', l: ['全台常用的田徑場、河濱、公園與步道，可以搜尋、依類型和縣市篩選。', '看現場回報與天氣，也能畫路線、存 GPX、開揪跑。'],
     need: () => shown(tab('/map')), go: () => go('#/map', ['.mapwrap', '.spotlist']), at: () => pick('.mapwrap'), ring: () => pick(tab('/map')) },
-  { id: 'studio', icon: I.camera, t: '拍照分享', l: ['把今天的距離、時間和路線放進照片，', '直接分享到 IG 限時動態或 Reels。'],
-    need: () => shown(tab('/studio')), go: () => go('#/studio', '.stage-card'), at: () => pick(tab('/studio')) },
+  // 拍照分享：GPS 跑步開著時收在「跑步」裡（聚光「拍照分享」那一列），關掉 GPS 時是分頁列的一格
+  { id: 'studio', icon: I.camera, t: '拍照分享', l: () => (gpsOn() ? ['跑完在「跑步」裡拍照分享到 IG，', '距離、時間和路線會放進照片。'] : ['把今天的距離、時間和路線放進照片，', '直接分享到 IG 限時動態或 Reels。']),
+    need: () => studioOn(), go: () => (gpsOn() ? go('#/run', '.runshare') : go('#/studio', '.stage-card')), at: () => (gpsOn() ? pick('.runshare') : pick(tab('/studio'))) },
   { id: 'me', icon: I.person, t: '我的', l: ['個人資料、賽事報名資料、主團、通知與安全，', '分組放在這裡，點一列就進去設定。'],
     go: () => go('#/me', '.setgroup'), at: () => [pick('.mecard'), pick('.setgroup')].filter(Boolean) },
   { id: 'done', center: true, icon: I.check, t: '準備好了', l: ['之後可以在「我的 → 使用說明」再看一次。'] },
@@ -159,7 +163,7 @@ function render() {
   $('#gIc').innerHTML = s.center ? '' : s.icon || '';
   $('#gCount').textContent = s.center ? '' : `${T.i} / ${n - 2}`;
   $('#gTitle').textContent = s.t;
-  $('#gBody').innerHTML = s.l.map((x) => `<p>${esc(x)}</p>`).join('');
+  $('#gBody').innerHTML = (typeof s.l === 'function' ? s.l() : s.l).map((x) => `<p>${esc(x)}</p>`).join('');
   $('#gExtra').innerHTML = s.id === 'done' ? installTip() : '';
   $('#gDots').innerHTML = T.steps.map((_, k) => `<i class="${k === T.i ? 'on' : ''}"></i>`).join('');
   $('#gPrev').hidden = T.i === 0;

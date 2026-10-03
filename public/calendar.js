@@ -44,7 +44,7 @@ async function calendarView() {
       ${needHol ? `<p class="tiny" style="margin:0">${allow('settings') ? `還沒匯入 ${y} 年的國定假日，<a href="#/admin?tab=settings">到系統設定匯入</a>。` : `${y} 年的國定假日還沒匯入。`}</p>` : ''}
     </section>
     <section class="card" id="dayBox"></section>
-    <div class="row" style="gap:8px">${d.canAdd ? `<button class="btn sm iconbtn" id="addItem">${IC.plus}新增賽事提醒</button>` : ''}<a class="btn ghost sm" href="#/me/notify">訂閱到手機行事曆</a></div>
+    <div class="row" style="gap:8px">${d.canAdd ? `<button class="btn sm iconbtn" id="addItem">${IC.plus}新增賽事提醒</button>` : ''}<a class="btn ghost sm" href="#/me/calendar">訂閱到手機行事曆</a></div>
     <div id="itemForm"></div>`;
   const paintDay = () => {
     const date = picked, hol = holOn(date), evs = evOn(date), its = itOn(date), races = raceOn(date);

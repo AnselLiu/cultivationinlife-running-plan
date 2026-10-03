@@ -334,8 +334,16 @@ function closeCard() {
   selected = null; history.replaceState(null, '', '#/map');
   paintPins(); listPanel(); setDetent(wide() ? 'half' : 'peek');
 }
-function startPick(cb) { endDraw(); RS.deselect(); mode = 'pick'; pickCb = cb; $('#pickBar').hidden = false; $('#map').classList.add('picking'); setDetent('peek'); toast('點地圖選位置'); }
-function endPick() { mode = 'browse'; pickCb = null; $('#pickBar').hidden = true; $('#map')?.classList.remove('picking'); }
+function startPick(cb) { endDraw(); RS.deselect(); mode = 'pick'; pickCb = cb; $('#pickBar').hidden = false; $('#map').classList.add('picking'); tasking(true); setDetent('peek'); toast('點地圖選位置'); }
+function endPick() { mode = 'browse'; pickCb = null; $('#pickBar').hidden = true; $('#map')?.classList.remove('picking'); tasking(false); }
+// 畫路線、選地點時收起分頁列（body.tasking 用 transform 收到畫面下方，measure() 量得到）；收起或恢復後重新量抽屜
+function tasking(on) {
+  if (document.body.classList.contains('tasking') === on) return;
+  document.body.classList.toggle('tasking', on);
+  setTimeout(() => { if ($('#msheet') && !wide()) setDetent(detent, { instant: true }); }, 450);
+}
+// 再點一次「地圖」分頁：清掉選的地點、抽屜收回（畫路線、選地點時不打斷）
+addEventListener('tabreselect', () => { if ($('#msheet') && mode === 'browse') closeCard(); });
 // iPad 畫路線：Apple Pencil 隨時直接畫（手指照樣移動、縮放地圖）；打開「手繪」後單指拖也能畫，兩指移動地圖
 let freehand = false, strokes = [], quietUntil = 0;
 function bindFreehand(el) {
@@ -380,10 +388,10 @@ function simplify(from) {
 }
 function startDraw(seed = []) {
   endPick(); RS.deselect(); mode = 'draw'; draft = [...seed]; strokes = []; routeLayer.clearLayers();
-  $('#drawBar').hidden = false; $('#map').classList.add('picking'); paintDraft(); setDetent('peek');
+  $('#drawBar').hidden = false; $('#map').classList.add('picking'); tasking(true); paintDraft(); setDetent('peek');
   $('#panel').innerHTML = `<section class="card"><h3>畫路線</h3><p class="tiny" style="margin:0">沿著要跑的路依序點地圖，轉彎處多點幾下比較準；iPad 可以用 Apple Pencil 直接畫，或打開「手繪」用手指畫。完成後可以存起來分享、下載 GPX，或直接開揪跑。</p></section>`;
 }
-function endDraw() { mode = 'browse'; draft = []; strokes = []; freehand = false; $('#drawFree')?.setAttribute('aria-pressed', 'false'); $('#map')?.classList.remove('freehand'); drawLayer?.clearLayers(); if ($('#drawBar')) $('#drawBar').hidden = true; $('#map')?.classList.remove('picking'); }
+function endDraw() { mode = 'browse'; draft = []; strokes = []; freehand = false; $('#drawFree')?.setAttribute('aria-pressed', 'false'); $('#map')?.classList.remove('freehand'); drawLayer?.clearLayers(); if ($('#drawBar')) $('#drawBar').hidden = true; $('#map')?.classList.remove('picking'); tasking(false); }
 function paintDraft(quick) {
   drawLayer.clearLayers();
   if (draft.length) {
@@ -529,7 +537,7 @@ async function openSpot(id, fly) {
 //   位置：地點卡開放時間下面，可以收合（記在這支手機）；收合時不載入影像
 //   縮圖：一列三格，段落看得見時才載入，而且只載一次、不自動更新；別的 isolate 剛抓過（503）就照 Retry-After 再試一次
 //   大圖：點縮圖打開；每 60 秒更新，只在畫面看得見時更新，App 進背景就暫停，10 分鐘後自動停止
-//   省流量（「我的 → 通知與裝置」的開關、系統的省數據模式或 2G 網路）：都不自動載入，點了才載
+//   省流量（「我的 → 外觀與語言」的開關、系統的省數據模式或 2G 網路）：都不自動載入，點了才載
 const CAM_NOTE = '影像為政府公開攝影機畫面，由本站即時轉送、不保存，你的 IP 與位置不會傳給影像來源。僅供參考天氣與路況，實際狀況以現場與官方公告為準。';
 const CAM_NOTE_SHORT = '政府公開攝影機畫面，由本站轉送、不保存；僅供參考天氣與路況，以現場與官方公告為準。';
 const CAM_SVG = '<svg class="ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="2.5" y="6.5" width="13" height="11" rx="2.5"/><path d="m15.5 10.5 6-3.5v10l-6-3.5"/></svg>';

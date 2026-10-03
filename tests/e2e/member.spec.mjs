@@ -67,10 +67,10 @@ test('記錄訓練後可以直接拍照分享，挑戰頁看得到里程', async
 
 test('切換英文介面再切回中文', async ({ page }) => {
   await login(page, 't_runner'); await acceptPrivacyIfAsked(page);
-  await page.goto('/#/me/notify');
+  await page.goto('/#/me/display');
   await page.getByRole('button', { name: 'English' }).click();
   await expect(page.locator('.tabs')).toContainText('Runs');
-  await page.goto('/#/me/notify');
+  await page.goto('/#/me/display');
   await page.getByRole('button', { name: '中文' }).click();
   await expect(page.locator('.tabs')).toContainText('團練');
 });

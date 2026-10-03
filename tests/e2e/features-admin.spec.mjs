@@ -81,7 +81,7 @@ test('管理後台：切換每個分頁不會整頁跳動；離開後點下方�
   await page.waitForTimeout(1500);
   await expect(page).toHaveURL(/#\/plan$/);
   await expect(page.locator('#view h1')).toContainText('課表');
-  await expect(page.locator('.tabs a[data-tab="/plan"]')).toHaveAttribute('aria-current', '');
+  await expect(page.locator('.tabs a[data-tab="/plan"]')).toHaveAttribute('aria-current', 'page');
   await page.locator('.tabs a[data-tab="/me"]').click();
   await page.waitForTimeout(1000);
   await expect(page).toHaveURL(/#\/me$/);
