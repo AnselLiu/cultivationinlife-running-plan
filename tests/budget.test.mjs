@@ -238,6 +238,23 @@ test('大量輸入：國定假日匯入（假資料 365 天）在 16 個子請�
   assert.deepEqual(await violations(), []);
 });
 
+test('大量輸入：排桌（同一個代碼以最後一筆為準）與一次抽 20 位', async () => {
+  const id = ok50(await call('t_chair', '/events', { method: 'POST', body: evBody({ kind: 'party', title: '額度抽獎' }) }), '建立餐敘').id;
+  await rounds('t_chair', `/events/${id}/bulk`, { action: 'signup', names: bnames(0, 30).join('\n') });
+  const tickets = (await call('t_chair', `/events/${id}/tickets`)).json.tickets;
+  assert.equal(tickets.length, 30);
+  const seats = tickets.map((t, i) => ({ code: t.code, table_no: 1 + (i % 5) }));
+  seats.push({ code: tickets[0].code.toLowerCase(), table_no: 9, note: '主桌' });
+  assert.equal(ok50(await call('t_chair', `/events/${id}/seats/assign`, { method: 'POST', body: { seats } }), '排桌').updated, 30);
+  const t0 = (await call('t_chair', `/events/${id}/tickets`)).json.tickets.find((t) => t.code === tickets[0].code);
+  assert.equal(t0.table_no, 9); assert.equal(t0.note, '主桌');
+  const pid = ok50(await call('t_chair', `/events/${id}/prizes`, { method: 'POST', body: { name: '大獎', qty: 20 } }), '新增獎項').id;
+  const d = ok50(await call('t_chair', `/events/${id}/draw`, { method: 'POST', body: { prize_id: pid, count: 20, onlyCheckedIn: false } }), '抽 20 位');
+  assert.equal(d.winners.length, 20);
+  assert.equal((await call('t_chair', `/events/${id}/prizes`)).json.draws.length, 20);
+  assert.deepEqual(await violations(), []);
+});
+
 test('大量輸入：清掉測試資料', async () => {
   assert.equal((await call(null, '/dev/seed-bulk?clear=1')).json.ok, true);
 });

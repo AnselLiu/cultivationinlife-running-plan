@@ -4346,6 +4346,7 @@ async function devRoute(req, env, ctx, url, path) {
     if (q.get('clear') === '1') {
       await env.DB.batch([
         env.DB.prepare("DELETE FROM push_subs WHERE endpoint LIKE 'https://fcm.googleapis.com/fcm/send/b\\_%' ESCAPE '\\'"),
+        env.DB.prepare("UPDATE draws SET member_id = NULL WHERE member_id LIKE 'b\\_%' ESCAPE '\\'"),   // 得獎紀錄沒有 ON DELETE（刪帳號時匿名化）
         env.DB.prepare("DELETE FROM members WHERE id LIKE 'b\\_%' ESCAPE '\\'"),
       ]);
       return json({ ok: true });
