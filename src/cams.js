@@ -8,6 +8,7 @@
 //   每支鏡頭向來源抓取的間隔由這裡保證（至少 60 秒）；影像只在 Cache API（約 60 秒）與記憶體（最多 10 分鐘）暫存，不寫入 D1、KV 或 R2。
 //   整個功能由「功能開關」的 features.cams 控制，預設關閉（staging 實測 Cache API、出口 IP 與解析 CPU 時間之後才開）。
 import * as Mock from './cams-mock.js';
+import { xfetch, cacheOf } from './budget.js';
 
 const UA = 'cil-run camera relay (+https://cil-run.anselliu7.workers.dev)';
 // 來源登錄表：清單網址、解析、主機白名單、顯名。主機白名單跟資安有關（避免變成開放代理），寫在程式碼裡
@@ -17,8 +18,10 @@ export const SOURCES = {
     list: 'https://opendata.wra.gov.tw/api/v2/f71b74eb-cbe5-42c6-8be5-7500450e7db0?format=JSON',
     page: 'https://fhy.wra.gov.tw/fhyv2/monitor/cctv', hosts: [/^fmg\.wra\.gov\.tw$/], parse: parseWra,
   },
+  // 公路局清單約 1.7 MB、2300 多筆：解析與寫入超過免費方案一次執行的 CPU 與子請求，改用電腦上的同步工具（tools/cams-sync.mjs）更新；
+  //   畫面轉送照常（offline 只影響清單同步）
   thb: {
-    name: '交通部公路局', attribution: '影像來源：交通部公路局', hour: 5,
+    name: '交通部公路局', attribution: '影像來源：交通部公路局', hour: 5, offline: true,
     list: 'https://cctv-maintain.thb.gov.tw/opendataCCTVs.xml',
     page: 'https://thbapp.thb.gov.tw/opendata/', hosts: [/^cctv-ss0[1-8]\.thb\.gov\.tw$/], parse: parseThb,
   },
@@ -37,7 +40,12 @@ const MAX_LIST = 4 * 1024 * 1024;
 
 // 測試模式（CAM_MOCK=1 而且 DEV_LOGIN=1）：清單與畫面都用假資料，不連外
 const mocked = (env) => env.CAM_MOCK === '1' && env.DEV_LOGIN === '1';
-const camFetch = (env, url, init) => (mocked(env) ? Promise.resolve(Mock.fetchMock(url)) : fetch(url, init));
+// 對外連線一律算進執行額度（測試的假來源也照算，計數才和正式環境一樣）
+const camFetch = (env, url, init) => {
+  if (!mocked(env)) return xfetch(env, url, init);
+  try { env.budget?.take('fetch'); } catch (e) { return Promise.reject(e); }
+  return Promise.resolve(Mock.fetchMock(url));
+};
 export const mockControl = (q) => Mock.control(q);
 
 // FNV-1a：清單欄位有沒有變（不是資安用途）
@@ -125,7 +133,7 @@ async function readCapped(res, max) {
 }
 
 // ---- 每日同步 ----
-const UPSERT = `INSERT INTO cams (id, source, name, kind, lat, lng, city, basin, media, src_url, page_url, min_interval, hash)
+export const UPSERT = `INSERT INTO cams (id, source, name, kind, lat, lng, city, basin, media, src_url, page_url, min_interval, hash)
   SELECT json_extract(value, '$.id'), ?1, json_extract(value, '$.name'), json_extract(value, '$.kind'), json_extract(value, '$.lat'), json_extract(value, '$.lng'),
     json_extract(value, '$.city'), json_extract(value, '$.basin'), json_extract(value, '$.media'), json_extract(value, '$.src'), json_extract(value, '$.page'),
     json_extract(value, '$.iv'), json_extract(value, '$.h')
@@ -134,8 +142,21 @@ const UPSERT = `INSERT INTO cams (id, source, name, kind, lat, lng, city, basin,
     media = excluded.media, src_url = excluded.src_url, page_url = excluded.page_url, min_interval = excluded.min_interval, hash = excluded.hash, enabled = 1, updated_at = datetime('now')
   WHERE cams.hash IS NOT excluded.hash OR cams.enabled = 0`;
 // 來源清單不再出現的鏡頭：停用（不刪除）
-const DISABLE = `UPDATE cams SET enabled = 0, updated_at = datetime('now')
+export const DISABLE = `UPDATE cams SET enabled = 0, updated_at = datetime('now')
   WHERE source = ?1 AND manual = 0 AND enabled = 1 AND id NOT IN (SELECT value FROM json_each(?2))`;
+
+// 抓不到畫面而被標成 down 的鏡頭：每天同步後重新給一次機會；來源的同步結果
+export const HEALTH_RESET = "UPDATE cams SET health = 'ok', fails = 0 WHERE source = ?1 AND health = 'down'";
+export const SOURCE_OK = "UPDATE cam_sources SET last_sync_at = datetime('now'), last_ok_at = datetime('now'), last_count = ?2, last_error = NULL, rev = rev + 1 WHERE source = ?1";
+// 清單文字 → 資料列（白名單與臺灣座標範圍檢查、同一個 id 只留第一筆）；Worker 與 tools/cams-sync.mjs 共用
+export const parseList = (source, text) => { const seen = new Set(); return sourceOf(source).parse(text).filter((r) => r && !seen.has(r.id) && seen.add(r.id)); };
+// 同步要寫的語句（[SQL, 參數]）：UPSERT 每 chunk 筆一句、停用消失的鏡頭、重設 down、來源狀態；Worker 與同步工具共用
+export function syncPlan(source, rows, chunk = 400) {
+  const out = [];
+  for (let i = 0; i < rows.length; i += chunk) out.push([UPSERT, [source, JSON.stringify(rows.slice(i, i + chunk))]]);
+  out.push([DISABLE, [source, JSON.stringify(rows.map((r) => r.id))]], [HEALTH_RESET, [source]], [SOURCE_OK, [source, rows.length]]);
+  return out;
+}
 
 // 同步中的標記：開始抓清單前先寫，成功或失敗都會覆蓋掉。如果一直停在這個值，表示那次執行被中斷（例如超過 CPU 時間上限）
 export const SYNCING = '同步中';
@@ -165,19 +186,13 @@ export async function syncSource(env, source) {
     if (!res.ok) throw new Error(`來源回應 ${res.status}`);
     const buf = await readCapped(res, MAX_LIST);
     if (!buf) throw new Error('清單太大');
-    const seen = new Set();
-    rows = S.parse(new TextDecoder().decode(buf)).filter((r) => r && !seen.has(r.id) && seen.add(r.id));
+    rows = parseList(source, new TextDecoder().decode(buf));
   } catch (e) { error = e.name === 'TimeoutError' ? '來源逾時' : String(e.message || e).slice(0, 120); }
   if (!error && !rows.length) error = '清單是空的';
   if (!error && src.last_count && rows.length < src.last_count * 0.7) error = `筆數從 ${src.last_count} 掉到 ${rows.length}，這次不更新`;
   if (error) { await markFailed(env, source, error); return { error }; }
-  const stmts = [];
-  for (let i = 0; i < rows.length; i += 400) stmts.push(env.DB.prepare(UPSERT).bind(source, JSON.stringify(rows.slice(i, i + 400))));
-  const nUp = stmts.length;
-  stmts.push(env.DB.prepare(DISABLE).bind(source, JSON.stringify(rows.map((r) => r.id))));
-  // 抓不到畫面而被標成 down 的鏡頭：每天同步後重新給一次機會
-  stmts.push(env.DB.prepare("UPDATE cams SET health = 'ok', fails = 0 WHERE source = ? AND health = 'down'").bind(source));
-  stmts.push(env.DB.prepare("UPDATE cam_sources SET last_sync_at = datetime('now'), last_ok_at = datetime('now'), last_count = ?, last_error = NULL, rev = rev + 1 WHERE source = ?").bind(rows.length, source));
+  const stmts = syncPlan(source, rows).map(([sql, p]) => env.DB.prepare(sql).bind(...p));
+  const nUp = stmts.length - 3;
   let res;
   try { res = await env.DB.batch(stmts); } catch (e) {
     const msg = `寫入資料庫失敗：${String(e?.message || e).slice(0, 80)}`;
@@ -241,7 +256,7 @@ export async function forSpot(env, spot) {
   if (!srcs.length) return { cams: [], enabled: false, link };
   const ver = fnv(JSON.stringify(srcs.map((s) => [s.source, s.rev])));
   const key = new Request(`https://cil-run.internal/spotcams/v2/${encodeURIComponent(spot.id)}/${spot.lat},${spot.lng}/${ver}`);
-  const cache = globalThis.caches?.default;
+  const cache = cacheOf(env);
   let cams = null;
   try { const hit = await cache?.match(key); if (hit) cams = await hit.json(); } catch {}
   if (!cams) {
@@ -281,7 +296,7 @@ const frameFail = (status, msg, extra = {}) => new Response(JSON.stringify({ err
 export async function frame(env, cam, throttle) {
   const iv = Math.max(MIN_IV, cam.min_interval || MIN_IV);
   const key = new Request(`https://cil-run.internal/cam/v1/${encodeURIComponent(cam.id)}`);
-  const cache = globalThis.caches?.default;
+  const cache = cacheOf(env);
   try {
     const hit = await cache?.match(key);
     if (hit) return frameRes(await hit.arrayBuffer(), hit.headers.get('content-type'), hit.headers.get('x-cam-at') || '', iv, 'hit');

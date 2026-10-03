@@ -16,6 +16,9 @@ async function as(id) {
   return cookies[id];
 }
 async function call(who, path, { method = 'GET', body } = {}) {
+  // 排程測試會跳日期：每換一天，每日備份就到期並用掉那個整點大部分的額度（其他工作延到下個整點）。
+  // 這裡測的是各工作本身的邏輯，所以略過備份；備份與執行額度在 budget.test.mjs 測
+  if (path.startsWith('/dev/cron') && !/[?&]skip=/.test(path)) path += `${path.includes('?') ? '&' : '?'}skip=backup`;
   const headers = { origin: BASE };
   if (who) headers.cookie = await as(who);
   if (method !== 'GET') headers['content-type'] = 'application/json';
@@ -1196,7 +1199,13 @@ test('附近即時影像：功能開關預設關閉、同步與完整性檢查�
   assert.equal((await call('t_chair', '/cams/sources')).json.sources.find((s) => s.source === 'wra').active, 3, '清單不再出現的鏡頭停用');
   await mock('drop=0');
   assert.equal((await cron('2027-06-17T20:30:00Z')).wra, 4);
-  assert.equal((await cron('2027-06-17T21:30:00Z')).thb, 2);
+  // 公路局（offline）不在排程裡，也不能在後台立即同步；清單由電腦上的同步工具更新（這裡用測試入口模擬）
+  // 排程只做每天一次的健康狀態重設（連續抓不到畫面而停用推薦的鏡頭，隔天再給一次機會）
+  assert.deepEqual(await cron('2027-06-17T21:30:00Z'), { thb: 'reset' }, '公路局只重設健康狀態，不同步清單');
+  assert.equal((await call('t_chair', '/cams/sources')).json.sources.find((s) => s.source === 'thb').offline, true);
+  const ts = await call('t_chair', '/cams/sync', { method: 'POST', body: { source: 'thb' } });
+  assert.equal(ts.status, 400); assert.match(ts.json.error, /cams-sync\.mjs/);
+  assert.equal((await call(null, '/dev/cams-import?source=thb')).json.count, 2);
   assert.equal(await cron('2027-06-17T21:40:00Z'), null);
   // 地點附近：1.5 公里內最多 3 支、河濱優先河川鏡頭；不回原始影像網址
   const r = await call('t_runner', '/spots/seed07/cams');

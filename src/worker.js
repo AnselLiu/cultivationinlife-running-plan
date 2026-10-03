@@ -6,7 +6,7 @@
 //   A.8.15 日誌：特權操作寫入 audit_log，監事可查
 //   A.5.34 個資：最小蒐集、電話遮罩、IP 只存雜湊、本人可匯出與刪除
 // 工作階段權杖放 HttpOnly cookie，D1 只存 SHA-256；寫入類 API 只接受同源 JSON（擋 CSRF）。
-import { subscribe, unsubscribe, push, validEndpoint } from './push.js';
+import { subscribe, unsubscribe, pushTest, drainPush, vapidOn, validEndpoint, pushMock } from './push.js';
 import * as WebAuthn from './webauthn.js';
 import { quote } from '../public/pricing.js';
 import { hourOf } from '../public/wxrule.js';
@@ -16,6 +16,9 @@ import { CATS, isCat, MUTABLE } from '../public/notif-cats.js';
 import { tpNow, shiftDays, daysBetween, evStart, signupEnd, signupState, STATE_TEXT, tpText, SIGNUP_DEFAULTS, windowError, isStamp } from '../public/signup-window.js';
 import * as Cams from './cams.js';
 import * as Rest from './rest.js';
+import { fold, b64bytes } from './ics.js';
+import { WorkerEntrypoint } from 'cloudflare:workers';
+import { Budget, invocationEnv, logBudget, settled, strictViolations, xfetch, planOf, cacheOf } from './budget.js';
 
 const COOKIE = '__Host-cil_sess';
 // 工作階段期限：一般跑友長期使用；幹部看得到別人的資料，期限短很多
@@ -76,10 +79,13 @@ async function currentMember(req, env) {
   const th = await sha(token);
   const row = await env.DB.prepare(
     `SELECT m.*, s.last_seen_at AS s_seen, s.role_at_issue AS s_role, s.created_at AS s_created, s.mfa_at AS s_mfa, s.token_hash AS s_th,
-       (SELECT json_group_array(json_object('team_id', tm.team_id, 'role', tm.role, 'status', tm.status, 'title', tm.title)) FROM team_members tm WHERE tm.member_id = m.id) AS s_teams
+       (SELECT json_group_array(json_object('team_id', tm.team_id, 'role', tm.role, 'status', tm.status, 'title', tm.title)) FROM team_members tm WHERE tm.member_id = m.id) AS s_teams,
+       (SELECT 1 FROM push_queue WHERE lease_until IS NULL OR lease_until < datetime('now') LIMIT 1) AS s_pq
      FROM sessions s JOIN members m ON m.id = s.member_id
      WHERE s.token_hash = ? AND s.expires_at > datetime('now')`).bind(th).first();
   if (!row) return null;
+  // 推播佇列有待送的：這次請求結束後用剩下的額度順便送幾台（不多花一句查詢）
+  if (row.s_pq) env.pushKick = true;
   // 分團團長、幹部看得到分團名冊與活動報名資料，工作階段期限比照協會幹部
   const teamOfficer = JSON.parse(row.s_teams || '[]').some((t) => t.status === 'active' && (t.role === 'lead' || t.role === 'officer'));
   row.team_officer = teamOfficer;
@@ -112,16 +118,6 @@ const revokeSessions = (env, memberId) => env.DB.batch([
   env.DB.prepare('UPDATE members SET cal_token_hash = NULL WHERE id = ?').bind(memberId),
 ]);
 
-// IN 清單分批查詢（D1 一個陳述式最多 100 個參數）：sql(q) 回傳含 IN (${q}) 的 SQL，pre 是 IN 前面的參數
-async function allIn(env, ids, sql, pre = []) {
-  const out = [];
-  for (let i = 0; i < ids.length; i += 90) {
-    const part = ids.slice(i, i + 90);
-    out.push(...(await env.DB.prepare(sql(part.map(() => '?').join(','))).bind(...pre, ...part).all()).results);
-  }
-  return out;
-}
-
 // 嘗試次數限制：在 window 秒內超過 limit 次就擋
 async function limited(env, key, limit, windowSec) {
   // 一個陳述式完成「計數＋判斷」，同時多個請求也不會超過上限
@@ -134,22 +130,48 @@ async function limited(env, key, limit, windowSec) {
 
 // 稽核紀錄：特權操作一律記下（detail 只放摘要，不放個資原文）
 // 防竄改：每筆用 AUDIT_KEY（只有 Worker 知道）算 HMAC，改動任何欄位都驗得出來；刪除則由每日摘要鏈檢查
+// 匯入過的金鑰存在模組層級（key 是 secret 的 SHA-256，存的是不可匯出的 CryptoKey），不用每次 importKey
+const keyCache = new Map();
+async function cachedKey(tag, secret, make) {
+  const h = `${tag}:${await sha(secret)}`;
+  let p = keyCache.get(h);
+  if (!p) {
+    p = make().catch((e) => { keyCache.delete(h); throw e; });
+    keyCache.set(h, p);
+    if (keyCache.size > 16) keyCache.delete(keyCache.keys().next().value);
+  }
+  return p;
+}
 async function hmac(env, text) {
   if (!env.AUDIT_KEY) return null;
-  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(env.AUDIT_KEY), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const key = await cachedKey('hmac', env.AUDIT_KEY, () => crypto.subtle.importKey('raw', new TextEncoder().encode(env.AUDIT_KEY), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']));
   return [...new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(text)))].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 const auditFields = (r) => [r.id, r.at, r.actor_id, r.actor_name, r.actor_role, r.action, r.target_type, r.target_id, r.detail, r.ip_hash].map((v) => v ?? '').join('\u001f');
-async function audit(env, req, actor, action, targetType, targetId, detail) {
-  try {
-    const row = { id: rid(10), at: new Date().toISOString().replace('T', ' ').slice(0, 19), actor_id: actor?.id || null,
-      actor_name: actor?.name || (req ? null : '系統排程'), actor_role: actor ? norm(actor.real_role || actor.role) : null, action,
-      target_type: targetType || null, target_id: targetId || null, detail: str(detail, 300) || null, ip_hash: await ipHash(req, env) };
+// auditStmt 只產生 statement（HMAC 照算），讓呼叫端可以和其他寫入放進同一個 DB.batch（同一個交易）
+async function auditStmt(env, req, actor, action, targetType, targetId, detail) {
+  const row = { id: rid(10), at: new Date().toISOString().replace('T', ' ').slice(0, 19), actor_id: actor?.id || null,
+    actor_name: actor?.name || (req ? null : '系統排程'), actor_role: actor ? norm(actor.real_role || actor.role) : null, action,
+    target_type: targetType || null, target_id: targetId || null, detail: str(detail, 300) || null, ip_hash: await ipHash(req, env) };
+  row.mac = await hmac(env, auditFields(row));
+  return env.DB.prepare(`INSERT INTO audit_log (id, at, actor_id, actor_name, actor_role, action, target_type, target_id, detail, ip_hash, mac)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .bind(row.id, row.at, row.actor_id, row.actor_name, row.actor_role, row.action, row.target_type, row.target_id, row.detail, row.ip_hash, row.mac);
+}
+// 同一個操作、很多個對象（例如婉拒 60 人，每位一列）：一句寫完，每列各自簽章（HMAC 照算）
+async function auditManyStmt(env, req, actor, action, targetType, list) {
+  const at = new Date().toISOString().replace('T', ' ').slice(0, 19), ip = await ipHash(req, env), rows = [];
+  for (const [targetId, detail] of list) {
+    const row = { id: rid(10), at, actor_id: actor?.id || null, actor_name: actor?.name || (req ? null : '系統排程'), actor_role: actor ? norm(actor.real_role || actor.role) : null, action,
+      target_type: targetType || null, target_id: targetId || null, detail: str(detail, 300) || null, ip_hash: ip };
     row.mac = await hmac(env, auditFields(row));
-    await env.DB.prepare(`INSERT INTO audit_log (id, at, actor_id, actor_name, actor_role, action, target_type, target_id, detail, ip_hash, mac)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .bind(row.id, row.at, row.actor_id, row.actor_name, row.actor_role, row.action, row.target_type, row.target_id, row.detail, row.ip_hash, row.mac).run();
-  } catch (e) { console.error('audit', e); }
+    rows.push([row.id, row.at, row.actor_id, row.actor_name, row.actor_role, row.action, row.target_type, row.target_id, row.detail, row.ip_hash, row.mac]);
+  }
+  return env.DB.prepare(`INSERT INTO audit_log (id, at, actor_id, actor_name, actor_role, action, target_type, target_id, detail, ip_hash, mac)
+    SELECT ${Array.from({ length: 11 }, (_, i) => `json_extract(j.value, '$[${i}]')`).join(', ')} FROM json_each(?) j`).bind(JSON.stringify(rows));
+}
+async function audit(env, req, actor, action, targetType, targetId, detail) {
+  try { await (await auditStmt(env, req, actor, action, targetType, targetId, detail)).run(); } catch (e) { console.error('audit', e); }
 }
 
 // 新裝置登入：只記「裝置類型・瀏覽器」的雜湊；第一次以外的新組合會通知本人
@@ -211,39 +233,75 @@ const pub = (m) => ({
 // 分類只在伺服器端決定（public/notif-cats.js）；帳號安全只能經由 securityNotify 寫入，群發無法偽裝
 const SEC = Symbol('security');   // 模組私有：沒有任何請求路徑拿得到
 const REF_RE = /^(e|t|spot|log|join|apply|pay|wx|review|sr):[\w:-]{1,70}$/;   // sr＝報名待審核（signup review）
+// 寫通知：通知中心與推播佇列各一句（每 1000 位收件人），句數跟人數無關（免費方案一次執行只有 50 個子請求）
+//   items：[通知 id, 收件人, 標題, 內文, 網址, ref, 推播內容 JSON]，後 5 欄沒有就用 o 的共同值
+//   推播佇列只排「沒有關掉這一類」的人的裝置（locked 類別或 force 一律排）；opt.also 的語句放在同一個 batch（同一個交易）
+//   有排進佇列就標記 env.wantDrain：這次執行結束前用剩下的額度先送一段，剩下的由之後的請求與每小時排程送完
+const NOTE_SQL = `INSERT INTO notifications (id, member_id, kind, category, ref, title, body, url)
+  SELECT json_extract(j.value, '$[0]'), m.id, ?2, ?3, COALESCE(json_extract(j.value, '$[5]'), ?4), COALESCE(json_extract(j.value, '$[2]'), ?5),
+    COALESCE(json_extract(j.value, '$[3]'), ?6), COALESCE(json_extract(j.value, '$[4]'), ?7)
+  FROM json_each(?1) j JOIN members m ON m.id = json_extract(j.value, '$[1]')`;
+const QUEUE_SQL = `INSERT INTO push_queue (endpoint, notif_id, payload, urgency, expires_at)
+  SELECT s.endpoint, json_extract(j.value, '$[0]'), COALESCE(json_extract(j.value, '$[6]'), ?2), ?3, datetime('now', '+' || ?4 || ' seconds')
+  FROM json_each(?1) j JOIN push_subs s ON s.member_id = json_extract(j.value, '$[1]') JOIN members m ON m.id = s.member_id
+  WHERE ?5 = 1 OR m.notif_mute IS NULL OR instr(',' || m.notif_mute || ',', ?6) = 0`;
+async function writeNotes(env, cat, items, o) {
+  const push = vapidOn(env), stmts = [];
+  for (let i = 0; i < items.length; i += 1000) {
+    const j = JSON.stringify(items.slice(i, i + 1000));
+    stmts.push(env.DB.prepare(NOTE_SQL).bind(j, o.kind, cat, o.ref ?? null, o.title ?? null, o.body ?? null, o.url ?? null));
+    if (push) stmts.push(env.DB.prepare(QUEUE_SQL).bind(j, o.payload ?? null, o.urgency || 'normal', Math.max(60, Math.round(o.ttl || 86400)), o.force ? 1 : 0, `,${cat},`));
+  }
+  const res = await env.DB.batch([...stmts, ...(o.also || [])]);
+  let rows = 0, queued = 0;
+  res.slice(0, stmts.length).forEach((r, k) => { if (push && k % 2) queued += r.meta?.changes || 0; else rows += r.meta?.changes || 0; });
+  if (queued) env.wantDrain = true;
+  return { rows, queued };
+}
+const pushPayload = (cat, def, msg, ref) => JSON.stringify({ cat, ts: Date.now(), title: str(msg.push?.title ?? msg.title, 80), body: str(msg.push?.body ?? msg.body, 160),
+  url: msg.url || '/#/notifications', tag: msg.tag || (ref ? `r-${ref}`.slice(0, 64) : undefined), re: msg.renotify === true || def.locked });
+// 同樣內容給一群人；回傳 { rows, queued }
 async function notify(env, memberIds, cat, msg, opt = {}) {
   if (!isCat(cat)) throw new Error(`notify: unknown category ${cat}`);
   if (cat === 'security' && opt[SEC] !== true) throw new Error('notify: security only via securityNotify');
   const def = CATS[cat], ids = [...new Set(memberIds)].filter(Boolean);
-  if (!ids.length) return;
-  const ref = REF_RE.test(msg.ref || '') ? msg.ref : null, rowIds = new Map(ids.map((id) => [id, rid(8)]));
-  // 一律寫進通知中心（不管有沒有推播）
-  for (let i = 0; i < ids.length; i += 40) await env.DB.batch(ids.slice(i, i + 40).map((id) => env.DB.prepare(
-    'INSERT INTO notifications (id, member_id, kind, category, ref, title, body, url) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-    .bind(rowIds.get(id), id, msg.kind || cat, cat, ref, str(msg.title, 80), str(msg.body, 300), str(msg.url, 200) || null)));
-  // 推播名單：locked 類別或 force 一律推；其他類別去掉關掉這一類的人
-  let pushIds = ids;
-  if (!def.locked && !opt.force) {
-    const muted = new Set();
-    for (let i = 0; i < ids.length; i += 90) {
-      const part = ids.slice(i, i + 90);
-      for (const r of (await env.DB.prepare(`SELECT id FROM members WHERE id IN (${part.map(() => '?').join(',')})
-        AND notif_mute IS NOT NULL AND instr(',' || notif_mute || ',', ?) > 0`).bind(...part, `,${cat},`).all()).results) muted.add(r.id);
-    }
-    pushIds = ids.filter((id) => !muted.has(id));
-  }
-  if (!pushIds.length) return;
-  const payload = { cat, ts: Date.now(),
-    title: str(msg.push?.title ?? msg.title, 80), body: str(msg.push?.body ?? msg.body, 160),
-    url: msg.url || '/#/notifications', tag: msg.tag || (ref ? `r-${ref}`.slice(0, 64) : undefined),
-    re: msg.renotify === true || def.locked };
-  env.defer(push(env, pushIds, payload, { rowIds, ttl: msg.ttl ?? def.ttl, urgency: msg.urgency ?? def.urgency })
-    .then((r) => (r.dropped || r.failed) && audit(env, null, null, 'push.truncated', 'notifications', null, `${cat}｜送出 ${r.sent}｜略過 ${r.dropped} 台裝置｜連線失敗 ${r.failed || 0}`)));
+  if (!ids.length) { if (opt.also?.length) await env.DB.batch(opt.also); return { rows: 0, queued: 0 }; }
+  const ref = REF_RE.test(msg.ref || '') ? msg.ref : null;
+  return writeNotes(env, cat, ids.map((id) => [rid(8), id]), { kind: msg.kind || cat, ref, title: str(msg.title, 80), body: str(msg.body, 300), url: str(msg.url, 200) || null,
+    payload: pushPayload(cat, def, msg, ref), ttl: msg.ttl ?? def.ttl, urgency: msg.urgency ?? def.urgency, force: def.locked || opt.force, also: opt.also });
+}
+// 每人內容不同（例如每月總結、疲勞提醒、會費到期、收款）：list 每一項 { member_id, title, body, url, ref, tag, push }，同樣 2 句
+async function notifyMany(env, cat, list, opt = {}) {
+  if (!isCat(cat) || cat === 'security') throw new Error(`notifyMany: bad category ${cat}`);
+  const def = CATS[cat];
+  const items = list.filter((x) => x?.member_id).map((x) => {
+    const ref = REF_RE.test(x.ref || '') ? x.ref : null;
+    return [rid(8), x.member_id, str(x.title, 80), str(x.body, 300), str(x.url, 200) || null, ref, pushPayload(cat, def, x, ref)];
+  });
+  if (!items.length) { if (opt.also?.length) await env.DB.batch(opt.also); return { rows: 0, queued: 0 }; }
+  return writeNotes(env, cat, items, { kind: opt.kind || cat, ttl: opt.ttl ?? def.ttl, urgency: opt.urgency ?? def.urgency, force: def.locked || opt.force, also: opt.also });
+}
+// 送出推播佇列的一段；過期或送不出去而被丟掉的寫稽核 push.dropped（取代以前的 push.truncated）
+async function drain(env, opt = {}) {
+  const r = await drainPush(env, opt);
+  if (r.dropped) await audit(env, null, null, 'push.dropped', 'notifications', null, `略過 ${r.dropped} 則（過期或送不出去）`);
+  return r;
+}
+// 每次執行只送一段（最多 plan.pushPerHop 台）：每台約 0.2–0.3 ms CPU（M4），10 台乘 2 換算 Cloudflare 主機還在 10 ms 內；
+//   多送幾段 CPU 就會超過而被終止（已送出的列沒刪掉，租約到期後重複推播）。剩下的交給之後請求的 pushKick、下個整點、
+//   或 self 模式的下一段（Jobs.drainPush）。每小時排程、/api/dev/drain、self 模式的 Jobs.drainPush 共用；回傳是否可能還有剩
+async function drainAll(env) {
+  const plan = planOf(env);
+  if (!env.budget.room(6 + 1)) { env.budget.stop('push'); return { sent: 0, more: true }; }
+  const cap = Math.min(plan.pushPerHop, env.budget.left() - 6);
+  const r = await drain(env, { max: cap });
+  return { sent: r.sent, more: r.leased > 0 && r.leased >= cap };   // 領到的比上限少：佇列裡沒有可以送的了
 }
 const securityNotify = (env, memberIds, msg) => notify(env, memberIds, 'security', msg, { [SEC]: true });
 // 一位幹部處理完，其他收件幹部的同一則待辦一起標為已讀
-const settleTodo = (env, ...refs) => refs.length && env.DB.batch(refs.map((ref) => env.DB.prepare(
-  "UPDATE notifications SET read_at = COALESCE(read_at, datetime('now')) WHERE category = 'todo' AND ref = ?").bind(ref)));
+//   一句處理所有 ref（json_each），句數跟筆數無關
+const settleTodo = (env, ...refs) => refs.length && env.DB.prepare(
+  "UPDATE notifications SET read_at = COALESCE(read_at, datetime('now')) WHERE category = 'todo' AND ref IN (SELECT value FROM json_each(?))").bind(JSON.stringify(refs)).run();
 // 活動的管理者（送出當下重新檢查權限，已經失去權限的建立者不會收到）
 const eventManagers = async (env, ev) => (await env.DB.prepare(
   `SELECT id FROM members WHERE id = ?1 AND role IN ('chair','director','staff','coach')
@@ -289,7 +347,7 @@ async function verifyGoogleIdToken(env, idToken, nonce) {
   const header = dec(h), claims = dec(p);
   if (header.alg !== 'RS256') throw new Error('簽章演算法不正確');
   if (Date.now() - googleKeys.at > 3600e3 || !googleKeys.keys.some((k) => k.kid === header.kid)) {
-    googleKeys = { at: Date.now(), keys: (await (await fetch('https://www.googleapis.com/oauth2/v3/certs')).json()).keys || [] };
+    googleKeys = { at: Date.now(), keys: (await (await xfetch(env, 'https://www.googleapis.com/oauth2/v3/certs')).json()).keys || [] };
   }
   const jwk = googleKeys.keys.find((k) => k.kid === header.kid);
   if (!jwk) throw new Error('找不到簽章金鑰');
@@ -315,7 +373,7 @@ async function googleCallback(req, env, url) {
   let claims;
   try {
     const form = new URLSearchParams({ grant_type: 'authorization_code', code, redirect_uri: googleRedirect(url), client_id: env.GOOGLE_CLIENT_ID, client_secret: env.GOOGLE_CLIENT_SECRET });
-    const tok = await (await fetch('https://oauth2.googleapis.com/token', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: form })).json();
+    const tok = await (await xfetch(env, 'https://oauth2.googleapis.com/token', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: form })).json();
     if (!tok.id_token) return back('Google 登入失敗');
     claims = await verifyGoogleIdToken(env, tok.id_token, nonce);
   } catch (e) {
@@ -347,7 +405,7 @@ async function googleCallback(req, env, url) {
     m = { id, name: displayName, role: 'member' };
   }
   await audit(env, req, m, isNew ? 'account.create' : 'login', 'member', m.id, 'Google');
-  env.ctx?.waitUntil(noteDevice({ ...env, defer: (p) => env.ctx.waitUntil(p) }, req, m, ' Google '));
+  env.defer(noteDevice(env, req, m, ' Google '));   // env 是這次執行專用的（不要用 { ...env } 複製，綁定會不見）
   return new Response(null, { status: 302, headers: [
     ['location', isNew ? '/#/me?welcome=1' : '/#/'],
     ['set-cookie', await startSession(env, m, req)],
@@ -364,7 +422,7 @@ const RACE_FIELDS = {
 };
 async function raceKey(env) {
   if (!env.RACE_KEY) throw new Error('尚未設定 RACE_KEY');
-  return crypto.subtle.importKey('raw', WebAuthn.unb64u(env.RACE_KEY.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')), 'AES-GCM', false, ['encrypt', 'decrypt']);
+  return cachedKey('race', env.RACE_KEY, () => crypto.subtle.importKey('raw', WebAuthn.unb64u(env.RACE_KEY.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')), 'AES-GCM', false, ['encrypt', 'decrypt']));
 }
 // 格式 v1.<iv>.<密文>：把會員代碼當附加驗證資料（AAD），密文搬到別人名下就解不開；開頭的版本號留給日後換金鑰
 async function sealPrivate(env, obj, memberId) {
@@ -391,7 +449,7 @@ async function postCheck(env, raw) {
   const x = addr.replace(/[<>&'"]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', "'": '&apos;', '"': '&quot;' })[c]);
   let text = '';
   try {
-    const r = await fetch(POST_WS, { method: 'POST', signal: AbortSignal.timeout(6000),
+    const r = await xfetch(env, POST_WS, { method: 'POST', signal: AbortSignal.timeout(6000),
       headers: { 'content-type': 'text/xml; charset=utf-8', SOAPAction: '"http://tempuri.org/GetZipAddress"' },
       body: `<?xml version="1.0" encoding="utf-8"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><GetZipAddress xmlns="http://tempuri.org/"><addrStr>${x}</addrStr></GetZipAddress></soap:Body></soap:Envelope>` });
     if (!r.ok) return { ok: false, unavailable: true };
@@ -666,7 +724,7 @@ async function doSignup(env, ev, member, b, { by = null, manager = false, req = 
       if (ev.notify_signup) await notify(env, [member.id], 'signup', { ...base, title: `已送出申請：${ev.title}`, body: `主辦幹部審核後會通知你${q.total ? '，核准後再繳費' : ''}` });
       await alertReviewers(env, ev, member.id);
     } else if (ev.notify_signup && final === 'in') {
-      await notify(env, [member.id], 'signup', { ...base, title: `報名成功：${ev.title}`, body: `${whenText(ev)}${dueText(ev, q.total)}${party ? '；入場券在「我的入場券」' : ''}` });
+      await notify(env, [member.id], 'signup', { ...base, title: `報名成功：${ev.title}`, body: `${whenText(ev)}${dueText(ev, q.total)}${party ? '；入場券在「我的入場券」' : ''}`, ...duePush(ev, q.total) });
     } else if (ev.notify_signup && final === 'wait') {
       await notify(env, [member.id], 'signup', { ...base, title: `已排入候補：${ev.title}`, body: `目前候補第 ${await queuePos(env, ev.id, member.id)} 位，有人取消會自動遞補並通知你` });
     }
@@ -677,25 +735,22 @@ async function doSignup(env, ev, member, b, { by = null, manager = false, req = 
 const ticketCode = () => [...crypto.getRandomValues(new Uint8Array(6))].map((b) => 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[b % 32]).join('');
 const countIn = async (env, eid) => (await env.DB.prepare("SELECT COUNT(*) AS n FROM signups WHERE event_id = ? AND status = 'in'").bind(eid).first()).n;
 const sumItems = (rows, id) => rows.reduce((t, r) => t + parseQ(r.items).filter((x) => x.id === id).reduce((u, x) => u + x.qty, 0), 0);
-// 這一筆的商品，加上其他正取的人已訂的，有沒有超過庫存
-async function stockOk(env, ev, row) {
-  const defs = parseQ(ev.items).filter((d) => d.stock), mine = parseQ(row.items);
-  if (!defs.length || !mine.length) return true;
-  const others = (await env.DB.prepare("SELECT items FROM signups WHERE event_id = ? AND status = 'in' AND member_id != ? AND items IS NOT NULL").bind(ev.id, row.member_id).all()).results;
-  return defs.every((d) => { const q = mine.filter((x) => x.id === d.id).reduce((t, x) => t + x.qty, 0); return !q || sumItems(others, d.id) + q <= d.stock; });
-}
-// 這一筆缺哪一項庫存（回報給主辦用）
-async function shortItem(env, ev, row) {
-  const defs = parseQ(ev.items).filter((d) => d.stock), mine = parseQ(row.items);
-  if (!defs.length || !mine.length) return null;
-  const others = (await env.DB.prepare("SELECT items FROM signups WHERE event_id = ? AND status = 'in' AND member_id != ? AND items IS NOT NULL").bind(ev.id, row.member_id).all()).results;
-  return defs.find((d) => { const q = mine.filter((x) => x.id === d.id).reduce((t, x) => t + x.qty, 0); return q && sumItems(others, d.id) + q > d.stock; })?.name || null;
-}
+// 庫存：正取的人已訂的數量（一句查出來，之後在 JS 裡累加；以前每位候補各查一次，候補多的團購一次就超過 50 句）
+const STOCK_SQL = "SELECT member_id, items FROM signups WHERE event_id = ? AND status = 'in' AND items IS NOT NULL";
+const qtyOf = (items, id) => items.filter((x) => x.id === id).reduce((t, x) => t + x.qty, 0);
+const takenOf = (rows) => { const t = {}; for (const r of rows) for (const x of parseQ(r.items)) t[x.id] = (t[x.id] || 0) + x.qty; return t; };
+// 這一筆缺哪一項庫存（taken：其他正取已訂的數量；回報給主辦用）
+const shortOf = (defs, taken, items) => defs.find((d) => { const q = qtyOf(items, d.id); return q && (taken[d.id] || 0) + q > d.stock; })?.name || null;
 // 入場券只給正取：成為正取就開（保留原本的代碼與座位），離開正取就刪
 const ensureTicket = (env, ev, row) => env.DB.prepare(`INSERT INTO tickets (id, event_id, member_id, code, guests, meal, note) VALUES (?, ?, ?, ?, ?, ?, ?)
   ON CONFLICT(event_id, member_id) DO UPDATE SET guests = excluded.guests, meal = excluded.meal`)
   .bind(rid(8), ev.id, row.member_id, ticketCode(), row.guests || 0, row.meal || '', str(row.note, 60)).run();
 const dropTicket = (env, eid, mid) => env.DB.prepare('DELETE FROM tickets WHERE event_id = ? AND member_id = ?').bind(eid, mid).run();
+// 很多人一起成為正取（遞補、核准）：一句開完入場券（代碼在 JS 產生）
+const ensureTickets = (env, ev, rows) => rows.length && env.DB.prepare(`INSERT INTO tickets (id, event_id, member_id, code, guests, meal, note)
+  SELECT json_extract(j.value, '$[0]'), ?1, json_extract(j.value, '$[1]'), json_extract(j.value, '$[2]'), json_extract(j.value, '$[3]'), json_extract(j.value, '$[4]'), json_extract(j.value, '$[5]')
+  FROM json_each(?2) j WHERE true ON CONFLICT(event_id, member_id) DO UPDATE SET guests = excluded.guests, meal = excluded.meal`)
+  .bind(ev.id, JSON.stringify(rows.map((r) => [rid(8), r.member_id, ticketCode(), r.guests || 0, r.meal || '', str(r.note, 60)]))).run();
 // 候補第幾位（依 created_at, id）
 const queuePos = async (env, eid, mid) => (await env.DB.prepare(`SELECT COUNT(*) AS n FROM signups w, signups me
   WHERE me.event_id = ?1 AND me.member_id = ?2 AND w.event_id = ?1 AND w.status = 'wait'
@@ -703,60 +758,82 @@ const queuePos = async (env, eid, mid) => (await env.DB.prepare(`SELECT COUNT(*)
 const pendingCount = async (env, eid) => (await env.DB.prepare("SELECT COUNT(*) AS n FROM signups WHERE event_id = ? AND status = 'pending'").bind(eid).first()).n;
 // 通知用的文字：日期（星期）、金額與繳費期限、日期時間地點
 const tpDay = (date) => tpText(`${date}T00:00`).slice(0, -5);
+// 金額只放通知中心，鎖定畫面與推播佇列不放：要繳費時推播改成不含金額的說法
+const duePush = (ev, amount, lead = '') => (amount ? { push: { body: `${lead}${whenText(ev)}；點開看繳費資訊` } } : {});
 const dueText = (ev, amount) => { const p = parseQ(ev.pay_info, {}); return amount ? `；應繳 NT$${amount}${p.due ? `，${p.due.slice(5).replace('-', '/')} 前繳費` : ''}` : ''; };
 const whenText = (ev) => `${tpDay(ev.date)}${ev.gather_time ? ` ${ev.gather_time} ${ev.kind === 'party' ? '開始' : '集合'}` : ''}${ev.place ? `・${ev.place}` : ''}`;
 
-// 唯一把 wait 改成 in 的地方：取消、移出、移出受邀名單、調高名額、關閉審核、刪除帳號都呼叫它
+// 唯一把 wait 改成 in 的地方：取消、移出、移出受邀名單、調高名額、關閉審核、刪除帳號、每小時的 promoteSweep 都呼叫它
 //   manual：幹部的操作（核准、調名額），活動開始後仍可遞補；自動遞補到活動開始為止
-//   quiet：這些人由呼叫端自己通知
-async function promote(env, ev, { manual = false, quiet = new Set() } = {}) {
-  if (!ev || ev.status !== 'open') return [];
-  if (!manual && tpNow() >= evStart(ev)) return [];          // 活動開始後不自動遞補（手動核准、調名額仍可）
+//   quiet：這些人由呼叫端自己通知；rounds：最多跑幾輪；reserve：呼叫端之後還要用的子請求數
+//   句數跟人數無關（免費方案一次執行 50 個子請求）：每輪最多 8 句（名額、候補、庫存、遞補一句、超賣檢查 2–4 句），
+//   收尾最多 4 句（入場券一句、是否已通知一句、通知 2 句）。額度不夠就不開始下一輪，回傳值帶 more，
+//   剩下的空位由每小時的 promoteSweep 接著遞補
+const PROMOTE_ROUND = 8, PROMOTE_TAIL = 4;
+async function promote(env, ev, { manual = false, quiet = new Set(), rounds = 3, reserve = 0 } = {}) {
   const done = [];
+  if (!ev || ev.status !== 'open') return done;
+  if (!manual && tpNow() >= evStart(ev)) return done;          // 活動開始後不自動遞補（手動核准、調名額仍可）
+  const defs = parseQ(ev.items).filter((d) => d.stock);
   // D1 沒有交易鎖：同時好幾個遞補（兩人取消、取消＋核准、報名自降＋遞補）可能超賣。
   //   超過名額時，每個呼叫端都用同一個排序（created_at, id，與報名時自降一致）判斷誰排在名額外，只退回自己遞補、排在名額外的人；
   //   退完反而空出位子（排序相同但兩邊都退）就再補一輪，最多三輪
-  for (let round = 0; round < 3; round++) {
+  for (let round = 0; round < rounds; round++) {
+    if (!env.budget.room(PROMOTE_ROUND + PROMOTE_TAIL + reserve)) { env.budget.stop('promote'); done.more = true; break; }
     let free = ev.capacity ? ev.capacity - await countIn(env, ev.id) : Infinity;
     if (free <= 0) break;
     const waits = (await env.DB.prepare(`SELECT id, member_id, name, items, amount, guests, meal, note, created_at, review, reviewed_at FROM signups
       WHERE event_id = ? AND status = 'wait' ORDER BY created_at, id LIMIT 200`).bind(ev.id).all()).results;
-    const got = [];
+    if (!waits.length) break;
+    const taken = defs.length && waits.some((w) => parseQ(w.items).length) ? takenOf((await env.DB.prepare(STOCK_SQL).bind(ev.id).all()).results) : {};
+    const pick = [];
     for (const w of waits) {
       if (free <= 0) break;
-      if (!(await stockOk(env, ev, w))) continue;               // 庫存不夠：留在候補，換下一位
-      const r = await env.DB.prepare("UPDATE signups SET status = 'in' WHERE id = ? AND status = 'wait'").bind(w.id).run();
-      if (!r.meta.changes) continue;
-      got.push(w); free--;
+      const mine = parseQ(w.items);
+      if (shortOf(defs, taken, mine)) continue;                 // 庫存不夠：留在候補，換下一位
+      for (const x of mine) taken[x.id] = (taken[x.id] || 0) + x.qty;
+      pick.push(w); free--;
     }
+    if (!pick.length) break;
+    const up = new Set((await env.DB.prepare(`UPDATE signups SET status = 'in' WHERE event_id = ?1 AND status = 'wait' AND id IN (SELECT value FROM json_each(?2)) RETURNING id`)
+      .bind(ev.id, JSON.stringify(pick.map((w) => w.id))).all()).results.map((r) => r.id));
+    let got = pick.filter((w) => up.has(w.id));
     if (!got.length) break;
-    if (ev.capacity && (await countIn(env, ev.id)) > ev.capacity) {
-      for (const w of [...got]) {
-        const ahead = (await env.DB.prepare("SELECT COUNT(*) AS n FROM signups WHERE event_id = ? AND status = 'in' AND (created_at < ? OR (created_at = ? AND id < ?))")
-          .bind(ev.id, w.created_at, w.created_at, w.id).first()).n;
-        if (ahead < ev.capacity) continue;
-        const r = await env.DB.prepare("UPDATE signups SET status = 'wait' WHERE id = ? AND status = 'in'").bind(w.id).run();
-        if (r.meta.changes) got.splice(got.indexOf(w), 1);
-      }
+    let n = ev.capacity ? await countIn(env, ev.id) : 0;
+    if (ev.capacity && n > ev.capacity) {
+      // 排序在名額外（第 capacity 位之後）的正取裡，這次遞補的人退回候補
+      const back = new Set((await env.DB.prepare(`UPDATE signups SET status = 'wait' WHERE status = 'in' AND id IN (SELECT value FROM json_each(?1))
+          AND id IN (SELECT id FROM signups WHERE event_id = ?2 AND status = 'in' ORDER BY created_at, id LIMIT -1 OFFSET ?3) RETURNING id`)
+        .bind(JSON.stringify(got.map((w) => w.id)), ev.id, ev.capacity).all()).results.map((r) => r.id));
+      got = got.filter((w) => !back.has(w.id));
+      n = await countIn(env, ev.id);
       // 少見：遞補的人排在既有正取前面（之前因庫存跳過），排序判斷退不到自己；退回這次最晚遞補的
-      let over = (await countIn(env, ev.id)) - ev.capacity;
-      while (over-- > 0 && got.length) await env.DB.prepare("UPDATE signups SET status = 'wait' WHERE id = ? AND status = 'in'").bind(got.pop().id).run();
+      if (n > ev.capacity && got.length) {
+        const last = got.splice(-(n - ev.capacity));
+        await env.DB.prepare("UPDATE signups SET status = 'wait' WHERE status = 'in' AND id IN (SELECT value FROM json_each(?1))").bind(JSON.stringify(last.map((w) => w.id))).run();
+        n -= last.length;
+      }
     }
     done.push(...got);
-    if (!ev.capacity || (await countIn(env, ev.id)) >= ev.capacity) break;
+    if (!ev.capacity || n >= ev.capacity) break;
   }
-  if (ev.kind === 'party') for (const w of done) await ensureTicket(env, ev, w);
+  if (!done.length) return done;
+  if (ev.kind === 'party') await ensureTickets(env, ev, done);
   // 同時有人在核准這位：核准那一方已經送了「審核通過（正取）」就不再送遞補成功（反之亦然，見 notifyApproved）
-  for (const w of done.filter((x) => x.member_id && !quiet.has(x.member_id))) {
-    if (w.review === 'approved' && await seatNoticed(env, ev.id, w)) continue;
-    await notify(env, [w.member_id], 'change', { kind: 'signup', ref: `e:${ev.id}`, tag: `signup-${ev.id}`, url: `/#/e/${ev.id}`,
-      title: `候補遞補成功：${ev.title}`, body: `有人取消，你已排進正取・${whenText(ev)}${dueText(ev, w.amount)}。不能參加請到活動頁取消，讓給下一位` });
-  }
+  const tell = done.filter((x) => x.member_id && !quiet.has(x.member_id));
+  const seen = await seatNoticed(env, ev.id, tell.filter((w) => w.review === 'approved'));
+  await notifyMany(env, 'change', tell.filter((w) => !seen.has(w.member_id)).map((w) => ({ member_id: w.member_id, ref: `e:${ev.id}`, tag: `signup-${ev.id}`, url: `/#/e/${ev.id}`,
+    title: `候補遞補成功：${ev.title}`, body: `有人取消，你已排進正取・${whenText(ev)}${dueText(ev, w.amount)}。不能參加請到活動頁取消，讓給下一位`, ...duePush(ev, w.amount, '有人取消，你已排進正取・') })), { kind: 'signup' });
   return done;
 }
-// 這次核准（reviewed_at）之後，本人是否已經收到「排進正取」的通知（遞補成功或審核通過）
-const seatNoticed = async (env, eid, row) => !!row.reviewed_at && !!(await env.DB.prepare(`SELECT 1 FROM notifications WHERE member_id = ? AND ref = ?
-  AND (title LIKE ? OR title LIKE ?) AND created_at >= ? LIMIT 1`).bind(row.member_id, `e:${eid}`, ...['候補遞補成功：', '審核通過：'].map((t) => `${t}%`), row.reviewed_at).first());
+// 這次核准（reviewed_at）之後，本人是否已經收到「排進正取」的通知（遞補成功或審核通過）：一句查完，回傳已經收到的 member_id
+async function seatNoticed(env, eid, rows) {
+  const list = rows.filter((r) => r.member_id && r.reviewed_at).map((r) => [r.member_id, r.reviewed_at]);
+  if (!list.length) return new Set();
+  return new Set((await env.DB.prepare(`SELECT json_extract(j.value, '$[0]') AS mid FROM json_each(?1) j WHERE EXISTS (SELECT 1 FROM notifications n
+    WHERE n.member_id = json_extract(j.value, '$[0]') AND n.ref = ?2 AND (n.title LIKE ?3 OR n.title LIKE ?4) AND n.created_at >= json_extract(j.value, '$[1]'))`)
+    .bind(JSON.stringify(list), `e:${eid}`, ...['候補遞補成功：', '審核通過：'].map((t) => `${t}%`)).all()).results.map((r) => r.mid));
+}
 // 有新的待審核：通知主辦，一小時最多一次（其餘交給 20:00 的整理）；推播只有數量
 async function alertReviewers(env, ev, actorId) {
   const r = await env.DB.prepare(`UPDATE events SET review_notified_at = datetime('now') WHERE id = ?
@@ -767,35 +844,79 @@ async function alertReviewers(env, ev, actorId) {
   if (to.length) await notify(env, to, 'todo', { kind: 'event', ref: `sr:${ev.id}`, tag: `review-${ev.id}`, url: `/#/e/${ev.id}/stats?f=pending`,
     title: `待審核：${ev.title}`, body: `目前 ${n} 筆報名等你核准` });
 }
-// 核准（或關閉審核自動錄取）之後，這些人各自落在正取還是候補
+// 核准（或關閉審核自動錄取）之後，這些人各自落在正取還是候補（候補順位在同一句算）
 async function reviewOutcome(env, ev, ids) {
   const out = { in: [], wait: [] };
   if (!ids.length) return out;
-  const rows = await allIn(env, ids, (q) => `SELECT member_id, name, status, amount, reviewed_at FROM signups WHERE event_id = ? AND member_id IN (${q})`, [ev.id]);
+  const rows = (await env.DB.prepare(`SELECT me.member_id, me.name, me.status, me.amount, me.reviewed_at, me.items,
+      CASE WHEN me.status = 'wait' THEN (SELECT COUNT(*) FROM signups w WHERE w.event_id = ?1 AND w.status = 'wait'
+        AND (w.created_at < me.created_at OR (w.created_at = me.created_at AND w.id <= me.id))) END AS position
+    FROM signups me WHERE me.event_id = ?1 AND me.member_id IN (SELECT value FROM json_each(?2))`).bind(ev.id, JSON.stringify(ids)).all()).results;
+  const by = new Map(rows.map((r) => [r.member_id, r]));
   for (const mid of ids) {
-    const r = rows.find((x) => x.member_id === mid);
+    const r = by.get(mid);
     if (r?.status === 'in') out.in.push({ member_id: mid, name: r.name, amount: r.amount, reviewed_at: r.reviewed_at });
-    else if (r?.status === 'wait') out.wait.push({ member_id: mid, name: r.name, position: await queuePos(env, ev.id, mid) });
+    else if (r?.status === 'wait') out.wait.push({ member_id: mid, name: r.name, position: r.position, items: r.items });
   }
   return out;
 }
-// 審核通過的通知（一律送，change 分類）：正取附日期地點與繳費；候補附順位
+// 審核通過的通知（一律送，change 分類）：正取附日期地點與繳費；候補附順位。所有人一次寫完（是否已通知 1 句＋通知 2 句）
 async function notifyApproved(env, ev, out) {
-  const base = { kind: 'signup', ref: `e:${ev.id}`, tag: `signup-${ev.id}`, url: `/#/e/${ev.id}` };
-  for (const x of out.in) if (!(await seatNoticed(env, ev.id, x))) await notify(env, [x.member_id], 'change', { ...base, title: `審核通過：${ev.title}`, body: `你已經在正取名單・${whenText(ev)}${dueText(ev, x.amount)}` });
-  for (const x of out.wait) await notify(env, [x.member_id], 'change', { ...base, title: `審核通過，候補第 ${x.position} 位：${ev.title}`, body: '有人取消會自動遞補並通知你' });
+  const base = { ref: `e:${ev.id}`, tag: `signup-${ev.id}`, url: `/#/e/${ev.id}` };
+  const seen = await seatNoticed(env, ev.id, out.in);
+  await notifyMany(env, 'change', [
+    ...out.in.filter((x) => !seen.has(x.member_id)).map((x) => ({ ...base, member_id: x.member_id, title: `審核通過：${ev.title}`, body: `你已經在正取名單・${whenText(ev)}${dueText(ev, x.amount)}`, ...duePush(ev, x.amount, '你已經在正取名單・') })),
+    ...out.wait.map((x) => ({ ...base, member_id: x.member_id, title: `審核通過，候補第 ${x.position} 位：${ev.title}`, body: '有人取消會自動遞補並通知你' })),
+  ], { kind: 'signup' });
 }
 // 沒有待審核了：主辦的待辦一起標為已處理
 const settleReviews = async (env, eid) => { if (!(await pendingCount(env, eid))) await settleTodo(env, `sr:${eid}`); };
-// 核准前重新檢查資格（核准按鈕與關閉審核直接錄取共用）：受邀名單、私密分團、代為團體報名的資料；回傳不符的原因
-async function reviewBlock(env, ev, mid) {
-  if (ev.visibility === 'invite') return (await env.DB.prepare('SELECT 1 FROM event_invites WHERE event_id = ? AND member_id = ?').bind(ev.id, mid).first()) ? null : '已不在受邀名單';
-  if (ev.team_id && (await env.DB.prepare('SELECT private FROM teams WHERE id = ?').bind(ev.team_id).first())?.private
-    && !(await env.DB.prepare("SELECT 1 FROM team_members WHERE team_id = ? AND member_id = ? AND status = 'active'").bind(ev.team_id, mid).first())) return '已不在分團';
-  if (ev.group_reg && !(await env.DB.prepare('SELECT complete FROM member_private WHERE member_id = ?').bind(mid).first())?.complete) return '報名資料不完整';
-  return null;
+// 核准前重新檢查資格（核准按鈕與關閉審核直接錄取共用）：受邀名單、私密分團、代為團體報名的資料
+//   所有人一起查（最多 3 句，跟人數無關）；回傳 Map(member_id → 不符的原因)
+async function reviewBlocks(env, ev, mids) {
+  const out = new Map(), j = JSON.stringify(mids);
+  if (!mids.length) return out;
+  const has = async (sql, ...a) => new Set((await env.DB.prepare(sql).bind(...a).all()).results.map((r) => r.member_id));
+  if (ev.visibility === 'invite') {
+    const ok = await has('SELECT member_id FROM event_invites WHERE event_id = ?1 AND member_id IN (SELECT value FROM json_each(?2))', ev.id, j);
+    for (const m of mids) if (!ok.has(m)) out.set(m, '已不在受邀名單');
+    return out;
+  }
+  if (ev.team_id) {
+    const ok = await has(`SELECT member_id FROM team_members WHERE team_id = ?1 AND status = 'active' AND member_id IN (SELECT value FROM json_each(?2))
+      UNION SELECT value FROM json_each(?2) WHERE NOT EXISTS (SELECT 1 FROM teams WHERE id = ?1 AND private = 1)`, ev.team_id, j);
+    for (const m of mids) if (!ok.has(m)) out.set(m, '已不在分團');
+  }
+  if (ev.group_reg) {
+    const ok = await has('SELECT member_id FROM member_private WHERE complete = 1 AND member_id IN (SELECT value FROM json_each(?1))', j);
+    for (const m of mids) if (!out.has(m) && !ok.has(m)) out.set(m, '報名資料不完整');
+  }
+  return out;
 }
-
+// 核准一批待審核（核准按鈕與關閉審核直接錄取共用）：資格檢查 ≤3 句、改成候補 1 句、promote()、正取或候補 1 句、
+//   庫存說明 0–1 句、通知 3 句；句數跟人數無關。rows：[{ id, member_id, name }]（都是 pending），note：審核備註
+//   核准一律先進候補，再由 promote() 依報名先後排進正取（不會插隊到原本的候補前面）
+async function approveMany(env, ev, actor, rows, { note = null, reserve = 0 } = {}) {
+  const blocks = await reviewBlocks(env, ev, rows.map((r) => r.member_id));
+  const ok = rows.filter((r) => !blocks.has(r.member_id));
+  const res = ok.length ? (await env.DB.prepare(`UPDATE signups SET status = 'wait', review = 'approved', reviewed_by = ?1, reviewed_at = datetime('now'), review_note = ?2, edited_after_review = 0
+    WHERE event_id = ?3 AND status = 'pending' AND id IN (SELECT value FROM json_each(?4)) RETURNING id`).bind(actor.id, note, ev.id, JSON.stringify(ok.map((r) => r.id))).all()).results : [];
+  const upd = new Set(res.map((r) => r.id));
+  const approved = ok.filter((r) => upd.has(r.id)).map((r) => r.member_id);
+  await promote(env, ev, { manual: true, quiet: new Set(approved), reserve: reserve + 5 });
+  const out = await reviewOutcome(env, ev, approved);
+  out.blocked = rows.filter((r) => blocks.has(r.member_id)).map((r) => ({ ...r, reason: blocks.get(r.member_id) }));
+  out.lost = ok.filter((r) => !upd.has(r.id));   // 兩句之間被別人處理掉的
+  // 候補裡因為庫存不夠排不進正取的，告訴主辦缺哪一項
+  const defs = parseQ(ev.items).filter((d) => d.stock);
+  out.notes = [];
+  if (defs.length && out.wait.some((w) => parseQ(w.items).length)) {
+    const taken = takenOf((await env.DB.prepare(STOCK_SQL).bind(ev.id).all()).results);
+    for (const w of out.wait) { const short = shortOf(defs, taken, parseQ(w.items)); if (short) out.notes.push({ name: w.name, reason: `「${short}」庫存不夠，先排候補` }); }
+  }
+  await notifyApproved(env, ev, out);
+  return out;
+}
 // 本人取消或撤回：沒有報名或已婉拒時不做事（不能取消再重報繞過婉拒）；正取在活動開始後不能自己取消
 async function cancelSignup(env, ev, member) {
   const mine = await env.DB.prepare('SELECT id, status, review, paid, pay_reported_at, amount FROM signups WHERE event_id = ? AND member_id = ?').bind(ev.id, member.id).first();
@@ -836,13 +957,13 @@ const racePresets = async (env) => { try { return JSON.parse((await env.DB.prepa
 
 // 天氣：Open-Meteo 預報＋空氣品質，同一格（0.01 度）快取 30 分鐘；API 與排程（壞天氣提醒）共用
 async function getWeather(env, lat, lng) {
-  const k = `${Number(lat).toFixed(2)},${Number(lng).toFixed(2)}`, cache = caches.default, key = new Request(`https://cil-run.internal/weather/v1/${k}`);
+  const k = `${Number(lat).toFixed(2)},${Number(lng).toFixed(2)}`, cache = cacheOf(env), key = new Request(`https://cil-run.internal/weather/v1/${k}`);
   const hit = await cache.match(key);
   if (hit) return { body: await hit.text(), hit: true };
   const [la, lo] = k.split(',');
   const fc = `https://api.open-meteo.com/v1/forecast?latitude=${la}&longitude=${lo}&hourly=temperature_2m,apparent_temperature,relative_humidity_2m,precipitation_probability,precipitation,weather_code,wind_speed_10m,uv_index&daily=sunrise,sunset,temperature_2m_max,temperature_2m_min,precipitation_probability_max,uv_index_max,weather_code&timezone=Asia%2FTaipei&forecast_days=7&wind_speed_unit=ms`;
   const aq = `https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${la}&longitude=${lo}&hourly=pm2_5,us_aqi&timezone=Asia%2FTaipei&forecast_days=5`;
-  const [a, b] = await Promise.all([fetch(fc).then((r) => (r.ok ? r.json() : null)).catch(() => null), fetch(aq).then((r) => (r.ok ? r.json() : null)).catch(() => null)]);
+  const [a, b] = await Promise.all([xfetch(env, fc).then((r) => (r.ok ? r.json() : null)).catch(() => null), xfetch(env, aq).then((r) => (r.ok ? r.json() : null)).catch(() => null)]);
   if (!a?.hourly) return null;
   const body = JSON.stringify({ at: new Date().toISOString(), hourly: a.hourly, daily: a.daily, air: b?.hourly ? { time: b.hourly.time, pm2_5: b.hourly.pm2_5, us_aqi: b.hourly.us_aqi } : null });
   const put = cache.put(key, new Response(body, { headers: { 'content-type': 'application/json', 'cache-control': 'public, max-age=1800' } }));
@@ -850,8 +971,20 @@ async function getWeather(env, lat, lng) {
   return { body, hit: false };
 }
 
+// 測試用（NTPC_MOCK=1、DEV_LOGIN=1 的本機）：新北市假日資料的假回應（指定年份 365 天，週末放假），不連外；照樣算 1 個子請求
+function ntpcMock(env, year, page) {
+  env.budget?.take('fetch');
+  const out = [];
+  if (page === 0) for (let t = Date.UTC(year, 0, 1); new Date(t).getUTCFullYear() === year; t += 864e5) {
+    const d = new Date(t), wk = d.getUTCDay(), ds = d.toISOString().slice(0, 10).replace(/-/g, ''), ny = ds.endsWith('0101');
+    out.push({ date: ds, year: String(year), name: ny ? '開國紀念日' : '', isholiday: wk === 0 || wk === 6 || ny ? '是' : '否', holidaycategory: wk === 0 || wk === 6 ? '星期六、星期日' : ny ? '放假之紀念日及節日' : '', description: '' });
+  }
+  return new Response(JSON.stringify(out), { headers: { 'content-type': 'application/json' } });
+}
+
 // ---- 路由 ----
-async function api(req, env, path, method) {
+// 路由：寫成括號包住的函式運算式，V8 在載入模組時就先編譯（冷啟動的第一個 /api 請求從 13–22 ms 降到約 2 ms）
+const api = (async function api(req, env, path, method) {
   // 登入狀態（含我在各分團的身分）與系統設定同時查，一次往返就好
   const [member0, settingRows] = await Promise.all([currentMember(req, env), env.DB.prepare('SELECT key, value FROM settings').all().then((r) => r.results)]);
   let member = member0;
@@ -1030,9 +1163,17 @@ async function api(req, env, path, method) {
     { const su = await needStepUp(); if (su) return su; }
     if (!backupStore(env) || !env.BACKUP_KEY) return fail(400, '備份還沒設定');
     if (await limited(env, `backup:${member.id}`, 3, 3600)) return fail(429, '一小時最多手動備份 3 次');
-    const r = await runBackup(env, `${today()}-manual-${Date.now().toString(36)}`);
-    await audit(env, req, member, 'backup.manual', 'system', null, `${r.tables} 張表 ${r.rows} 筆`);
-    return json(r);
+    // 和每日備份同一套分段做法（backupStep）：資料少時這次就做完；做不完的由每小時排程接著做（管理後台的清單在做完後才出現）
+    const m = await env.DB.prepare("SELECT claim_key, attempts, cursor FROM job_runs WHERE job = 'backup_manual'").first();
+    if (backupPending(m)) return fail(409, '上一次手動備份還在分段進行中，會在接下來的整點做完');
+    const label = `${today()}-manual-${Date.now().toString(36)}`;
+    const r = await backupStep(env, 'backup_manual', label, { action: 'backup.manual' });
+    if (!r.done) {
+      await audit(env, req, member, 'backup.manual', 'system', label, '開始（資料較多，分段進行）');
+      return json({ started: true, label }, 202);
+    }
+    await audit(env, req, member, 'backup.manual', 'system', label, `${r.result.tables} 張表 ${r.result.rows} 筆`);
+    return json(r.result);
   }
   // ---- 練跑地圖 ----
   const SPOT_KINDS = ['track', 'river', 'park', 'trail', 'road', 'other'];
@@ -1220,7 +1361,7 @@ async function api(req, env, path, method) {
     const stuck = (r) => r.last_error === Cams.SYNCING && r.last_sync_at && Date.parse(`${r.last_sync_at.replace(' ', 'T')}Z`) < Date.now() - 120e3;
     return json({ sources: Object.entries(Cams.SOURCES).map(([k, S]) => {
       const r = srcs.find((x) => x.source === k) || {};
-      return { source: k, name: S.name, attribution: S.attribution, manual: !!S.manual, consent: !!S.consent, enabled: !!r.enabled,
+      return { source: k, name: S.name, attribution: S.attribution, manual: !!S.manual, consent: !!S.consent, offline: !!S.offline, enabled: !!r.enabled,
         last_sync_at: r.last_sync_at || null, last_ok_at: r.last_ok_at || null, last_count: r.last_count ?? null,
         last_error: stuck(r) ? '上次同步沒有完成（可能超過執行時間上限）' : r.last_error || null,
         active: cnt[k]?.active || 0, down: cnt[k]?.down || 0 };
@@ -1243,6 +1384,7 @@ async function api(req, env, path, method) {
     if (!can(member, 'settings')) return fail(403, '只有理事長與行政人員可以同步');
     const src = str((await body()).source, 10), S = Cams.sourceOf(src);
     if (!S?.list) return fail(400, '沒有這個來源');
+    if (S.offline) return fail(400, '公路局的清單改用電腦上的同步工具更新（tools/cams-sync.mjs），這裡不能同步');
     if (!(await env.DB.prepare('SELECT enabled FROM cam_sources WHERE source = ?').bind(src).first())?.enabled) return fail(400, '請先開啟這個來源');
     if (await limited(env, `camsync:${src}`, 3, 3600)) return fail(429, '這個來源一小時最多同步 3 次');
     let r;
@@ -1493,9 +1635,10 @@ async function api(req, env, path, method) {
     const year = Number((await body()).year);
     if (!Number.isInteger(year) || year < 2020 || year > 2100) return fail(400, '年份不正確');
     if (await limited(env, `holiday:${member.id}`, 10, 3600)) return fail(429, '匯入太頻繁，請稍後再試');
-    const rows = [];
-    for (let page = 0; page < 20; page++) {
-      const r = await fetch(`https://data.ntpc.gov.tw/api/datasets/308DCD75-6434-45BC-A95F-584DA4FED251/json?page=${page}&size=1000`, { headers: { accept: 'application/json' }, cf: { cacheTtl: 3600 } });
+    // 頁數上限跟著執行額度（免費方案 10 頁＝1 萬筆，新北市的資料約 4 千筆）
+    const rows = [], pages = planOf(env).holidayPages, mock = env.NTPC_MOCK === '1' && env.DEV_LOGIN === '1' && ['localhost', '127.0.0.1'].includes(url0(req).hostname);
+    for (let page = 0; page < pages; page++) {
+      const r = mock ? ntpcMock(env, year, page) : await xfetch(env, `https://data.ntpc.gov.tw/api/datasets/308DCD75-6434-45BC-A95F-584DA4FED251/json?page=${page}&size=1000`, { headers: { accept: 'application/json' }, cf: { cacheTtl: 3600 } });
       if (!r.ok) return fail(502, `新北市資料開放平台暫時無法連線（${r.status}），請稍後再試`);
       const list = await r.json().catch(() => null);
       if (!Array.isArray(list)) return fail(502, '新北市資料開放平台回傳的格式不正確');
@@ -1504,10 +1647,13 @@ async function api(req, env, path, method) {
       if (list.length < 1000) break;
     }
     if (!rows.length) return fail(404, `新北市資料開放平台還沒有 ${year} 年的資料，通常前一年 6 月後公告`);
-    await env.DB.prepare('DELETE FROM holidays WHERE year = ?').bind(year).run();
-    for (let i = 0; i < rows.length; i += 80) await env.DB.batch(rows.slice(i, i + 80).map((x) => env.DB.prepare(
-      'INSERT OR REPLACE INTO holidays (date, year, name, is_holiday, category, description) VALUES (?, ?, ?, ?, ?, ?)').bind(
-      `${x.date.slice(0, 4)}-${x.date.slice(4, 6)}-${x.date.slice(6, 8)}`, year, str(x.name, 40) || null, x.isholiday === '是' ? 1 : 0, str(x.holidaycategory, 40) || null, str(x.description, 120) || null)));
+    // 刪除與寫入在同一個 batch（同一個交易）；一整年一句 INSERT … SELECT FROM json_each
+    const hj = JSON.stringify(rows.map((x) => [`${x.date.slice(0, 4)}-${x.date.slice(4, 6)}-${x.date.slice(6, 8)}`, str(x.name, 40) || null, x.isholiday === '是' ? 1 : 0, str(x.holidaycategory, 40) || null, str(x.description, 120) || null]));
+    await env.DB.batch([
+      env.DB.prepare('DELETE FROM holidays WHERE year = ?').bind(year),
+      env.DB.prepare(`INSERT OR REPLACE INTO holidays (date, year, name, is_holiday, category, description)
+        SELECT json_extract(value, '$[0]'), ?1, json_extract(value, '$[1]'), json_extract(value, '$[2]'), json_extract(value, '$[3]'), json_extract(value, '$[4]') FROM json_each(?2)`).bind(year, hj),
+    ]);
     const named = rows.filter((x) => x.name && x.isholiday === '是');
     await audit(env, req, member, 'holiday.import', 'settings', String(year), `${rows.length} 天，節日 ${named.length} 天`);
     return json({ year, total: rows.length, holidays: named.map((x) => ({ date: `${x.date.slice(0, 4)}-${x.date.slice(4, 6)}-${x.date.slice(6, 8)}`, name: x.name })),
@@ -1538,7 +1684,6 @@ async function api(req, env, path, method) {
       WHERE date BETWEEN date('now', '-30 days') AND date('now', '+400 days') AND (team_id IS NULL OR team_id IN (SELECT team_id FROM team_members WHERE member_id = ? AND status = 'active'))
       ORDER BY date LIMIT 200`).bind(who.id).all()).results;
     const icsEsc = (t) => String(t || '').replace(/\\/g, '\\\\').replace(/\r\n?|\n/g, '\\n').replace(/[,;]/g, (c) => `\\${c}`);
-    const fold = (line) => { const out = []; let cur = ''; for (const ch of line) { if (new TextEncoder().encode(cur + ch).length > 73) { out.push(cur); cur = ` ${ch}`; } else cur += ch; } out.push(cur); return out.join('\r\n'); };
     const d8 = (d) => d.replace(/-/g, ''), t6 = (t) => `${t.replace(':', '')}00`;
     const origin = new URL(req.url).origin, stamp = new Date().toISOString().replace(/[-:]/g, '').slice(0, 15) + 'Z';
     const plus1 = (d) => new Date(Date.parse(`${d}T00:00:00Z`) + 864e5).toISOString().slice(0, 10);
@@ -1582,12 +1727,14 @@ async function api(req, env, path, method) {
     const b = await body(), device = deviceLabel(req.headers.get('user-agent') || ''), page = str(b.page, 40);
     const LIM = { ready: 60000, fcp: 60000, lcp: 60000, inp: 20000, ttfb: 60000, cls: 10 };
     const rows = Object.entries(LIM).map(([k, max]) => [k, Number(b[k])]).filter(([k, v]) => Number.isFinite(v) && v >= 0 && v <= LIM[k]);
-    if (rows.length) await env.DB.batch(rows.map(([k, v]) => env.DB.prepare('INSERT INTO client_metrics (day, metric, value, page, device, standalone, warm) VALUES (?, ?, ?, ?, ?, ?, ?)')
-      .bind(today(), k, Math.round(v * (k === 'cls' ? 1000 : 1)) / (k === 'cls' ? 1000 : 1), page, device, b.standalone ? 1 : 0, b.warm ? 1 : 0)));
     // 資料讀取時間：每種 API（代碼換成 :id）的中位數，api＝總時間、apisrv＝其中伺服器處理的時間
     const apis = (Array.isArray(b.api) ? b.api : []).slice(0, 10).filter((x) => /^\/[\w/:.-]{1,48}$/.test(x?.p || '') && Number.isFinite(x.ms) && x.ms >= 0 && x.ms <= 60000);
-    if (apis.length) await env.DB.batch(apis.flatMap((x) => [['api', x.ms], ...(Number.isFinite(x.srv) && x.srv >= 0 && x.srv <= 60000 ? [['apisrv', x.srv]] : [])]
-      .map(([k, v]) => env.DB.prepare('INSERT INTO client_metrics (day, metric, value, page, device, standalone, warm) VALUES (?, ?, ?, ?, ?, ?, 0)').bind(today(), k, Math.round(v), x.p, device, b.standalone ? 1 : 0))));
+    // 全部一句寫完（json_each：[指標, 數值, 頁面, warm]），寫入的列數不變
+    const all = [...rows.map(([k, v]) => [k, Math.round(v * (k === 'cls' ? 1000 : 1)) / (k === 'cls' ? 1000 : 1), page, b.warm ? 1 : 0]),
+      ...apis.flatMap((x) => [['api', x.ms], ...(Number.isFinite(x.srv) && x.srv >= 0 && x.srv <= 60000 ? [['apisrv', x.srv]] : [])].map(([k, v]) => [k, Math.round(v), x.p, 0]))];
+    if (all.length) await env.DB.prepare(`INSERT INTO client_metrics (day, metric, value, page, device, standalone, warm)
+      SELECT ?1, json_extract(value, '$[0]'), json_extract(value, '$[1]'), json_extract(value, '$[2]'), ?2, ?3, json_extract(value, '$[3]') FROM json_each(?4)`)
+      .bind(today(), device, b.standalone ? 1 : 0, JSON.stringify(all)).run();
     return json({ ok: true });
   }
   // 速度與錯誤（管理後台總覽）：最近 N 天的 p75 與最常見的錯誤
@@ -1596,22 +1743,43 @@ async function api(req, env, path, method) {
     if (!can(member, 'settings') && !can(member, 'audit')) return fail(403, '只有理事長、行政人員與監事可以看');
     const days = [7, 30, 90].includes(Number(url0(req).searchParams.get('days'))) ? Number(url0(req).searchParams.get('days')) : 7;
     const from = new Date(Date.now() + 8 * 3600e3 - (days - 1) * 864e5).toISOString().slice(0, 10);
-    const vals = (await env.DB.prepare('SELECT metric, value, warm, standalone FROM client_metrics WHERE day >= ? ORDER BY metric, value').bind(from).all()).results;
-    const pct = (arr, p) => (arr.length ? arr[Math.min(arr.length - 1, Math.floor(arr.length * p))] : null);
+    // 百分位在 SQL 算（ROW_NUMBER＋COUNT，取第 floor(n×p)+1 名，和以前在 JS 排序的結果一樣），不再把幾萬列讀進 Worker；
+    //   同一個 batch 再帶出執行額度、排程工作、推播佇列（管理後台「執行額度」區塊）
+    const PCT = (p) => `MIN(n, CAST(n * ${p} AS INTEGER) + 1)`, MET = "('ready','fcp','lcp','inp','cls','ttfb')";
+    const [mres, eres, ares, bres, jres, qres] = await env.DB.batch([
+      env.DB.prepare(`WITH r AS (SELECT metric, value, warm, ROW_NUMBER() OVER (PARTITION BY metric ORDER BY value) AS rn, COUNT(*) OVER (PARTITION BY metric) AS n
+          FROM client_metrics WHERE day >= ?1 AND metric IN ${MET}),
+        w AS (SELECT metric, value, ROW_NUMBER() OVER (PARTITION BY metric ORDER BY value) AS rn, COUNT(*) OVER (PARTITION BY metric) AS n
+          FROM client_metrics WHERE day >= ?1 AND warm AND metric IN ${MET})
+        SELECT metric, MAX(n) AS n, MAX(CASE WHEN rn = ${PCT(0.5)} THEN value END) AS p50, MAX(CASE WHEN rn = ${PCT(0.75)} THEN value END) AS p75,
+          (SELECT value FROM w WHERE w.metric = r.metric AND w.rn = MIN(w.n, CAST(w.n * 0.75 AS INTEGER) + 1)) AS warmP75
+        FROM r GROUP BY metric`).bind(from),
+      env.DB.prepare(`SELECT message, source, line, page, device, SUM(n) AS n, MAX(last_at) AS last_at FROM client_errors WHERE day >= ?
+        GROUP BY message, source, line ORDER BY n DESC LIMIT 20`).bind(from),
+      // 最慢的資料讀取（p75）：總時間與其中伺服器處理的時間
+      env.DB.prepare(`WITH a AS (SELECT page, metric, value, ROW_NUMBER() OVER (PARTITION BY page, metric ORDER BY value) AS rn, COUNT(*) OVER (PARTITION BY page, metric) AS n
+          FROM client_metrics WHERE day >= ?1 AND metric IN ('api', 'apisrv'))
+        SELECT page, MAX(CASE WHEN metric = 'api' THEN n END) AS n, MAX(CASE WHEN metric = 'api' AND rn = ${PCT(0.75)} THEN value END) AS p75,
+          MAX(CASE WHEN metric = 'apisrv' AND rn = ${PCT(0.75)} THEN value END) AS srv
+        FROM a GROUP BY page HAVING n > 0 ORDER BY p75 DESC LIMIT 8`).bind(from),
+      env.DB.prepare(`SELECT name, kind, SUM(n) AS n, SUM(stopped) AS stopped, SUM(over) AS over, MAX(max_sub) AS max_sub, MAX(last_at) AS last_at FROM budget_log
+        WHERE day >= ? GROUP BY name ORDER BY SUM(stopped) + SUM(over) DESC, SUM(n) DESC LIMIT 20`).bind(from),
+      env.DB.prepare("SELECT job, last_run, claim_key, claim_at, attempts, last_error, done_at FROM job_runs WHERE job != 'promote_sweep' ORDER BY job"),
+      env.DB.prepare("SELECT COUNT(*) AS n, MIN(created_at) AS oldest FROM push_queue"),
+    ]);
     const metrics = {};
     for (const k of ['ready', 'fcp', 'lcp', 'inp', 'cls', 'ttfb']) {
-      const all = vals.filter((v) => v.metric === k).map((v) => v.value);
-      const warm = vals.filter((v) => v.metric === k && v.warm).map((v) => v.value);
-      metrics[k] = { n: all.length, p50: pct(all, 0.5), p75: pct(all, 0.75), warmP75: pct(warm, 0.75) };
+      const r = mres.results.find((x) => x.metric === k);
+      metrics[k] = { n: r?.n || 0, p50: r?.p50 ?? null, p75: r?.p75 ?? null, warmP75: r?.warmP75 ?? null };
     }
-    const errors = (await env.DB.prepare(`SELECT message, source, line, page, device, SUM(n) AS n, MAX(last_at) AS last_at FROM client_errors WHERE day >= ?
-      GROUP BY message, source, line ORDER BY n DESC LIMIT 20`).bind(from).all()).results;
-    // 最慢的資料讀取（p75）：總時間與其中伺服器處理的時間
-    const apiRows = (await env.DB.prepare("SELECT metric, page, value FROM client_metrics WHERE day >= ? AND metric IN ('api', 'apisrv') ORDER BY value").bind(from).all()).results;
-    const byPage = {};
-    for (const r of apiRows) (byPage[r.page] ||= { api: [], apisrv: [] })[r.metric].push(r.value);
-    const apis = Object.entries(byPage).map(([p, v]) => ({ page: p, n: v.api.length, p75: pct(v.api, 0.75), srv: pct(v.apisrv, 0.75) })).filter((x) => x.n).sort((a, b2) => b2.p75 - a.p75).slice(0, 8);
-    return json({ days, metrics, errors, apis });
+    const errors = eres.results, apis = ares.results.map((x) => ({ page: x.page, n: x.n, p75: x.p75, srv: x.srv ?? null }));
+    // 排程工作的狀態：完成、等下個整點補做、失敗 n 次（連續 3 次就放棄）
+    //   佔用超過 15 分鐘還沒結束、也沒有錯誤訊息＝被平台終止（下個整點會補記錯誤）；已經第 3 次就算放棄
+    //   跑者休息站（rest.<來源>）沒有用佔用：last_run 還是「retry:日期」＝那天沒有同步完成（失敗或被終止），隔天重試
+    const stale = (at) => !!at && Date.parse(`${at.replace(' ', 'T')}Z`) < Date.now() - 15 * 60e3;
+    const jobs = jres.results.map((j) => ({ ...j, state: j.claim_key && j.attempts >= 3 && (j.last_error || stale(j.claim_at)) ? 'gave_up'
+      : j.last_error ? 'failed' : j.claim_key ? 'pending' : String(j.last_run || '').startsWith('retry:') ? 'retry' : 'done' }));
+    return json({ days, metrics, errors, apis, budget: bres.results, jobs, pushQueue: { n: qres.results[0].n, oldest: qres.results[0].oldest } });
   }
   // 分團小圖：網址帶版本號，可以長期快取
   const mic = path.match(/^\/api\/teams\/([\w-]{1,16})\/icon$/);
@@ -1619,7 +1787,7 @@ async function api(req, env, path, method) {
     const r = await env.DB.prepare('SELECT icon FROM teams WHERE id = ?').bind(mic[1]).first();
     const m = r?.icon?.match(/^data:(image\/(?:webp|png|jpeg));base64,([A-Za-z0-9+/=]+)$/);
     if (!m) return fail(404, '沒有圖示');
-    return new Response(Uint8Array.from(atob(m[2]), (c) => c.charCodeAt(0)), { headers: { ...SEC_HEADERS,
+    return new Response(b64bytes(m[2]), { headers: { ...SEC_HEADERS,
       'content-type': m[1], 'cache-control': 'public, max-age=31536000, immutable' } });
   }
   if (mic && method === 'PUT') {
@@ -1738,19 +1906,35 @@ async function api(req, env, path, method) {
     const u = new URL(req.url), to = isDate(u.searchParams.get('to') || '') ? u.searchParams.get('to') : today();
     const from = isDate(u.searchParams.get('from') || '') ? u.searchParams.get('from') : new Date(Date.parse(to) - 29 * 864e5).toISOString().slice(0, 10);
     if (Date.parse(to) - Date.parse(from) > 92 * 864e5) return fail(400, '一次最多檢查 92 天');
-    const rows = (await env.DB.prepare(`SELECT * FROM audit_log WHERE at >= ? AND at < ? ORDER BY at, id LIMIT 20000`).bind(from, `${to} 24`).all()).results;
+    // 逐筆重算 HMAC 很吃 CPU：一次最多 400 筆，超過就回 more.after（游標），前端（apiAll）接著送
+    const [cAt, cId] = str(u.searchParams.get('after'), 60).split('|');
+    const cur = cAt && cId ? [cAt, cAt, cId] : null;
+    const rows = (await env.DB.prepare(`SELECT * FROM audit_log WHERE at >= ? AND at < ? ${cur ? 'AND (at > ? OR (at = ? AND id > ?))' : ''} ORDER BY at, id LIMIT 401`)
+      .bind(from, `${to} 24`, ...(cur || [])).all()).results;
+    const page = rows.slice(0, 400);
     let bad = 0, unsigned = 0; const badIds = [];
-    for (const r of rows) { if (!r.mac) { unsigned += 1; continue; } if ((await hmac(env, auditFields(r))) !== r.mac) { bad += 1; if (badIds.length < 20) badIds.push(r.id); } }
-    const digests = (await env.DB.prepare('SELECT * FROM audit_digests WHERE day BETWEEN ? AND ? ORDER BY day').bind(from, to).all()).results;
-    const brokenDays = [];
-    for (const d of digests) {
-      const prev = (await env.DB.prepare('SELECT digest FROM audit_digests WHERE day < ? ORDER BY day DESC LIMIT 1').bind(d.day).first())?.digest || '';
-      const dayRows = (await env.DB.prepare("SELECT mac FROM audit_log WHERE at >= ? AND at < ? AND mac IS NOT NULL ORDER BY at, id").bind(d.day, `${d.day} 24`).all()).results;
-      const dg = await hmac(env, `${prev}|${dayRows.map((x) => x.mac).join('|')}`);
-      if (dg !== d.digest || dayRows.length !== d.rows) brokenDays.push(d.day);
+    for (const r of page) { if (!r.mac) { unsigned += 1; continue; } if ((await hmac(env, auditFields(r))) !== r.mac) { bad += 1; if (badIds.length < 20) badIds.push(r.id); } }
+    // 每日摘要鏈只在第一段檢查：一句讀出區間內（含前一份，當作鏈的起點）的摘要、一句讀出區間內所有的 mac，在 JS 依日期分組
+    let days, brokenDays = [];
+    if (!cur) {
+      const [dg, mac] = await env.DB.batch([
+        env.DB.prepare('SELECT * FROM audit_digests WHERE day >= COALESCE((SELECT MAX(day) FROM audit_digests WHERE day < ?1), ?1) AND day <= ?2 ORDER BY day').bind(from, to),
+        env.DB.prepare('SELECT substr(at, 1, 10) AS day, mac FROM audit_log WHERE at >= ?1 AND at < ?2 AND mac IS NOT NULL ORDER BY at, id').bind(from, `${to} 24`),
+      ]);
+      const byDay = new Map();
+      for (const r of mac.results) { if (!byDay.has(r.day)) byDay.set(r.day, []); byDay.get(r.day).push(r.mac); }
+      const list = dg.results.filter((d) => d.day >= from);
+      days = list.length;
+      for (const d of list) {
+        const i = dg.results.indexOf(d), prev = i > 0 ? dg.results[i - 1].digest : '';
+        const macs = byDay.get(d.day) || [];
+        if ((await hmac(env, `${prev}|${macs.join('|')}`)) !== d.digest || macs.length !== d.rows) brokenDays.push(d.day);
+      }
     }
-    await audit(env, req, member, 'audit.verify', 'audit', null, `${from}～${to}：${rows.length} 筆，異常 ${bad}，摘要異常 ${brokenDays.length} 天`);
-    return json({ from, to, checked: rows.length, unsigned, modified: bad, modifiedIds: badIds, days: digests.length, brokenDays });
+    const last = page[page.length - 1];
+    await audit(env, req, member, 'audit.verify', 'audit', null, `${from}～${to}${cur ? '（續）' : ''}：${page.length} 筆，異常 ${bad}${cur ? '' : `，摘要異常 ${brokenDays.length} 天`}`);
+    return json({ from, to, checked: page.length, unsigned, modified: bad, modifiedIds: badIds, ...(cur ? {} : { days, brokenDays }),
+      ...(rows.length > 400 ? { more: { after: `${last.at}|${last.id}` } } : {}) });
   }
 
   // 分享連結的預覽：還沒登入的人點進來，先看到是什麼活動（私密分團的活動不顯示）
@@ -1936,10 +2120,13 @@ async function api(req, env, path, method) {
     // 之後才開放：到了開始時間由排程推播一次（建立時有勾通知、不是定期揪跑）；其他情況直接標成已推播
     const openOwed = b.notify !== false && !!e.signup_start && e.signup_start > tpNow() && !series;
     const ids = dates.map(() => rid(8)), id = ids[0];
-    await env.DB.batch(dates.map((d, i) => env.DB.prepare(`INSERT INTO events (id, kind, title, date, gather_time, end_time, place, lead, note, week_no, plan_text, capacity, signup_open, deadline, created_by, fee, guest_max, meal_options, link_url, link_label, team_id, questions, visibility, options, group_reg, items, pricing, pay_info, min_qty, series_id, spot_id, route_id, address, address_zip, signup_start, require_approval, notify_signup, open_notified_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ${openOwed ? 'NULL' : "datetime('now')"})`)
-      .bind(ids[i], e.kind, e.title, d, e.gather_time, e.end_time, e.place, e.lead, e.note, i ? null : e.week_no, e.plan_text, e.capacity, e.signup_open, sh(e.deadline, d), member.id, e.fee, e.guest_max, e.meal_options, e.link_url, e.link_label, e.team_id, e.questions, e.visibility, e.options, e.group_reg, e.items, e.pricing, e.pay_info, e.min_qty, series, e.spot_id, e.route_id, e.address, e.address_zip || null,
-        shStart(d), e.require_approval, e.notify_signup)));
+    // 每一場不同的欄位（id、日期、週次、截止、開始）放進 JSON，一句 INSERT … SELECT FROM json_each（句數跟場數無關）
+    const dj = JSON.stringify(dates.map((d, i) => [ids[i], d, i ? null : e.week_no ?? null, sh(e.deadline, d) ?? null, shStart(d) ?? null]));
+    await env.DB.prepare(`INSERT INTO events (id, kind, title, date, gather_time, end_time, place, lead, note, week_no, plan_text, capacity, signup_open, deadline, created_by, fee, guest_max, meal_options, link_url, link_label, team_id, questions, visibility, options, group_reg, items, pricing, pay_info, min_qty, series_id, spot_id, route_id, address, address_zip, signup_start, require_approval, notify_signup, open_notified_at)
+      SELECT json_extract(value, '$[0]'), ?2, ?3, json_extract(value, '$[1]'), ?4, ?5, ?6, ?7, ?8, json_extract(value, '$[2]'), ?9, ?10, ?11, json_extract(value, '$[3]'), ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31,
+        json_extract(value, '$[4]'), ?32, ?33, ${openOwed ? 'NULL' : "datetime('now')"} FROM json_each(?1)`)
+      .bind(dj, e.kind, e.title, e.gather_time, e.end_time, e.place, e.lead, e.note, e.plan_text, e.capacity, e.signup_open, member.id, e.fee, e.guest_max, e.meal_options, e.link_url, e.link_label, e.team_id, e.questions, e.visibility, e.options, e.group_reg, e.items, e.pricing, e.pay_info, e.min_qty, series, e.spot_id, e.route_id, e.address, e.address_zip || null,
+        e.require_approval, e.notify_signup).run();
     // 複製活動：沿用原活動的座位圖（獎項每年不同，不複製）
     const from = str(b.copy_from, 32);
     if (from) {
@@ -2030,28 +2217,19 @@ async function api(req, env, path, method) {
       // 改期：重設活動提醒、天氣提醒、跑完接續的標記，新的日期會再提醒一次
       if (e.date !== cur.date || (e.gather_time || '') !== (cur.gather_time || ''))
         await env.DB.prepare('UPDATE events SET remind_day_at = NULL, remind_hour_at = NULL, wx_alert_at = NULL, followup_at = NULL WHERE id = ?').bind(id).run();
-      // 關閉審核並直接錄取：依報名先後改成候補，再由 promote() 排進正取
+      // 關閉審核並直接錄取：所有待審核一次處理（句數跟人數無關，見 approveMany），依報名先後改成候補，再由 promote() 排進正取
+      //   資格不符的留在待審核，回報給主辦（主辦之後仍可在統計頁核准或婉拒）
       let admitted = null;
       if (pend) {
-        // 與核准按鈕相同的資格檢查；不符的留在待審核，回報給主辦
-        const pending = (await env.DB.prepare("SELECT id, member_id FROM signups WHERE event_id = ? AND status = 'pending' ORDER BY created_at, id").bind(id).all()).results;
-        const rows = [], skipped = [];
-        for (const r of pending) {
-          const why = await reviewBlock(env, ev, r.member_id);
-          if (why) { skipped.push(why); continue; }
-          const c = await env.DB.prepare(`UPDATE signups SET status = 'wait', review = 'approved', reviewed_by = ?, reviewed_at = datetime('now'), review_note = ?
-            WHERE id = ? AND status = 'pending'`).bind(member.id, '關閉審核自動錄取', r.id).run();
-          if (c.meta.changes) rows.push(r.member_id);
-        }
-        await promote(env, ev, { manual: true, quiet: new Set(rows) });
-        admitted = await reviewOutcome(env, ev, rows);
-        admitted.skipped = skipped.length;
-        await notifyApproved(env, ev, admitted);
-        await audit(env, req, member, 'event.signup_review', 'event', id, `關閉審核，自動錄取 ${rows.length}（正取 ${admitted.in.length}、候補 ${admitted.wait.length}）${skipped.length ? `、資格不符留在待審核 ${skipped.length}` : ''}`);
+        const pending = (await env.DB.prepare("SELECT id, member_id, name FROM signups WHERE event_id = ? AND status = 'pending' ORDER BY created_at, id").bind(id).all()).results;
+        admitted = await approveMany(env, ev, member, pending, { note: '關閉審核自動錄取', reserve: 6 });
+        const skipped = admitted.blocked.length + admitted.lost.length;
+        admitted.skipped = skipped;
+        await audit(env, req, member, 'event.signup_review', 'event', id, `關閉審核，自動錄取 ${admitted.in.length + admitted.wait.length}（正取 ${admitted.in.length}、候補 ${admitted.wait.length}）${skipped ? `、資格不符留在待審核 ${skipped}` : ''}`);
         await settleReviews(env, id);
       }
-      // 名額變多或拿掉上限：遞補候補（名額變少不會讓任何人掉回候補）
-      if (!admitted && (cur.capacity && (!e.capacity || e.capacity > cur.capacity))) await promote(env, ev, { manual: true });
+      // 名額變多或拿掉上限：遞補候補（名額變少不會讓任何人掉回候補）；人多時做不完的由每小時的 promoteSweep 接著遞補
+      if (!admitted && (cur.capacity && (!e.capacity || e.capacity > cur.capacity))) await promote(env, ev, { manual: true, reserve: 4 });
       if (reopen) await audit(env, req, member, 'event.reopen', 'event', id, e.title);
       const changed = [
         cur.visibility !== e.visibility ? `改為${e.visibility === 'invite' ? '邀請制' : '公開'}` : '',
@@ -2069,9 +2247,16 @@ async function api(req, env, path, method) {
       if (!teamCan(cur.team_id, 'event')) return fail(403, '沒有刪除這個活動的權限');
       // 定期揪跑：?series=after 連同之後的場次一起刪，已報名的人會收到通知
       const after = url0(req).searchParams.get('series') === 'after' && cur.series_id;
-      const gone = after ? (await env.DB.prepare('SELECT id, date FROM events WHERE series_id = ? AND date >= ? AND team_id IS ?').bind(cur.series_id, cur.date, cur.team_id).all()).results : [{ id, date: cur.date }];
-      const who = (await env.DB.prepare(`SELECT DISTINCT member_id FROM signups WHERE status IN ('in','wait','pending') AND event_id IN (${gone.map(() => '?').join(',')})`).bind(...gone.map((g) => g.id)).all()).results.map((r) => r.member_id).filter((x) => x !== member.id);
-      await env.DB.batch(gone.map((g) => env.DB.prepare('DELETE FROM events WHERE id = ?').bind(g.id)));
+      //   通知對象和刪除放在同一個 batch：先查（刪除會連報名一起刪），再一句刪掉所有場次
+      const where = after ? 'series_id = ?1 AND date >= ?2 AND team_id IS ?3' : 'id = ?1';
+      const args = after ? [cur.series_id, cur.date, cur.team_id] : [id];
+      const [w0, g0] = await env.DB.batch([
+        env.DB.prepare(`SELECT DISTINCT member_id FROM signups WHERE status IN ('in','wait','pending') AND event_id IN (SELECT id FROM events WHERE ${where})`).bind(...args),
+        env.DB.prepare(`DELETE FROM events WHERE ${where} RETURNING id, date`).bind(...args),
+      ]);
+      const who = w0.results.map((r) => r.member_id).filter((x) => x !== member.id);
+      const gone = g0.results.sort((a, c) => a.date.localeCompare(c.date));
+      if (!gone.length) gone.push({ id, date: cur.date });
       if (who.length) await notify(env, who, 'change', { kind: 'event', title: `活動取消：${cur.title}`, body: gone.length > 1 ? `${gone[0].date} 起 ${gone.length} 場取消` : `${cur.date} 這場取消`, url: '/#/', ref: `e:${id}`, tag: `notice-${id}` });
       await audit(env, req, member, 'event.delete', 'event', id, `${cur.title}${gone.length > 1 ? `（連同之後 ${gone.length} 場）` : ''}`);
       return json({ ok: true, count: gone.length });
@@ -2130,11 +2315,11 @@ async function api(req, env, path, method) {
         via = 'team';
       }
       if (!ids.length) return fail(400, '沒有要邀請的人');
-      const exist = new Set((await env.DB.prepare(`SELECT id FROM members WHERE id IN (${ids.map(() => '?').join(',')})`).bind(...ids).all()).results.map((r) => r.id));
-      const before = new Set((await env.DB.prepare('SELECT member_id FROM event_invites WHERE event_id = ?').bind(ev.id).all()).results.map((r) => r.member_id));
-      const fresh = ids.filter((x) => exist.has(x) && !before.has(x));
-      for (let i = 0; i < fresh.length; i += 50) await env.DB.batch(fresh.slice(i, i + 50).map((mid) =>
-        env.DB.prepare('INSERT OR IGNORE INTO event_invites (event_id, member_id, invited_by, via) VALUES (?, ?, ?, ?)').bind(ev.id, mid, member.id, via)));
+      // 名單比對、既有邀請檢查、寫入一句完成（json_each；以前用 IN() 綁到 300 個參數，超過 D1 的 100 個上限）
+      const fresh = (await env.DB.prepare(`INSERT OR IGNORE INTO event_invites (event_id, member_id, invited_by, via)
+        SELECT ?1, m.id, ?2, ?3 FROM json_each(?4) j JOIN members m ON m.id = j.value
+        WHERE NOT EXISTS (SELECT 1 FROM event_invites i WHERE i.event_id = ?1 AND i.member_id = m.id) RETURNING member_id`)
+        .bind(ev.id, member.id, via, JSON.stringify([...new Set(ids)])).all()).results.map((r) => r.member_id);
       if (fresh.length) {
         await audit(env, req, member, 'event.invite', 'event', ev.id, `${fresh.length} 人${tid ? `（分團 ${tid}）` : ''}`);
         if (b.notify !== false) await notify(env, fresh, 'event', { title: `你受邀參加：${ev.title}`, body: `${ev.date}${ev.gather_time ? ` ${ev.gather_time}` : ''}　${ev.place || ''}`, url: `/#/e/${ev.id}`, ref: `e:${ev.id}` });
@@ -2289,35 +2474,32 @@ async function api(req, env, path, method) {
       const ids = [...new Set((Array.isArray(b.member_ids) ? b.member_ids : []).map((x) => str(x, 32)).filter(Boolean))].slice(0, 200);
       if (!action || !ids.length) return fail(400, '審核資料不正確');
       const note = action === 'reject' ? str(b.note, 120) || null : null;
-      const rows = (await allIn(env, ids, (q) => `SELECT id, member_id, name, status, review, paid, pay_reported_at, amount, created_at FROM signups
-        WHERE event_id = ? AND member_id IN (${q})`, [ev.id])).sort((a, c) => (a.created_at < c.created_at ? -1 : a.created_at > c.created_at ? 1 : a.id < c.id ? -1 : 1));
+      const rows = (await env.DB.prepare(`SELECT id, member_id, name, status, review, paid, pay_reported_at, amount, created_at FROM signups
+        WHERE event_id = ? AND member_id IN (SELECT value FROM json_each(?))`).bind(ev.id, JSON.stringify(ids)).all()).results
+        .sort((a, c) => (a.created_at < c.created_at ? -1 : a.created_at > c.created_at ? 1 : a.id < c.id ? -1 : 1));
       const out = { in: [], wait: [], rejected: [], reopened: [], skipped: [], notes: [], refund: [] };
+      // 所有人一起處理（免費方案一次執行 50 個子請求）：每一步都是一句處理所有人（json_each），句數跟人數無關，
+      //   一次最多 200 人。萬一這次請求的額度已經不夠（核准約 30、婉拒約 20、重新審核約 10），全部放進 more，前端（apiAll）再送一次
+      const NEED = { approve: 30, reject: 22, reopen: 10 }[action];
+      if (!env.budget.room(NEED)) { env.budget.stop('review:more'); return json({ ...out, more: { member_ids: ids } }); }
       const skip = (r, reason) => out.skipped.push({ member_id: r.member_id, name: r.name || '', reason });
       for (const mid of ids) if (!rows.some((r) => r.member_id === mid)) skip({ member_id: mid }, '找不到這筆報名');
-      const base = { kind: 'signup', ref: `e:${ev.id}`, tag: `signup-${ev.id}`, url: `/#/e/${ev.id}` };
+      const base = { ref: `e:${ev.id}`, tag: `signup-${ev.id}`, url: `/#/e/${ev.id}` };
       let revoked = 0;
       if (action === 'approve') {
-        // 每一筆重新檢查資格：受邀名單、私密分團、代為團體報名的資料
-        const approved = [];
+        const todo = [];
         for (const r of rows) {
           if (r.status !== 'pending') { skip(r, (r.status === 'in' || r.status === 'wait') && r.review === 'approved' ? '這筆已被處理' : '目前狀態不能這樣處理'); continue; }
-          const why = await reviewBlock(env, ev, r.member_id);
-          if (why) { skip(r, why); continue; }
-          const c = await env.DB.prepare(`UPDATE signups SET status = 'wait', review = 'approved', reviewed_by = ?, reviewed_at = datetime('now'), review_note = NULL, edited_after_review = 0
-            WHERE id = ? AND status = 'pending'`).bind(member.id, r.id).run();
-          if (!c.meta.changes) { skip(r, '這筆已被處理'); continue; }
-          approved.push(r.member_id);
+          todo.push(r);
         }
-        // 核准一律先進候補，再由 promote() 依報名先後排進正取（不會插隊到原本的候補前面）
-        await promote(env, ev, { manual: true, quiet: new Set(approved) });
-        const res = await reviewOutcome(env, ev, approved);
-        out.in = res.in.map(({ member_id, name }) => ({ member_id, name }));
-        out.wait = res.wait;
-        for (const w of res.wait) {
-          const short = await shortItem(env, ev, (await env.DB.prepare('SELECT member_id, items FROM signups WHERE event_id = ? AND member_id = ?').bind(ev.id, w.member_id).first()) || {});
-          if (short) out.notes.push({ name: w.name, reason: `「${short}」庫存不夠，先排候補` });
+        if (todo.length) {
+          const res = await approveMany(env, ev, member, todo, { reserve: 6 });
+          for (const x of res.blocked) skip(x, x.reason);
+          for (const x of res.lost) skip(x, '這筆已被處理');
+          out.in = res.in.map(({ member_id, name }) => ({ member_id, name }));
+          out.wait = res.wait.map(({ member_id, name, position }) => ({ member_id, name, position }));
+          out.notes = res.notes;
         }
-        await notifyApproved(env, ev, res);
       } else if (action === 'reject') {
         const live = rows.filter((r) => ['pending', 'in', 'wait'].includes(r.status));
         for (const r of rows.filter((x) => !live.includes(x))) skip(r, r.review === 'rejected' ? '這筆已被處理' : '目前狀態不能這樣處理');
@@ -2325,38 +2507,50 @@ async function api(req, env, path, method) {
         // 已經在名單上的（正取或候補）要明確確認「移出」
         if (listed.length && b.revoke !== true)
           return json({ error: '這些人已經在名單上，要確認移出', needRevoke: true, count: listed.length, paid: listed.filter((r) => r.paid === 'paid').length }, 409);
-        let freed = false;
-        for (const r of live) {
-          const c = await env.DB.prepare(`UPDATE signups SET status = 'cancel', review = 'rejected', reviewed_by = ?, reviewed_at = datetime('now'), review_note = ?, reg_consent_at = NULL,
-              paid_note = CASE WHEN paid = 'paid' THEN '婉拒，待退費' ELSE paid_note END
-            WHERE id = ? AND status = ?`).bind(member.id, note, r.id, r.status).run();
-          if (!c.meta.changes) { skip(r, '這筆已被處理'); continue; }
-          await dropTicket(env, ev.id, r.member_id);
-          if (r.status === 'in') freed = true;
+        // 一句改完所有人（每人比對自己原本的狀態，兩句之間被別人處理掉的不會改到）
+        const upd = live.length ? new Set((await env.DB.prepare(`UPDATE signups SET status = 'cancel', review = 'rejected', reviewed_by = ?1, reviewed_at = datetime('now'), review_note = ?2, reg_consent_at = NULL,
+            paid_note = CASE WHEN paid = 'paid' THEN '婉拒，待退費' ELSE paid_note END
+          WHERE event_id = ?3 AND (id || ':' || status) IN (SELECT value FROM json_each(?4)) RETURNING id`)
+          .bind(member.id, note, ev.id, JSON.stringify(live.map((r) => `${r.id}:${r.status}`))).all()).results.map((x) => x.id)) : new Set();
+        const gone = live.filter((r) => upd.has(r.id));
+        for (const r of live.filter((x) => !upd.has(x.id))) skip(r, '這筆已被處理');
+        const notes = [];
+        for (const r of gone) {
           const paid = r.paid === 'paid';
           if (paid) out.refund.push(r.name);
           out.rejected.push({ member_id: r.member_id, name: r.name, was: r.status });
           // 原因只放通知中心內文；鎖定畫面用通用文字
-          if (r.status === 'pending') await notify(env, [r.member_id], 'change', { ...base, title: `未通過審核：${ev.title}`,
+          if (r.status === 'pending') notes.push({ ...base, member_id: r.member_id, title: `未通過審核：${ev.title}`,
             body: note ? `主辦婉拒了這筆報名：${note}` : '主辦婉拒了這筆報名，有疑問請聯絡主辦人', push: { body: '請到活動頁查看說明' } });
-          else { revoked++; await notify(env, [r.member_id], 'change', { ...base, title: `已被移出名單：${ev.title}`,
+          else { revoked++; notes.push({ ...base, member_id: r.member_id, title: `已被移出名單：${ev.title}`,
             body: `主辦把你移出了名單${note ? `：${note}` : ''}${paid ? '。已繳費用由主辦處理退費' : ''}`, push: { body: '請到活動頁查看說明' } }); }
-          // 每位一列稽核：對象是會員，只記活動標題，不記原因
-          await audit(env, req, member, 'event.signup_reject', 'member', r.member_id, ev.title);
         }
-        if (freed) await promote(env, ev);
+        if (gone.length) {
+          // 入場券一句刪完；每位一列稽核（對象是會員，只記活動標題，不記原因），一句寫完
+          await env.DB.batch([env.DB.prepare('DELETE FROM tickets WHERE event_id = ?1 AND member_id IN (SELECT value FROM json_each(?2))').bind(ev.id, JSON.stringify(gone.map((r) => r.member_id))),
+            await auditManyStmt(env, req, member, 'event.signup_reject', 'member', gone.map((r) => [r.member_id, ev.title]))]);
+          await notifyMany(env, 'change', notes, { kind: 'signup' });
+        }
+        if (gone.some((r) => r.status === 'in')) await promote(env, ev, { reserve: 6 });
       } else {
+        const todo = [];
         for (const r of rows) {
           if (!(r.status === 'cancel' && r.review === 'rejected')) { skip(r, r.status === 'pending' ? '這筆已被處理' : '目前狀態不能這樣處理'); continue; }
           if (!ev.require_approval) { skip(r, '這場沒有開啟審核，請改用代為報名'); continue; }
-          // 重新審核：保留原本的 created_at（排隊順序不變）
-          const c = await env.DB.prepare(`UPDATE signups SET status = 'pending', review = NULL, review_note = NULL, reviewed_by = ?, reviewed_at = datetime('now')
-            WHERE id = ? AND status = 'cancel' AND review = 'rejected'`).bind(member.id, r.id).run();
-          if (!c.meta.changes) { skip(r, '這筆已被處理'); continue; }
-          out.reopened.push({ member_id: r.member_id, name: r.name });
-          await notify(env, [r.member_id], 'change', { ...base, title: `你的報名重新進入審核：${ev.title}`, body: '主辦會再通知你結果' });
+          todo.push(r);
         }
-        if (out.reopened.length) await alertReviewers(env, ev, member.id);
+        // 重新審核：保留原本的 created_at（排隊順序不變）
+        const upd = todo.length ? new Set((await env.DB.prepare(`UPDATE signups SET status = 'pending', review = NULL, review_note = NULL, reviewed_by = ?1, reviewed_at = datetime('now')
+          WHERE event_id = ?2 AND status = 'cancel' AND review = 'rejected' AND id IN (SELECT value FROM json_each(?3)) RETURNING id`)
+          .bind(member.id, ev.id, JSON.stringify(todo.map((r) => r.id))).all()).results.map((x) => x.id)) : new Set();
+        for (const r of todo) {
+          if (!upd.has(r.id)) { skip(r, '這筆已被處理'); continue; }
+          out.reopened.push({ member_id: r.member_id, name: r.name });
+        }
+        if (out.reopened.length) {
+          await notify(env, out.reopened.map((x) => x.member_id), 'change', { kind: 'signup', ...base, title: `你的報名重新進入審核：${ev.title}`, body: '主辦會再通知你結果' });
+          await alertReviewers(env, ev, member.id);
+        }
       }
       const nRej = out.rejected.length - revoked;
       await audit(env, req, member, 'event.signup_review', 'event', ev.id,
@@ -2370,26 +2564,32 @@ async function api(req, env, path, method) {
       const ids = Array.isArray(b.member_ids) ? b.member_ids.map((x) => str(x, 32)).filter(Boolean).slice(0, 500) : [];
       if (!ids.length || !PAID.includes(b.paid)) return fail(400, '繳費資料不正確');
       // 先記下原本的繳費狀態：只有真的改成已收款或已退費的人才通知
-      const before = await allIn(env, ids, (q) => `SELECT member_id, paid, amount FROM signups WHERE event_id = ? AND status != 'pending' AND member_id IN (${q})`, [ev.id]);
-      // 標記已退費時，把取消／婉拒留下的「待退費」備註清掉
-      await env.DB.batch(ids.map((mid) => env.DB.prepare(`UPDATE signups SET paid = ?1,
+      const pj = JSON.stringify([...new Set(ids)]);
+      const before = (await env.DB.prepare(`SELECT member_id, paid, amount FROM signups WHERE event_id = ? AND status != 'pending' AND member_id IN (SELECT value FROM json_each(?))`).bind(ev.id, pj).all()).results;
+      // 標記已退費時，把取消／婉拒留下的「待退費」備註清掉；所有人一句
+      await env.DB.prepare(`UPDATE signups SET paid = ?1,
         paid_note = COALESCE(?2, CASE WHEN ?1 = 'refunded' AND paid_note LIKE '%待退費' THEN NULL ELSE paid_note END),
-        paid_at = CASE WHEN ?1 = 'paid' THEN datetime('now') ELSE paid_at END WHERE event_id = ?3 AND member_id = ?4 AND status != 'pending'`)
-        .bind(b.paid, str(b.note, 60) || null, ev.id, mid)));
+        paid_at = CASE WHEN ?1 = 'paid' THEN datetime('now') ELSE paid_at END WHERE event_id = ?3 AND status != 'pending' AND member_id IN (SELECT value FROM json_each(?4))`)
+        .bind(b.paid, str(b.note, 60) || null, ev.id, pj).run();
       await audit(env, req, member, 'event.payment', 'event', ev.id, `${ids.length} 人 → ${b.paid}`);
       if (b.paid !== 'unpaid') await settleTodo(env, ...ids.map((mid) => `pay:${ev.id}:${mid}`));
+      // 每人金額不同：notifyMany 一次寫完（2 句）
       if (ev.notify_signup && (b.paid === 'paid' || b.paid === 'refunded'))
-        for (const r of before.filter((x) => x.paid !== b.paid && x.member_id !== member.id))
-          await notify(env, [r.member_id], 'signup', { kind: 'signup', ref: `e:${ev.id}`, tag: `signup-${ev.id}`, url: `/#/e/${ev.id}`,
-            title: `${b.paid === 'paid' ? '已確認收款' : '已退費'}：${ev.title}`, body: `NT$${r.amount || 0}` });
+        await notifyMany(env, 'signup', before.filter((x) => x.paid !== b.paid && x.member_id !== member.id).map((r) => ({ member_id: r.member_id, ref: `e:${ev.id}`, tag: `signup-${ev.id}`, url: `/#/e/${ev.id}`,
+          title: `${b.paid === 'paid' ? '已確認收款' : '已退費'}：${ev.title}`, body: `NT$${r.amount || 0}`, push: { body: '點開看繳費狀態' } })), { kind: 'signup' });   // 金額只放通知中心，鎖定畫面與推播佇列不放
       return json({ ok: true });
     }
     // 團購到貨：通知訂購的人來領，每個人一個領取 QR
     if (op === 'arrived') {
       const note = str(b.note, 120);
       const rows = (await env.DB.prepare("SELECT id, member_id, pick_code FROM signups WHERE event_id = ? AND status = 'in' AND items IS NOT NULL").bind(ev.id).all()).results;
-      for (const r of rows) if (!r.pick_code) await env.DB.prepare('UPDATE signups SET pick_code = ? WHERE id = ?').bind(ticketCode(), r.id).run();
-      await env.DB.prepare("UPDATE events SET arrived_at = COALESCE(arrived_at, datetime('now')), pickup_note = ? WHERE id = ?").bind(note || null, ev.id).run();
+      // 領取碼在 JS 產生、一句寫完（UPDATE … FROM json_each），和到貨標記同一個 batch
+      const codes = rows.filter((r) => !r.pick_code).map((r) => [r.id, ticketCode()]);
+      await env.DB.batch([
+        ...(codes.length ? [env.DB.prepare(`UPDATE signups SET pick_code = json_extract(j.value, '$[1]') FROM json_each(?1) j
+          WHERE signups.id = json_extract(j.value, '$[0]') AND signups.pick_code IS NULL`).bind(JSON.stringify(codes))] : []),
+        env.DB.prepare("UPDATE events SET arrived_at = COALESCE(arrived_at, datetime('now')), pickup_note = ? WHERE id = ?").bind(note || null, ev.id),
+      ]);
       const ids = rows.map((r) => r.member_id).filter(Boolean);
       if (ids.length) await notify(env, ids, 'signup', { kind: 'event', title: `到貨了：${ev.title}`, body: `${note || '請到活動頁看領取方式'}。領取時出示 App 裡的領取 QR。`, url: `/#/e/${ev.id}`, ref: `e:${ev.id}`, tag: `arrived-${ev.id}` });
       await audit(env, req, member, 'event.arrived', 'event', ev.id, `${ids.length} 人`);
@@ -2452,7 +2652,8 @@ async function api(req, env, path, method) {
         used.add(i); matched.push({ member_id: s0.member_id, name: s0.name, amount: s0.amount, date: rows[i].date });
       }
       if (matched.length && b.apply === true) {
-        await env.DB.batch(matched.map((m) => env.DB.prepare("UPDATE signups SET paid = 'paid', paid_at = datetime('now'), paid_note = ? WHERE event_id = ? AND member_id = ?").bind(`對帳 ${m.date || today()}`, ev.id, m.member_id)));
+        await env.DB.prepare(`UPDATE signups SET paid = 'paid', paid_at = datetime('now'), paid_note = json_extract(j.value, '$[1]') FROM json_each(?2) j
+          WHERE signups.event_id = ?1 AND signups.member_id = json_extract(j.value, '$[0]')`).bind(ev.id, JSON.stringify(matched.map((m) => [m.member_id, `對帳 ${m.date || today()}`]))).run();
         await audit(env, req, member, 'event.reconcile', 'event', ev.id, `對上 ${matched.length} 筆`);
         await settleTodo(env, ...matched.map((m) => `pay:${ev.id}:${m.member_id}`));
       }
@@ -2487,23 +2688,33 @@ async function api(req, env, path, method) {
       const names = [...new Set((Array.isArray(b.names) ? b.names : String(b.names || '').split(/[\n,，、\t]+/)).map((x) => str(x, 40)).filter(Boolean))].slice(0, 300);
       const action = b.action === 'invite' ? 'invite' : 'signup';
       if (!names.length) return fail(400, '請貼上姓名');
-      const matched = [], ambiguous = [], unmatched = [], failed = [];
+      const matched = [], ambiguous = [], unmatched = [], failed = [], rest = [];
+      // 名字比對一句（json_each JOIN members）
+      const hits = (await env.DB.prepare('SELECT j.value AS q_name, m.* FROM json_each(?) j JOIN members m ON m.name = j.value OR m.nickname = j.value').bind(JSON.stringify(names)).all()).results;
+      const byName = new Map(), seen = new Set();
+      for (const { q_name, ...m } of hits) { if (!byName.has(q_name)) byName.set(q_name, []); byName.get(q_name).push(m); }
       for (const n of names) {
-        const rows = (await env.DB.prepare('SELECT * FROM members WHERE name = ? OR nickname = ? LIMIT 3').bind(n, n).all()).results;
-        if (rows.length === 1) matched.push(rows[0]); else (rows.length ? ambiguous : unmatched).push(n);
+        const rows = byName.get(n) || [];
+        if (rows.length === 1) { if (!seen.has(rows[0].id)) { seen.add(rows[0].id); matched.push({ ...rows[0], q_name: n }); } } else (rows.length ? ambiguous : unmatched).push(n);
       }
       let added = 0, nIn = 0, nWait = 0;
       if (action === 'invite') {
-        // 只通知這次真的新增邀請的人（原本就受邀的不再通知一次）
-        const fresh = [];
-        for (const m of matched) if ((await env.DB.prepare("INSERT OR IGNORE INTO event_invites (event_id, member_id, invited_by, via) VALUES (?, ?, ?, 'manual')").bind(ev.id, m.id, member.id).run()).meta.changes === 1) fresh.push(m.id);
+        // 只通知這次真的新增邀請的人（原本就受邀的不再通知一次）；一句寫完
+        const fresh = matched.length ? (await env.DB.prepare(`INSERT OR IGNORE INTO event_invites (event_id, member_id, invited_by, via)
+          SELECT ?1, value, ?2, 'manual' FROM json_each(?3) RETURNING member_id`).bind(ev.id, member.id, JSON.stringify(matched.map((m) => m.id))).all()).results.map((r) => r.member_id) : [];
         added = fresh.length;
         if (fresh.length) await notify(env, fresh, 'event', { title: `你受邀參加：${ev.title}`, body: `${ev.date}${ev.gather_time ? ` ${ev.gather_time}` : ''}　${ev.place || ''}`, url: `/#/e/${ev.id}`, ref: `e:${ev.id}` });
       } else {
         // 只通知這次報名成功的人；原本就已報名（含候補）的不再通知，候補的人用候補文案
-        const had = new Set((await allIn(env, matched.map((m) => m.id), (q) => `SELECT member_id FROM signups WHERE event_id = ? AND status IN ('in','wait') AND member_id IN (${q})`, [ev.id])).map((r) => r.member_id));
+        const had = new Set((await env.DB.prepare(`SELECT member_id FROM signups WHERE event_id = ? AND status IN ('in','wait') AND member_id IN (SELECT value FROM json_each(?))`)
+          .bind(ev.id, JSON.stringify(matched.map((m) => m.id))).all()).results.map((r) => r.member_id));
         const okIn = [], okWait = [];
+        // 分段處理：代為報名要逐人走 doSignup（一人約 5–9 句），每人之前確認額度（用目前為止單人最高用量估），
+        //   不夠就停，沒處理到的人放進 more.names，前端（apiAll）再送一次
+        let per = 10;
         for (const m of matched) {
+          if (rest.length || !env.budget.room(per + notifyCost(okIn.length + okWait.length + 1) + 4)) { rest.push(m.q_name); continue; }
+          const s0 = env.budget.sub;
           if (ev.visibility === 'invite') await env.DB.prepare("INSERT OR IGNORE INTO event_invites (event_id, member_id, invited_by, via) VALUES (?, ?, ?, 'manual')").bind(ev.id, m.id, member.id).run();
           const r = await doSignup(env, ev, m, { note: '幹部代為報名' }, { by: member, req });
           if (!r.ok) { failed.push(`${m.name}（${(await r.json()).error}）`); continue; }
@@ -2511,13 +2722,15 @@ async function api(req, env, path, method) {
           const st = (await r.json()).status;
           if (!had.has(m.id)) (st === 'wait' ? okWait : okIn).push(m.id);
           if (st === 'in') nIn++; else if (st === 'wait') nWait++;
+          per = Math.max(per, env.budget.sub - s0 + 1);
         }
         if (okIn.length) await notify(env, okIn, 'signup', { title: `已幫你報名：${ev.title}`, body: '如果不能參加，請到活動頁取消', url: `/#/e/${ev.id}`, ref: `e:${ev.id}` });
         if (okWait.length) await notify(env, okWait, 'signup', { title: `已幫你排入候補：${ev.title}`, body: '有人取消時會依序遞補，遞補成功會再通知你', url: `/#/e/${ev.id}`, ref: `e:${ev.id}` });
       }
       const outside = action === 'signup' && signupState(ev, tpNow()) !== 'open' ? '（期間外代報）' : '';
       await audit(env, req, member, 'event.bulk', 'event', ev.id, `${action === 'invite' ? '邀請' : '代為報名'} ${added} 人${action === 'signup' ? `（正取 ${nIn}、候補 ${nWait}）` : ''}，找不到 ${unmatched.length}、同名 ${ambiguous.length}${outside}`);
-      return json({ added, matched: matched.map((m) => m.name), ambiguous, unmatched, failed });
+      if (rest.length) env.budget.stop('bulk:more');
+      return json({ added, matched: matched.filter((m) => !rest.includes(m.q_name)).map((m) => m.name), ambiguous, unmatched, failed, ...(rest.length ? { more: { names: rest } } : {}) });
     }
   }
 
@@ -2608,7 +2821,8 @@ async function api(req, env, path, method) {
       env.DB.prepare('UPDATE calendar_items SET created_by = NULL WHERE created_by = ?').bind(member.id),
       env.DB.prepare('DELETE FROM members WHERE id = ?').bind(member.id),
     ]);
-    for (const eid of freed) await promote(env, await evById(eid));
+    // 遞補：額度夠的場次現在處理，剩下的由每小時的 promoteSweep 在下個整點遞補
+    for (const eid of freed) { if (!env.budget.room(1 + PROMOTE_ROUND + PROMOTE_TAIL + 2)) { env.budget.stop('delete:promote'); break; } await promote(env, await evById(eid), { rounds: 1, reserve: 2 }); }
     await audit(env, req, member, 'privacy.delete', 'member', member.id, '本人刪除帳號');
     return json({ ok: true }, 200, { 'set-cookie': `${COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0` });
   }
@@ -3184,15 +3398,13 @@ async function api(req, env, path, method) {
     const b = await body();
     const list = Array.isArray(b.seats) ? b.seats.slice(0, 400) : [];
     if (!list.length) return fail(400, '沒有要排的資料');
-    let n = 0;
-    for (const row of list) {
-      const code = str(row.code, 8).toUpperCase(), tableNo = Number(row.table_no) || null;
-      if (!code) continue;
-      const r = await env.DB.prepare('UPDATE tickets SET table_no = ?, note = COALESCE(?, note) WHERE event_id = ? AND code = ?')
-        .bind(tableNo, str(row.note, 60) || null, msa[1], code).run();
-      n += r.meta.changes;
-    }
-    return json({ updated: n });
+    // 一句 UPDATE … FROM json_each；同一個代碼出現多次時以最後一筆為準（和以前逐筆更新一樣）
+    const seats = new Map();
+    for (const row of list) { const code = str(row.code, 8).toUpperCase(); if (code) { seats.delete(code); seats.set(code, [code, Number(row.table_no) || null, str(row.note, 60) || null]); } }
+    if (!seats.size) return json({ updated: 0 });
+    const r = await env.DB.prepare(`UPDATE tickets SET table_no = json_extract(j.value, '$[1]'), note = COALESCE(json_extract(j.value, '$[2]'), tickets.note)
+      FROM json_each(?2) j WHERE tickets.event_id = ?1 AND tickets.code = json_extract(j.value, '$[0]')`).bind(msa[1], JSON.stringify([...seats.values()])).run();
+    return json({ updated: r.meta.changes });
   }
 
   const mt = path.match(/^\/api\/events\/([\w-]{1,32})\/tickets$/);
@@ -3251,9 +3463,10 @@ async function api(req, env, path, method) {
         }).filter((r) => r && r.name);
         if (!rows.length) return fail(400, '沒有可匯入的獎項');
         let sort = (await env.DB.prepare('SELECT COALESCE(MAX(sort), 0) AS m FROM prizes WHERE event_id = ?').bind(eid).first()).m;
-        await env.DB.batch(rows.slice(0, 200).map((r) => env.DB.prepare(
-          'INSERT INTO prizes (id, event_id, name, qty, sponsor, sort, stage, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-          .bind(rid(8), eid, str(r.name, 60), Math.max(1, Math.min(Number(r.qty) || 1, 400)), str(r.sponsor, 40), ++sort, str(r.stage, 12), str(r.note, 80))));
+        const list = rows.slice(0, 200).map((r) => [rid(8), str(r.name, 60), Math.max(1, Math.min(Number(r.qty) || 1, 400)), str(r.sponsor, 40), ++sort, str(r.stage, 12), str(r.note, 80)]);
+        await env.DB.prepare(`INSERT INTO prizes (id, event_id, name, qty, sponsor, sort, stage, note)
+          SELECT json_extract(value, '$[0]'), ?1, json_extract(value, '$[1]'), json_extract(value, '$[2]'), json_extract(value, '$[3]'), json_extract(value, '$[4]'), json_extract(value, '$[5]'), json_extract(value, '$[6]')
+          FROM json_each(?2)`).bind(eid, JSON.stringify(list)).run();
         return json({ added: Math.min(rows.length, 200) });
       }
       const name = str(b.name, 60);
@@ -3289,8 +3502,9 @@ async function api(req, env, path, method) {
       const k = crypto.getRandomValues(new Uint32Array(1))[0] % pool.length;
       winners.push(pool.splice(k, 1)[0]);
     }
-    await env.DB.batch(winners.map((w) => env.DB.prepare('INSERT INTO draws (id, event_id, prize_id, member_id, name) VALUES (?, ?, ?, ?, ?)')
-      .bind(rid(8), eid, prizeId, w.member_id, w.name)));
+    await env.DB.prepare(`INSERT INTO draws (id, event_id, prize_id, member_id, name)
+      SELECT json_extract(value, '$[0]'), ?1, ?2, json_extract(value, '$[1]'), json_extract(value, '$[2]') FROM json_each(?3)`)
+      .bind(eid, prizeId, JSON.stringify(winners.map((w) => [rid(8), w.member_id, w.name]))).run();
     await audit(env, req, member, 'lottery.draw', 'prize', prizeId, `${winners.length} 位`);
     await notify(env, winners.map((w) => w.member_id), 'signup', { kind: 'lottery', title: `恭喜中獎：${prize.name}`, body: '請到台前領獎', url: `/#/e/${eid}`, ref: `e:${eid}` });
     return json({ winners: winners.map((w) => ({ name: w.name, nickname: w.nickname || '', table_no: w.table_no || null })), prize: prize.name, stage: prize.stage || '' });
@@ -3527,6 +3741,24 @@ async function api(req, env, path, method) {
       attendance: att?.n ? Math.round((att.a || 0) / att.n * 100) : null,
       growth, teamSizes,
     });
+  }
+  // staging 驗證「呼叫自己會不會拿到新的額度」（只有 SELFTEST=1 的環境有這個 API，正式站沒有）：
+  //   ctx.exports.Jobs 的呼叫鏈跑 3 層，每層依序 40 句 SELECT 1、一個 60 句的 DB.batch、約 8 ms 的 CPU，回報每層成功或失敗與錯誤原文
+  //   只有理事長、要通過通行金鑰再驗證；一小時 3 次；寫稽核
+  if (path === '/api/admin/selftest' && method === 'POST' && env.SELFTEST === '1') {
+    const g = need(); if (g) return g;
+    if (norm(member.role) !== 'chair') return fail(403, '只有理事長可以執行');
+    { const su = await needStepUp(true); if (su) return su; }
+    if (await limited(env, `selftest:${member.id}`, 3, 3600)) return fail(429, '一小時最多 3 次');
+    const exp = env.ctx?.exports?.Jobs;
+    if (!exp) return fail(503, '這個環境沒有 ctx.exports');
+    // 先寫稽核再呼叫：如果額度真的和父執行共用，呼叫之後父執行可能已經沒有額度寫稽核
+    await audit(env, req, member, 'admin.selftest', 'system', null, '開始');
+    env.budget.take('rpc');
+    let layers;
+    try { layers = await exp.selftest({ depth: 1 }); } catch (e) { layers = [{ layer: 1, error: String(e?.message || e).slice(0, 300) }]; }
+    await audit(env, req, member, 'admin.selftest', 'system', null, layers.map((l) => `第 ${l.layer} 層 ${l.error ? '失敗' : '成功'}`).join('、'));
+    return json({ layers });
   }
   if (path === '/api/admin/broadcast' && method === 'POST') {
     const g = need(); if (g) return g;
@@ -3765,20 +3997,19 @@ async function api(req, env, path, method) {
     if (tid && !(await teamIds()).includes(tid)) return fail(400, '找不到這個分團');
     if (tid && (await selfManaged(tid)) && !teamOwn(tid, 'approve')) return fail(403, '這個分團的成員只由該團的團長與幹部處理');
     // 目前主團是「只由本團幹部管理」的人，也不能由協會幹部改走
-    const locked = (await allIn(env, ids, (q) => `SELECT m.id, m.main_team FROM members m JOIN teams t ON t.id = m.main_team
-      WHERE t.self_managed = 1 AND m.id IN (${q})`)).filter((r) => !teamOwn(r.main_team, 'approve'));
+    const mj = JSON.stringify([...new Set(ids)]);
+    const locked = (await env.DB.prepare(`SELECT m.id, m.main_team FROM members m JOIN teams t ON t.id = m.main_team
+      WHERE t.self_managed = 1 AND m.id IN (SELECT value FROM json_each(?))`).bind(mj).all()).results.filter((r) => !teamOwn(r.main_team, 'approve'));
     if (locked.length) return fail(403, `有 ${locked.length} 位的主團只能由該團幹部調整`);
     // 只通知主團真的有變的人
-    const changed = tid ? (await allIn(env, ids, (q) => `SELECT id FROM members WHERE main_team IS NOT ? AND id IN (${q})`, [tid])).map((r) => r.id) : [];
-    const stmts = [];
-    for (const mid of ids) {
-      stmts.push(env.DB.prepare('UPDATE members SET main_team = ?, club = (SELECT name FROM teams WHERE id = ?) WHERE id = ?').bind(tid, tid, mid));
-      // 一般團員只屬於主團；擔任團長或幹部的分團保留
-      stmts.push(env.DB.prepare("DELETE FROM team_members WHERE member_id = ? AND role = 'member' AND (? IS NULL OR team_id != ?)").bind(mid, tid, tid));
-      if (tid) stmts.push(env.DB.prepare(`INSERT INTO team_members (team_id, member_id, role, status) VALUES (?, ?, 'member', 'active')
-        ON CONFLICT(team_id, member_id) DO UPDATE SET status = 'active'`).bind(tid, mid));
-    }
-    for (let i = 0; i < stmts.length; i += 90) await env.DB.batch(stmts.slice(i, i + 90));
+    const changed = tid ? (await env.DB.prepare('SELECT id FROM members WHERE main_team IS NOT ?1 AND id IN (SELECT value FROM json_each(?2))').bind(tid, mj).all()).results.map((r) => r.id) : [];
+    // 所有人 2–3 句（json_each），句數跟人數無關；一般團員只屬於主團，擔任團長或幹部的分團保留
+    await env.DB.batch([
+      env.DB.prepare('UPDATE members SET main_team = ?1, club = (SELECT name FROM teams WHERE id = ?1) WHERE id IN (SELECT value FROM json_each(?2))').bind(tid, mj),
+      env.DB.prepare("DELETE FROM team_members WHERE member_id IN (SELECT value FROM json_each(?2)) AND role = 'member' AND (?1 IS NULL OR team_id != ?1)").bind(tid, mj),
+      ...(tid ? [env.DB.prepare(`INSERT INTO team_members (team_id, member_id, role, status) SELECT ?1, m.id, 'member', 'active' FROM json_each(?2) j JOIN members m ON m.id = j.value WHERE true
+        ON CONFLICT(team_id, member_id) DO UPDATE SET status = 'active'`).bind(tid, mj)] : []),
+    ]);
     const tname = tid ? (await env.DB.prepare('SELECT name FROM teams WHERE id = ?').bind(tid).first())?.name : '未設定';
     await audit(env, req, member, 'team.main', 'members', ids.length === 1 ? ids[0] : null, `${ids.length} 人 → ${tname}`);
     if (changed.length) await notify(env, changed, 'membership', { kind: 'system', title: `你的主團：${tname}`, body: '分團的活動與公告會通知你', url: `/#/t/${tid}`, ref: `t:${tid}` });
@@ -3881,128 +4112,168 @@ async function api(req, env, path, method) {
   if (path === '/api/push/test' && method === 'POST') {
     const g = need(); if (g) return g;
     if (await limited(env, `pushtest:${member.id}`, 10, 3600)) return fail(429, '測試太頻繁，請稍後再試');
-    const { sent } = await push(env, [member.id], { cat: 'test', title: '耕跑團', body: '通知設定完成，新團練和報名提醒都會通知你。', url: '/#/me/notify', ts: Date.now() });
+    const { sent } = await pushTest(env, member.id, { cat: 'test', title: '耕跑團', body: '通知設定完成，新團練和報名提醒都會通知你。', url: '/#/me/notify', ts: Date.now() });
     return sent ? json({ ok: true, sent }) : fail(400, '沒有送出，請確認這台裝置已開啟通知');
   }
 
   return fail(404, '沒有這個 API');
-}
+});
 
 // ---- 排程工作（wrangler.jsonc 的 cron：每小時整點）----
 // 時間一律用台北時間判斷；每項工作都有防重複的標記，重跑也不會重複通知
+// 免費方案一次執行只有 50 個子請求（見 src/budget.js），所以：
+//   1. 每小時先用一句 SQL（CRON_PROBE）看哪些工作有事要做，安靜的整點只花 1 句
+//   2. 有事的工作依優先順序跑，共用一份預算；每處理一項（一場活動、一位會員）之前先確認額度，不夠就停，下個整點接著做
+//   3. 每日、每季的工作是兩段式：開始時先佔用，做完才標成完成；中途被終止的話，下個整點會重跑（最多 3 次，之後寫稽核 cron.gave_up）
+//   4. 時間門檻是「到了以後都可以補做」（hour >= H），錯過的整點在同一天後面的整點補上
+//   5. 每日備份（own）開自己的執行（ctx.exports.Jobs），不和其他工作擠同一份額度
 const taipei = (d = new Date()) => new Date(d.getTime() + 8 * 3600e3);   // 只拿來讀年月日時，不當成真的時區物件
 const tpDate = (d) => taipei(d).toISOString().slice(0, 10);
-async function onceOn(env, job, key) {
-  // 同一個 key（例如日期、季別）只執行一次
-  const r = await env.DB.prepare('SELECT last_run FROM job_runs WHERE job = ?').bind(job).first();
-  if (r?.last_run === key) return false;
-  await env.DB.prepare('INSERT INTO job_runs (job, last_run) VALUES (?, ?) ON CONFLICT(job) DO UPDATE SET last_run = excluded.last_run').bind(job, key).run();
-  return true;
+
+// 佔用：已完成、別人正在跑（15 分鐘內）、或已經失敗 3 次，都回 null
+//   claim_at 是 NULL（因為額度停下或失敗後釋放）也當作可以接著做
+const CLAIM = `INSERT INTO job_runs (job, last_run, claim_key, claim_at, attempts) VALUES (?1, '', ?2, datetime('now'), 1)
+  ON CONFLICT(job) DO UPDATE SET attempts = CASE WHEN job_runs.claim_key IS ?2 THEN job_runs.attempts + 1 ELSE 1 END,
+    claim_key = ?2, claim_at = datetime('now'), last_error = NULL
+  WHERE job_runs.last_run IS NOT ?2 AND (job_runs.claim_key IS NOT ?2
+    OR ((job_runs.claim_at IS NULL OR job_runs.claim_at < datetime('now', '-15 minutes')) AND job_runs.attempts < 3))
+  RETURNING attempts, cursor`;
+async function claim(env, job, key) {
+  const r = await env.DB.prepare(CLAIM).bind(job, key).first();
+  if (!r) return null;
+  env.claimed = { job, key, attempts: r.attempts };
+  // 測試用（/api/dev/cron?fail=backup，只有 DEV_LOGIN=1 的本機）：佔用之後丟錯，用來測重跑
+  if (env.failAfterClaim && env.failAfterClaim === env.jobName) throw new Error('測試：佔用之後失敗');
+  return r;
 }
+// 完成標記：要和收尾的寫入（例如稽核）放在同一個 DB.batch，才是同一個交易
+//   這項工作佔用的部分到這裡就算完成：之後再出錯（例如待審核整理之後的逾期失效）不算在這個佔用上
+const doneStmt = (env, job, key) => {
+  if (env.claimed?.job === job) env.claimed = null;
+  return env.DB.prepare("UPDATE job_runs SET last_run = ?2, done_at = datetime('now'), claim_key = NULL, last_error = NULL, cursor = NULL WHERE job = ?1").bind(job, key);
+};
+// 因為額度停下：不算失敗，把次數退回去、釋放佔用，讓下個整點接著做
+const yieldStmt = (env, job) => env.DB.prepare('UPDATE job_runs SET attempts = MAX(0, attempts - 1), claim_at = NULL WHERE job = ?1').bind(job);
+// 失敗：記下錯誤並釋放佔用（確定沒有人在跑了，下個整點就能重跑，不用等 15 分鐘）
+const failStmt = (env, job, msg) => env.DB.prepare('UPDATE job_runs SET last_error = ?2, claim_at = NULL WHERE job = ?1').bind(job, String(msg).slice(0, 200));
+const yieldTo = async (env, job, name, result = 'deferred') => { env.budget.stop(name); await yieldStmt(env, job).run(); return { done: false, result }; };
+// 額度夠不夠處理下一項；不夠就記下「因額度停下」
+const fits = (env, n, name) => { if (env.budget.room(n)) return true; env.budget.stop(name); return false; };
+// notify()／notifyMany() 一次用掉的子請求：通知中心與推播佇列各一句（每 1000 人）；推播在執行結束前用剩下的額度送
+const notifyCost = (n) => (n ? 2 * Math.ceil(n / 1000) : 0);
+
 const signedIds = async (env, eid) => (await env.DB.prepare("SELECT member_id FROM signups WHERE event_id = ? AND status = 'in' AND member_id IS NOT NULL").bind(eid).all()).results.map((r) => r.member_id);
 
-// 活動提醒：前一晚 20:00 提醒明天的活動；集合前 1–2 小時再提醒一次
+// 活動提醒：集合前 2 小時內提醒一次（每小時排程；錯過的整點在下一個整點補送，只要還沒集合）；前一晚 20:00 起提醒明天的活動（之後的整點補做）
+//   集合前提醒有時效，先做；明天的提醒額度不夠就留到下個整點
 async function remindEvents(env, now) {
   const hour = taipei(now).getUTCHours(), today0 = tpDate(now), tomorrow = tpDate(new Date(now.getTime() + 864e5));
   let sent = 0;
-  if (hour === 20) {
+  // 集合時間落在 (現在, 現在 + 120 分]：正常是在集合前 1–2 小時的整點送；那個整點被延後（額度、03:00 的備份）就在下一個整點補送
+  const nowMin = taipei(now).getUTCHours() * 60 + taipei(now).getUTCMinutes();
+  const hevs = (await env.DB.prepare(`SELECT id, title, gather_time, place, kind FROM events
+    WHERE date = ? AND status = 'open' AND kind != 'survey' AND gather_time != '' AND gather_time IS NOT NULL AND remind_hour_at IS NULL LIMIT 100`).bind(today0).all()).results;
+  for (const ev of hevs) {
+    const [h, m] = ev.gather_time.split(':').map(Number), diff = h * 60 + m - nowMin;
+    if (!(diff > 0 && diff <= 120)) continue;
+    if (!fits(env, 2, 'events')) return { done: false, result: sent };
+    const ids = await signedIds(env, ev.id);
+    if (!fits(env, 1 + notifyCost(ids.length), 'events')) return { done: false, result: sent };
+    // 集合前提醒到集合時間就過期（最多 1 小時），不會集合之後才收到
+    await notify(env, ids, 'signup', { kind: 'event', ref: `e:${ev.id}`, title: `${ev.gather_time} 集合：${ev.title}`, body: `${ev.place || ''}${ev.kind === 'party' ? '　入場券在「我的入場券」' : '　出門前記得暖身補水'}`, url: ev.kind === 'party' ? '/#/tickets' : `/#/e/${ev.id}`, tag: `hour-${ev.id}`,
+      ttl: Math.min(3600, diff * 60), urgency: 'high' }, { also: [env.DB.prepare("UPDATE events SET remind_hour_at = datetime('now') WHERE id = ?").bind(ev.id)] });
+    sent += ids.length;
+  }
+  if (hour >= 20) {
     const evs = (await env.DB.prepare(`SELECT id, title, date, gather_time, place, kind FROM events
-      WHERE date = ? AND status = 'open' AND kind != 'survey' AND remind_day_at IS NULL`).bind(tomorrow).all()).results;
+      WHERE date = ? AND status = 'open' AND kind != 'survey' AND remind_day_at IS NULL LIMIT 100`).bind(tomorrow).all()).results;
     for (const ev of evs) {
+      if (!fits(env, 2, 'events')) return { done: false, result: sent };
       const ids = await signedIds(env, ev.id);
-      await env.DB.prepare("UPDATE events SET remind_day_at = datetime('now') WHERE id = ?").bind(ev.id).run();
-      if (!ids.length) continue;
-      await notify(env, ids, 'signup', { kind: 'event', ref: `e:${ev.id}`, title: `明天：${ev.title}`, body: `${ev.gather_time ? `${ev.gather_time} 集合` : '明天'}${ev.place ? `・${ev.place}` : ''}${ev.kind === 'party' ? '・記得帶入場券 QR Code' : ''}`, url: `/#/e/${ev.id}`, tag: `day-${ev.id}` });
+      if (!fits(env, 1 + notifyCost(ids.length), 'events')) return { done: false, result: sent };
+      // 提醒標記和通知在同一個 batch：不會標了沒送、也不會送了沒標（下個整點重送）
+      await notify(env, ids, 'signup', { kind: 'event', ref: `e:${ev.id}`, title: `明天：${ev.title}`, body: `${ev.gather_time ? `${ev.gather_time} 集合` : '明天'}${ev.place ? `・${ev.place}` : ''}${ev.kind === 'party' ? '・記得帶入場券 QR Code' : ''}`, url: `/#/e/${ev.id}`, tag: `day-${ev.id}` },
+        { also: [env.DB.prepare("UPDATE events SET remind_day_at = datetime('now') WHERE id = ?").bind(ev.id)] });
       sent += ids.length;
     }
   }
-  // 集合時間落在 (現在 + 60 分, 現在 + 120 分]
-  const nowMin = taipei(now).getUTCHours() * 60 + taipei(now).getUTCMinutes();
-  const evs = (await env.DB.prepare(`SELECT id, title, gather_time, place, kind FROM events
-    WHERE date = ? AND status = 'open' AND kind != 'survey' AND gather_time != '' AND gather_time IS NOT NULL AND remind_hour_at IS NULL`).bind(today0).all()).results;
-  for (const ev of evs) {
-    const [h, m] = ev.gather_time.split(':').map(Number), diff = h * 60 + m - nowMin;
-    if (!(diff > 60 && diff <= 120)) continue;
-    const ids = await signedIds(env, ev.id);
-    await env.DB.prepare("UPDATE events SET remind_hour_at = datetime('now') WHERE id = ?").bind(ev.id).run();
-    if (!ids.length) continue;
-    // 集合前提醒 1 小時就過期，不會隔天才收到
-    await notify(env, ids, 'signup', { kind: 'event', ref: `e:${ev.id}`, title: `${ev.gather_time} 集合：${ev.title}`, body: `${ev.place || ''}${ev.kind === 'party' ? '　入場券在「我的入場券」' : '　出門前記得暖身補水'}`, url: ev.kind === 'party' ? '/#/tickets' : `/#/e/${ev.id}`, tag: `hour-${ev.id}`,
-      ttl: 3600, urgency: 'high' });
-    sent += ids.length;
-  }
-  return sent;
+  return { done: true, result: sent };
 }
 
-// 會費到期：到期前 30 天、7 天、到期當天各提醒本人一次（同一個到期日的同一階段只提醒一次）
+// 會費到期：到期前 30 天、7 天、到期當天各提醒本人一次（同一個到期日的同一階段只提醒一次；renew_notice 就是游標）
 async function remindRenewals(env, now) {
   const until = tpDate(new Date(now.getTime() + 30 * 864e5)), today0 = tpDate(now);
   const rows = (await env.DB.prepare(`SELECT id, paid_until, renew_notice FROM members WHERE membership = 'active' AND paid_until IS NOT NULL
     AND paid_until BETWEEN ? AND ? LIMIT 1000`).bind(today0, until).all()).results;
-  let n = 0;
+  const list = [], marks = [];
   for (const r of rows) {
     const days = Math.round((Date.parse(`${r.paid_until}T00:00:00Z`) - Date.parse(`${today0}T00:00:00Z`)) / 864e5);
     const stage = days <= 0 ? 0 : days <= 7 ? 7 : 30, key = `${r.paid_until}:${stage}`;
     if (r.renew_notice === key) continue;
-    await notify(env, [r.id], 'membership', { kind: 'system', title: stage === 0 ? '會費今天到期' : `會費 ${days} 天後到期`, body: `你的協會會費繳至 ${r.paid_until}，續繳後會籍卡就會更新`, url: '/#/me/card' });
-    await env.DB.prepare('UPDATE members SET renew_notice = ? WHERE id = ?').bind(key, r.id).run();
-    n++;
+    list.push({ member_id: r.id, title: stage === 0 ? '會費今天到期' : `會費 ${days} 天後到期`, body: `你的協會會費繳至 ${r.paid_until}，續繳後會籍卡就會更新`, url: '/#/me/card' });
+    marks.push([r.id, key]);
   }
-  return n;
+  // 所有人一次寫完（通知＋標記同一個 batch，共 3 句）
+  if (!fits(env, notifyCost(list.length) + 1, 'renewals')) return { done: false, result: 0 };
+  await notifyMany(env, 'membership', list, { kind: 'system', also: marks.length ? [env.DB.prepare(`UPDATE members SET renew_notice = json_extract(j.value, '$[1]')
+    FROM json_each(?1) j WHERE members.id = json_extract(j.value, '$[0]')`).bind(JSON.stringify(marks))] : [] });
+  return { done: true, result: list.length };
 }
 
-// 壞天氣提醒：前一晚 20:00，明天有指定地點的活動，集合時間預報「不建議」、大雨或空氣不佳，通知報名的人與主辦幹部
+// 壞天氣提醒：前一晚 20:00 起，明天有指定地點的活動，集合時間預報「不建議」、大雨或空氣不佳，通知報名的人與主辦幹部
+//   先查天氣與名單、確認額度夠，才標記 wx_alert_at 並通知（額度不夠就不標記，下個整點重來）
 async function weatherAlerts(env, now) {
-  if (taipei(now).getUTCHours() !== 20) return 0;
   const tomorrow = tpDate(new Date(now.getTime() + 864e5));
   const evs = (await env.DB.prepare(`SELECT e.id, e.title, e.gather_time, e.team_id, e.created_by, s.name AS spot, s.lat, s.lng FROM events e JOIN spots s ON s.id = e.spot_id
-    WHERE e.date = ? AND e.status = 'open' AND e.kind != 'survey' AND e.wx_alert_at IS NULL`).bind(tomorrow).all()).results;
+    WHERE e.date = ? AND e.status = 'open' AND e.kind != 'survey' AND e.wx_alert_at IS NULL LIMIT 50`).bind(tomorrow).all()).results;
   let sent = 0;
+  const mark = (id) => env.DB.prepare("UPDATE events SET wx_alert_at = datetime('now') WHERE id = ?").bind(id).run();
   for (const ev of evs) {
-    await env.DB.prepare("UPDATE events SET wx_alert_at = datetime('now') WHERE id = ?").bind(ev.id).run();
+    if (!fits(env, 7, 'weather')) return { done: false, result: sent };   // 快取查詢 1＋天氣 2＋寫入快取 1（命中就只有查詢）＋名單 1＋幹部 1＋標記 1
     const w = await getWeather(env, ev.lat, ev.lng);
-    if (!w) continue;
+    if (!w) { await mark(ev.id); continue; }
     const hh = /^\d{2}:\d{2}$/.test(ev.gather_time || '') ? ev.gather_time.slice(0, 2) : '07';
     const x = hourOf(JSON.parse(w.body), `${tomorrow}T${hh}:00`);
-    if (!x || !(x.advice.level === 'poor' || (x.rain >= 70 && x.mm >= 2) || x.aqi >= 101)) continue;
+    if (!x || !(x.advice.level === 'poor' || (x.rain >= 70 && x.mm >= 2) || x.aqi >= 101)) { await mark(ev.id); continue; }
     const why = x.advice.why.join('；');
     const ids = await signedIds(env, ev.id);
+    const mgr = x.advice.level === 'poor' ? await eventManagers(env, ev) : [];
+    if (!fits(env, 1 + notifyCost(ids.length) + notifyCost(mgr.length), 'weather')) return { done: false, result: sent };
+    await mark(ev.id);
     // 鎖定畫面用同一個 day- tag 取代同一場的「明天」提醒，通知中心兩筆都保留
     if (ids.length) await notify(env, ids, 'signup', { kind: 'event', ref: `e:${ev.id}`, title: `明天${x.advice.level === 'poor' ? '天氣不佳' : '天氣提醒'}：${ev.title}`, body: `${hh}:00 ${ev.spot}：${x.text}，體感 ${Math.round(x.feel)}°。${why}。有異動幹部會再通知。`, url: `/#/e/${ev.id}`, tag: `day-${ev.id}`, renotify: true });
-    if (x.advice.level === 'poor') {
-      const mgr = await eventManagers(env, ev);
-      if (mgr.length) await notify(env, mgr, 'todo', { kind: 'event', ref: `wx:${ev.id}`, title: `要不要調整：${ev.title}`, body: `明天 ${hh}:00 預報不建議跑步（${why}）。可以在活動頁「發布異動」通知大家。`, url: `/#/e/${ev.id}`, tag: `wxm-${ev.id}` });
-    }
+    if (mgr.length) await notify(env, mgr, 'todo', { kind: 'event', ref: `wx:${ev.id}`, title: `要不要調整：${ev.title}`, body: `明天 ${hh}:00 預報不建議跑步（${why}）。可以在活動頁「發布異動」通知大家。`, url: `/#/e/${ev.id}`, tag: `wxm-${ev.id}` });
     sent += ids.length;
   }
-  return sent;
+  return { done: true, result: sent };
 }
 
 // 跑完接續：團練結束 15 分鐘後，提醒有報名的人記錄今天的訓練（帶入課表），記完可以直接拍照分享
 async function runFollowups(env, now) {
   const today0 = tpDate(now), t = taipei(now), nowMin = t.getUTCHours() * 60 + t.getUTCMinutes();
   const evs = (await env.DB.prepare(`SELECT id, title, gather_time, end_time FROM events WHERE date = ? AND status = 'open' AND kind IN ('track', 'core', 'long', 'race', 'other')
-    AND followup_at IS NULL AND gather_time IS NOT NULL AND gather_time != ''`).bind(today0).all()).results;
+    AND followup_at IS NULL AND gather_time IS NOT NULL AND gather_time != '' LIMIT 100`).bind(today0).all()).results;
   let sent = 0;
   for (const ev of evs) {
     const [gh, gm] = ev.gather_time.split(':').map(Number);
     const end = /^\d{2}:\d{2}$/.test(ev.end_time || '') && ev.end_time > ev.gather_time ? ev.end_time.split(':').map(Number).reduce((h, m) => h * 60 + m) : gh * 60 + gm + 120;
     if (nowMin < end + 15) continue;
-    await env.DB.prepare("UPDATE events SET followup_at = datetime('now') WHERE id = ?").bind(ev.id).run();
+    if (!fits(env, 2, 'followups')) return { done: false, result: sent };
     const ids = await signedIds(env, ev.id);
+    if (!fits(env, 1 + notifyCost(ids.length), 'followups')) return { done: false, result: sent };
+    await env.DB.prepare("UPDATE events SET followup_at = datetime('now') WHERE id = ?").bind(ev.id).run();
     if (!ids.length) continue;
     await notify(env, ids, 'training', { kind: 'event', ref: `e:${ev.id}`, title: '跑完了嗎？', body: `記錄今天「${ev.title}」的訓練，再拍張照分享`, url: `/#/log?event=${ev.id}`, tag: `fu-${ev.id}` });
     sent += ids.length;
   }
-  return sent;
+  return { done: true, result: sent };
 }
 
-// 每月 1 號 09:00：上個月的里程挑戰總結（個人里程與徽章、分團平均第一名），只通知上個月有紀錄的人
+// 每月 1 號 09:00 起：上個月的里程挑戰總結（個人里程與徽章、分團平均第一名），只通知上個月有紀錄的人
+const prevMonthOf = (t) => new Date(Date.UTC(t.getUTCFullYear(), t.getUTCMonth() - 1, 1)).toISOString().slice(0, 7);
 async function monthSummary(env, now) {
-  const t = taipei(now);
-  if (t.getUTCDate() !== 1 || t.getUTCHours() !== 9) return 0;
-  const prev = new Date(Date.UTC(t.getUTCFullYear(), t.getUTCMonth() - 1, 1)).toISOString().slice(0, 7);
-  if (!(await onceOn(env, 'month_summary', prev))) return 0;
+  const prev = prevMonthOf(taipei(now));
+  if (!(await claim(env, 'month_summary', prev))) return { done: true, result: 0 };
   const logs = (await env.DB.prepare("SELECT member_id, date, km FROM training_logs WHERE date BETWEEN ? AND ? AND status != 'skip'").bind(`${prev}-01`, `${prev}-31`).all()).results;
   const by = {};
   for (const l of logs) (by[l.member_id] ||= []).push(l);
@@ -4010,146 +4281,243 @@ async function monthSummary(env, now) {
     JOIN team_members tm ON tm.team_id = t.id AND tm.status = 'active' LEFT JOIN training_logs l ON l.member_id = tm.member_id AND l.date BETWEEN ? AND ? AND l.status != 'skip'
     WHERE t.private = 0 GROUP BY t.id`).bind(`${prev}-01`, `${prev}-31`).all()).results.filter((x) => x.members).sort((a, b) => b.km / b.members - a.km / a.members);
   const champ = teams[0] && teams[0].km > 0 ? `分團平均第一：${teams[0].name}（每人 ${(teams[0].km / teams[0].members).toFixed(1)} 公里）` : '';
-  let n = 0;
-  for (const [mid, list] of Object.entries(by)) {
+  // 每人一則，所有人一次寫完；完成標記放在同一個 batch（不會只送一半又重送）
+  const notes = Object.entries(by).map(([mid, list]) => {
     const km = list.reduce((s0, l) => s0 + (l.km || 0), 0), stat = { km, runs: list.length, weeks: weeksOf(prev, list.map((l) => l.date)) };
     const got = earned(stat).map((id) => BADGES.find((b) => b.id === id).name);
-    await notify(env, [mid], 'training', { kind: 'system', title: `${Number(prev.slice(5))} 月跑了 ${km.toFixed(1)} 公里`, body: `${list.length} 次訓練${got.length ? `，獲得徽章：${got.join('、')}` : ''}。${champ}`, url: `/#/challenge?m=${prev}`,
-      push: { title: `${Number(prev.slice(5))} 月訓練總結`, body: '點開看本月里程與徽章' } });
-    n++;
-  }
-  return n;
+    return { member_id: mid, title: `${Number(prev.slice(5))} 月跑了 ${km.toFixed(1)} 公里`, body: `${list.length} 次訓練${got.length ? `，獲得徽章：${got.join('、')}` : ''}。${champ}`, url: `/#/challenge?m=${prev}`,
+      push: { title: `${Number(prev.slice(5))} 月訓練總結`, body: '點開看本月里程與徽章' } };
+  });
+  if (!fits(env, notifyCost(notes.length) + 1, 'monthSummary')) return yieldTo(env, 'month_summary', 'monthSummary');
+  await notifyMany(env, 'training', notes, { kind: 'system', also: [doneStmt(env, 'month_summary', prev)] });
+  return { done: true, result: notes.length };
 }
 
 // 備份存放：有綁 R2（BACKUP）就存 R2，否則存 Workers KV（BACKUP_KV）；兩邊格式一樣
+//   KV 的每個物件都設 36 天後自動過期（分段備份一份可能有很多段，逐一刪除太花子請求）；R2 沒有逐筆期限，過期的整份一起刪（list 1＋批次刪除 1）
+const BACKUP_TTL = 36 * 86400;
 const backupStore = (env) => (env.BACKUP ? {
   put: (k, v, meta) => env.BACKUP.put(k, v, { customMetadata: meta }),
-  list: async () => (await env.BACKUP.list({ prefix: 'daily/', include: ['customMetadata'] })).objects.map((o) => ({ key: o.key, size: o.size, at: o.uploaded, ...o.customMetadata })),
+  list: async (prefix = 'daily/') => (await env.BACKUP.list({ prefix, include: ['customMetadata'] })).objects.map((o) => ({ key: o.key, size: o.size, at: o.uploaded, ...o.customMetadata })),
+  get: async (k) => (await env.BACKUP.get(k))?.arrayBuffer(),
   del: (k) => env.BACKUP.delete(k), kind: 'R2',
 } : env.BACKUP_KV ? {
-  put: (k, v, meta) => env.BACKUP_KV.put(k, v, { metadata: { ...meta, size: v.length, at: new Date().toISOString() } }),
-  list: async () => (await env.BACKUP_KV.list({ prefix: 'daily/' })).keys.map((o) => ({ key: o.name, ...o.metadata })),
+  put: (k, v, meta) => env.BACKUP_KV.put(k, v, { metadata: { ...meta, size: v.length, at: new Date().toISOString() }, expirationTtl: BACKUP_TTL }),
+  list: async (prefix = 'daily/') => (await env.BACKUP_KV.list({ prefix })).keys.map((o) => ({ key: o.name, ...o.metadata })),
+  get: (k) => env.BACKUP_KV.get(k, 'arrayBuffer'),
   del: (k) => env.BACKUP_KV.delete(k), kind: 'KV',
 } : null);
-// 每天 03:00：資料庫加密備份（保留 35 天）。格式：CILB1＋IV＋AES-GCM(gzip(JSON))，還原見 tools/restore-backup.mjs
-async function dailyBackup(env, now) {
-  if (!backupStore(env) || !env.BACKUP_KEY || taipei(now).getUTCHours() !== 3 || !(await onceOn(env, 'backup', tpDate(now)))) return null;
-  return runBackup(env, tpDate(now));
-}
-async function runBackup(env, label) {
-  const skip = ['sessions', 'rate_limits', 'webauthn_challenges', 'd1_migrations'];
-  const tables = (await env.DB.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%'").all()).results.map((r) => r.name).filter((n) => !skip.includes(n));
-  const data = { format: 'cil-backup', version: 1, at: new Date().toISOString(), tables: {} };
-  let rows = 0;
-  for (const tb of tables) {
-    const out = [];
-    for (let off = 0; ; off += 1000) {
-      const r = (await env.DB.prepare(`SELECT * FROM "${tb.replace(/"/g, '')}" LIMIT 1000 OFFSET ${off}`).all()).results;
-      out.push(...r);
-      if (r.length < 1000) break;
-    }
-    data.tables[tb] = out; rows += out.length;
-  }
-  const gz = await new Response(new Blob([JSON.stringify(data)]).stream().pipeThrough(new CompressionStream('gzip'))).arrayBuffer();
-  const key = await crypto.subtle.importKey('raw', WebAuthn.unb64u(env.BACKUP_KEY.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')), 'AES-GCM', false, ['encrypt']);
+const backupKey = (env, use) => crypto.subtle.importKey('raw', WebAuthn.unb64u(env.BACKUP_KEY.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')), 'AES-GCM', false, [use]);
+const BACKUP_AAD = new TextEncoder().encode('cil-backup-v1');
+// 不備份的表：暫存（工作階段、限流、通行金鑰挑戰、migration 紀錄）、遙測（前端效能與錯誤，保存 90 天）、
+//   推播佇列與執行額度紀錄，以及通知中心（保存 180 天的訊息副本，人多時是最大的一張表；真正的狀態在各自的資料表，還原後通知中心從空的開始）
+const BACKUP_SKIP = new Set(['sessions', 'rate_limits', 'webauthn_challenges', 'd1_migrations',
+  'client_metrics', 'client_errors', 'push_queue', 'budget_log', 'notifications']);
+// 同步來的鏡頭清單（水利署、水利處）可以在管理後台重新同步，只備份幹部手動新增的連結；公路局用 tools/cams-sync.mjs 重新匯入
+//   跑者休息站的官方開放資料可以重新同步（tools/rest-sync.mjs 與管理後台的立即同步）：只備份幹部整理、新增、修正、隱藏或寫了補充說明的列
+//   （條件有 OR，用的地方一律加括號）
+const BACKUP_FILTER = { cams: 'manual = 1', rest_stops: 'manual = 1 OR fix IS NOT NULL OR hidden = 1 OR note IS NOT NULL' };
+// 每筆可能很大的表（路線最多 3000 點約 66 KB、分團小圖最多 80 KB）：第一次只讀幾筆，之後照平均大小調整，一段的 CPU 才不會爆
+const BACKUP_FIRST = { routes: 5, teams: 5, plan_posts: 50, team_posts: 50 };
+// 加密一個備份物件：'CILB2'＋IV＋AES-GCM(gzip(text))；AAD 綁住日期與第幾段（manifest 是 'manifest'），段落不能被換位置或拿去拼別份
+async function sealBackup(env, text, aad) {
+  const gz = await new Response(new Blob([text]).stream().pipeThrough(new CompressionStream('gzip'))).arrayBuffer();
   const iv = crypto.getRandomValues(new Uint8Array(12));
-  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: new TextEncoder().encode('cil-backup-v1') }, key, gz));
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: new TextEncoder().encode(`cil-backup-v2|${aad}`) }, await backupKey(env, 'encrypt'), gz));
   const blob = new Uint8Array(5 + 12 + ct.length);
-  blob.set(new TextEncoder().encode('CILB1'), 0); blob.set(iv, 5); blob.set(ct, 17);
-  const store = backupStore(env);
-  await store.put(`daily/${label}.bin`, blob, { tables: String(tables.length), rows: String(rows) });
-  const cut = `daily/${tpDate(new Date(Date.now() - 35 * 864e5))}`;
-  for (const o of await store.list()) if (o.key < cut) await store.del(o.key);
-  await audit(env, null, null, 'backup.daily', 'system', label, `${tables.length} 張表 ${rows} 筆，${blob.length} bytes`);
-  return { label, tables: tables.length, rows, bytes: blob.length };
+  blob.set(new TextEncoder().encode('CILB2'), 0); blob.set(iv, 5); blob.set(ct, 17);
+  return blob;
+}
+async function openBackup(env, buf, aad) {
+  const magic = new TextDecoder().decode(buf.subarray(0, 5));
+  const ad = magic === 'CILB2' ? new TextEncoder().encode(`cil-backup-v2|${aad}`) : magic === 'CILB1' ? BACKUP_AAD : null;
+  if (!ad) throw new Error('格式不對');
+  const gz = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: buf.subarray(5, 17), additionalData: ad }, await backupKey(env, 'decrypt'), buf.subarray(17));
+  return JSON.parse(await new Response(new Blob([gz]).stream().pipeThrough(new DecompressionStream('gzip'))).text());
+}
+const partKey = (label, n) => `part/${label}/${String(n).padStart(4, '0')}.bin`;
+const cursorStmt = (env, job, cur) => env.DB.prepare('UPDATE job_runs SET cursor = ?2 WHERE job = ?1').bind(job, cur ? JSON.stringify(cur) : null);
+const backupPending = (r) => !!(r && r.cursor && r.claim_key && r.attempts < 3);
+
+// 每天 03:00 起：資料庫加密備份（保留 35 天），分段做（見 backupStep）；手動備份（backup_manual）還沒做完的先接著做
+//   上一份還沒做完（資料多時要好幾個整點，甚至跨日）：先接著做完，再開始新的一天；失敗 3 次而放棄的，從今天重新開始
+async function dailyBackup(env, now) {
+  if (!backupStore(env) || !env.BACKUP_KEY) return { done: true, result: null };
+  const rows = (await env.DB.prepare("SELECT job, claim_key, attempts, cursor FROM job_runs WHERE job IN ('backup', 'backup_manual')").all()).results;
+  const m = rows.find((r) => r.job === 'backup_manual'), d = rows.find((r) => r.job === 'backup');
+  if (backupPending(m)) return backupStep(env, 'backup_manual', m.claim_key, { action: 'backup.manual' });
+  const label = backupPending(d) ? d.claim_key : tpDate(now);
+  return backupStep(env, 'backup', label, { action: 'backup.daily' });
+}
+// 分段備份的一段（一次執行）：依表名排序，每張表依 rowid 往後讀，讀到 plan.backupSeg 個 JSON 字元或額度用完就停，
+//   加密寫成一段 part/<日期>/<第幾段>.bin，游標存在 job_runs.cursor，下個整點接著做；全部做完才寫 daily/<日期>.bin（manifest：每張表幾筆、共幾段），
+//   管理後台的清單只看得到做完的備份。CPU 跟這一段的資料量成正比，不再跟整個資料庫成正比（人多時一次做完會超過 10 ms 而被終止）
+//   子請求：佔用 1、開頭一次（表名 1、哪些表有資料 1）、每次讀取 1、寫入一段 1、收尾 2（manifest 1＋完成標記與稽核）
+//   注意：資料多而跨好幾個整點時，每張表是各自讀取時的狀態，不是同一時間點的快照；要還原到某個時間點請用 D1 Time Travel（免費方案 7 天）
+const BK_RESERVE = 5;
+async function backupStep(env, job, label, { action = 'backup.daily' } = {}) {
+  const store = backupStore(env), plan = planOf(env);
+  const c0 = await claim(env, job, label);
+  if (!c0) return { done: true, result: null };
+  let cur = parseQ(c0.cursor, null);
+  if (!cur || cur.label !== label) {
+    if (!fits(env, 2 + BK_RESERVE, 'backup:start')) { await yieldStmt(env, job).run(); return { done: false, result: 'deferred' }; }
+    const names = (await env.DB.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%' ORDER BY name").all())
+      .results.map((r) => r.name).filter((n) => !BACKUP_SKIP.has(n) && /^\w+$/.test(n));
+    // 空的表不用逐張去讀（一句看完哪些表有資料）
+    const has = names.length ? JSON.parse((await env.DB.prepare(`SELECT json_array(${names.map((n) => `EXISTS (SELECT 1 FROM "${n}"${BACKUP_FILTER[n] ? ` WHERE (${BACKUP_FILTER[n]})` : ''})`).join(', ')}) AS j`).first()).j) : [];
+    cur = { label, at: new Date().toISOString(), all: names, tables: names.filter((n, i) => has[i]), t: 0, after: 0, n: 0, rows: Object.fromEntries(names.map((n) => [n, 0])), bytes: 0 };
+  }
+  const pieces = [], seg = env.backupSeg || plan.backupSeg;   // backupSeg：測試用（/api/dev/cron?seg=，只有 DEV_LOGIN=1 的本機）
+  let size = 0, lim = BACKUP_FIRST[cur.tables[cur.t]] || 200;
+  while (cur.t < cur.tables.length && size < seg) {
+    if (!env.budget.room(1 + BK_RESERVE)) { env.budget.stop('backup:sub'); break; }
+    const t = cur.tables[cur.t], L = lim;
+    const rows = (await env.DB.prepare(`SELECT *, rowid AS _rid FROM "${t}" WHERE rowid > ?1${BACKUP_FILTER[t] ? ` AND (${BACKUP_FILTER[t]})` : ''} ORDER BY rowid LIMIT ?2`).bind(cur.after, L).all()).results;
+    if (rows.length) {
+      const js = JSON.stringify(rows);
+      pieces.push(`[${JSON.stringify(t)},${js}]`); size += js.length;
+      cur.rows[t] = (cur.rows[t] || 0) + rows.length; cur.after = rows[rows.length - 1]._rid;
+      // 下一次讀幾筆：照這次每筆的平均大小，填滿這一段剩下的空間（20–2000 筆）
+      lim = Math.max(5, Math.min(2000, Math.floor((seg - size) / Math.max(1, js.length / rows.length))));
+    }
+    if (rows.length < L) { cur.t++; cur.after = 0; lim = BACKUP_FIRST[cur.tables[cur.t]] || 200; }
+  }
+  if (pieces.length) {
+    const blob = await sealBackup(env, `{"format":"cil-backup-part","version":2,"label":${JSON.stringify(label)},"n":${cur.n},"tables":[${pieces.join(',')}]}`, `${label}|${cur.n}`);
+    await store.put(partKey(label, cur.n), blob, { label, n: String(cur.n) });
+    cur.n++; cur.bytes += blob.length;
+  }
+  if (cur.t < cur.tables.length) {
+    // 還沒做完：記下游標、釋放佔用（不算失敗），下個整點接著做
+    await env.DB.batch([cursorStmt(env, job, cur), yieldStmt(env, job)]);
+    return { done: false, result: 'deferred' };
+  }
+  const rows = Object.values(cur.rows).reduce((x, y) => x + y, 0);
+  const man = await sealBackup(env, JSON.stringify({ format: 'cil-backup', version: 2, label, at: cur.at, done_at: new Date().toISOString(), parts: cur.n, tables: cur.rows }), `${label}|manifest`);
+  await store.put(`daily/${label}.bin`, man, { tables: String(cur.all.length), rows: String(rows), parts: String(cur.n), bytes: String(cur.bytes + man.length) });
+  // 完成標記（也清掉游標）和稽核同一個 batch
+  await env.DB.batch([doneStmt(env, job, label), await auditStmt(env, null, null, action, 'system', label, `${cur.all.length} 張表 ${rows} 筆，${cur.n} 段 ${cur.bytes + man.length} bytes`)]);
+  // 過期的備份（35 天）：一次最多刪 3 份；KV 的物件本來就會自動過期，這裡只是早一點清掉（額度有剩才做）
+  try {
+    if (env.budget.room(2)) {
+      const cut = `daily/${tpDate(new Date(Date.now() - 35 * 864e5))}`;
+      for (const o of (await store.list()).filter((x) => x.key < cut).slice(0, 3)) {
+        if (!env.budget.room(2)) break;
+        await store.del(o.key);
+        if (store.kind === 'R2' && env.budget.room(2)) {
+          const ps = await store.list(`part/${o.key.slice(6, -4)}/`);
+          if (ps.length) await env.BACKUP.delete(ps.map((x) => x.key));
+        }
+      }
+    }
+  } catch (e) { console.error('backup cleanup', e); }
+  return { done: true, result: { label, tables: cur.all.length, rows, parts: cur.n, bytes: cur.bytes + man.length } };
 }
 
-// 每季第一天 09:00：提醒理事長與監事檢視幹部名單與權限（ISO 27001 A.5.18）
+// 每季第一天 09:00 起：提醒理事長與監事檢視幹部名單與權限（ISO 27001 A.5.18）
+const quarterOf = (t) => `${t.getUTCFullYear()}Q${Math.floor(t.getUTCMonth() / 3) + 1}`;
 async function quarterlyReview(env, now) {
-  const t = taipei(now);
-  if (t.getUTCDate() !== 1 || ![0, 3, 6, 9].includes(t.getUTCMonth()) || t.getUTCHours() !== 9) return 0;
-  if (!(await onceOn(env, 'quarterly_review', `${t.getUTCFullYear()}Q${t.getUTCMonth() / 3 + 1}`))) return 0;
+  const q = quarterOf(taipei(now));
+  if (!(await claim(env, 'quarterly_review', q))) return { done: true, result: 0 };
   const ids = (await env.DB.prepare("SELECT id FROM members WHERE role IN ('chair', 'supervisor')").all()).results.map((r) => r.id);
   const n = (await env.DB.prepare("SELECT COUNT(*) AS n FROM members WHERE role != 'member'").first()).n;
   const leads = (await env.DB.prepare("SELECT COUNT(*) AS n FROM team_members WHERE role IN ('lead', 'officer') AND status = 'active'").first()).n;
-  // 理事長與監事不能關這一則的推播
-  const q = `${t.getUTCFullYear()}Q${t.getUTCMonth() / 3 + 1}`;
-  await notify(env, ids, 'todo', { kind: 'system', title: '每季權限檢視', body: `目前協會幹部 ${n} 位、分團團長與幹部 ${leads} 位。請確認卸任的人已移除權限。`, url: '/#/admin?tab=roles', ref: `review:${q}` }, { force: true });
-  await audit(env, null, null, 'review.reminder', 'system', null, `幹部 ${n}、分團幹部 ${leads}`);
-  return ids.length;
+  if (!fits(env, notifyCost(ids.length) + 2, 'review')) return yieldTo(env, 'quarterly_review', 'review');
+  // 理事長與監事不能關這一則的推播；完成標記與稽核和通知在同一個 batch（中途被終止也不會重送）
+  await notify(env, ids, 'todo', { kind: 'system', title: '每季權限檢視', body: `目前協會幹部 ${n} 位、分團團長與幹部 ${leads} 位。請確認卸任的人已移除權限。`, url: '/#/admin?tab=roles', ref: `review:${q}` },
+    { force: true, also: [doneStmt(env, 'quarterly_review', q), await auditStmt(env, null, null, 'review.reminder', 'system', null, `幹部 ${n}、分團幹部 ${leads}`)] });
+  return { done: true, result: ids.length };
 }
 
-// 每天 03:00：清掉過期資料；活動個資依後台設定的保存年限清除（沒設定就不動）
+// 每天 03:00 起：清掉過期資料；活動個資依後台設定的保存年限清除（沒設定就不動）
+//   子請求：佔用 1、設定 1、清理一個 batch 8–13 句、收尾 2
 async function retention(env, now) {
-  const t = taipei(now);
-  if (t.getUTCHours() !== 3 || !(await onceOn(env, 'retention', tpDate(now)))) return null;
+  const t = taipei(now), label = tpDate(now);
+  if (!(await claim(env, 'retention', label))) return { done: true, result: null };
   const org = (await getSettings(env)).org || {};
-  const out = {};
-  const run = async (k, sql, ...args) => { out[k] = (await env.DB.prepare(sql).bind(...args).run()).meta.changes; };
-  await run('sessions', "DELETE FROM sessions WHERE expires_at < datetime('now')");
-  await run('rate_limits', "DELETE FROM rate_limits WHERE window_end < datetime('now')");
-  await run('notifications', "DELETE FROM notifications WHERE created_at < datetime('now', '-180 days')");
+  const keys = [], stmts = [];
+  const add = (k, sql, ...args) => { keys.push(k); stmts.push(env.DB.prepare(sql).bind(...args)); };
+  add('sessions', "DELETE FROM sessions WHERE expires_at < datetime('now')");
+  add('rate_limits', "DELETE FROM rate_limits WHERE window_end < datetime('now')");
+  add('notifications', "DELETE FROM notifications WHERE created_at < datetime('now', '-180 days')");
   // 幹部待辦含其他會員的暱稱，真正的待處理狀態在來源資料表，60 天就清掉
-  await run('notif_todo', "DELETE FROM notifications WHERE category = 'todo' AND created_at < datetime('now', '-60 days')");
-  await run('client_metrics', "DELETE FROM client_metrics WHERE day < date('now', '-90 days')");
-  await run('client_errors', "DELETE FROM client_errors WHERE day < date('now', '-90 days')");
-  await run('spot_reports', "DELETE FROM spot_reports WHERE created_at < datetime('now', '-90 days')");
+  add('notif_todo', "DELETE FROM notifications WHERE category = 'todo' AND created_at < datetime('now', '-60 days')");
+  add('client_metrics', "DELETE FROM client_metrics WHERE day < date('now', '-90 days')");
+  add('client_errors', "DELETE FROM client_errors WHERE day < date('now', '-90 days')");
+  add('spot_reports', "DELETE FROM spot_reports WHERE created_at < datetime('now', '-90 days')");
+  // 跑友回報休息站（含回報人）：30 天（見 migrations/0040）
+  add('rest_reports', "DELETE FROM rest_reports WHERE created_at < datetime('now', '-30 days')");
+  add('budget_log', "DELETE FROM budget_log WHERE day < date('now', '-90 days')");
+  // 推播佇列：過期的（最長 24 小時）；推播關閉（VAPID 拿掉）時也不會一直留著通知內容
+  add('push_queue', "DELETE FROM push_queue WHERE expires_at <= datetime('now')");
   const auditYears = Math.max(1, Math.min(Number(org.audit_years) || 3, 10));
-  await run('audit', `DELETE FROM audit_log WHERE at < datetime('now', '-${auditYears} years')`);
+  add('audit', `DELETE FROM audit_log WHERE at < datetime('now', '-${auditYears} years')`);
   const evYears = Math.max(0, Math.min(Number(org.event_data_years) || 0, 20));
   if (evYears) {
-    const cut = `${t.getUTCFullYear() - evYears}${tpDate(now).slice(4)}`;
+    const cut = `${t.getUTCFullYear() - evYears}${label.slice(4)}`;
     const old = `SELECT id FROM events WHERE date < ?`;
-    await run('signups', `DELETE FROM signups WHERE event_id IN (${old})`, cut);
-    await run('tickets', `DELETE FROM tickets WHERE event_id IN (${old})`, cut);
-    await run('invites', `DELETE FROM event_invites WHERE event_id IN (${old})`, cut);
-    await run('draws', `UPDATE draws SET name = '已清除', member_id = NULL WHERE member_id IS NOT NULL AND event_id IN (${old})`, cut);
+    add('signups', `DELETE FROM signups WHERE event_id IN (${old})`, cut);
+    add('tickets', `DELETE FROM tickets WHERE event_id IN (${old})`, cut);
+    add('invites', `DELETE FROM event_invites WHERE event_id IN (${old})`, cut);
+    add('draws', `UPDATE draws SET name = '已清除', member_id = NULL WHERE member_id IS NOT NULL AND event_id IN (${old})`, cut);
   }
   const logYears = Math.max(0, Math.min(Number(org.log_years) || 0, 20));
-  if (logYears) await run('training_logs', `DELETE FROM training_logs WHERE date < date('now', '-${logYears} years')`);
-  await audit(env, null, null, 'retention.cleanup', 'system', null, Object.entries(out).map(([k, v]) => `${k} ${v}`).join('、'));
-  return out;
+  if (logYears) add('training_logs', `DELETE FROM training_logs WHERE date < date('now', '-${logYears} years')`);
+  if (!fits(env, stmts.length + 2, 'retention')) return yieldTo(env, 'retention', 'retention');
+  const res = await env.DB.batch(stmts);
+  const out = Object.fromEntries(keys.map((k, i) => [k, res[i].meta.changes]));
+  await env.DB.batch([doneStmt(env, 'retention', label), await auditStmt(env, null, null, 'retention.cleanup', 'system', null, Object.entries(out).map(([k, v]) => `${k} ${v}`).join('、'))]);
+  return { done: true, result: out };
 }
 
-// 每天 21:00：疲勞提醒（只通知本人，不通知教練）
+// 每天 21:00 起：疲勞提醒（只通知本人，不通知教練）
 //   最近 7 天有 3 次以上 RPE ≥ 8，或最近 7 天里程超過前三週平均的 1.3 倍（而且超過 20 公里）
+//   members.fatigue_notified 就是游標：額度不夠停下時，下個整點不會重複通知已經通知過的人
 async function fatigueCheck(env, now) {
-  if (taipei(now).getUTCHours() !== 21 || !(await onceOn(env, 'fatigue', tpDate(now)))) return 0;
-  const d7 = tpDate(new Date(now.getTime() - 6 * 864e5)), d28 = tpDate(new Date(now.getTime() - 27 * 864e5)), today0 = tpDate(now);
+  const today0 = tpDate(now);
+  if (!(await claim(env, 'fatigue', today0))) return { done: true, result: 0 };
+  const d7 = tpDate(new Date(now.getTime() - 6 * 864e5)), d28 = tpDate(new Date(now.getTime() - 27 * 864e5));
   const rows = (await env.DB.prepare(`SELECT member_id,
       SUM(CASE WHEN date >= ?1 AND rpe >= 8 THEN 1 ELSE 0 END) AS hard,
       SUM(CASE WHEN date >= ?1 THEN COALESCE(km, 0) ELSE 0 END) AS km7,
       SUM(CASE WHEN date < ?1 THEN COALESCE(km, 0) ELSE 0 END) AS km21
     FROM training_logs WHERE date BETWEEN ?2 AND ?3 GROUP BY member_id`).bind(d7, d28, today0).all()).results;
-  let n = 0;
+  // 7 天內通知過的人跳過（fatigue_notified 在同一句查詢帶出來）；所有人一次寫完，標記與完成標記同一個 batch
+  const last = new Map((await env.DB.prepare('SELECT id, fatigue_notified FROM members WHERE id IN (SELECT value FROM json_each(?)) AND fatigue_notified IS NOT NULL')
+    .bind(JSON.stringify(rows.map((r) => r.member_id))).all()).results.map((m) => [m.id, m.fatigue_notified]));
+  const notes = [];
   for (const r of rows) {
     const jump = r.km7 > 20 && r.km21 > 0 && r.km7 > (r.km21 / 3) * 1.3;
     if (!(r.hard >= 3 || jump)) continue;
-    const m = await env.DB.prepare('SELECT fatigue_notified FROM members WHERE id = ?').bind(r.member_id).first();
-    if (m?.fatigue_notified && Date.parse(today0) - Date.parse(m.fatigue_notified) < 7 * 864e5) continue;
+    const prev = last.get(r.member_id);
+    if (prev && Date.parse(today0) - Date.parse(prev) < 7 * 864e5) continue;
     // 鎖定畫面不放 RPE 與公里數
-    await notify(env, [r.member_id], 'training', { kind: 'log', title: '這週練得很兇，注意恢復',
+    notes.push({ member_id: r.member_id, title: '這週練得很兇，注意恢復',
       body: r.hard >= 3 ? `最近 7 天有 ${r.hard} 次自覺強度 8 以上，安排一兩天輕鬆跑或休息吧` : `最近 7 天跑了 ${Math.round(r.km7)} 公里，比前三週平均多了不少，小心受傷`, url: '/#/report',
       push: { body: '點開看本週訓練量與恢復建議' } });
-    await env.DB.prepare('UPDATE members SET fatigue_notified = ? WHERE id = ?').bind(today0, r.member_id).run();
-    n += 1;
   }
-  return n;
+  if (!fits(env, notifyCost(notes.length) + 2, 'fatigue')) return yieldTo(env, 'fatigue', 'fatigue', 0);
+  await notifyMany(env, 'training', notes, { kind: 'log', also: [
+    ...(notes.length ? [env.DB.prepare('UPDATE members SET fatigue_notified = ?1 WHERE id IN (SELECT value FROM json_each(?2))').bind(today0, JSON.stringify(notes.map((x) => x.member_id)))] : []),
+    doneStmt(env, 'fatigue', today0)] });
+  return { done: true, result: notes.length };
 }
 
-// 每天台北 09:00：把前一天（UTC）的稽核 HMAC 串成摘要鏈；有人刪掉或改掉紀錄，重算就對不上
+// 每天台北 09:00 起：把前一天（UTC）的稽核 HMAC 串成摘要鏈；有人刪掉或改掉紀錄，重算就對不上（audit_digests 本身防止重複）
+const utcYesterday = (now) => new Date(now.getTime() - 864e5).toISOString().slice(0, 10);
 async function auditDigest(env, now) {
-  if (!env.AUDIT_KEY || taipei(now).getUTCHours() !== 9) return null;
-  const day = new Date(now.getTime() - 864e5).toISOString().slice(0, 10);
-  if (await env.DB.prepare('SELECT 1 FROM audit_digests WHERE day = ?').bind(day).first()) return null;
+  if (!env.AUDIT_KEY) return { done: true, result: null };
+  const day = utcYesterday(now);
+  if (await env.DB.prepare('SELECT 1 FROM audit_digests WHERE day = ?').bind(day).first()) return { done: true, result: null };
   const prev = (await env.DB.prepare('SELECT digest FROM audit_digests WHERE day < ? ORDER BY day DESC LIMIT 1').bind(day).first())?.digest || '';
   const rows = (await env.DB.prepare('SELECT mac FROM audit_log WHERE at >= ? AND at < ? AND mac IS NOT NULL ORDER BY at, id').bind(day, `${day} 24`).all()).results;
   const digest = await hmac(env, `${prev}|${rows.map((x) => x.mac).join('|')}`);
   await env.DB.prepare('INSERT INTO audit_digests (day, rows, digest) VALUES (?, ?, ?)').bind(day, rows.length, digest).run();
-  return { day, rows: rows.length };
+  return { done: true, result: { day, rows: rows.length } };
 }
 
-// 開放報名推播：到了 signup_start、還沒推過的活動（每小時，最晚 59 分鐘）
+// 開放報名推播：到了 signup_start、還沒推過的活動（每小時，最晚 59 分鐘；open_notified_at 就是游標）
 async function signupOpen(env, now) {
   const evs = (await env.DB.prepare(`SELECT id, title, date, gather_time, place, kind, capacity, team_id, visibility, created_by, signup_start, signup_open, status, deadline
     FROM events WHERE open_notified_at IS NULL AND signup_start IS NOT NULL AND signup_start <= ? AND status = 'open' AND date >= ? LIMIT 50`)
@@ -4157,36 +4525,46 @@ async function signupOpen(env, now) {
   let sent = 0;
   for (const ev of evs) {
     // 看得到這場、還沒報名的人（邀請制＝受邀名單、分團活動＝該分團、其他＝全體）；
-    // 每個分支只綁自己用到的參數（D1 參數數量不符會直接丟錯），名單查好了才標記已推，查詢失敗下一輪會重試
+    // 每個分支只綁自己用到的參數（D1 參數數量不符會直接丟錯），名單查好了、額度也夠才標記已推，查詢失敗下一輪會重試
     const team = ev.visibility !== 'invite' && ev.team_id;
     const base = ev.visibility === 'invite' ? 'SELECT member_id AS id FROM event_invites WHERE event_id = ?1'
       : team ? "SELECT member_id AS id FROM team_members WHERE team_id = ?2 AND status = 'active'" : 'SELECT id FROM members';
     const q = env.DB.prepare(`${base} EXCEPT SELECT member_id FROM signups WHERE event_id = ?1 AND status != 'cancel'`);
+    if (ev.signup_open && !fits(env, 1, 'signupOpen')) return { done: false, result: sent };
     const ids = ev.signup_open ? (await (team ? q.bind(ev.id, ev.team_id) : q.bind(ev.id)).all()).results.map((r) => r.id).filter((x) => x && x !== ev.created_by) : [];
+    if (!fits(env, 1 + notifyCost(ids.length), 'signupOpen')) return { done: false, result: sent };
     const c = await env.DB.prepare("UPDATE events SET open_notified_at = datetime('now') WHERE id = ? AND open_notified_at IS NULL").bind(ev.id).run();
     if (!c.meta.changes || !ev.signup_open) continue;
     if (ids.length) await notify(env, ids, 'event', { kind: 'event', ref: `e:${ev.id}`, tag: `open-${ev.id}`, url: `/#/e/${ev.id}`,
       title: `開放報名：${ev.title}`, body: `${whenText(ev)}${ev.capacity ? `・名額 ${ev.capacity}` : ''}` });
     sent += ids.length;
   }
-  return sent;
+  return { done: true, result: sent };
 }
-// 待審核：20:00 提醒主辦；活動結束 15 分鐘後（或活動取消）待審核失效
+// 待審核：20:00 起提醒主辦（一天一次）；活動結束 15 分鐘後（或活動取消）待審核失效（signups.status 就是游標）
 async function signupReviews(env, now) {
-  let n = 0;
-  if (taipei(now).getUTCHours() === 20 && await onceOn(env, 'signup_review_digest', tpDate(now))) {
-    const evs = (await env.DB.prepare(`SELECT e.id, e.title, e.date, e.team_id, e.created_by, COUNT(*) AS n FROM signups s JOIN events e ON e.id = s.event_id
-      WHERE s.status = 'pending' AND e.status = 'open' AND e.date >= ? GROUP BY e.id LIMIT 100`).bind(tpDate(now)).all()).results;
-    for (const ev of evs) {
-      const to = await eventManagers(env, ev);
-      if (to.length) await notify(env, to, 'todo', { kind: 'event', ref: `sr:${ev.id}`, tag: `review-${ev.id}`, url: `/#/e/${ev.id}/stats?f=pending`,
-        title: `還有 ${ev.n} 筆待審核：${ev.title}`, body: `活動 ${tpDay(ev.date)}，請在活動開始前處理` });
-      n += to.length;
-    }
+  let n = 0, done = true;
+  if (taipei(now).getUTCHours() >= 20 && await claim(env, 'signup_review_digest', tpDate(now))) {
+    // 每場的主辦名單和待審核筆數一句查出來（規則同 eventManagers：建立者還有幹部身分、分團活動的團長與幹部、協會活動的理事長與行政人員）
+    const evs = (await env.DB.prepare(`WITH ev AS (SELECT e.id, e.title, e.date, e.team_id, e.created_by, COUNT(*) AS n FROM signups s JOIN events e ON e.id = s.event_id
+        WHERE s.status = 'pending' AND e.status = 'open' AND e.date >= ?1 GROUP BY e.id LIMIT 100)
+      SELECT ev.id, ev.title, ev.date, ev.n, (SELECT json_group_array(m.id) FROM members m WHERE
+          (m.id = ev.created_by AND m.role IN ('chair', 'director', 'staff', 'coach'))
+          OR (ev.team_id IS NULL AND m.role IN ('chair', 'staff'))
+          OR (ev.team_id IS NOT NULL AND EXISTS (SELECT 1 FROM team_members tm WHERE tm.member_id = m.id AND tm.team_id = ev.team_id AND tm.status = 'active' AND tm.role IN ('lead', 'officer')))) AS mgr
+      FROM ev`).bind(tpDate(now)).all()).results;
+    // 每場一則、沒有個別標記：所有人一次寫完，完成標記在同一個 batch（不會只送一半又重送）
+    const notes = evs.flatMap((ev) => parseQ(ev.mgr).map((mid) => ({ member_id: mid, ref: `sr:${ev.id}`, tag: `review-${ev.id}`, url: `/#/e/${ev.id}/stats?f=pending`,
+      title: `還有 ${ev.n} 筆待審核：${ev.title}`, body: `活動 ${tpDay(ev.date)}，請在活動開始前處理` })));
+    if (fits(env, notifyCost(notes.length) + 1, 'signupReviews')) {
+      await notifyMany(env, 'todo', notes, { kind: 'event', also: [doneStmt(env, 'signup_review_digest', tpDate(now))] });
+      n = notes.length;
+    } else { await yieldStmt(env, 'signup_review_digest').run(); done = false; }   // 留到下個整點，下面的逾期失效照樣做
   }
   // 逾期失效：結束時間（或集合＋120 分）＋15 分；取消的活動直接失效、不另外通知（已收到取消通知）
   const nowTp = tpNow(now.getTime());
-  const evs = (await env.DB.prepare(`SELECT e.id, e.title, e.date, e.gather_time, e.end_time, e.status FROM events e
+  const evs = (await env.DB.prepare(`SELECT e.id, e.title, e.date, e.gather_time, e.end_time, e.status,
+      (SELECT COUNT(*) FROM signups s WHERE s.event_id = e.id AND s.status = 'pending') AS pn FROM events e
     WHERE (e.date <= ? OR e.status = 'cancelled') AND EXISTS (SELECT 1 FROM signups s WHERE s.event_id = e.id AND s.status = 'pending') LIMIT 100`)
     .bind(tpDate(now)).all()).results;
   for (const ev of evs) {
@@ -4194,6 +4572,7 @@ async function signupReviews(env, now) {
     const endHm = /^\d{2}:\d{2}$/.test(ev.end_time || '') && ev.end_time > g ? ev.end_time : null;
     const until = endHm ? shiftDays(`${ev.date}T${endHm}`, 15 / 1440) : shiftDays(`${ev.date}T${g}`, 135 / 1440);
     if (ev.status !== 'cancelled' && nowTp < until) continue;
+    if (!fits(env, 3 + notifyCost(ev.pn), 'signupReviews')) return { done: false, result: n };
     // RETURNING 只拿真的被這一句改到的人；兩句之間被核准或撤回的不會收到「已失效」
     const ids = (await env.DB.prepare("UPDATE signups SET status = 'cancel', review_note = ?, reg_consent_at = NULL WHERE event_id = ? AND status = 'pending' RETURNING member_id")
       .bind('主辦未處理，申請已失效', ev.id).all()).results.map((r) => r.member_id);
@@ -4202,36 +4581,76 @@ async function signupReviews(env, now) {
     await audit(env, null, null, 'signup.expire', 'event', ev.id, `${ids.length} 筆`);
     await settleTodo(env, `sr:${ev.id}`);
   }
-  return n;
+  return { done, result: n };
 }
 
-// 附近即時影像：每天同步一次鏡頭清單（台北 04:00 水利署與水利處、05:00 公路局；錯過整點就在下一個整點補跑）
+// 候補遞補補做：刪除帳號、調高名額、核准時額度不夠，沒能當場遞補的場次（有名額空著而且有人候補），每小時每場最多跑 1 輪 promote()
+//   每場的句數固定（最多 PROMOTE_ROUND＋PROMOTE_TAIL），一個整點最多 5 場；排在其他工作後面，只用剩下的額度
+//   「遞補不了」的場次（候補的人都因為庫存不夠排不進去）：把當下的狀態（名額、商品設定、報名人數）記在 job_runs 的 promote_sweep，
+//   狀態沒變就不再試，隔天也重新試一次；不然這種場次每個整點都會白白花掉額度
+const SWEEP_SIG = `events.capacity || ':' || length(COALESCE(events.items, '')) || ':' ||
+  (SELECT COUNT(*) || '/' || COALESCE(SUM(length(x.items)), 0) FROM signups x WHERE x.event_id = events.id AND x.status IN ('in', 'wait')) || ':' || ?1`;
+const SWEEP_SQL = `FROM events WHERE status = 'open' AND date >= ?1 AND capacity > 0
+  AND EXISTS (SELECT 1 FROM signups w WHERE w.event_id = events.id AND w.status = 'wait')
+  AND (SELECT COUNT(*) FROM signups s WHERE s.event_id = events.id AND s.status = 'in') < capacity
+  AND NOT EXISTS (SELECT 1 FROM job_runs j WHERE j.job = 'promote_sweep' AND json_extract(j.last_run, '$."' || events.id || '"') = ${SWEEP_SIG})`;
+async function promoteSweep(env, now) {
+  const day = tpDate(now);
+  const evs = (await env.DB.prepare(`SELECT ${eventCols}, ${SWEEP_SIG} AS sweep_sig ${SWEEP_SQL} ORDER BY date LIMIT 5`).bind(day).all()).results;
+  let n = 0, done = true;
+  const stuck = {};
+  for (const ev of evs) {
+    if (!fits(env, PROMOTE_ROUND + PROMOTE_TAIL + 1, 'promoteSweep')) { done = false; break; }
+    const got = await promote(env, ev, { rounds: 1, reserve: 1 });
+    if (!got.length && !got.more) stuck[ev.id] = ev.sweep_sig;
+    n += got.length;
+  }
+  if (Object.keys(stuck).length) {
+    // 只留今天的紀錄（簽章最後是日期），加上這次遞補不了的場次
+    let old = {};
+    try { old = JSON.parse((env.probe?.jobs?.promote_sweep || [])[0] || '{}') || {}; } catch {}
+    const keep = Object.fromEntries(Object.entries(old).filter(([, v]) => String(v).endsWith(`:${day}`)));
+    await env.DB.prepare(`INSERT INTO job_runs (job, last_run) VALUES ('promote_sweep', ?1) ON CONFLICT(job) DO UPDATE SET last_run = excluded.last_run`)
+      .bind(JSON.stringify({ ...keep, ...stuck })).run();
+  }
+  return { done, result: n };
+}
+
+// 附近即時影像：每天同步一次鏡頭清單（台北 04:00 起水利署與水利處、05:00 起公路局；錯過整點就在下一個整點補跑）
 //   功能開關（features.cams）關閉時完全不跑；只同步開啟的來源；失敗或筆數驟減時不寫入、不停用，隔天再試
 //   每次排程最多同步一個來源（公路局 XML 約 1.7 MB，解析很吃 CPU，不跟別的來源擠在同一次執行）
-//   開始前先把來源標成「同步中」：如果執行被強制中斷（超過 CPU 時間上限，接不到例外），管理後台看得到
+//   開始前先佔用（job_runs 的 cams.<來源>）並把來源標成「同步中」：執行被強制中斷時，管理後台看得到，下個整點也會重跑（最多 3 次）
+//   offline 的來源（公路局）清單改用電腦上的同步工具 tools/cams-sync.mjs；排程只做每天一次的健康狀態重設（1 句）：
+//     連續抓不到畫面而被設成 down 的鏡頭隔天再給一次機會，不然短暫斷線的鏡頭會好幾個月都不出現
+const camsDue = (t, s) => Object.entries(Cams.SOURCES).filter(([k, S]) => S.list && s.cams_on.includes(k) && t.h >= S.hour && open(s, `cams.${k}`, t.date)).map(([k]) => k);
 async function syncCams(env, now) {
-  if (!Cams.featureOn((await env.DB.prepare("SELECT value FROM settings WHERE key = 'features'").first())?.value)) return null;
-  const h = taipei(now).getUTCHours();
-  const on = new Set((await env.DB.prepare('SELECT source FROM cam_sources WHERE enabled = 1').all()).results.map((r) => r.source));
-  for (const [k, S] of Object.entries(Cams.SOURCES)) {
-    if (!S.list || !on.has(k) || h < S.hour || !(await onceOn(env, `cams.${k}`, tpDate(now)))) continue;
+  const s = env.probe || await cronProbe(env, now);
+  if (!Cams.featureOn(s.features)) return { done: true, result: null };
+  const day = tpDate(now), out = {};
+  for (const k of camsDue(tparts(now), s)) {
+    if (!fits(env, 9, 'cams')) return { done: false, result: 'deferred' };
+    if (!(await claim(env, `cams.${k}`, day))) continue;
+    if (Cams.SOURCES[k].offline) { await env.DB.batch([env.DB.prepare(Cams.HEALTH_RESET).bind(k), doneStmt(env, `cams.${k}`, day)]); out[k] = 'reset'; continue; }
     let r;
     try { r = await Cams.syncSource(env, k); } catch (e) {
       const msg = String(e?.message || e).slice(0, 120);
       await Cams.markFailed(env, k, msg);
       r = { error: msg };
     }
-    return { [k]: r.error ? `error: ${r.error}` : r.count };
+    // 同步失敗（來源連不上、筆數驟減）也算今天做過了，隔天再試（管理後台看得到錯誤）
+    await doneStmt(env, `cams.${k}`, day).run();
+    return { done: true, result: { ...out, [k]: r.error ? `error: ${r.error}` : r.count } };
   }
-  return null;
+  return { done: true, result: Object.keys(out).length ? out : null };
 }
 
-// 跑者休息站：台北 01、02、06 點（避開 03:00 備份與清理、04–05 點攝影機）各跑一個到期的來源
-//   每天、每週或每月一次（job_runs 以週期為 key）；失敗的來源隔天重試；分頁來源（臺灣騎跡）一輪沒跑完就每次排程續跑下一頁
-//   功能開關（features.rest）關閉時完全不跑；開始前先標「同步中」，被強制中斷時管理後台看得到
+// 跑者休息站：台北 01、02、06 點（避開 04–05 點攝影機）各跑一個到期的來源（排程工作 rest，見 JOBS）
+//   每天、每週或每月一次（job_runs 的 rest.<來源> 以週期為 key）；失敗的來源隔天重試；分頁來源（臺灣騎跡）一輪沒跑完就每次排程續跑下一頁
+//   功能開關（features.rest）關閉時完全不跑；有沒有到期的來源由每小時那一句 CRON_PROBE（rest_on 與 job_runs）判斷，不另外查
 //   只跑 Worker 可以同步的來源（SOURCES 沒有標 local）；標 local 的只由維護工具（tools/rest-sync.mjs）同步
-//   免費方案每次執行 50 個子請求（D1 指令也算）：一次排程最多 1＋1＋（1＋3＋1）＋1＝8 個 D1 指令，失敗再加 1 個；不在 01、02、06 點時一個都不查
-//   先用「retry:今天」佔住這一期、成功才改成這一期：執行到一半被平台強制中斷（超過 10 ms CPU 或 50 個子請求）時留下的是 retry，隔天會再跑
+//   一次最多：佔用 1＋同步（1＋對外 2＋寫入 3＋rev 1）＋完成 1，失敗再加 1，約 10 個子請求（JOBS.rest.cost 12）
+//   先用「retry:今天」佔住這一期、成功才改成這一期：執行到一半被平台強制中斷（超過 CPU 或 50 個子請求）時留下的是 retry，隔天會再跑；
+//   管理後台把 retry 顯示成「沒有完成，隔天重試」
 const periodOf = (every, now) => {
   const d = tpDate(now);
   if (every === 'month') return d.slice(0, 7);
@@ -4239,30 +4658,31 @@ const periodOf = (every, now) => {
   return d;
 };
 const REST_WORKER = Object.keys(Rest.SOURCES).filter((k) => !Rest.SOURCES[k].manual && !Rest.SOURCES[k].local);
-async function syncRest(env, now) {
-  const h = taipei(now).getUTCHours();
-  if (!Rest.ALLOWED_HOURS.includes(h) || !REST_WORKER.length) return null;
-  // 功能開關、開啟中的來源、上次執行的週期：一個指令查完
-  const rows = (await env.DB.prepare(`SELECT s.source, s.cursor, j.last_run, (SELECT value FROM settings WHERE key = 'features') AS features
-    FROM rest_sources s LEFT JOIN job_runs j ON j.job = 'rest.' || s.source WHERE s.enabled = 1`).all()).results;
-  if (!rows.length || !Rest.featureOn(rows[0].features)) return null;
-  const srcs = new Map(rows.map((r) => [r.source, r]));
-  const retry = `retry:${tpDate(now)}`;
+// 這個整點要跑哪個來源：到期的來源優先，續跑的分頁來源排在後面；s 是 CRON_PROBE 的結果
+function restPick(s, now) {
+  const on = s.rest_on || {}, h = taipei(now).getUTCHours(), retry = `retry:${tpDate(now)}`;
   let pick = null;
   for (const k of REST_WORKER) {
-    const S = Rest.SOURCES[k], src = srcs.get(k);
-    if (!src) continue;
-    if (S.pages && src.cursor != null) { pick ??= { k, cont: true }; continue; }   // 續跑的分頁來源排在到期的來源後面
-    if (h < S.hour || src.last_run === periodOf(S.every, now) || src.last_run === retry) continue;
-    pick = { k, cont: false };
-    break;
+    if (!Object.hasOwn(on, k)) continue;
+    const S = Rest.SOURCES[k], last = (s.jobs[`rest.${k}`] || [])[0];
+    if (S.pages && on[k]) { pick ??= { k, cont: true }; continue; }
+    if (h < S.hour || last === periodOf(S.every, now) || last === retry) continue;
+    return { k, cont: false };
   }
-  if (!pick) return null;
-  const { k } = pick;
+  return pick;
+}
+const restDue = (t, s) => Rest.ALLOWED_HOURS.includes(t.h) && REST_WORKER.length > 0 && Rest.featureOn(s.features) && !!restPick(s, t.at);
+async function syncRest(env, now) {
+  if (!Rest.ALLOWED_HOURS.includes(taipei(now).getUTCHours()) || !REST_WORKER.length) return { done: true, result: null };
+  const s = env.probe || await cronProbe(env, now);
+  if (!Rest.featureOn(s.features)) return { done: true, result: null };
+  const pick = restPick(s, now);
+  if (!pick) return { done: true, result: null };
+  const { k } = pick, retry = `retry:${tpDate(now)}`;
   // 今天只跑一次（同時兩個排程時只有一個拿得到）：寫入與判斷同一個指令；先寫 retry，成功才標成這一期跑完
   if (!pick.cont && !(await env.DB.prepare(`INSERT INTO job_runs (job, last_run) VALUES (?, ?)
-    ON CONFLICT(job) DO UPDATE SET last_run = excluded.last_run WHERE job_runs.last_run IS NOT excluded.last_run RETURNING job`).bind(`rest.${k}`, retry).first())) return null;
-  if (Rest.mockKilled(env, k)) return { [k]: 'killed' };   // 測試：模擬在這之後被平台強制中斷
+    ON CONFLICT(job) DO UPDATE SET last_run = excluded.last_run WHERE job_runs.last_run IS NOT excluded.last_run RETURNING job`).bind(`rest.${k}`, retry).first())) return { done: true, result: null };
+  if (Rest.mockKilled(env, k)) return { done: true, result: { [k]: 'killed' } };   // 測試：模擬在這之後被平台強制中斷
   let r;
   try { r = await Rest.syncSource(env, k); } catch (e) {
     const msg = String(e?.message || e).slice(0, 120);
@@ -4271,77 +4691,474 @@ async function syncRest(env, now) {
   }
   // 成功：這一期跑完；失敗：留著 retry（這一期還要再試，但今天不再試，避免每小時都打同一個壞掉的來源）；分頁來源的 cursor 不動，下次從同一頁續跑
   if (!r.error && !pick.cont) await env.DB.prepare('UPDATE job_runs SET last_run = ? WHERE job = ?').bind(periodOf(Rest.SOURCES[k].every, now), `rest.${k}`).run();
-  return { [k]: r.error ? `error: ${r.error}` : r.pages ? `${r.count}（${r.page}/${r.pages}）` : r.count };
+  return { done: true, result: { [k]: r.error ? `error: ${r.error}` : r.pages ? `${r.count}（${r.page}/${r.pages}）` : r.count } };
 }
 
-async function scheduled(env, now = new Date()) {
-  const res = {};
-  for (const [k, fn] of [['events', remindEvents], ['weather', weatherAlerts], ['followups', runFollowups], ['renewals', remindRenewals], ['monthSummary', monthSummary],
-    ['review', quarterlyReview], ['retention', retention], ['fatigue', fatigueCheck], ['auditDigest', auditDigest], ['backup', dailyBackup],
-    ['signupOpen', signupOpen], ['signupReviews', signupReviews], ['cams', syncCams], ['rest', syncRest]]) {
-    try { res[k] = await fn(env, now); } catch (e) { console.error('cron', k, e); res[k] = `error: ${e.message}`; }
+// 推播佇列：用這次執行剩下的額度送；JOB_DISPATCH=self 時還有剩就開下一段自己的執行（Jobs.drainPush，最多 plan.pushDepth 段）
+async function pushJob(env, now, ctx) {
+  const r = await drainAll(env);
+  if (r.more && env.JOB_DISPATCH === 'self' && ctx?.exports?.Jobs) { env.budget.take('rpc'); ctx.waitUntil(ctx.exports.Jobs.drainPush({ depth: 1 }).catch((e) => console.error('drainPush', e))); }
+  return { done: !r.more, result: r.sent };
+}
+
+// 一次執行結束：寫 log（用量偏高、因額度停下、超過計數），停下或超過時另外記一列 budget_log（佔 1 個預留額度）
+async function finishBudget(e, b) {
+  logBudget(b);
+  if (!b.stopped.length && !b.over) return;
+  const name = b.kind === 'request' ? b.name : `${b.name}${b.stopped.length ? `:${b.stopped[0].split(':')[0]}` : ''}`;
+  try {
+    await e.DB.prepare(`INSERT INTO budget_log (day, name, kind, n, stopped, over, max_sub, last_at) VALUES (date('now'), ?1, ?2, 1, ?3, ?4, ?5, datetime('now'))
+      ON CONFLICT(day, name) DO UPDATE SET n = n + 1, stopped = stopped + excluded.stopped, over = over + excluded.over, max_sub = MAX(max_sub, excluded.max_sub), last_at = excluded.last_at`)
+      .bind(name.slice(0, 80), b.kind, b.stopped.length ? 1 : 0, b.over ? 1 : 0, b.sub).run();
+  } catch (err) { console.error('budget_log', err?.message || err); }
+}
+
+// ---- 排程分派 ----
+const hhmm = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+const tparts = (now) => {
+  const t = taipei(now);
+  return { at: now, h: t.getUTCHours(), d: t.getUTCDate(), m: t.getUTCMonth(), date: tpDate(now), prev: prevMonthOf(t), q: quarterOf(t) };
+};
+// 每小時一句：哪些工作有事要做（job_runs 的狀態、功能開關、各工作的資料上有沒有待處理的列）
+const CRON_PROBE = `SELECT
+  (SELECT json_group_object(job, json_array(last_run, claim_key, claim_at, attempts, last_error, cursor IS NOT NULL)) FROM job_runs) AS jobs,
+  (SELECT value FROM settings WHERE key = 'features') AS features,
+  (SELECT json_group_array(source) FROM cam_sources WHERE enabled = 1) AS cams_on,
+  (SELECT json_group_object(source, cursor IS NOT NULL) FROM rest_sources WHERE enabled = 1) AS rest_on,
+  EXISTS (SELECT 1 FROM events WHERE date = ?1 AND status = 'open' AND kind != 'survey' AND gather_time > '' AND remind_hour_at IS NULL AND gather_time > ?6 AND gather_time <= ?2) AS ev_hour,
+  EXISTS (SELECT 1 FROM events WHERE date = ?3 AND status = 'open' AND kind != 'survey' AND remind_day_at IS NULL) AS ev_day,
+  EXISTS (SELECT 1 FROM events WHERE date = ?3 AND status = 'open' AND kind != 'survey' AND spot_id IS NOT NULL AND wx_alert_at IS NULL) AS ev_wx,
+  EXISTS (SELECT 1 FROM events WHERE date = ?1 AND status = 'open' AND kind IN ('track','core','long','race','other') AND followup_at IS NULL AND gather_time > '') AS fu,
+  EXISTS (SELECT 1 FROM members WHERE membership = 'active' AND paid_until BETWEEN ?1 AND ?4
+          AND renew_notice IS NOT (paid_until || ':' || CASE WHEN julianday(paid_until) - julianday(?1) <= 0 THEN 0
+                                   WHEN julianday(paid_until) - julianday(?1) <= 7 THEN 7 ELSE 30 END)) AS rn,
+  EXISTS (SELECT 1 FROM events WHERE open_notified_at IS NULL AND signup_start IS NOT NULL AND signup_start <= ?5 AND status = 'open' AND date >= ?1) AS so,
+  EXISTS (SELECT 1 FROM signups WHERE status = 'pending') AS sr,
+  EXISTS (SELECT 1 FROM signups s JOIN events e ON e.id = s.event_id WHERE s.status = 'pending' AND (e.date <= ?1 OR e.status = 'cancelled')) AS sr_exp,
+  EXISTS (SELECT 1 FROM audit_digests WHERE day = ?7) AS ad,
+  EXISTS (SELECT 1 ${SWEEP_SQL}) AS ps,
+  EXISTS (SELECT 1 FROM push_queue WHERE lease_until IS NULL OR lease_until < datetime('now')) AS pq`;
+async function cronProbe(env, now) {
+  const t = taipei(now), nowMin = t.getUTCHours() * 60 + t.getUTCMinutes(), today0 = tpDate(now);
+  // ev_hour：集合時間落在 (現在, 現在 + 120 分]、還沒提醒過（延後的整點也還能補送，見 remindEvents）
+  const r = await env.DB.prepare(CRON_PROBE).bind(today0, hhmm(Math.min(nowMin + 120, 1439)), tpDate(new Date(now.getTime() + 864e5)),
+    tpDate(new Date(now.getTime() + 30 * 864e5)), tpNow(now.getTime()), hhmm(nowMin), utcYesterday(now)).first();
+  const parse = (v, d) => { try { return JSON.parse(v || '') ?? d; } catch { return d; } };
+  return { ...r, jobs: parse(r.jobs, {}), cams_on: parse(r.cams_on, []), rest_on: parse(r.rest_on, {}) };
+}
+// 這個 key 還有沒有事要做：還沒完成，也沒有別人正在跑（15 分鐘內），也還沒放棄（失敗 3 次）
+//   claim_at 是資料庫的 datetime('now')（真實時間），所以跟 Date.now() 比
+function open(s, job, key) {
+  const [last, ck, at, attempts] = s.jobs[job] || [];
+  if (last === key) return false;
+  if (ck !== key) return true;
+  if (attempts >= 3) return false;
+  return !at || Date.parse(`${at.replace(' ', 'T')}Z`) < Date.now() - 15 * 60e3;
+}
+// cost＝這項工作在「有事可做」時最多用多少子請求；min＝開始至少要有多少（每處理一項之前工作自己會再確認）；
+// own＝一定要開自己的執行（每日備份的 cost 是開始一段至少要剩多少，一段會用掉剩下的額度）；hops＝self 模式一個整點可以接著做好幾段；
+// idle＝沒事做時 /api/dev/cron 回傳的值（維持舊的回傳格式）
+// 每日備份有事要做：今天的還沒做（03:00 起），或上一份（每日或手動）分段還沒做完（不限時段，接著做）
+const bkOpen = (s, job) => { const [, ck, , attempts, , cursor] = s.jobs[job] || []; return !!(cursor && ck && attempts < 3 && open(s, job, ck)); };
+const JOBS = {
+  // 集合前提醒有時效，排在每日備份前面（便宜，而且延到下個整點就晚了）；備份本來就可以延到下個整點
+  events:        { prio: 5, cost: 12, min: 4, idle: 0, due: (t, s) => !!s.ev_hour || (t.h >= 20 && !!s.ev_day), run: remindEvents },
+  backup:        { prio: 10, own: true, cost: 20, idle: null, hops: true, due: (t, s, env) => !!backupStore(env) && !!env.BACKUP_KEY
+    && ((t.h >= 3 && open(s, 'backup', t.date)) || bkOpen(s, 'backup') || bkOpen(s, 'backup_manual')), run: dailyBackup },
+  signupOpen:    { prio: 21, cost: 12, min: 4, idle: 0, due: (t, s) => !!s.so, run: signupOpen },
+  followups:     { prio: 22, cost: 12, min: 4, idle: 0, due: (t, s) => !!s.fu, run: runFollowups },
+  weather:       { prio: 23, cost: 20, min: 8, idle: 0, due: (t, s) => t.h >= 20 && !!s.ev_wx, run: weatherAlerts },
+  signupReviews: { prio: 24, cost: 12, min: 4, idle: 0, due: (t, s) => !!s.sr_exp || (t.h >= 20 && !!s.sr && open(s, 'signup_review_digest', t.date)), run: signupReviews },
+  renewals:      { prio: 30, cost: 10, min: 4, idle: 0, due: (t, s) => !!s.rn, run: remindRenewals },
+  retention:     { prio: 40, cost: 20, idle: null, due: (t, s) => t.h >= 3 && open(s, 'retention', t.date), run: retention },
+  auditDigest:   { prio: 41, cost: 6, idle: null, due: (t, s, env) => t.h >= 9 && !!env.AUDIT_KEY && !s.ad, run: auditDigest },
+  monthSummary:  { prio: 42, cost: 12, idle: 0, due: (t, s) => t.d === 1 && t.h >= 9 && open(s, 'month_summary', t.prev), run: monthSummary },
+  review:        { prio: 43, cost: 10, idle: 0, due: (t, s) => t.d === 1 && t.m % 3 === 0 && t.h >= 9 && open(s, 'quarterly_review', t.q), run: quarterlyReview },
+  fatigue:       { prio: 44, cost: 12, min: 6, idle: 0, due: (t, s) => t.h >= 21 && open(s, 'fatigue', t.date), run: fatigueCheck },
+  cams:          { prio: 50, cost: 9, idle: null, due: (t, s) => Cams.featureOn(s.features) && t.h >= 4 && camsDue(t, s).length > 0, run: syncCams },
+  // 跑者休息站：01、02、06 點各一個到期的來源（同步一個來源不能中途停，開始前要有整份額度）
+  rest:          { prio: 55, cost: 12, idle: null, due: restDue, run: syncRest },
+  // 候補遞補補做：排在其他工作後面，只用剩下的額度（每場固定句數，最多 5 場）
+  promoteSweep:  { prio: 80, cost: 40, min: PROMOTE_ROUND + PROMOTE_TAIL + 1, idle: 0, due: (t, s) => !!s.ps, run: promoteSweep },
+  push:          { prio: 90, cost: 15, min: 8, idle: 0, due: (t, s, env) => !!s.pq || !!env.wantDrain, run: pushJob },
+};
+const JOB_ORDER = Object.keys(JOBS).sort((a, b) => JOBS[a].prio - JOBS[b].prio);
+
+// 跑一項工作：例外不往外丟，記到 job_runs.last_error；佔用後連續失敗 3 次寫稽核 cron.gave_up（管理後台會用紅字顯示）
+//   佔用之前就出錯（不用佔用的工作，例如活動提醒、推播）：記在工作名稱那一列，連續失敗幾次就是 attempts，下次成功時清掉（見 cronTick）
+async function runJob(e, name, now, ctx) {
+  e.claimed = null; e.jobName = name;
+  try {
+    if (e.failBefore === name) throw new Error('測試：佔用之前失敗');   // /api/dev/cron?failpre=，只有 DEV_LOGIN=1 的本機
+    return await JOBS[name].run(e, now, ctx);
+  } catch (err) {
+    const msg = String(err?.message || err).slice(0, 200), c = e.claimed;
+    console.error('cron', name, err);
+    try {
+      const stmts = [c ? failStmt(e, c.job, msg)
+        : e.DB.prepare(`INSERT INTO job_runs (job, last_run, last_error, attempts) VALUES (?1, '', ?2, 1)
+          ON CONFLICT(job) DO UPDATE SET last_error = excluded.last_error, attempts = CASE WHEN job_runs.claim_key IS NULL THEN job_runs.attempts + 1 ELSE job_runs.attempts END`).bind(name, msg)];
+      if (c && c.attempts >= 3) stmts.push(await auditStmt(e, null, null, 'cron.gave_up', 'system', c.job, `${c.job}｜${c.key}｜${msg}`));
+      await e.DB.batch(stmts);
+    } catch (x) { console.error('cron fail', name, x); }
+    return { done: false, error: true, result: `error: ${msg}` };
+  } finally { e.claimed = null; e.jobName = null; }
+}
+// 被平台終止的工作（CPU 或子請求超過上限）不會跑到上面的 catch：佔用還在、沒有錯誤訊息，attempts 已經加 1。
+//   rows：[job, claim_key, attempts]。補記錯誤並釋放佔用（下個整點重跑）；已經是第 3 次就寫 cron.gave_up（管理後台紅字）
+async function reapStmts(e, rows, msg) {
+  const out = [];
+  for (const [job, key, attempts] of rows) {
+    out.push(failStmt(e, job, msg));
+    if (attempts >= 3) out.push(await auditStmt(e, null, null, 'cron.gave_up', 'system', job, `${job}｜${key}｜${msg}`));
   }
-  return res;
+  return out;
+}
+// 每小時開頭：佔用超過 15 分鐘、沒有錯誤訊息的（整次執行被終止，例如 inline 模式的工作），補記一次
+const staleClaims = (s) => Object.entries(s.jobs).filter(([, [, ck, at, , err]]) => ck && at && !err && Date.parse(`${at.replace(' ', 'T')}Z`) < Date.now() - 15 * 60e3)
+  .map(([job, [, ck, , attempts]]) => [job, ck, attempts]);
+const snap = (b) => ({ d1: b.d1, kv: b.kv, fetch: b.fetch, rpc: b.rpc, sub: b.sub });
+const delta = (a, b) => ({ kind: 'inline', d1: b.d1 - a.d1, kv: b.kv - a.kv, fetch: b.fetch - a.fetch, rpc: b.rpc - a.rpc, sub: b.sub - a.sub });
+
+// 每小時：1 句看哪些工作有事要做 → 依優先順序執行
+//   own 的工作（每日備份）用 ctx.exports.Jobs 開自己的執行；子執行回報的用量，父執行保守地加回自己的預算
+//     （假設呼叫自己和父執行共用額度，就算真的共用也不會超過）；沒有 ctx.exports 就在父執行裡直接跑
+//   JOB_DISPATCH=self：每項工作都開自己的執行（staging 確認呼叫自己會拿到新的額度之後才開，只改設定）
+//   inline（預設）：在父執行裡直接跑，開始前先確認額度，不夠就留到下個整點
+async function cronTick(e, now, ctx, opt = {}) {
+  const t = tparts(now), s = await cronProbe(e, now);
+  e.probe = s;
+  const res = {}, jobs = {};
+  const self = opt.dispatch === 'self' || e.JOB_DISPATCH === 'self';
+  const exp = ctx?.exports?.Jobs;
+  // 上一次被終止、沒留下紀錄的工作：先補記（會改到 job_runs，所以之後的判斷用更新過的狀態）
+  const stale = staleClaims(s);
+  if (stale.length && e.budget.room(stale.length * 2 + 4)) {
+    try {
+      await e.DB.batch(await reapStmts(e, stale, '中途被終止（CPU 或子請求超過上限），沒有留下錯誤訊息'));
+      for (const [job] of stale) { const j = s.jobs[job]; j[2] = null; j[4] = '中途被終止'; }
+    } catch (err) { console.error('cron reap', err); }
+  }
+  for (const name of JOB_ORDER) {
+    const J = JOBS[name];
+    res[name] = J.idle;
+    if (opt.skip?.has(name)) continue;
+    let due = false;
+    try { due = J.due(t, s, e); } catch (err) { console.error('cron due', name, err); }
+    if (!due) continue;
+    if ((J.own || self) && exp) {
+      // 每日備份是分段做的：self 模式（每次呼叫自己都有自己的額度）一個整點可以接著做好幾段；inline 一個整點一段
+      const hops = J.hops && self ? planOf(e).backupHops : 1;
+      for (let hop = 0; hop < hops; hop++) {
+        if (!self && !e.budget.room(J.cost + 1)) { e.budget.stop(name); res[name] = 'deferred'; break; }
+        try {
+          e.budget.take('rpc');
+          const r = await exp.run({ job: name, at: now.getTime(), inherit: self ? 0 : e.budget.sub, ...(opt.fail ? { fail: opt.fail } : {}), ...(opt.seg ? { seg: opt.seg } : {}), ...(opt.failpre ? { failpre: opt.failpre } : {}) });
+          if (!self) e.budget.absorb(r.used);
+          res[name] = r.result ?? (r.done ? J.idle : 'deferred');
+          jobs[hop ? `${name}#${hop + 1}` : name] = r.budget;
+          if (r.done || r.error) break;
+        } catch (err) {
+          // 子執行被平台終止（CPU、子請求超過上限）：子執行的 catch 不會跑，這裡補記錯誤原文；第 3 次寫 cron.gave_up
+          const msg = String(err?.message || err).slice(0, 120);
+          console.error('cron rpc', name, err);
+          res[name] = `error: ${msg}`;
+          try {
+            if (e.budget.room(2)) {
+              const rows = (await e.DB.prepare("SELECT job, claim_key, attempts FROM job_runs WHERE claim_key IS NOT NULL AND claim_at >= datetime('now', '-15 minutes') AND last_error IS NULL").all()).results;
+              if (rows.length && e.budget.room(rows.length * 2)) await e.DB.batch(await reapStmts(e, rows.map((r) => [r.job, r.claim_key, r.attempts]), `中途被終止：${msg}`));
+            }
+          } catch (x) { console.error('cron reap', x); }
+          break;
+        }
+      }
+      continue;
+    }
+    if (!e.budget.room(J.min ?? J.cost)) { e.budget.stop(name); res[name] = 'deferred'; continue; }
+    const before = snap(e.budget);
+    const r = await runJob(e, name, now, ctx);
+    res[name] = r.result ?? (r.done ? J.idle : 'deferred');
+    jobs[name] = delta(before, e.budget);
+    // 之前在佔用前就失敗過（記在工作名稱那一列）：這次沒有出錯就清掉
+    if (!r.error && s.jobs[name]?.[4] && !s.jobs[name][1] && e.budget.room(1)) {
+      try { await e.DB.prepare('UPDATE job_runs SET last_error = NULL, attempts = 0 WHERE job = ?1 AND claim_key IS NULL').bind(name).run(); } catch {}
+    }
+  }
+  return { res, jobs };
+}
+
+// 排程工作的獨立執行入口（只給內部呼叫）
+//   資安（ISO 27001 A.8.3／A.8.20）：具名的 WorkerEntrypoint 從網際網路連不到，HTTP 只會進到 default.fetch；
+//   只有同一支 Worker 的 ctx.exports（或同帳號裡有人另外設定 service binding）叫得到。
+//   參數白名單：job 必須在 JOBS 裡、時間只能在現在前後 3 小時內（DEV_LOGIN=1 的本機測試可以模擬其他時間）；回傳值只有筆數與用量，不含個資與 secrets
+export class Jobs extends WorkerEntrypoint {
+  async run({ job, at, inherit = 0, fail, seg, failpre } = {}) {
+    const ok = typeof job === 'string' && Object.hasOwn(JOBS, job);
+    const t = Number(at);
+    if (!ok || !Number.isFinite(t) || (Math.abs(Date.now() - t) > 3 * 3600e3 && this.env.DEV_LOGIN !== '1')) throw new Error('bad job');
+    const b = new Budget(this.env, { kind: 'job', name: job, inherit: this.env.JOB_DISPATCH === 'self' ? 0 : inherit });
+    const e = invocationEnv(this.env, this.ctx, b);
+    if (this.env.DEV_LOGIN === '1') {
+      if (fail) e.failAfterClaim = String(fail);
+      if (failpre) e.failBefore = String(failpre);
+      if (Number(seg) > 0) e.backupSeg = Number(seg);
+    }
+    try {
+      const r = await runJob(e, job, new Date(t), this.ctx);
+      await settled(e);   // defer 裡的工作也算進這次的用量
+      // 這項工作排進佇列的推播，用剩下的額度先送一段（每日備份的 CPU 已經用掉大半，不在同一次執行裡送）
+      if (e.wantDrain && job !== 'push' && job !== 'backup') { await drain(e, { max: planOf(e).pushPerHop }).catch((x) => console.error('drain', x)); await settled(e); }
+      return { done: !!r.done, error: !!r.error, result: r.result ?? null, used: b.sub - b.inherit, budget: b.summary() };
+    } finally { await finishBudget(e, b); }
+  }
+  // staging 驗證用（POST /api/admin/selftest，只有 SELFTEST=1）：這一層照官方文件會超過免費方案的上限（40＋60 句），
+  //   看平台實際上是擋下還是放行，再呼叫下一層（最多 3 層）。直接用原本的 DB 綁定，不經過計數
+  async selftest({ depth = 1 } = {}) {
+    const d = Number(depth);
+    if (this.env.SELFTEST !== '1' || !Number.isInteger(d) || d < 1 || d > 3) throw new Error('bad selftest');
+    const out = { layer: d, seq: null, batch: null, cpuMs: 0, error: null };
+    try {
+      for (let i = 0; i < 40; i++) await this.env.DB.prepare('SELECT 1').first();
+      out.seq = 'ok';
+      await this.env.DB.batch(Array.from({ length: 60 }, () => this.env.DB.prepare('SELECT 1')));
+      out.batch = 'ok';
+      const t0 = Date.now(); let x = 0;
+      while (Date.now() - t0 < 8) x = (x * 31 + 7) % 1000003;
+      out.cpuMs = Date.now() - t0;
+    } catch (e) { out.error = String(e?.message || e).slice(0, 300); }
+    let next = [];
+    if (d < 3 && this.ctx.exports?.Jobs) {
+      try { next = await this.ctx.exports.Jobs.selftest({ depth: d + 1 }); } catch (e) { next = [{ layer: d + 1, error: String(e?.message || e).slice(0, 300) }]; }
+    }
+    return [out, ...next];
+  }
+  // 推播佇列的下一段（只在 JOB_DISPATCH=self 時由 pushJob 呼叫）：depth 必須在 1–plan.pushDepth 之間
+  async drainPush({ depth = 0 } = {}) {
+    const d = Number(depth), plan = planOf(this.env);
+    if (!Number.isInteger(d) || d < 1 || d > plan.pushDepth) throw new Error('bad depth');
+    const b = new Budget(this.env, { kind: 'push', name: `drain#${d}` }), e = invocationEnv(this.env, this.ctx, b);
+    try {
+      const r = await drainAll(e);
+      if (r.more && d < plan.pushDepth && this.env.JOB_DISPATCH === 'self' && this.ctx.exports?.Jobs) {
+        b.take('rpc');
+        this.ctx.waitUntil(this.ctx.exports.Jobs.drainPush({ depth: d + 1 }).catch((x) => console.error('drainPush', x)));
+      }
+      await settled(e);
+      return { sent: r.sent, more: r.more };
+    } finally { await finishBudget(e, b); }
+  }
+}
+
+// 路由樣板（給執行額度紀錄用）：路徑裡像 id 的片段（6 個字元以上而且含數字或底線）一律換成 :id，紀錄裡不會出現個資或 token
+//   （rid() 產生的 id 是 16 個小寫英數字，全是字母的機率很小，也一併當成 id）
+const routeName = (path) => path.split('/').map((p) => (p.length >= 6 && (/[\d_A-Z]/.test(p) || /^[a-z]{16,}$/.test(p)) ? ':id' : p)).join('/').slice(0, 80);
+const LOCAL = ['localhost', '127.0.0.1'];
+
+// 開發用路由（只有 .dev.vars 設 DEV_LOGIN=1 而且在 localhost 才有效，正式環境不會有這個設定）
+async function devRoute(req, env, ctx, url, path) {
+  const q = url.searchParams;
+  // 手動觸發排程，可指定時間 ?at=2026-10-03T12:00:00Z；&dispatch=self 強制走 ctx.exports.Jobs；&fail=backup 備份在佔用之後丟錯；&skip=backup 略過某些工作
+  if (path === '/api/dev/cron') {
+    const b = new Budget(env, { kind: 'cron', name: 'dev' }), e = invocationEnv(env, ctx, b);
+    // &seg=2048：每日備份一段只做 2048 個字元（測試分段）；&failpre=auditDigest：那項工作在佔用之前丟錯
+    const opt = { dispatch: q.get('dispatch') === 'self' ? 'self' : null, fail: str(q.get('fail'), 20) || null, skip: new Set((q.get('skip') || '').split(',').filter(Boolean)),
+      seg: Number(q.get('seg')) > 0 ? Number(q.get('seg')) : null, failpre: str(q.get('failpre'), 20) || null };
+    if (opt.fail) e.failAfterClaim = opt.fail;
+    if (opt.failpre) e.failBefore = opt.failpre;
+    if (opt.seg) e.backupSeg = opt.seg;
+    const { res, jobs } = await cronTick(e, q.get('at') ? new Date(q.get('at')) : new Date(), ctx, opt);
+    await settled(e);
+    const summary = b.summary();
+    await finishBudget(e, b);
+    return json({ ...res, _budget: { root: summary, jobs } });
+  }
+  // 嚴格模式的違規紀錄（BUDGET_STRICT=1）：?clear=1 清空
+  if (path === '/api/dev/budget-violations') {
+    const list = strictViolations.slice();
+    if (q.get('clear') === '1') strictViolations.length = 0;
+    return json({ list });
+  }
+  // 排程工作的狀態（測試重跑與放棄用）
+  //   ?stale=backup&key=2028-04-02&attempts=3：模擬「被平台終止」（佔用 20 分鐘前、沒有錯誤訊息）
+  if (path === '/api/dev/jobs') {
+    if (q.get('stale')) await env.DB.prepare(`INSERT INTO job_runs (job, last_run, claim_key, claim_at, attempts) VALUES (?1, '', ?2, datetime('now', '-20 minutes'), ?3)
+      ON CONFLICT(job) DO UPDATE SET claim_key = ?2, claim_at = datetime('now', '-20 minutes'), attempts = ?3, last_error = NULL`)
+      .bind(str(q.get('stale'), 40), str(q.get('key'), 40), Number(q.get('attempts')) || 1).run();
+    return json({ jobs: (await env.DB.prepare('SELECT * FROM job_runs ORDER BY job').all()).results });
+  }
+  // 備份能不能解回來：在 Worker 裡解密、解壓縮指定（或最新）的備份，回傳每張表的筆數，和現在的筆數對照
+  if (path === '/api/dev/backup-check') {
+    const store = backupStore(env);
+    if (!store || !env.BACKUP_KEY) return fail(400, '備份還沒設定');
+    const list = await store.list(), label = q.get('label');
+    const o = label ? list.find((x) => x.key === `daily/${label}.bin`) : list.sort((a, b) => String(b.at).localeCompare(String(a.at)))[0];
+    if (!o) return fail(404, '沒有這份備份');
+    const lb = o.key.slice(6, -4), man = await openBackup(env, new Uint8Array(await store.get(o.key)), `${lb}|manifest`);
+    // 每一段解開、接回來（AAD 綁住日期與第幾段），算每張表的筆數；_rid 是分段用的 rowid，還原時不寫回
+    const counts = Object.fromEntries(Object.keys(man.tables).map((t) => [t, 0]));
+    let rid = 0;
+    for (let n = 0; n < (man.parts || 0); n++) {
+      const p = await openBackup(env, new Uint8Array(await store.get(partKey(lb, n))), `${lb}|${n}`);
+      if (p.label !== lb || p.n !== n) return fail(500, '段落對不上');
+      for (const [t, rows] of p.tables) { counts[t] = (counts[t] || 0) + rows.length; rid += rows.filter((r) => '_rid' in r).length; }
+    }
+    const names = Object.keys(counts).filter((n) => /^\w+$/.test(n));
+    const cnt = await env.DB.batch(names.map((n) => env.DB.prepare(`SELECT COUNT(*) AS n FROM "${n}" ${BACKUP_FILTER[n] ? `WHERE (${BACKUP_FILTER[n]})` : ''}`)));
+    return json({ key: o.key, format: man.format, version: man.version, at: man.at, parts: man.parts, rid, manifest: man.tables,
+      counts, now: Object.fromEntries(names.map((n, i) => [n, cnt[i].results[0].n])) });
+  }
+  // 大量資料（執行額度測試用）：?members=300&subs=400 建假會員（id 以 b_ 開頭）與假訂閱；
+  //   ?event=<id>&pending=60 讓前 60 位假會員在這場待審核（報名時間依序相差 1 秒）；?clear=1 全部清掉
+  if (path === '/api/dev/seed-bulk') {
+    if (q.get('clear') === '1') {
+      await env.DB.batch([
+        env.DB.prepare("DELETE FROM push_subs WHERE endpoint LIKE 'https://fcm.googleapis.com/fcm/send/b\\_%' ESCAPE '\\'"),
+        env.DB.prepare("UPDATE draws SET member_id = NULL WHERE member_id LIKE 'b\\_%' ESCAPE '\\'"),   // 得獎紀錄沒有 ON DELETE（刪帳號時匿名化）
+        env.DB.prepare("DELETE FROM members WHERE id LIKE 'b\\_%' ESCAPE '\\'"),
+      ]);
+      return json({ ok: true });
+    }
+    const nm = Math.min(Number(q.get('members')) || 0, 1000), ns = Math.min(Number(q.get('subs')) || 0, 2000), np = Math.min(Number(q.get('pending')) || 0, 1000);
+    const seq = (n) => JSON.stringify(Array.from({ length: n }, (_, i) => i));
+    const stmts = [];
+    if (nm) stmts.push(env.DB.prepare(`INSERT OR IGNORE INTO members (id, name, nickname, dist, grp, role, membership, consent_at, consent_version)
+      SELECT printf('b_%04d', value), printf('大量測試%04d', value), NULL, 'fm', 'D', 'member', 'none', datetime('now'), '2026-10-03.1' FROM json_each(?)`).bind(seq(nm)));
+    if (ns && nm) stmts.push(env.DB.prepare(`INSERT OR IGNORE INTO push_subs (endpoint, member_id, p256dh, auth)
+      SELECT printf('https://fcm.googleapis.com/fcm/send/b_%05d', value), printf('b_%04d', value % ?2), 'BPmock', 'mock' FROM json_each(?1)`).bind(seq(ns), nm));
+    if (np && q.get('event')) stmts.push(env.DB.prepare(`INSERT OR IGNORE INTO signups (id, event_id, member_id, name, grp, dist, status, created_at)
+      SELECT printf('bs%04d%s', value, substr(?1, 1, 8)), ?1, printf('b_%04d', value), printf('大量測試%04d', value), 'D', 'fm', 'pending', datetime('now', printf('-%d seconds', ?2 - value))
+      FROM json_each(?3)`).bind(str(q.get('event'), 32), np, seq(np)));
+    // ?mute=<id>&cats=event：關掉某人的推播分類；?events=30&per=10&date=YYYY-MM-DD：建 30 場活動、每場 10 位假會員正取；?logs=YYYY-MM：每位假會員那個月一筆訓練紀錄
+    if (q.get('mute')) stmts.push(env.DB.prepare('UPDATE members SET notif_mute = ? WHERE id = ?').bind(str(q.get('cats'), 100) || null, str(q.get('mute'), 32)));
+    const ne = Math.min(Number(q.get('events')) || 0, 100), per = Math.min(Number(q.get('per')) || 0, 50), day = str(q.get('date'), 10);
+    if (ne && isDate(day)) {
+      stmts.push(env.DB.prepare(`INSERT OR IGNORE INTO events (id, kind, title, date, gather_time, status, created_by, open_notified_at)
+        SELECT printf('bev%s%02d', replace(?1, '-', ''), value), 'track', printf('大量活動 %d', value), ?1, '07:00', 'open', 't_chair', datetime('now') FROM json_each(?2)`).bind(day, seq(ne)));
+      if (per) stmts.push(env.DB.prepare(`INSERT OR IGNORE INTO signups (id, event_id, member_id, name, grp, dist, status)
+        SELECT printf('bsg%s%04d', replace(?1, '-', ''), value), printf('bev%s%02d', replace(?1, '-', ''), value / ?3), printf('b_%04d', value), printf('大量測試%04d', value), 'D', 'fm', 'in' FROM json_each(?2)`)
+        .bind(day, seq(ne * per), per));
+    }
+    // ?waititems=<活動 id>&n=40：前 40 位假會員排進候補，每人訂 1 件商品 a（庫存不夠時永遠遞補不了）
+    if (q.get('waititems')) stmts.push(env.DB.prepare(`INSERT OR IGNORE INTO signups (id, event_id, member_id, name, grp, dist, status, items, created_at)
+      SELECT printf('bw%04d%s', value, substr(?1, 1, 8)), ?1, printf('b_%04d', value), printf('大量測試%04d', value), 'D', 'fm', 'wait', '[{"id":"a","qty":1}]', datetime('now', printf('-%d seconds', 1000 - value))
+      FROM json_each(?2)`).bind(str(q.get('waititems'), 32), seq(Math.min(Number(q.get('n')) || 0, 500))));
+    if (/^\d{4}-\d{2}$/.test(q.get('logs') || '') && nm) stmts.push(env.DB.prepare(`INSERT OR IGNORE INTO training_logs (id, member_id, date, status, km)
+      SELECT printf('blg%s%04d', replace(?1, '-', ''), value), printf('b_%04d', value), ?1 || '-10', 'done', 10 FROM json_each(?2)`).bind(q.get('logs'), seq(nm)));
+    if (stmts.length) await env.DB.batch(stmts);
+    return json({ ok: true, members: nm, subs: ns, pending: np });
+  }
+  // 推播模擬（PUSH_MOCK=1）：收到的 endpoint 與 payload id；?clear=1 清空、?gone=<endpoint> 讓它回 410；
+  //   ?verify=1 檢查每個 payload 的 id 都對得到「那台裝置的主人」的通知列
+  if (path === '/api/dev/push-mock' && env.PUSH_MOCK === '1') {
+    if (q.get('clear') === '1') { pushMock.list.length = 0; pushMock.gone.clear(); }
+    if (q.get('gone')) pushMock.gone.add(str(q.get('gone'), 300));
+    if (q.get('expire') === '1') await env.DB.prepare("UPDATE push_queue SET expires_at = datetime('now', '-1 minutes')").run();   // 佇列全部當作過期
+    const [qn, sn] = await env.DB.batch([env.DB.prepare('SELECT COUNT(*) AS n FROM push_queue'), env.DB.prepare('SELECT COUNT(*) AS n FROM push_subs')]);
+    let bad = null;
+    if (q.get('verify') === '1') {
+      const pairs = JSON.stringify(pushMock.list.map((x) => [x.endpoint, x.id]));
+      bad = (await env.DB.prepare(`SELECT COUNT(*) AS n FROM json_each(?1) j LEFT JOIN notifications n ON n.id = json_extract(j.value, '$[1]')
+        LEFT JOIN push_subs s ON s.endpoint = json_extract(j.value, '$[0]') WHERE n.id IS NULL OR s.member_id IS NOT n.member_id`).bind(pairs).first()).n;
+    }
+    return json({ list: pushMock.list, endpoints: new Set(pushMock.list.map((x) => x.endpoint)).size, queue: qn.results[0].n, subs: sn.results[0].n, bad });
+  }
+  // 通知列統計（測試用）：?like=標題開頭 → 幾列、幾位收件人；&ev=活動 id 開頭 → 其中幾場已經標記前一晚提醒
+  if (path === '/api/dev/notes') {
+    const like = `${str(q.get('like'), 40).replace(/[%_]/g, '')}%`, ev = `${str(q.get('ev'), 32).replace(/[%_]/g, '')}%`;
+    const [a, c] = await env.DB.batch([
+      env.DB.prepare('SELECT COUNT(*) AS n, COUNT(DISTINCT member_id) AS m FROM notifications WHERE title LIKE ?').bind(like),
+      env.DB.prepare('SELECT COUNT(*) AS n, SUM(remind_day_at IS NOT NULL) AS marked FROM events WHERE id LIKE ?').bind(ev),
+    ]);
+    return json({ rows: a.results[0].n, members: a.results[0].m, events: c.results[0].n, marked: c.results[0].marked || 0 });
+  }
+  // 送推播佇列（一次執行，用完額度為止）
+  if (path === '/api/dev/drain') {
+    const b = new Budget(env, { kind: 'push', name: 'dev' }), e = invocationEnv(env, ctx, b);
+    const r = await drainAll(e);
+    await settled(e);
+    const left = (await env.DB.prepare('SELECT COUNT(*) AS n FROM push_queue').first()).n;
+    return json({ ...r, queue: left, _budget: { root: b.summary(), jobs: {} } });
+  }
+  // 測試用：附近即時影像的假來源狀態（只有 CAM_MOCK=1）
+  if (path === '/api/dev/cams-mock' && env.CAM_MOCK === '1') return json(Cams.mockControl(q));
+  // 測試用：模擬在電腦上跑 tools/cams-sync.mjs 匯入 offline 來源（同一套解析、完整性檢查與 SQL；假來源不連外）
+  if (path === '/api/dev/cams-import' && env.CAM_MOCK === '1') return json(await Cams.syncSource(env, str(q.get('source'), 10)));
+  // 測試用：跑者休息站的假來源狀態（只有 REST_MOCK=1）
+  if (path === '/api/dev/rest-mock' && env.REST_MOCK === '1') return json(Rest.mockControl(q));
+  // 測試用：用假資料同步任何一個來源（包含在電腦上同步的來源；正式環境的「立即同步」不收這些來源），不限次數、一次一頁
+  if (path === '/api/dev/rest-sync' && env.REST_MOCK === '1') {
+    const k = q.get('source') || '', S = Rest.sourceOf(k);
+    if (!S || S.manual) return json({ error: '沒有這個來源' }, 400);
+    const r = await Rest.syncSource(env, k);
+    return json(r, r.error ? 502 : 200);
+  }
+  // 開發用登入
+  if (path === '/api/dev/login' && req.method === 'GET') {
+    const m = await env.DB.prepare('SELECT * FROM members WHERE id = ?').bind(str(q.get('id'), 32)).first();
+    if (!m) return fail(404, '找不到這個帳號');
+    return new Response(null, { status: 302, headers: { location: '/#/', 'set-cookie': await startSession(env, m, req, { mfa: q.get('mfa') === '1' }) } });
+  }
+  return null;
+}
+
+async function handle(req, env, ctx, url, path) {
+  // Google 登入是瀏覽器導向（GET、不是 JSON），走在下面的 CSRF 檢查之前
+  if (path === '/api/google/start' && req.method === 'GET') return googleStart(env, url, url.searchParams.get('link') === '1' ? await currentMember(req, env) : null);
+  if (path === '/api/google/callback' && req.method === 'GET') return googleCallback(req, env, url);
+  if (path.startsWith('/api/dev/') && env.DEV_LOGIN === '1' && LOCAL.includes(url.hostname)) {
+    const r = await devRoute(req, env, ctx, url, path);
+    if (r) return r;
+  }
+  // 擋 CSRF：寫入類請求只收同源的 JSON
+  if (req.method !== 'GET') {
+    const origin = req.headers.get('origin');
+    if (origin && origin !== url.origin) return fail(403, '來源不正確');
+    if (req.headers.get('sec-fetch-site') === 'cross-site') return fail(403, '來源不正確');
+    if ((req.headers.get('content-type') || '').split(';')[0].trim().toLowerCase() !== 'application/json' && req.method !== 'DELETE') return fail(415, '請用 JSON');
+  }
+  try {
+    const t0 = Date.now();
+    const res = await api(req, env, path, req.method);
+    // 伺服器處理時間（主要是等資料庫）：開發工具看得到，前端也用它分辨慢在網路還是伺服器
+    try { res.headers.set('server-timing', `app;dur=${Date.now() - t0}`); } catch {}
+    return res;
+  } catch (e) {
+    console.error('api', path, e);
+    return fail(500, '伺服器錯誤');
+  }
 }
 
 export default {
   async scheduled(event, env, ctx) {
-    env.defer = (p) => ctx.waitUntil(Promise.resolve(p).catch((e) => console.error('defer', e)));
-    env.pushBudget = {};
-    ctx.waitUntil(scheduled(env, new Date(event.scheduledTime)).then((r) => console.log('cron', JSON.stringify(r))));
+    const b = new Budget(env, { kind: 'cron', name: 'hourly' }), e = invocationEnv(env, ctx, b);
+    ctx.waitUntil(cronTick(e, new Date(event.scheduledTime), ctx)
+      .then((r) => console.log('cron', JSON.stringify(r.res)), (err) => console.error('cron', err))
+      .then(() => settled(e)).finally(() => finishBudget(e, b)));
   },
   async fetch(req, env, ctx) {
     const url = new URL(req.url);
     const path = decodeURIComponent(url.pathname);
     if (!path.startsWith('/api/')) return env.ASSETS.fetch(req);
     // 資安金鑰沒設定就不提供 API（避免用預設值雜湊 IP、稽核紀錄沒有簽章）
-    if ((!env.HASH_SALT || !env.AUDIT_KEY) && !['localhost', '127.0.0.1'].includes(url.hostname)) return new Response(JSON.stringify({ error: '系統設定不完整，請聯絡管理員' }), { status: 503, headers: { 'content-type': 'application/json' } });
-    env.ctx = ctx;
-    // Google 登入是瀏覽器導向（GET、不是 JSON），走在下面的 CSRF 檢查之前
-    if (path === '/api/google/start' && req.method === 'GET') return googleStart(env, url, url.searchParams.get('link') === '1' ? await currentMember(req, env) : null);
-    if (path === '/api/google/callback' && req.method === 'GET') return googleCallback(req, env, url);
-    // 開發用：手動觸發排程，可指定時間 ?at=2026-10-03T12:00:00Z（只有 DEV_LOGIN=1 的本機有效）
-    if (path === '/api/dev/cron' && env.DEV_LOGIN === '1' && ['localhost', '127.0.0.1'].includes(url.hostname)) {
-      env.defer = (p) => ctx.waitUntil(Promise.resolve(p).catch(() => {}));
-      env.pushBudget = {};
-      return json(await scheduled(env, url.searchParams.get('at') ? new Date(url.searchParams.get('at')) : new Date()));
-    }
-    // 測試用：附近即時影像的假來源狀態（只有 CAM_MOCK=1、DEV_LOGIN=1 的本機有效）
-    if (path === '/api/dev/cams-mock' && env.CAM_MOCK === '1' && env.DEV_LOGIN === '1' && ['localhost', '127.0.0.1'].includes(url.hostname)) return json(Cams.mockControl(url.searchParams));
-    // 測試用：跑者休息站的假來源狀態（只有 REST_MOCK=1、DEV_LOGIN=1 的本機有效）
-    if (path === '/api/dev/rest-mock' && env.REST_MOCK === '1' && env.DEV_LOGIN === '1' && ['localhost', '127.0.0.1'].includes(url.hostname)) return json(Rest.mockControl(url.searchParams));
-    // 測試用：用假資料同步任何一個來源（包含在電腦上同步的來源；正式環境的「立即同步」不收這些來源），不限次數、一次一頁
-    if (path === '/api/dev/rest-sync' && env.REST_MOCK === '1' && env.DEV_LOGIN === '1' && ['localhost', '127.0.0.1'].includes(url.hostname)) {
-      const k = url.searchParams.get('source') || '', S = Rest.sourceOf(k);
-      if (!S || S.manual) return json({ error: '沒有這個來源' }, 400);
-      const r = await Rest.syncSource(env, k);
-      return json(r, r.error ? 502 : 200);
-    }
-    // 開發用登入：只有 .dev.vars 設 DEV_LOGIN=1 而且在 localhost 才有效，正式環境不會有這個設定
-    if (path === '/api/dev/login' && req.method === 'GET' && env.DEV_LOGIN === '1' && ['localhost', '127.0.0.1'].includes(url.hostname)) {
-      const m = await env.DB.prepare('SELECT * FROM members WHERE id = ?').bind(str(url.searchParams.get('id'), 32)).first();
-      if (!m) return fail(404, '找不到這個帳號');
-      return new Response(null, { status: 302, headers: { location: '/#/', 'set-cookie': await startSession(env, m, req, { mfa: url.searchParams.get('mfa') === '1' }) } });
-    }
-    env.ctx = ctx;
-    env.defer = (p) => ctx.waitUntil(Promise.resolve(p).catch((e) => console.error('defer', e)));
-    env.pushBudget = {};
-    // 擋 CSRF：寫入類請求只收同源的 JSON
-    if (req.method !== 'GET') {
-      const origin = req.headers.get('origin');
-      if (origin && origin !== url.origin) return fail(403, '來源不正確');
-      if (req.headers.get('sec-fetch-site') === 'cross-site') return fail(403, '來源不正確');
-      if ((req.headers.get('content-type') || '').split(';')[0].trim().toLowerCase() !== 'application/json' && req.method !== 'DELETE') return fail(415, '請用 JSON');
-    }
+    if ((!env.HASH_SALT || !env.AUDIT_KEY) && !LOCAL.includes(url.hostname)) return new Response(JSON.stringify({ error: '系統設定不完整，請聯絡管理員' }), { status: 503, headers: { 'content-type': 'application/json' } });
+    // 每次請求一個 env（綁定包裝成會計數的版本、這次請求專用的 ctx 與 defer），不改共用的 env
+    const b = new Budget(env, { kind: 'request', name: `${req.method} ${routeName(path)}` }), e = invocationEnv(env, ctx, b), plan = planOf(env);
+    let res;
     try {
-      const t0 = Date.now();
-      const res = await api(req, env, path, req.method);
-      // 伺服器處理時間（主要是等資料庫）：開發工具看得到，前端也用它分辨慢在網路還是伺服器
-      try { res.headers.set('server-timing', `app;dur=${Date.now() - t0}`); } catch {}
-      return res;
-    } catch (e) {
-      console.error('api', path, e);
-      return fail(500, '伺服器錯誤');
+      res = await handle(req, e, ctx, url, path);
+      // 推播：這次請求排進佇列的，回應送出後用剩下的額度先送一段；一般流量看到佇列有待送的，順便送 plan.pushKick 台
+      if (e.wantDrain) { e.drained = true; e.defer(drain(e, { max: plan.pushPerHop })); }
+      else if (e.pushKick && b.room(4 + plan.pushKick)) { e.drained = true; e.defer(drain(e, { max: plan.pushKick })); }
+    } finally {
+      // defer 裡才發的通知（例如 Google 登入後的新裝置提醒）：等 defer 都結束再看一次，有排進佇列就送
+      ctx.waitUntil(settled(e).then(async () => {
+        if (e.wantDrain && !e.drained) { e.drained = true; await drain(e, { max: plan.pushPerHop }).catch((x) => console.error('drain', x)); }
+      }).then(() => finishBudget(e, b)));
     }
+    // 測試用：回應帶這次請求到目前為止用掉的額度（只有 DEV_LOGIN=1 的本機）
+    if (env.DEV_LOGIN === '1' && LOCAL.includes(url.hostname)) {
+      try { const x = b.summary(); res.headers.set('x-budget', `d1=${x.d1};kv=${x.kv};fetch=${x.fetch};rpc=${x.rpc};sub=${x.sub}`); } catch {}
+    }
+    return res;
   },
 };

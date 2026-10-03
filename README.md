@@ -80,6 +80,8 @@ openssl rand -base64 32 | npx wrangler secret put RACE_KEY   # 賽事報名資�
 npm run deploy
 ```
 
+執行額度：`wrangler.jsonc` 的 `vars` 設 `PLAN`（`free`＝Workers 免費方案，每次執行 50 個子請求、CPU 10 ms；`paid`＝付費方案）與 `JOB_DISPATCH`（`inline`＝排程工作在同一次執行裡依優先順序跑，只有每日備份開自己的執行；`self`＝每項工作都開自己的執行，要先在 staging 驗證過才切換）。沒設定一律當免費方案。用量偏高、因額度停下或超過計數時，Workers Logs 會有一行 `{"t":"budget",…}`。
+
 ### Google 登入
 
 已設定完成（2026-10-03）：Google Cloud 專案 `cultivation-in-life-run`、OAuth 用戶端「cil-run web」（網頁應用程式，正式站與測試環境兩個重新導向 URI），同意畫面已發布為「實際運作中」，隱私權政策連結 `https://cil-run.anselliu7.workers.dev/privacy`。
@@ -115,6 +117,8 @@ npx wrangler secret put VAPID_SUBJECT     # 例如 mailto:you@example.com
 
 iPhone 要先用 Safari 的「分享 → 加到主畫面」，再從主畫面開啟才收得到通知。
 
+推播走佇列（`push_queue`）：通知寫進通知中心時，同時把每台裝置排一列，免費方案一次執行大約送 10 台（每段同時最多 4 個連線）。發通知的那次請求會先用剩下的額度送一段，之後每個一般請求順便送 3 台、每小時排程把剩下的額度用完。訂閱數量少時跟以前一樣幾乎馬上收到；訂閱很多時（例如 400 台）大量廣播可能要好幾個小時才送完，訂閱超過約 50 台以前，要先在 staging 驗證 `JOB_DISPATCH=self` 再切換。過期或試 3 次都送不出去的會丟掉，並寫稽核 `push.dropped`。
+
 ## 課表資料怎麼更新
 
 教練每週發新課表後，在 `gengpao-running-coach` skill 更新原文並重建 `season-2026.json`，再覆蓋 `public/data/season-2026.json`。W9 以後目前是依 2025 臺北馬同期推估，畫面與公告都會標示「以教練公告為準」。
@@ -139,3 +143,7 @@ npm run deploy         # 部署正式站
   要啟用自動部署，到 GitHub repo 的 Settings → Secrets and variables → Actions 新增 `CLOUDFLARE_API_TOKEN`（Cloudflare 後台 → My Profile → API Tokens，用「Edit Cloudflare Workers」範本，再加上 D1 Edit 權限）與 `CLOUDFLARE_ACCOUNT_ID`。沒設定的話只跑測試、不部署。
 - 測試環境的邀請碼與初始理事長碼要另外設：`npx wrangler secret put JOIN_CODE --env staging`。
 - 錯誤監控：Cloudflare 後台 → Workers → cil-run → Logs，可以看到伺服器錯誤、排程結果與前端回報的錯誤（`client-error`）。
+- 附近即時影像的公路局清單（約 1.7 MB、2300 多筆）超過免費方案一次執行的 CPU 與子請求，改在電腦上同步（水利署、水利處照常由排程同步，公路局的畫面轉送不受影響）：
+  1. `node tools/cams-sync.mjs thb --out cams-thb.sql`（測試環境加 `--staging`）：抓清單、用和 Worker 一樣的規則解析，筆數少於上次的 70% 就停下；上次的筆數會用唯讀查詢從 D1 讀，也可以用 `--last-count N` 指定。
+  2. 看一下印出來的筆數，確認沒問題後執行它印出的指令（`npx wrangler d1 execute cil-run --remote --file cams-thb.sql`），這一步會寫入正式站的 D1。
+  3. 管理後台「附近即時影像」的公路局那一列會顯示上次更新的時間。清單大約幾個月才有變動，不用天天跑。

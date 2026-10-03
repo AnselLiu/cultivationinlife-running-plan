@@ -10,6 +10,7 @@
 //   不存任何電話與個人姓名；顯名文字放在登錄表，不存在每一列。整個功能由 settings.features 的 rest 控制，預設關閉。
 import { parseHours } from '../public/hours.js';
 import * as Mock from './rest-mock.js';
+import { xfetch, cacheOf } from './budget.js';
 
 const UA = 'cil-run rest-stop sync (+https://cil-run.anselliu7.workers.dev)';
 const LICENSE = '政府資料開放授權條款第1版';
@@ -98,7 +99,12 @@ const BASE_SVC = { water: 1, toilet: 2, shower: 0, supply: 16 };
 const MAX = 4 * MB;
 // 測試模式（REST_MOCK=1 而且 DEV_LOGIN=1）：所有來源都用假資料，不連外
 export const mocked = (env) => env?.REST_MOCK === '1' && env?.DEV_LOGIN === '1';
-const restFetch = (env, url, init) => (mocked(env) ? Promise.resolve(Mock.fetchMock(url)) : fetch(url, init));
+// 對外連線一律算進執行額度（測試的假來源也照算，計數才和正式環境一樣）
+const restFetch = (env, url, init) => {
+  if (!mocked(env)) return xfetch(env, url, init);
+  try { env?.budget?.take('fetch'); } catch (e) { return Promise.reject(e); }
+  return Promise.resolve(Mock.fetchMock(url));
+};
 export const mockControl = (q) => Mock.control(q);
 // 測試模式：排程拿到這個來源之後當成被平台強制中斷（超過 CPU 或子請求上限），測「隔天重試」
 export const mockKilled = (env, k) => mocked(env) && Mock.state.kill === k;
@@ -723,16 +729,19 @@ async function cellRows(env, cells, on, box = null) {
   const rows = (await env.DB.prepare(`SELECT ${COLS} FROM rest_stops WHERE cell IN (${ph}) AND ${LIVE}${box ? BOX : ''} LIMIT ${CELL_LIMIT}`).bind(...cells, ...(box || [])).all()).results;
   return rows.filter((r) => on.has(r.source)).map(applyFix);
 }
+// Cache API 也算子請求：經過這次執行的 cacheOf(env)（見 src/budget.js）
 const cachePut = (env, key, body, ttl) => {
-  const put = globalThis.caches?.default?.put(key, new Response(body, { headers: { 'content-type': 'application/json', 'cache-control': `public, max-age=${ttl}` } }));
-  if (put) env.ctx?.waitUntil ? env.ctx.waitUntil(put.catch(() => {})) : put.catch(() => {});
+  const c = cacheOf(env);
+  if (!c) return;
+  const put = Promise.resolve().then(() => c.put(key, new Response(body, { headers: { 'content-type': 'application/json', 'cache-control': `public, max-age=${ttl}` } }))).catch(() => {});
+  if (env.defer) env.defer(put); else if (env.ctx?.waitUntil) env.ctx.waitUntil(put);
 };
-const cacheGet = async (key) => { try { const hit = await globalThis.caches?.default?.match(key); return hit ? await hit.text() : null; } catch { return null; } };
+const cacheGet = async (env, key) => { try { const hit = await cacheOf(env)?.match(key); return hit ? await hit.text() : null; } catch { return null; } };
 // 一格的精簡陣列：[id, type, subtype, svc, access, lat, lng, name, hours]，不含停用、隱藏、暫停的列
 export async function cellStops(env, key) {
   const st = await sourceState(env);
   const ck = new Request(`https://cil-run.internal/rest/cell/v1/${key}/${st.rev}`);
-  const hit = await cacheGet(ck);
+  const hit = await cacheGet(env, ck);
   if (hit) return { body: hit, rev: st.rev, hit: true };
   const stops = mergeRows(await cellRows(env, [key], st.on)).map((r) => [r.id, r.type, r.subtype, r.svc, r.access, r.lat, r.lng, r.name, r.hours || null]);
   const body = JSON.stringify({ cell: key, rev: st.rev, stops });
@@ -746,7 +755,7 @@ const weightOf = (r) => (r.status === 'reported' ? 2.0 : WEIGHT[r.access] ?? 1.6
 export async function nearSpot(env, spot) {
   const st = await sourceState(env);
   const ck = new Request(`https://cil-run.internal/rest/spot/v1/${encodeURIComponent(spot.id)}/${spot.lat},${spot.lng}/${st.rev}`);
-  const hit = await cacheGet(ck);
+  const hit = await cacheGet(env, ck);
   if (hit) return JSON.parse(hit);
   const [cy, cx] = cellOf(spot.lat, spot.lng).split('_').map(Number), cells = [];
   for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) cells.push(`${cy + dy}_${cx + dx}`);

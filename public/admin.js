@@ -1,7 +1,7 @@
 // 耕跑團 PWA — admin.js：從 app.js 拆出來、用到才載入的畫面（第一次開 App 不用下載）
 import * as Party from './party.js';
 import { defaultWindow, SIGNUP_DEFAULTS, tpText } from './signup-window.js';
-import { $, latest, nowTp, scanSheet, ago, allow, api, applyFeatures, avatar, barChart, bars, bindStepup, cfg, esc, group, IC, largeTitle, me, mfaBanner, nrow, org, pad2, paintCountdown, passkey, refreshMe, render, ROLE_NAME, row, studio, TAB_DEFAULT, TEAM_PERMS, teamAllow, teamIcon, teamOf, teams, toast, view } from './app.js';
+import { $, latest, nowTp, scanSheet, ago, allow, api, apiAll, applyFeatures, avatar, barChart, bars, bindStepup, cfg, esc, group, IC, largeTitle, me, mfaBanner, nrow, org, pad2, paintCountdown, passkey, refreshMe, render, ROLE_NAME, row, studio, TAB_DEFAULT, TEAM_PERMS, teamAllow, teamIcon, teamOf, teams, toast, view } from './app.js';
 
 // ---------- 管理介面（RBAC、會籍、座位圖）----------
 let adminSeq = 0;
@@ -99,8 +99,30 @@ async function loadHealth(days = 7) {
     <h3>前端錯誤</h3>
     ${h.errors.length ? `<div class="roster">${h.errors.map((e) => `<div class="r"><span class="av num" style="font-size:12px">${e.n}</span><span><b style="word-break:break-word">${esc(e.message)}</b>
       <span class="tiny" style="display:block">${esc(e.page || '')}${e.source ? `・${esc(e.source)}:${e.line}` : ''}・${esc(e.device || '')}・${ago(e.last_at)}</span></span></div>`).join('')}</div>`
-      : '<p class="tiny" style="margin:0">這段期間沒有錯誤。</p>'}`;
+      : '<p class="tiny" style="margin:0">這段期間沒有錯誤。</p>'}
+    ${budgetHtml(h)}`;
   for (const b of box.querySelectorAll('[data-hd]')) b.onclick = () => loadHealth(Number(b.dataset.hd));
+}
+// 執行額度（免費方案一次執行 50 個子請求）：排程工作的狀態、推播佇列、最常碰到上限的功能。狀態一律用文字
+const JOB_NAME = { backup: '每日備份', retention: '資料清理', month_summary: '每月總結', quarterly_review: '每季權限檢視', fatigue: '疲勞提醒',
+  signup_review_digest: '待審核整理', 'cams.wra': '鏡頭清單（水利署）', 'cams.heo': '鏡頭清單（水利處）', 'cams.thb': '鏡頭狀態重設（公路局）',
+  backup_manual: '手動備份', events: '活動提醒', signupOpen: '開放報名通知', followups: '跑完接續', weather: '壞天氣提醒', signupReviews: '待審核失效',
+  promoteSweep: '候補遞補', renewals: '會費到期提醒', auditDigest: '稽核摘要', monthSummary: '每月總結', review: '每季權限檢視', push: '推播佇列', cams: '鏡頭清單',
+  rest: '跑者休息站同步', 'rest.tpbk': '休息站（臺北市河濱自行車租借站）', 'rest.ntrv': '休息站（新北市河濱景觀廁所）' };
+function budgetHtml(h) {
+  if (!h.jobs) return '';
+  const bad = (t) => `<b style="color:var(--race)">${t}</b>`;
+  const state = (j) => (j.state === 'gave_up' ? bad(`失敗 ${j.attempts} 次，已停止重試`) : j.state === 'failed' ? bad(`失敗 ${j.attempts} 次`)
+    : j.state === 'retry' ? bad('沒有完成，隔天重試') : j.state === 'pending' ? '等下個整點補做' : `完成${j.last_run ? `（${esc(j.last_run)}）` : ''}`);
+  const q = h.pushQueue || { n: 0 };
+  return `<h3>執行額度</h3>
+    <p class="tiny" style="margin:0">免費方案一次執行最多 50 個子請求；做不完的工作會在下個整點接著做。</p>
+    ${h.jobs.length ? `<div class="itemtable">${h.jobs.map((j) => `<div class="itr"><span><b style="font-weight:600">${esc(JOB_NAME[j.job] || j.job)}</b>
+      ${j.last_error ? `<span class="tiny" style="display:block;word-break:break-word">${esc(j.last_error)}</span>` : ''}</span><span class="tiny">${state(j)}</span></div>`).join('')}</div>` : ''}
+    <div class="itemtable"><div class="itr"><span><b style="font-weight:600">推播佇列</b></span><span class="tiny">${q.n ? `待送 ${q.n} 則・最早一則 ${ago(q.oldest)}` : '沒有待送的推播'}</span></div></div>
+    ${(h.budget || []).length ? `<div class="itemtable">${h.budget.map((x) => `<div class="itr"><span><b class="num" style="font-weight:600;word-break:break-word">${esc(x.name)}</b>
+      <span class="tiny" style="display:block">停下 ${x.stopped} 次${x.over ? `・超過上限 ${x.over} 次` : ''}・單次最高 ${x.max_sub}</span></span><span class="tiny">${ago(x.last_at)}</span></div>`).join('')}</div>
+      <p class="tiny" style="margin:0">最常碰到額度上限的功能：停下表示做到一半留到下次，超過上限要檢查。</p>` : '<p class="tiny" style="margin:0">這段期間沒有功能碰到額度上限。</p>'}`;
 }
 function bindOverview() {
   loadHealth();
@@ -400,7 +422,7 @@ function bindAudit() {
   $('#auVerify').onclick = async () => {
     $('#auVerifyOut').textContent = '檢查中…';
     try {
-      const r = await api('/audit/verify');
+      const r = await apiAll('/audit/verify', {}, ['checked', 'unsigned', 'modified']);   // 紀錄多時伺服器分段檢查
       $('#auVerifyOut').innerHTML = `${r.from} ～ ${r.to}：檢查 ${r.checked} 筆${r.unsigned ? `（其中 ${r.unsigned} 筆是功能上線前的舊紀錄，沒有簽章）` : ''}。<br>
         ${r.modified || r.brokenDays.length ? `<b style="color:var(--race)">發現異常：被改動 ${r.modified} 筆${r.brokenDays.length ? `，摘要對不上的日期 ${r.brokenDays.join('、')}` : ''}。請立刻通知理事長與監事。</b>` : `<b>${IC.check} 沒有發現竄改</b>（每日摘要 ${r.days} 天）`}`;
     } catch (e) { $('#auVerifyOut').textContent = e.message; }
@@ -553,7 +575,7 @@ function settingsPanel() {
   </section>
   <section class="card" id="camSrcCard">
     <h3>附近即時影像</h3>
-    <p class="tiny" style="margin:0">地點卡會列出 1.5 公里內的政府公開攝影機（沒有就列 3 公里內最近一支），畫面由本站轉送、不保存，跑友的 IP 不會送到影像來源。功能開關打開後，鏡頭清單每天清晨 04:00 起自動同步（每小時只同步一個來源，依序是水利署、公路局、水利處）。關掉來源後立即不再顯示，也不再連線。</p>
+    <p class="tiny" style="margin:0">地點卡會列出 1.5 公里內的政府公開攝影機（沒有就列 3 公里內最近一支），畫面由本站轉送、不保存，跑友的 IP 不會送到影像來源。功能開關打開後，水利署與水利處的鏡頭清單每天清晨 04:00 起自動同步（每小時只同步一個來源）；公路局的清單由電腦上的同步工具更新。關掉來源後立即不再顯示，也不再連線。</p>
     <div id="camSrcList" class="toggles"><p class="tiny" style="margin:0">載入中…</p></div>
   </section>
   <section class="card" id="restSrcCard">
@@ -592,7 +614,7 @@ function settingsPanel() {
   </section>
   <h3 class="sgt">安全與隱私</h3>
   <section class="card" id="bkCard"><div class="row spread"><h3>每日加密備份</h3><button type="button" class="btn ghost sm" id="bkNow">立即備份</button></div>
-    <p class="tiny" style="margin:0">每天凌晨 3 點自動把資料庫加密備份（AES-GCM），保留 35 天。還原用 tools/restore-backup.mjs，金鑰另外保存在理事長的電腦與密碼管理器。</p>
+    <p class="tiny" style="margin:0">每天凌晨 3 點起自動把資料庫加密備份（AES-GCM），保留 35 天；資料多時分成好幾段，在接下來的整點陸續做完。還原用 tools/restore-backup.mjs，金鑰另外保存在理事長的電腦與密碼管理器。</p>
     <div id="bkList" class="roster"><p class="tiny" style="margin:0">載入中…</p></div></section>
   ${(me.realRole || me.role) === 'chair' ? `<section class="card">
     <h3>幹部兩步驟驗證</h3>
@@ -620,13 +642,13 @@ function bindSettings() {
     const r = await api('/backups').catch(() => null);
     if (!$('#bkList')) return;
     $('#bkList').innerHTML = !r ? '<p class="tiny" style="margin:0">沒有權限</p>' : !r.enabled ? '<p class="tiny" style="margin:0">備份還沒設定</p>'
-      : r.list.length ? r.list.slice(0, 7).map((b) => `<div class="r"><span class="av num" style="font-size:10px">${esc(String(b.key).slice(11, 16).replace('-', '/'))}</span><span><b>${esc(String(b.key).replace('daily/', '').replace('.bin', ''))}</b><span class="tiny" style="display:block">${b.tables || '—'} 張表・${b.rows || '—'} 筆・${Math.round((b.size || 0) / 1024)} KB・存在 ${esc(r.where || '')}</span></span></div>`).join('')
+      : r.list.length ? r.list.slice(0, 7).map((b) => `<div class="r"><span class="av num" style="font-size:10px">${esc(String(b.key).slice(11, 16).replace('-', '/'))}</span><span><b>${esc(String(b.key).replace('daily/', '').replace('.bin', ''))}</b><span class="tiny" style="display:block">${b.tables || '—'} 張表・${b.rows || '—'} 筆・${Math.round((Number(b.bytes) || b.size || 0) / 1024)} KB・存在 ${esc(r.where || '')}</span></span></div>`).join('')
       : '<p class="tiny" style="margin:0">還沒有備份，今晚 3 點會自動執行第一次。</p>';
   };
   loadBk();
   $('#bkNow')?.addEventListener('click', async (e) => {
     e.target.disabled = true;
-    try { const r = await api('/backups', { method: 'POST', body: {} }); toast(`已備份 ${r.tables} 張表、${r.rows} 筆`); loadBk(); } catch (err) { toast(err.message); }
+    try { const r = await api('/backups', { method: 'POST', body: {} }); toast(r.started ? '資料較多，備份會在接下來的整點分段做完' : `已備份 ${r.tables} 張表、${r.rows} 筆`); loadBk(); } catch (err) { toast(err.message); }
     e.target.disabled = false;
   });
   const loadHol = async () => {
@@ -658,7 +680,8 @@ function bindSettings() {
         <span class="tiny" style="display:block">${esc(x.attribution)}</span></span>
         <input type="checkbox" data-camsrc="${esc(x.source)}" ${x.enabled ? 'checked' : ''} ${r.editable ? '' : 'disabled'}><i></i></label>
       ${x.consent ? '<p class="tiny" style="margin:0 0 6px">這個來源沒有開放授權聲明，要先取得臺北市水利處的書面同意才能開啟；關閉時不會對水利處發出任何連線。</p>' : ''}
-      ${!x.manual && x.enabled && r.editable ? `<button type="button" class="btn ghost sm" data-camsync="${esc(x.source)}" style="margin:0 0 8px">立即同步</button>` : ''}</div>`).join('');
+      ${x.offline ? `<p class="tiny" style="margin:0 0 8px">清單由電腦上的同步工具更新（tools/cams-sync.mjs）${x.last_ok_at ? `・上次更新 ${camTime(x.last_ok_at)}` : ''}</p>`
+        : !x.manual && x.enabled && r.editable ? `<button type="button" class="btn ghost sm" data-camsync="${esc(x.source)}" style="margin:0 0 8px">立即同步</button>` : ''}</div>`).join('');
     for (const c of box.querySelectorAll('[data-camsrc]')) c.onchange = async () => {
       const x = r.sources.find((s) => s.source === c.dataset.camsrc);
       if (c.checked && x.consent && !confirm(`開啟「${x.name}」前，請確認協會已經取得對方的書面同意。確定已取得嗎？`)) { c.checked = false; return; }

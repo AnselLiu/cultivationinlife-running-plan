@@ -105,6 +105,26 @@ const api = async (path, opt = {}, retried = false) => {
   if (!res.ok) throw new Error(data.error || `錯誤 ${res.status}`);
   return data;
 };
+// 大量輸入分段處理：伺服器一次執行的額度有限（免費方案 50 個子請求），處理不完會回 more（剩下的輸入）。
+//   看到 more 就把它合併進 body（GET 合併進網址參數）再送一次，最多 20 輪；結果加總：陣列接起來、sum 列出的數字相加、其他取最後一輪
+//   20 輪還沒做完時，回傳值保留 more，呼叫端提示「請再按一次」
+const apiAll = async (path, opt = {}, sum = []) => {
+  const method = opt.method || 'GET';
+  let body = { ...(opt.body || {}) }, extra = '', out = null;
+  for (let i = 0; i < 20; i++) {
+    const r = await api(`${path}${extra}`, method === 'GET' ? opt : { ...opt, body });
+    if (!out) out = r;
+    else for (const [k, v] of Object.entries(r)) {
+      if (Array.isArray(v) && Array.isArray(out[k])) out[k] = [...out[k], ...v];
+      else if (sum.includes(k) && typeof v === 'number') out[k] = (out[k] || 0) + v;
+      else out[k] = v;
+    }
+    if (!r.more) { delete out.more; break; }
+    if (method === 'GET') extra = `${path.includes('?') ? '&' : '?'}${new URLSearchParams(r.more)}`;
+    else body = { ...body, ...r.more };
+  }
+  return out;
+};
 // 即時搜尋：<form data-live> 打字停 0.3 秒、或改了下拉選單，就自動查（不用再按「搜尋」）。
 //   注音、倉頡選字中不查；沒有任何條件時不查（名冊一律要有條件），data-live="empty" 的表單清空也會重查
 const liveTimers = new WeakMap();
@@ -1304,8 +1324,8 @@ async function eventView(id) {
     e.preventDefault();
     const f = e.target;
     try {
-      const r = await api(`/events/${ev.id}/bulk`, { method: 'POST', body: { names: f.names.value, action: f.action.value } });
-      $('#bulkOut').innerHTML = `完成 ${r.added} 人。${r.unmatched.length ? `<br>找不到：${r.unmatched.map(esc).join('、')}` : ''}${r.ambiguous.length ? `<br>同名需要手動處理：${r.ambiguous.map(esc).join('、')}` : ''}${r.failed.length ? `<br>沒報成：${r.failed.map(esc).join('、')}` : ''}`;
+      const r = await apiAll(`/events/${ev.id}/bulk`, { method: 'POST', body: { names: f.names.value, action: f.action.value } }, ['added']);
+      $('#bulkOut').innerHTML = `完成 ${r.added} 人。${r.more ? `<br>還有 ${r.more.names.length} 人沒處理完，請再按一次` : ''}${r.unmatched.length ? `<br>找不到：${r.unmatched.map(esc).join('、')}` : ''}${r.ambiguous.length ? `<br>同名需要手動處理：${r.ambiguous.map(esc).join('、')}` : ''}${r.failed.length ? `<br>沒報成：${r.failed.map(esc).join('、')}` : ''}`;
       if (r.added) { toast(`已處理 ${r.added} 人`); setTimeout(() => eventView(id), 1200); }
     } catch (err) { toast(err.message); }
   });
@@ -3895,4 +3915,4 @@ addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvt 
 addEventListener('appinstalled', () => { installEvt = null; try { localStorage.setItem('cil-installed', '1'); } catch {} document.querySelectorAll('.installcard').forEach((c) => c.remove()); });
 
 // 拆出去的模組（admin.js、photo.js…）從這裡拿共用的工具與狀態
-export { legacyData, removeLegacy, addrField, bindAddrField, latest, $, cfg, downloadAuthed, scanSheet, FEEL, IC, KIND_NAME, LOG_ICON, LOG_STATUS_NAME, MI, PAID_NAME, ROLE_NAME, TAB_DEFAULT, TEAM_PERMS, TEAM_ROLE_NAME, ago, allow, api, applyFeatures, avatar, barChart, bars, bindComments, bindStepup, btnRow, choose, coachPrefs, copy, countdownPicker, dayLabel, dstr, emptyState, esc, eventCard, feat, fixText, group, ic, largeTitle, me, mfaBanner, money, myCycle, nrow, org, pad2, paintCountdown, passkey, planSeg, queueLog, raceTarget, refreshMe, render, route, row, setCoachPrefs, squareIcon, startKey, studio, subTitle, teamAllow, teamIcon, teamOf, teams, toast, view, ymd, askReason, isOffline, nowTp, signupDefaults, submitLabel, camLazy, openSheet };
+export { legacyData, removeLegacy, addrField, bindAddrField, latest, $, cfg, downloadAuthed, scanSheet, FEEL, IC, KIND_NAME, LOG_ICON, LOG_STATUS_NAME, MI, PAID_NAME, ROLE_NAME, TAB_DEFAULT, TEAM_PERMS, TEAM_ROLE_NAME, ago, allow, api, applyFeatures, avatar, barChart, bars, bindComments, bindStepup, btnRow, choose, coachPrefs, copy, countdownPicker, dayLabel, dstr, emptyState, esc, eventCard, feat, fixText, group, ic, largeTitle, me, mfaBanner, money, myCycle, nrow, org, pad2, paintCountdown, passkey, planSeg, queueLog, raceTarget, refreshMe, render, route, row, setCoachPrefs, squareIcon, startKey, studio, subTitle, teamAllow, teamIcon, teamOf, teams, toast, view, ymd, askReason, isOffline, nowTp, signupDefaults, submitLabel, camLazy, openSheet, apiAll };
