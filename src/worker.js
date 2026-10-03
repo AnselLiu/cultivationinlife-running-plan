@@ -1250,7 +1250,8 @@ async function api(req, env, path, method) {
     const g = need(); if (g) return g;
     if (!restOn()) return fail(404, '找不到休息站');
     const st = await Rest.sourceState(env);
-    return json({ enabled: true, rev: st.rev, editor: canEditSpots(), sources: st.rows.filter((s) => s.enabled).map((s) => Rest.credit(s.source, s)) }, 200, { 'cache-control': 'private, max-age=300' });
+    // 內容依身分不同（editor）：不讓瀏覽器快取（共用裝置換人登入、幹部改完重新讀都要拿到新的）
+    return json({ enabled: true, rev: st.rev, editor: canEditSpots(), sources: st.rows.filter((s) => s.enabled).map((s) => Rest.credit(s.source, s)) });
   }
   // 一格（0.02 度）的休息站：精簡陣列；Cache API 用格子＋版本當 key；每位跑友 10 分鐘最多 300 次
   const mrcell = path.match(/^\/api\/rest\/cell\/([^/]{1,20})$/);
@@ -1331,7 +1332,8 @@ async function api(req, env, path, method) {
     if (method === 'GET') {
       if (!restOn()) return fail(404, '找不到休息站');
       const d = await Rest.detail(env, mrs[1], editor);
-      return d ? json(d, 200, { 'cache-control': 'private, max-age=300' }) : fail(404, '找不到休息站');
+      // 幹部多看得到建立者、修正前的值與隱藏的列：不讓瀏覽器快取（json 預設 no-store）
+      return d ? json(d) : fail(404, '找不到休息站');
     }
     if (!editor) return fail(403, '只有幹部可以修改休息站');
     if (!restOn()) return fail(404, '跑者休息站沒有開啟');
@@ -4144,7 +4146,8 @@ async function syncCams(env, now) {
 //   每天、每週或每月一次（job_runs 以週期為 key）；失敗的來源隔天重試；分頁來源（臺灣騎跡）一輪沒跑完就每次排程續跑下一頁
 //   功能開關（features.rest）關閉時完全不跑；開始前先標「同步中」，被強制中斷時管理後台看得到
 //   只跑 Worker 可以同步的來源（SOURCES 沒有標 local）；標 local 的只由維護工具（tools/rest-sync.mjs）同步
-//   免費方案每次執行 50 個子請求（D1 指令也算）：一次排程最多 1＋1＋（1＋3＋1）＝7 個 D1 指令，失敗再加 2 個；不在 01、02、06 點時一個都不查
+//   免費方案每次執行 50 個子請求（D1 指令也算）：一次排程最多 1＋1＋（1＋3＋1）＋1＝8 個 D1 指令，失敗再加 1 個；不在 01、02、06 點時一個都不查
+//   先用「retry:今天」佔住這一期、成功才改成這一期：執行到一半被平台強制中斷（超過 10 ms CPU 或 50 個子請求）時留下的是 retry，隔天會再跑
 const periodOf = (every, now) => {
   const d = tpDate(now);
   if (every === 'month') return d.slice(0, 7);
@@ -4172,17 +4175,18 @@ async function syncRest(env, now) {
   }
   if (!pick) return null;
   const { k } = pick;
-  // 這一期只跑一次（同時兩個排程時只有一個拿得到）：寫入與判斷同一個指令
+  // 今天只跑一次（同時兩個排程時只有一個拿得到）：寫入與判斷同一個指令；先寫 retry，成功才標成這一期跑完
   if (!pick.cont && !(await env.DB.prepare(`INSERT INTO job_runs (job, last_run) VALUES (?, ?)
-    ON CONFLICT(job) DO UPDATE SET last_run = excluded.last_run WHERE job_runs.last_run IS NOT excluded.last_run RETURNING job`).bind(`rest.${k}`, periodOf(Rest.SOURCES[k].every, now)).first())) return null;
+    ON CONFLICT(job) DO UPDATE SET last_run = excluded.last_run WHERE job_runs.last_run IS NOT excluded.last_run RETURNING job`).bind(`rest.${k}`, retry).first())) return null;
+  if (Rest.mockKilled(env, k)) return { [k]: 'killed' };   // 測試：模擬在這之後被平台強制中斷
   let r;
   try { r = await Rest.syncSource(env, k); } catch (e) {
     const msg = String(e?.message || e).slice(0, 120);
     await Rest.markFailed(env, k, msg);
     r = { error: msg };
   }
-  // 失敗：這一期還要再試，但今天不再試（避免每小時都打同一個壞掉的來源）；分頁來源的 cursor 不動，下次從同一頁續跑
-  if (r.error && !pick.cont) await env.DB.prepare('UPDATE job_runs SET last_run = ? WHERE job = ?').bind(retry, `rest.${k}`).run();
+  // 成功：這一期跑完；失敗：留著 retry（這一期還要再試，但今天不再試，避免每小時都打同一個壞掉的來源）；分頁來源的 cursor 不動，下次從同一頁續跑
+  if (!r.error && !pick.cont) await env.DB.prepare('UPDATE job_runs SET last_run = ? WHERE job = ?').bind(periodOf(Rest.SOURCES[k].every, now), `rest.${k}`).run();
   return { [k]: r.error ? `error: ${r.error}` : r.pages ? `${r.count}（${r.page}/${r.pages}）` : r.count };
 }
 

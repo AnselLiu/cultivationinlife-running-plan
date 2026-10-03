@@ -89,6 +89,11 @@ for (const scheme of ['light', 'dark']) test(`無障礙 跑者休息站（${sche
   await page.goto('/#/map');
   await expect(page.locator('.rpin').first()).toBeVisible();
   expect(await axe()).toEqual([]);
+  // 14 級：休息站合併成灰色泡泡，白色數字的對比也要過（16 級以上不合併，上面那次檢查不到）
+  await page.locator('#map').focus();
+  await page.keyboard.press('Minus'); await page.keyboard.press('Minus');
+  await expect(page.locator('.rclus').first()).toBeVisible();
+  expect(await axe()).toEqual([]);
   // 類型 chip 至少 44 px 高的點擊範圍（按鈕 36 px＋上下各 4 px 的透明延伸）
   const h = await page.locator('#restChips .rchip').first().evaluate((el) => el.getBoundingClientRect().height + 2 * Math.max(0, -parseFloat(getComputedStyle(el, '::after').top)));
   expect(h).toBeGreaterThanOrEqual(44);

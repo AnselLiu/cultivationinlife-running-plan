@@ -2,6 +2,7 @@
 //   各來源筆數、開放時間解析得出的比例、座標不在臺灣而丟掉的筆數、輸出欄位有沒有超出白名單或夾帶電話、管理人資料有沒有被讀進來，
 //   以及 171 個跑點（migrations 0033、0037）300 m／500 m／1 km 內有飲水、廁所、淋浴置物、補給的點數（含 0041 的整理清單）。
 //   用法：node tools/rest-check.mjs [來源代碼…]（例如 node tools/rest-check.mjs twd tpt）；依序抓取、每個網址之間停 1 秒
+//   結束碼：任何來源抓取或解析失敗、或（檢查全部來源時）任何一類 500 m 內的點數比基準少超過 10% → 1；都正常 → 0
 import { readFileSync } from 'node:fs';
 import { SOURCES, GROUPS, ROW_KEYS, collect, collectPage, haversine, hasPhone, parseCsv, inTaiwan, cellOf } from '../src/rest.js';
 import { parseHours } from '../public/hours.js';
@@ -10,7 +11,10 @@ const only = process.argv.slice(2);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const env = {};   // 沒有 REST_MOCK：真的連線
 // ver.checks（2026-10-03 研究時實測）的筆數，拿來對照
-const EXPECT = { twd: '739（正常 726、暫停 13）', tpt: '1,537', tprv: '182 處（334 間）', ntrv: '63', tpbk: '9', cpct: '574', tbk: '481', sav: '約 489（運動中心 46＋游泳池）' };
+// 覆蓋率基準：171 個跑點 500 m 內有該類的點數（2026-10-03 第一批來源＋0041 整理清單，不含暫停的直飲臺）；少超過 10% 就算失敗
+//   資料真的變了（例如來源下架）而且確認過，才更新這裡的數字
+const BASELINE_500 = { water: 60, toilet: 100, shower: 54, supply: 11 };
+const EXPECT = { twd: '739（正常 726、暫停 13）', tpt: '1,537', tprv: '334 間（研究時依位置描述 182 處，現在依距離分群）', ntrv: '63', tpbk: '9', cpct: '574', tbk: '481', sav: '約 489（運動中心 46＋游泳池）' };
 
 const all = [];
 const report = [];
@@ -55,7 +59,8 @@ for (const [k, S] of Object.entries(SOURCES)) {
   const by = (f) => Object.entries(rows.reduce((o, r) => ((o[r[f]] = (o[r[f]] || 0) + 1), o), {})).map(([a, n]) => `${a} ${n}`).join('、');
   report.push({ k, name: S.name, err, n: rows.length, expect: EXPECT[k], bad, withHours, unparsed, outside, extra, phones: phones.length, mgr, date, ms: Date.now() - t0,
     subtype: by('subtype'), access: by('access'), status: by('status') });
-  all.push(...rows.map((r) => ({ ...r, source: k })));
+  // 覆蓋率只算地圖上看得到的列（暫停的直飲臺不算）
+  all.push(...rows.filter((r) => r.status !== 'paused').map((r) => ({ ...r, source: k })));
   await sleep(1000);
 }
 
@@ -82,11 +87,12 @@ console.log(`\n## 覆蓋率（${spots.length} 個跑點、${all.length} 處；�
 console.log('類型          300 m  500 m  1 km   最近距離中位數');
 const near = (spot, bits) => { let d = Infinity; for (const r of all) if (r.svc & bits && Math.abs(r.lat - spot.lat) < 0.03 && Math.abs(r.lng - spot.lng) < 0.03) d = Math.min(d, haversine(spot, r)); return d; };
 const label = { water: '飲水', toilet: '廁所', shower: '淋浴置物', supply: '補給' };
-const dists = {};
+const dists = {}, drops = [];
 for (const [g, bits] of Object.entries(GROUPS)) {
   const ds = spots.map((s) => near(s, bits));
   dists[g] = ds;
   const w = (m) => ds.filter((d) => d <= m).length;
+  if (!only.length && w(500) < BASELINE_500[g] * 0.9) drops.push(`${label[g]} 500 m 內 ${w(500)} 點，基準 ${BASELINE_500[g]} 點`);
   const sorted = [...ds].sort((a, b) => a - b), med = sorted[Math.floor(sorted.length / 2)];
   console.log(`${label[g].padEnd(10, '　')}  ${String(w(300)).padStart(5)}  ${String(w(500)).padStart(5)}  ${String(w(1000)).padStart(5)}  ${Number.isFinite(med) ? `${Math.round(med)} m` : '3 km 以上'}`);
 }
@@ -94,3 +100,10 @@ const both = spots.filter((_, i) => dists.water[i] <= 500 && dists.toilet[i] <= 
 const none = spots.filter((_, i) => dists.water[i] > 500 && dists.toilet[i] > 500);
 console.log(`\n飲水和廁所 500 m 內都有：${both} 點；兩者 500 m 內都沒有：${none.length} 點`);
 console.log(`  ${none.map((s) => s.name).join('、')}`);
+
+// ---- 結果 ----
+const errs = report.filter((r) => r.err);
+if (errs.length || drops.length) {
+  console.error(`\n檢查失敗：${[...errs.map((r) => `${r.k} ${r.err}`), ...drops].join('；')}`);
+  process.exitCode = 1;
+} else console.log('\n檢查通過：每個來源都抓得到、覆蓋率沒有比基準少超過 10%');

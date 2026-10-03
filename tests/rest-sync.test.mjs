@@ -34,6 +34,10 @@ test('維護工具的參數：預設只試跑；寫進資料庫一定要指定�
   assert.deepEqual(wranglerArgs(parseArgs(['--apply', '--env=staging']).target, 'x.sql'), ['wrangler', 'd1', 'execute', 'cil-run-staging', '--remote', '--env', 'staging', '--file', 'x.sql']);
   assert.deepEqual(wranglerArgs(parseArgs(['--apply', '--env=production']).target, 'x.sql'), ['wrangler', 'd1', 'execute', 'cil-run', '--remote', '--file', 'x.sql']);
   assert.deepEqual(wranglerArgs(parseArgs(['--apply=local']).target, 'x.sql', '.st'), ['wrangler', 'd1', 'execute', 'cil-run', '--local', '--persist-to', '.st', '--file', 'x.sql']);
+  // 測試假資料不能寫進測試站或正式站（第一次同步沒有上次筆數，70% 檢查擋不住）；試跑與本機可以
+  for (const env of ['production', 'staging']) assert.throws(() => parseArgs(['--mock', '--apply', `--env=${env}`]), /--mock 是測試假資料/, env);
+  assert.equal(parseArgs(['--mock']).target, null);
+  assert.equal(parseArgs(['--mock', '--apply=local']).target.local, true);
   const src = readFileSync(new URL('../tools/rest-sync.mjs', import.meta.url), 'utf8');
   assert.ok(!/process\.env\.[A-Z_]*(TOKEN|KEY|SECRET|PASS)/.test(src) && !/\.dev\.vars/.test(src), '不讀金鑰或 .dev.vars');
 });
@@ -102,16 +106,16 @@ test('臺灣騎跡（多檔）：一次抓完全部路線、跨路線同一處�
   control(new URLSearchParams('reset=1'));
   const db = fresh();
   const g = await gather(env, 'tbk');
-  assert.equal(g.rows.length, 28);
+  assert.equal(g.rows.length, 32);
   run(db, buildSql('tbk', g));
-  assert.equal(live(db, 'tbk'), 28);
+  assert.equal(live(db, 'tbk'), 32);
   const shared = db.prepare("SELECT svc FROM rest_stops WHERE source = 'tbk' AND name = '共用補給站'").all();
   assert.equal(shared.length, 1); assert.ok(shared[0].svc & 256, '兩條路線的服務旗標合併');
-  assert.equal(db.prepare("SELECT access FROM rest_stops WHERE name LIKE '7-ELEVEN%'").get().access, 'customer');
+  for (const n of ['7-ELEVEN 測試門市', '7-11測試門市', 'OK測試中華店']) assert.equal(db.prepare('SELECT access FROM rest_stops WHERE name = ?').get(n).access, 'customer', n);
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM rest_stops WHERE source = 'cur'").get().n, 3, '整理清單不動');
   control(new URLSearchParams('drop=1'));
   run(db, buildSql('tbk', await gather(env, 'tbk')));
-  assert.equal(live(db, 'tbk'), 27);
+  assert.equal(live(db, 'tbk'), 31);
   assert.equal(src(db, 'tbk').cursor, null);
   control(new URLSearchParams('reset=1'));
 });

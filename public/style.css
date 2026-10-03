@@ -1417,9 +1417,9 @@ html.fullmap{background:var(--sheet-solid)}
 @media (min-width:1024px){.bulkbar{bottom:16px}}
 
 /* ---------- 跑者休息站（練跑地圖的圖層）：灰色小圓點＋白色線條圖示，跟彩色水滴形的練跑地點分得開 ---------- */
-.amap,.restcard,.restnear,.restsheet{--rp:#8E8E93}
-:root[data-theme="dark"] :is(.amap,.restcard,.restnear,.restsheet){--rp:#636366}
-@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) :is(.amap,.restcard,.restnear,.restsheet){--rp:#636366}}
+.amap,.restcard,.restnear,.restsheet{--rp:#8E8E93;--rpc:#6C6C70}
+:root[data-theme="dark"] :is(.amap,.restcard,.restnear,.restsheet){--rp:#636366;--rpc:#636366}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) :is(.amap,.restcard,.restnear,.restsheet){--rp:#636366;--rpc:#636366}}
 /* 底圖選單：分組的分隔線（像 iOS 的選單），每一項至少 44 px 高 */
 .basemenu .msep{height:8px;background:color-mix(in srgb,var(--ink) 7%,transparent)}
 .basemenu button{min-height:44px}
@@ -1456,8 +1456,11 @@ html.fullmap{background:var(--sheet-solid)}
 .rpin-host:focus-visible{outline:none}
 .rpin-host:focus-visible .rpin,.rpin-host:focus-visible .rclus{box-shadow:0 0 0 2px #fff,0 0 0 5px var(--accent)}
 /* 群集泡泡比練跑地點的小、灰色：大臺北一縮小就是滿滿的公廁，不要蓋過練跑地點 */
-.rclus{width:max-content;min-width:24px;height:24px;margin:10px auto;padding:0 6px;border-radius:12px;display:grid;place-items:center;background:var(--rp);color:#fff;box-shadow:0 0 0 1.5px #fff,0 1px 5px rgba(0,0,0,.28)}
+.rclus{width:max-content;min-width:24px;height:24px;margin:10px auto;padding:0 6px;border-radius:12px;display:grid;place-items:center;background:var(--rpc);color:#fff;box-shadow:0 0 0 1.5px #fff,0 1px 5px rgba(0,0,0,.28)}
 .rclus b{font-size:12px;font-weight:700;line-height:1}
+/* 分隔點（休息站清單）：中文「・」，英文介面「 · 」 */
+.rsep::before{content:"・"}
+html[lang="en"] .rsep::before{content:"·";margin:0 .35em}
 @media (prefers-reduced-motion:reduce){.rpin{transition:none}.rpin.sel{transform:scale(1.45)}}
 /* 休息站卡與地點卡的「附近休息站」 */
 .rtile{display:grid;place-items:center;flex:none;width:34px;height:34px;border-radius:10px;background:var(--rp)}
@@ -1491,7 +1494,7 @@ html.fullmap{background:var(--sheet-solid)}
 .restsheet .xbtn{width:44px;height:44px}
 .restsrc{list-style:none;margin:0;padding:0;display:grid;gap:12px}
 .restsrc li{display:grid;gap:2px;padding-bottom:10px;border-bottom:.5px solid var(--stroke)}
-.restsrc li > a{justify-self:start;display:inline-flex;align-items:center;gap:4px;min-height:32px}
+.restsrc li > a{justify-self:start;display:inline-flex;align-items:center;gap:4px;min-height:44px}
 .restsrc .ic{width:14px;height:14px}
 .restsrcrow{gap:8px;margin:0 0 8px}
 .restsrcrow code{font-size:12px;word-break:break-all;color:var(--ink-2)}

@@ -182,11 +182,13 @@ function visRect() {
   top = Math.min(top, y1 - 80);
   return { x0, y0: top, x1: W, y1 };
 }
-// 把幾個點一起框進看得到的範圍（地點卡的「在地圖上顯示」）
-function fitVisible(pts) {
+// 把幾個點一起框進看得到的範圍（地點卡的「在地圖上顯示」）；minZoom：框不下時改成以中心放大到這一級（休息站 13 級以上才畫得出針）
+function fitVisible(pts, minZoom = 0) {
   if (!pts.length) return;
-  const r = visRect(), s = map.getSize(), pad = 28;
-  map.fitBounds(window.L.latLngBounds(pts), { paddingTopLeft: [r.x0 + pad, r.y0 + pad], paddingBottomRight: [s.x - r.x1 + pad, s.y - r.y1 + pad], maxZoom: 17 });
+  const r = visRect(), s = map.getSize(), pad = 28, L = window.L, b = L.latLngBounds(pts);
+  const tl = [r.x0 + pad, r.y0 + pad], br = [s.x - r.x1 + pad, s.y - r.y1 + pad];
+  if (map.getBoundsZoom(b, false, L.point(tl).add(br)) < minZoom) return focusOn(b.getCenter(), minZoom);
+  map.fitBounds(b, { paddingTopLeft: tl, paddingBottomRight: br, maxZoom: 17 });
 }
 let sheetH = {}, detent = 'peek';
 function measure() {
@@ -209,6 +211,7 @@ function setDetent(d, opt = {}) {
   sh.classList.toggle('anim', !opt.instant);
   sh.style.transform = `translateY(${sheetH.full - sheetH[d]}px)`;
   if (d !== 'full') $('#msheetScroll').scrollTop = 0;
+  if (map && map.getContainer() === $('#map')) RS.viewChanged();   // 抽屜收起來露出的地圖：休息站補抓那幾格（畫面重建時舊的地圖不算）
 }
 function bindSheet() {
   const sh = $('#msheet'), sc = $('#msheetScroll');
@@ -327,7 +330,7 @@ function closeCard() {
   selected = null; history.replaceState(null, '', '#/map');
   paintPins(); listPanel(); setDetent(wide() ? 'half' : 'peek');
 }
-function startPick(cb) { endDraw(); mode = 'pick'; pickCb = cb; $('#pickBar').hidden = false; $('#map').classList.add('picking'); setDetent('peek'); toast('點地圖選位置'); }
+function startPick(cb) { endDraw(); RS.deselect(); mode = 'pick'; pickCb = cb; $('#pickBar').hidden = false; $('#map').classList.add('picking'); setDetent('peek'); toast('點地圖選位置'); }
 function endPick() { mode = 'browse'; pickCb = null; $('#pickBar').hidden = true; $('#map')?.classList.remove('picking'); }
 // iPad 畫路線：Apple Pencil 隨時直接畫（手指照樣移動、縮放地圖）；打開「手繪」後單指拖也能畫，兩指移動地圖
 let freehand = false, strokes = [], quietUntil = 0;
@@ -822,7 +825,8 @@ function spotForm(s, pt) {
   let cur = pt;
   const mk = window.L.circleMarker(cur, { radius: 9, color: '#fff', weight: 3, fillColor: '#FF9F0A', fillOpacity: 1 }).addTo(drawLayer);
   focusOn(cur, Math.max(map.getZoom(), 16));
-  $('#repick').onclick = () => startPick((p) => { cur = p; mk.setLatLng(p); $('#ptText').textContent = `${p[0].toFixed(5)}, ${p[1].toFixed(5)}`; });
+  // 選位置會清掉 drawLayer（連同這個點）：選好後再放回去
+  $('#repick').onclick = () => startPick((p) => { cur = p; mk.setLatLng(p).addTo(drawLayer); $('#ptText').textContent = `${p[0].toFixed(5)}, ${p[1].toFixed(5)}`; });
   $('#sfc').onclick = () => { drawLayer.clearLayers(); s ? openSpot(s.id) : listPanel(); };
   $('#sfd')?.addEventListener('click', async () => { if (!confirm('刪除這個地點？回報也會一起刪除。')) return; await api(`/spots/${s.id}`, { method: 'DELETE' }); drawLayer.clearLayers(); toast('已刪除'); await loadSpots(); listPanel(); });
   $('#sf').onsubmit = async (e) => {

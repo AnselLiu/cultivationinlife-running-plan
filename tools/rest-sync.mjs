@@ -13,7 +13,7 @@
 //     node tools/rest-sync.mjs --apply --env staging             產生後寫進測試站（cil-run-staging）
 //     node tools/rest-sync.mjs --apply --env production          產生後寫進正式站（cil-run）；wrangler 要先登入（npx wrangler login）
 //     node tools/rest-sync.mjs --apply=local [--persist-to=.wrangler/state]   寫進本機開發用的資料庫
-//     node tools/rest-sync.mjs --mock                            用測試假資料（不連外），檢查產生的 SQL
+//     node tools/rest-sync.mjs --mock                            用測試假資料（不連外），檢查產生的 SQL（只能試跑或配 --apply=local）
 //     --out=目錄                                                 SQL 檔放的位置（預設 .wrangler/rest-sync/）
 //   建議頻率：直飲臺每週（暫停的直飲臺才會盡快消失），其他每月一次；管理後台的「休息站資料來源」看得到上次同步的時間，太久沒同步會提醒
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -119,6 +119,8 @@ export function parseArgs(argv) {
     if (!Object.hasOwn(DBS, opt.env || '')) throw new Error('寫進資料庫要指定 --env staging 或 --env production');
     target = { local: false, env: opt.env, db: opt.db || DBS[opt.env] };
   }
+  // 測試假資料只能試跑或寫進本機資料庫：第一次同步時（還沒有上次筆數）70% 檢查擋不住，假資料會整批寫進正式站
+  if (opt.mock && target && !target.local) throw new Error('--mock 是測試假資料，只能試跑或配 --apply=local，不能寫進測試站或正式站');
   return { opt, want, target };
 }
 // wrangler 指令：正式站是設定檔的頂層（不帶 --env），測試站帶 --env staging

@@ -17,6 +17,8 @@ const LICENSE_URL = 'https://data.gov.tw/license';
 const gov = (provider) => `資料來源：${provider}，依政府資料開放授權條款第1版提供`;
 const TP = (rid, offset = 0) => `https://data.taipei/api/v1/dataset/${rid}?scope=resourceAquire&limit=1000&offset=${offset}`;
 const MB = 1024 * 1024;
+// Worker 同步的來源上限 64 KB（實際 6–8 KB）：資料意外變大時在下載階段就停（「資料太大」），不會在 10 ms CPU 裡解析幾 MB 被強制中斷
+const WORKER_MAX = 64 * 1024;
 export const ALLOWED_HOURS = [1, 2, 6];   // 台北時間：避開 03:00 備份與清理、04–05 點的攝影機同步
 
 // 來源登錄表：網址、解析、主機白名單、顯名、節奏（hour 最早幾點跑；every 每天／每週／每月）、radius（null＝全收；第二批的環境部、Cool map 才用）
@@ -48,7 +50,7 @@ export const SOURCES = {
   tpbk: {
     name: '臺北市河濱自行車租借站', provider: '臺北市政府工務局水利工程處', license: LICENSE, attribution: gov('臺北市政府工務局水利工程處'),
     dataset: 'https://data.gov.tw/dataset/143894', url: [TP('22a8d6c4-54c3-4ca9-b12e-9b827f2c0ca3')], parse: parseTpbk,
-    hosts: [/^data\.taipei$/], hour: 2, every: 'week', radius: null,
+    max: WORKER_MAX, hosts: [/^data\.taipei$/], hour: 2, every: 'week', radius: null,
   },
   cpct: {
     name: '中油加油站無障礙公廁', provider: '台灣中油股份有限公司', license: LICENSE, attribution: gov('台灣中油股份有限公司'),
@@ -59,7 +61,7 @@ export const SOURCES = {
   ntrv: {
     name: '新北市河濱景觀廁所', provider: '新北市政府水利局', license: LICENSE, attribution: gov('新北市政府水利局'),
     dataset: 'https://data.gov.tw/dataset/124796', url: ['https://data.ntpc.gov.tw/api/datasets/ef526dd1-a39c-4186-8905-3ac4726051b5/json?page=0&size=1000'],
-    parse: parseNtrv, hosts: [/^data\.ntpc\.gov\.tw$/], hour: 6, every: 'month', radius: null,
+    max: WORKER_MAX, parse: parseNtrv, hosts: [/^data\.ntpc\.gov\.tw$/], hour: 6, every: 'month', radius: null,
   },
   sav: {
     name: '全國運動場館', provider: '運動部', license: LICENSE, attribution: gov('運動部'),
@@ -98,6 +100,8 @@ const MAX = 4 * MB;
 export const mocked = (env) => env?.REST_MOCK === '1' && env?.DEV_LOGIN === '1';
 const restFetch = (env, url, init) => (mocked(env) ? Promise.resolve(Mock.fetchMock(url)) : fetch(url, init));
 export const mockControl = (q) => Mock.control(q);
+// 測試模式：排程拿到這個來源之後當成被平台強制中斷（超過 CPU 或子請求上限），測「隔天重試」
+export const mockKilled = (env, k) => mocked(env) && Mock.state.kill === k;
 
 // ---- 小工具 ----
 const fnv = (s) => { let h = 0x811c9dc5; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193); } return (h >>> 0).toString(36); };
@@ -168,12 +172,16 @@ const pad = (h) => String(Number(h)).padStart(2, '0');
 export const normTimes = (s) => String(s ?? '').replace(TIME_RANGE, (_, a, b, c, d) => `${pad(a)}:${b}–${pad(c)}:${d}`);
 const ALL_DAY = /^\s*0?0[:：]00\s*[~～\-–—至到]\s*24[:：]00\s*$|^\s*24\s*(小時|H)\s*$/i;
 const ALLDAY_TEXT = '24 小時';
-// 標準寫法要 parseHours 解析得出才收；原文最多 120 字，只顯示
+// 不開放類字樣：parseHours 會把「假日不開放」當成假日開放、把「12:00–13:00 休息」當成多一段開放時間（寧可不判斷也不要判斷錯）
+//   parseHours 看得懂的「週一休館」「週一及國定假日休館」先拿掉，剩下的文字還有這些字樣就只存原文
+const WEEK_CLOSED = /(?:每)?(?:週|星期)[一二三四五六日天](?:\s*[、,和及]\s*(?:週|星期)?[一二三四五六日天])?(?:\s*[及和、]\s*國定假日)?\s*(?:休館|休園|休息|公休|不開放|閉館|休場)/g;
+export const closedHint = (s) => /不開放|不對外|休息|休館|休園|公休|閉館|休場|暫停|停止/.test(String(s ?? '').replace(WEEK_CLOSED, ''));
+// 標準寫法要 parseHours 解析得出、而且沒有不開放類字樣才收；原文最多 120 字，只顯示
 function hoursOf(std, raw) {
   const s = std ? String(std).trim() : '';
   const r = clip(noPhone(raw), 120);
-  if (s && s.length <= 80 && parseHours(s)) return { hours: s, hours_raw: r && normTimes(r) !== s ? r : null };
-  return { hours: null, hours_raw: r || null };
+  if (s && s.length <= 80 && !closedHint(s) && parseHours(s)) return { hours: s, hours_raw: r && normTimes(r) !== s ? r : null };
+  return { hours: null, hours_raw: r || (s && s !== ALLDAY_TEXT ? clip(s, 120) : null) };
 }
 const WD = '日一二三四五六';
 // 「一二三四五」這類星期清單 → 「週一至週五」「每日」「週六、週日」
@@ -204,16 +212,17 @@ function taipei(texts, meta) {
   return all;
 }
 // 欄位名稱用「|」串成一個字串再拆開（中文欄名不是介面文字，不用翻譯）
-const [TW_ID, TW_NAME, TW_PLACE, TW_ADDR, TW_CITY, TW_HOURS, TW_LNG, TW_LAT, TW_STATUS, TW_URL, TW_OK, TW_PAUSE] =
-  '直飲臺編號|場所名稱|設置地點|地址|市別|場所開放時間|經度|緯度|狀態|水質及維護資訊網址|正常|暫停'.split('|');
+const [TW_ID, TW_NAME, TW_PLACE, TW_ADDR, TW_CITY, TW_HOURS, TW_LNG, TW_LAT, TW_STATUS, TW_URL, TW_OK, TW_PAUSE, TW_KIND, TW_MRT] =
+  '直飲臺編號|場所名稱|設置地點|地址|市別|場所開放時間|經度|緯度|狀態|水質及維護資訊網址|正常|暫停|場所別|捷運站'.split('|');
 function parseTwd(texts, meta) {
   return taipei(texts, meta).map((r) => {
     const st = clip(r[TW_STATUS], 10);
     if (st !== TW_OK && st !== TW_PAUSE) return null;        // 只收正常與暫停（暫停的顯示成 paused，不出現在地圖上）
-    const raw = clip(r[TW_HOURS], 120), all = ALL_DAY.test(raw);
+    // 捷運站裡的直飲臺跟著車站開關門：來源寫 0:00~24:00 的（新北幾站，2026-10-03 有 8 筆）不當成 24 小時，只存原文
+    const raw = clip(r[TW_HOURS], 120), allRaw = ALL_DAY.test(raw), mrt = allRaw && clip(r[TW_KIND], 10) === TW_MRT, all = allRaw && !mrt;
     return { sid: r[TW_ID], type: 'water', subtype: 'fountain', svc: SVC.water | (all ? SVC.allday : 0), access: 'public',
       name: r[TW_NAME], place: r[TW_PLACE], address: r[TW_ADDR], city: r[TW_CITY], lat: num(r[TW_LAT]), lng: num(r[TW_LNG]),
-      ...hoursOf(all ? ALLDAY_TEXT : normTimes(raw), all ? '' : raw), ref_url: r[TW_URL], status: st === TW_PAUSE ? 'paused' : 'ok' };
+      ...hoursOf(all ? ALLDAY_TEXT : mrt ? null : normTimes(raw), all ? '' : raw), ref_url: r[TW_URL], status: st === TW_PAUSE ? 'paused' : 'ok' };
   });
 }
 const [TT_NAME, TT_ADDR, TT_KIND, TT_LNG, TT_LAT, TT_ACC, TT_FAM, TT_DIST] = '公廁名稱|公廁地址|公廁類別|經度|緯度|無障礙廁座數|親子廁座數|行政區'.split('|');
@@ -227,20 +236,28 @@ function parseTpt(texts, meta) {
       name: r[TT_NAME], address: r[TT_ADDR], city: city(r[TT_ADDR]) || '臺北市', lat: num(r[TT_LAT]), lng: num(r[TT_LNG]) };
   });
 }
-// 河濱廁所一列一間：依「公園＋位置描述」合併成一處，座標取平均，有無障礙就加旗標
-const ACCESSIBLE = /無障礙/;
+// 河濱廁所一列一間：依「公園＋位置描述」分組，組內再依距離分群（60 公尺內算同一處，座標取平均），有無障礙就加旗標
+//   同一個位置描述有時涵蓋好幾處（例如百齡右岸「體育局球場」9 間分在 4 個地方、相距約 1.3 公里），平均起來會落在沒有廁所的地方
+//   代碼：組內只有一處用「公園｜位置」（跟以前一樣，幹部的修正對得上）；分成好幾處時再加上該處座標（取到 0.001 度）
+const ACCESSIBLE = /無障礙/, CLUSTER_M = 60;
 function parseTprv(texts, meta) {
   const groups = new Map();
   for (const r of taipei(texts, meta)) {
     const park = clip(r['riverside park'], 40), loc = clip(r.location, 60);
     const c = pickCoord(r.latitude, r.longitude, r.long_twd97, r.lat_wd97 ?? r.lat_twd97);
     if (!park || !inTaiwan(c.lat, c.lng)) continue;
-    const k = `${park}|${loc}`, g = groups.get(k) || { park, loc, lat: 0, lng: 0, n: 0, acc: false };
-    g.lat += c.lat; g.lng += c.lng; g.n += 1; g.acc ||= ACCESSIBLE.test(String(r.type || ''));
+    const k = `${park}|${loc}`, g = groups.get(k) || { park, loc, spots: [] };
+    // 貪婪分群：離某一群的第一間 60 公尺內就加進去
+    const acc = ACCESSIBLE.test(String(r.type || ''));
+    const hit = g.spots.find((x) => haversine(x.first, c) <= CLUSTER_M);
+    if (hit) { hit.lat += c.lat; hit.lng += c.lng; hit.n += 1; hit.acc ||= acc; } else g.spots.push({ first: c, lat: c.lat, lng: c.lng, n: 1, acc });
     groups.set(k, g);
   }
-  return [...groups.values()].map((g) => ({ sid: fnv(`${g.park}|${g.loc}`), type: 'toilet', subtype: 'river', svc: SVC.toilet | (g.acc ? SVC.accessible : 0),
-    access: 'public', name: g.park, place: g.loc, city: '臺北市', lat: g.lat / g.n, lng: g.lng / g.n }));
+  return [...groups.values()].flatMap((g) => g.spots.map((x) => {
+    const lat = x.lat / x.n, lng = x.lng / x.n;
+    return { sid: fnv(g.spots.length === 1 ? `${g.park}|${g.loc}` : `${g.park}|${g.loc}|${lat.toFixed(3)}|${lng.toFixed(3)}`), type: 'toilet', subtype: 'river',
+      svc: SVC.toilet | (x.acc ? SVC.accessible : 0), access: 'public', name: g.park, place: g.loc, city: '臺北市', lat, lng };
+  }));
 }
 function parseNtrv(texts) {
   const list = JSON.parse(texts[0]);
@@ -273,14 +290,19 @@ export function bikeHours(text) {
   if (out.wd && out.we) return `${BK_WEEKDAY} ${out.wd}；${BK_WEEKEND} ${out.we}`;
   return out.we ? `${BK_WEEKEND} ${out.we}` : `${BK_WEEKDAY} ${out.wd}`;
 }
+// 營運商（康美企業社，http://www.ukan.com.tw/About，2026-10-03 查證）列為「假日站」、但開放資料仍寫平日時段的站：
+//   兩邊不一致時不主張平日有開，只留假日時段（原文的平日時段也不顯示，免得互相矛盾）；營運商改了再拿掉
+const WEEKEND_ONLY = new Set(['木柵站']);
 function parseTpbk(texts, meta) {
   return taipei(texts, meta).map((r) => {
     const c = pickCoord(r[BK_LAT], r[BK_LNG], r[BK_X97], r[BK_Y97]);
     const raw = String(r[BK_HOURS] || '').replace(/={3,}/g, '／').replace(/\s*\n\s*/g, ' ');
+    let std = bikeHours(r[BK_HOURS]), shown = raw;
+    if (std && WEEKEND_ONLY.has(clip(r[BK_NAME], 40))) { std = std.split('；').find((x) => x.startsWith(BK_WEEKEND)) || null; shown = std ? '' : raw; }
     // 營運商公告提供免費飲水、打氣與簡易維修；不寫 AED（查不到來源）
     return { sid: fnv(clip(r[BK_NAME], 40)), type: 'supply', subtype: 'bike', svc: SVC.water | SVC.supply | SVC.repair, access: 'public',
       name: r[BK_NAME], place: clip(r[BK_PARK], 40) || null, address: clip(r[BK_PLACE], 100), city: '臺北市', lat: c.lat, lng: c.lng,
-      ...hoursOf(bikeHours(r[BK_HOURS]), raw) };
+      ...hoursOf(std, shown) };
   });
 }
 // 中油：無障礙公廁 XML（站代號、站名、地址、服務時段）＋站點 JSON（經緯度、營業中）；電話欄位不讀
@@ -344,32 +366,40 @@ const CITY_CODE = { 63000: '臺北市', 64000: '高雄市', 65000: '新北市', 
 const [SV_CITY, SV_NAME, SV_ATTR, SV_ADDR, SV_LAT, SV_LNG, SV_FAC, SV_OPEN, SV_DAYS, SV_NOTE, SV_WEB, SV_PAID, SV_CLOSED, SV_NULL, SV_NONE] =
   '縣市|場館名稱|場館隸屬機關屬性|地址|緯度|經度|設施項目|開放情形|開放時間|開放及休館時間補充說明|場館官方網站|付費|不對外開放使用|NULL|無'.split('|');
 const NSC = /^國民運動中心/, POOL = /游泳/;
+// 補充說明裡的時間大多是「不開放」的時段（學生游泳課、清場、午休、施工），不能當成開放時間：
+//   只有明確寫「開放時間／營業時間／每日開放」而且緊接著一段時間、全文沒有不開放類字樣時才整理，其他只存原文（畫面顯示「依場館公告」）
+//   2026-10-03 實測：494 處裡只有臺北市萬華運動中心、臺中朝馬國民運動中心符合
+const SAV_OPEN = /(?:開放時間|營業時間|每日開放)\s*[:：]?\s*\d{1,2}[:：]\d{2}\s*[~～\-–—至到]\s*\d{1,2}[:：]\d{2}/;
+const SAV_CLOSED = /不對外|不開放|未開放|清場|休息|學生|游泳課|上課時間|施工|暫停|停止開放|停止營業|停業|整修|維護|修繕|閉館/;
+export function savHours(note, daysCol) {
+  if (!SAV_OPEN.test(note) || SAV_CLOSED.test(note)) return null;
+  const times = [...normTimes(note).matchAll(/(\d{2}:\d{2})–(\d{2}:\d{2})/g)];
+  const days = daysText(daysCol);
+  return times.length === 1 && days && !/週|星期|假日|平日/.test(note) ? `${days} ${times[0][1]}–${times[0][2]}` : null;
+}
 function parseSav(texts) {
   const rows = parseCsv(texts[0]);
   const head = rows.shift() || [];
   const ix = Object.fromEntries([SV_CITY, SV_NAME, SV_ATTR, SV_ADDR, SV_LAT, SV_LNG, SV_FAC, SV_OPEN, SV_DAYS, SV_NOTE, SV_WEB].map((k) => [k, head.findIndex((h) => h.trim() === k)]));
   if (Object.values(ix).some((i) => i < 0)) throw new Error('欄位名稱改了');
   const venues = new Map();
+  const empty = (s) => !s || s === SV_NULL || s === SV_NONE;
   for (const r of rows) {
     const g = (k) => String(r[ix[k]] ?? '').trim();
     const attr = g(SV_ATTR), open = g(SV_OPEN), nsc = NSC.test(attr), pool = POOL.test(g(SV_FAC));
     if ((!nsc && !pool) || open === SV_CLOSED || !open || open === SV_NULL) continue;
     const name = g(SV_NAME).replace(/委由.*$|委託.*經營$/, '').trim(), addr = g(SV_ADDR), k = `${name}|${addr}`;
-    const v = venues.get(k) || { name, addr, nsc: false, pool: false, paid: false, city: CITY_CODE[Number(g(SV_CITY))] || city(addr), lat: num(g(SV_LAT)), lng: num(g(SV_LNG)), days: g(SV_DAYS), note: g(SV_NOTE), web: g(SV_WEB) };
+    const v = venues.get(k) || { name, addr, nsc: false, pool: false, paid: false, city: CITY_CODE[Number(g(SV_CITY))] || city(addr), lat: num(g(SV_LAT)), lng: num(g(SV_LNG)), days: '', note: '', poolInfo: false, web: g(SV_WEB) };
     v.nsc ||= nsc; v.pool ||= pool; v.paid ||= open.includes(SV_PAID);
-    if (!v.note || v.note === SV_NULL) v.note = g(SV_NOTE);
+    // 星期與補充說明以游泳池那一列為準（跑者要的是淋浴）；沒有游泳池列才用第一個有值的設施列
+    const note = g(SV_NOTE), days = g(SV_DAYS);
+    if (pool && !v.poolInfo) { v.poolInfo = true; if (!empty(note)) v.note = note; if (days) v.days = days; }
+    else if (!v.poolInfo) { if (!v.note && !empty(note)) v.note = note; if (!v.days && days) v.days = days; }
     venues.set(k, v);
   }
-  return [...venues.values()].map((v) => {
-    const note = v.note === SV_NULL || v.note === SV_NONE ? '' : v.note;
-    // 時間只在補充說明剛好寫了一段時間、而且沒有提到星期時才整理（其他寫法太多樣，留給畫面顯示「依場館公告」）
-    const times = [...normTimes(note).matchAll(/(\d{2}:\d{2})–(\d{2}:\d{2})/g)];
-    const days = daysText(v.days);
-    const std = times.length === 1 && days && !/週|星期|假日/.test(note) ? `${days} ${times[0][1]}–${times[0][2]}` : null;
-    return { sid: fnv(`${v.name}|${v.addr}`), type: 'shower', subtype: v.nsc ? 'center' : 'pool',
-      svc: v.nsc ? SVC.water | SVC.toilet | SVC.shower | SVC.locker : SVC.toilet | SVC.shower, access: v.paid ? 'paid' : 'public',
-      name: v.name, address: v.addr, city: v.city, lat: v.lat, lng: v.lng, ...hoursOf(std, note), ref_url: v.web };
-  });
+  return [...venues.values()].map((v) => ({ sid: fnv(`${v.name}|${v.addr}`), type: 'shower', subtype: v.nsc ? 'center' : 'pool',
+    svc: v.nsc ? SVC.water | SVC.toilet | SVC.shower | SVC.locker : SVC.toilet | SVC.shower, access: v.paid ? 'paid' : 'public',
+    name: v.name, address: v.addr, city: v.city, lat: v.lat, lng: v.lng, ...hoursOf(savHours(v.note, v.days), v.note), ref_url: v.web }));
 }
 // 臺灣騎跡：路線索引裡「環島挑戰」「多元路線」的路線檔，local[] 中 Type=REST 那一組是補給站
 const TBK_GRADE = /^(環島挑戰|多元路線)$/;
@@ -379,8 +409,9 @@ function tbkRoutes(text) {
   return list.filter((r) => TBK_GRADE.test(String(r.grades || '')) && /^\d{6,16}$/.test(String(r.id || ''))).map((r) => String(r.id));
 }
 function tbkRouteUrl(id) { return /^\d{6,16}$/.test(id) ? `https://taiwanbike.tw/data/zh/bikeRoute/${id}.json` : null; }
-const [TB_WC, TB_AWC, TB_WATER, TB_FOOD, TB_FIX, TB_SHOWER] = '廁所|無障礙廁所|飲水|餐飲|維修|淋浴'.split('|');
-const STORE_NAME = /7-?ELEVEN|統一超商|全家|萊爾富|OK\s*(超商|便利|mart)|便利商店|超商/i;
+const [TB_WC, TB_AWC, TB_WATER, TB_FOOD, TB_FIX] = '廁所|無障礙廁所|飲水|餐飲|維修'.split('|');
+// 超商：真實資料的名稱是「7-11瑞權門市」「OK大溪中華店」「全家…」「萊爾富…」
+export const STORE_NAME = /7-?11|7-?ELEVEN|統一超商|全家|萊爾富|Hi-?Life|^OK|OK\s*(超商|便利|mart)|便利商店|超商/i;
 function parseTbk(texts) {
   const out = [];
   for (const t of texts) {
@@ -388,11 +419,12 @@ function parseTbk(texts) {
     const rest = (Array.isArray(j?.local) ? j.local : []).filter((x) => x?.Type === 'REST').flatMap((x) => (Array.isArray(x.Data) ? x.Data : []));
     for (const r of rest) {
       const sv = new Set(String(r.Service || '').split(/[,，、]/).map((s) => s.trim()));
-      const lat = num(r.Lat), lng = num(r.Lng), name = clip(r.Name, 60);
-      const svc = SVC.supply | (sv.has(TB_WC) ? SVC.toilet : 0) | (sv.has(TB_AWC) ? SVC.toilet | SVC.accessible : 0) | (sv.has(TB_WATER) ? SVC.water : 0)
-        | (sv.has(TB_FIX) ? SVC.repair : 0) | (sv.has(TB_SHOWER) ? SVC.shower : 0) | (sv.has(TB_FOOD) ? SVC.seat : 0);
+      const lat = num(r.Lat), lng = num(r.Lng), name = clip(r.Name, 60), store = STORE_NAME.test(name);
+      // 「買得到補給」只給超商與有餐飲的補給站（派出所、加油站多半只有廁所與飲水）；淋浴有「淋浴」「淋浴(付費)」兩種寫法
+      const svc = (sv.has(TB_FOOD) || store ? SVC.supply : 0) | (sv.has(TB_WC) ? SVC.toilet : 0) | (sv.has(TB_AWC) ? SVC.toilet | SVC.accessible : 0)
+        | (sv.has(TB_WATER) ? SVC.water : 0) | (sv.has(TB_FIX) ? SVC.repair : 0) | ([...sv].some((x) => /^淋浴/.test(x)) ? SVC.shower : 0);
       out.push({ sid: fnv(`${name}|${lat.toFixed(4)}|${lng.toFixed(4)}`), type: 'supply', subtype: 'station', svc,
-        access: STORE_NAME.test(name) ? 'customer' : 'public', name, lat, lng, ref_url: r.Url });
+        access: store ? 'customer' : 'public', name, lat, lng, ref_url: r.Url });
     }
   }
   return out;
@@ -488,7 +520,7 @@ export async function collect(env, source, prev = null, { raw = false } = {}) {
   if (!S?.url) throw new Error('這個來源不能同步');
   const single = S.url.length === 1;
   const got = [];
-  for (const u of S.url) got.push(await fetchBytes(env, source, u, { max: S.max || MAX, cond: single ? prev : null }));
+  for (const u of S.url) got.push(await fetchBytes(env, source, u, { max: S.max || (S.local ? MAX : WORKER_MAX), cond: single ? prev : null }));
   if (got[0].status === 304) return { same: true, tag: prev };
   const tag = { e: single ? got[0].etag : null, m: single ? got[0].modified : null, h: await hex(got.map((g) => g.bytes)) };
   if (prev?.h && prev.h === tag.h) return { same: true, tag };
@@ -645,18 +677,30 @@ export function applyFix(r) {
   for (const k of FIX_KEYS) if (Object.hasOwn(f, k)) o[k] = f[k] === '' ? null : f[k];
   return o;
 }
-// 讀取時合併：同一類、60 公尺內、名稱去掉「男廁、女、無障礙、1F」後相同 → 一筆；優先順序 man > cur > 官方 > 店家，服務旗標取聯集
+// 讀取時合併：同一類、60 公尺內、名稱去掉「男廁、女、無障礙、1F」等字後相同 → 一筆；廁所另外 30 公尺內不看名稱也算同一處
+//   （同一間廁所在不同來源的名稱常常不一樣：「中油中崙站」與「中油中崙加油站」、「百齡右岸景觀」與「百齡右岸河濱公園」）
+//   優先順序 man > cur > 官方 > 店家（例如中油的廁所以中油無障礙公廁的「免費」為準，不用臺北公廁的「店家廁所」），服務旗標取聯集
 const RANK = (r) => (r.source === 'man' ? 0 : r.source === 'cur' ? 1 : r.access === 'customer' ? 3 : 2);
-export const normName = (s) => String(s || '').toLowerCase().replace(/男廁|女廁|男|女|無障礙|親子|廁所|化妝室|\b[b]?\d+f\b|\d+樓|[\s・·\-－_()（）]/g, '');
+export const normName = (s) => String(s || '').toLowerCase().replace(/^(台灣|臺灣)/, '').replace(/加油站/g, '站')
+  .replace(/男廁|女廁|男|女|無障礙|親子|廁所|化妝室|景觀|河濱公園|\b[b]?\d+f\b|\d+樓|[\s・·\-－_()（）]/g, '');
+export const SAME_M = 60, TOILET_M = 30;
+export const samePlace = (a, b, d = haversine(a, b)) => a.type === b.type && ((a.type === 'toilet' && d <= TOILET_M) || (d <= SAME_M && normName(a.name) === normName(b.name)));
 export function mergeRows(rows) {
   const sorted = [...rows].sort((a, b) => RANK(a) - RANK(b) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-  const keep = [], groups = new Map();
+  const keep = [], groups = new Map(), near = new Map();
+  // 廁所用約 50 公尺的小格子找鄰近的列（只比對自己與周圍 8 格，不用兩兩比對全部）
+  const bk = (r) => [Math.floor(r.lat * 2000), Math.floor(r.lng * 2000)];
   for (const r of sorted) {
     const k = `${r.type}|${normName(r.name)}`, list = groups.get(k) || [];
-    const hit = list.find((x) => haversine(x, r) <= 60);
+    let hit = list.find((x) => haversine(x, r) <= SAME_M);
+    if (!hit && r.type === 'toilet') {
+      const [y, x] = bk(r);
+      for (let dy = -1; dy <= 1 && !hit; dy++) for (let dx = -1; dx <= 1 && !hit; dx++) hit = (near.get(`${y + dy}_${x + dx}`) || []).find((o) => haversine(o, r) <= TOILET_M);
+    }
     if (hit) { hit.svc |= r.svc; if (!hit.also.includes(r.source)) hit.also.push(r.source); continue; }
     const o = { ...r, also: [] };
     list.push(o); groups.set(k, list); keep.push(o);
+    if (r.type === 'toilet') { const [y, x] = bk(r), key = `${y}_${x}`; (near.get(key) || near.set(key, []).get(key)).push(o); }
   }
   return keep;
 }
@@ -732,10 +776,10 @@ export async function detail(env, id, editor) {
   if (!live && !editor) return null;
   const r = applyFix(r0);
   const srow = st.rows.find((s) => s.source === r.source) || {};
-  // 同一處的其他來源（同類、60 公尺內、名稱相同）
+  // 同一處的其他來源（跟地圖合併的規則一樣：同類 60 公尺內名稱相同，或廁所 30 公尺內）
   const [cy, cx] = cellOf(r.lat, r.lng).split('_').map(Number), cells = [];
   for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) cells.push(`${cy + dy}_${cx + dx}`);
-  const near = (await cellRows(env, cells, st.on, boxOf(r, 80))).filter((x) => x.id !== r.id && x.type === r.type && normName(x.name) === normName(r.name) && haversine(x, r) <= 60);
+  const near = (await cellRows(env, cells, st.on, boxOf(r, 80))).filter((x) => x.id !== r.id && samePlace(r, x));
   const also = [...new Set(near.map((x) => x.source))].filter((k) => k !== r.source).map((k) => credit(k, st.rows.find((s) => s.source === k)));
   const stop = { id: r.id, type: r.type, subtype: r.subtype, svc: near.reduce((n, x) => n | x.svc, r.svc), access: r.access, status: r.status, name: r.name, place: r.place,
     address: r.address, city: r.city, lat: r.lat, lng: r.lng, hours: r.hours || null, hours_raw: r.hours_raw || null, fee: r.fee || null, note: r.note || null,
@@ -758,7 +802,7 @@ function hoursInput(v) {
   if (s.length > 80) return { error: '開放時間最多 80 字' };
   if (!s) return { hours: null, hours_raw: null };
   const n = normTimes(s);
-  return parseHours(n) ? { hours: n, hours_raw: null } : { hours: null, hours_raw: s };
+  return !closedHint(n) && parseHours(n) ? { hours: n, hours_raw: null } : { hours: null, hours_raw: s };
 }
 // 新增或整筆修改（man、cur）：回 { value } 或 { error }
 export function readStop(b) {

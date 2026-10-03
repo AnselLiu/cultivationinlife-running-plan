@@ -1168,6 +1168,11 @@ test('跑者休息站：功能開關預設關閉、權限、同步轉換與完�
   assert.equal((await call('t_chair', '/settings/features', { method: 'POST', body: { cams: false } })).status, 200);
   assert.equal((await call('t_chair', '/rest/sources')).json.feature, true);
   for (const k of ['ntrv', 'tpbk']) { const r = await sync(k); assert.equal(r.status, 200, `${k} ${r.text}`); }
+  // Worker 同步的來源有 64 KB 上限：資料意外變大時回「資料太大」，不解析、不寫入
+  await mock('big=1');
+  const bg = await sync('tpbk');
+  assert.equal(bg.status, 502); assert.match(bg.json.error, /資料太大/);
+  await mock('big=0');
   for (const k of ['tprv', 'tpt', 'cpct', 'sav']) { const r = await devSync(k); assert.equal(r.status, 200, `${k} ${JSON.stringify(r.json)}`); }
   const meta = await call('t_runner', '/rest/meta');
   assert.equal(meta.status, 200);
@@ -1188,6 +1193,9 @@ test('跑者休息站：功能開關預設關閉、權限、同步轉換與完�
   assert.ok(!c1.json.stops.some((s) => s[0] === 'twd:D3'), '暫停的直飲臺不出現');
   assert.deepEqual(c1.json.stops.find((s) => s[0] === 'twd:D1').slice(1), ['water', 'fountain', 513, 'public', 25.0738, 121.5403, '大佳河濱公園 9號水門', '24 小時']);
   assert.equal((await detail('twd:D3')).json.stop.status, 'paused');
+  // 詳情與 meta 依身分不同（幹部多看得到建立者、隱藏的列）：不讓瀏覽器快取
+  assert.equal((await detail('twd:D1')).headers.get('cache-control'), 'no-store');
+  assert.equal((await call('t_runner', '/rest/meta')).headers.get('cache-control'), 'no-store');
   for (const bad of ['12_34', 'abc', '1253_6077x', '1253-6077', '9_9', '12345_6077']) assert.equal((await call('t_runner', `/rest/cell/${bad}`)).status, 400, bad);
   // 完整性檢查：筆數掉到 70% 以下不寫入、不停用
   await mock('shrink=1');
@@ -1203,7 +1211,7 @@ test('跑者休息站：功能開關預設關閉、權限、同步轉換與完�
   // 排程：只跑留在 Worker 的小來源（租借站、新北河濱），每次排程只跑一個到期的來源；只由維護工具同步的來源排程不跑
   assert.equal(await cron('2027-07-04T17:30:00Z'), null, '台北 01:30：直飲臺、臺北公廁、河濱廁所都由維護工具同步，排程沒有到期的來源');
   assert.equal(await cron('2027-07-04T19:30:00Z'), null, '03:00 不跑（備份時段）');
-  assert.deepEqual(await cron('2027-07-04T22:30:00Z'), { tpbk: 2 }, '06:30：租借站與新北河濱都到期，一次只跑一個');
+  assert.deepEqual(await cron('2027-07-04T22:30:00Z'), { tpbk: 3 }, '06:30：租借站與新北河濱都到期，一次只跑一個');
   assert.deepEqual(await cron('2027-07-04T22:40:00Z'), { ntrv: 1 });
   assert.equal(await cron('2027-07-04T22:50:00Z'), null, '這一期都跑完了（中油、運動場館、騎跡不在排程裡）');
   // 幹部修正與隱藏：同步後不被覆蓋
@@ -1276,7 +1284,7 @@ test('跑者休息站：功能開關預設關閉、權限、同步轉換與完�
   await mock('failPage=0');
   assert.equal((await devSync('tbk')).json.page, 2, '從中斷的那一頁續跑');
   const t3 = (await devSync('tbk')).json;
-  assert.equal(t3.page, 3); assert.equal(t3.count, 28); assert.equal(t3.done, true);
+  assert.equal(t3.page, 3); assert.equal(t3.count, 32); assert.equal(t3.done, true);
   const seven = (await stops('1170_6020')).find((s) => /7-ELEVEN/.test(s[7]));
   assert.equal(seven[4], 'customer', '超商補給站是店家');
   const tail = (await ids('1165_6015'))[0];
@@ -1284,7 +1292,7 @@ test('跑者休息站：功能開關預設關閉、權限、同步轉換與完�
   await mock('drop=1');
   await devSync('tbk'); await devSync('tbk');
   assert.equal((await detail(tail)).status, 200, '一輪還沒跑完不停用');
-  assert.equal((await devSync('tbk')).json.count, 27);
+  assert.equal((await devSync('tbk')).json.count, 31);
   assert.equal((await detail(tail)).status, 404, '跑完一輪才停用沒看到的列');
   // 稽核紀錄
   const au = (await call('t_chair', '/audit?action=rest.')).json.items.map((x) => x.action);
@@ -1340,6 +1348,14 @@ test('跑者休息站（免費方案）：每個來源標明 Worker 能不能同
   assert.equal((await fetch(`${BASE}/api/dev/rest-sync?source=tprv`)).status, 200);
   const tp = (await call('t_chair', '/rest/sources')).json.sources.find((s) => s.source === 'tprv');
   assert.equal(tp.local, true); assert.ok(tp.last_ok_at, '有上次同步時間'); assert.equal(tp.last_error, null);
+  // 排程拿到來源後被平台強制中斷（超過 CPU 或子請求上限）：這一期不能算跑完，隔天要再跑
+  await mock('kill=tpbk');
+  assert.deepEqual(await cron('2027-09-05T22:30:00Z'), { tpbk: 'killed' }, '台北 9/6（週一）06:30：拿到租借站後被中斷');
+  assert.deepEqual(Object.keys(await cron('2027-09-05T22:40:00Z')), ['ntrv'], '今天不再試同一個來源');
+  assert.equal(await cron('2027-09-05T22:50:00Z'), null);
+  await mock('kill=');
+  assert.deepEqual(await cron('2027-09-06T22:30:00Z'), { tpbk: 3 }, '隔天重跑被中斷的來源');
+  assert.equal(await cron('2027-09-06T22:40:00Z'), null, '成功後這一期（這一週）不再跑');
   assert.equal((await call('t_chair', '/settings/features', { method: 'POST', body: { rest: false } })).status, 200);
   await mock('reset=1');
 });

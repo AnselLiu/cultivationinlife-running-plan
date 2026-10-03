@@ -433,6 +433,9 @@ test('跑者休息站：地點卡的附近休息站、休息站卡（顯名與�
   expect(page.url()).toContain(`rest=${encodeURIComponent(id)}`);
   // 地圖上那一處放大顯示
   await expect(page.locator(`.rpin.sel[data-rid="${id}"]`)).toBeAttached();
+  // 只打開休息站卡不會改這台裝置的圖層設定（圖層關著也畫出正在看的那一處）
+  expect(await page.evaluate(() => localStorage.getItem('cil-map-rest'))).toBe('0');
+  await expect(page.locator('#restBar')).toBeHidden();
   // 回到地點：焦點回到剛才那一列
   await page.locator('#restBack').click();
   await expect(page.locator('.spotcard').first()).toContainText('大佳');
@@ -446,6 +449,36 @@ test('跑者休息站：地點卡的附近休息站、休息站卡（顯名與�
   await expect(card).toBeVisible();
   await page.locator('#restClose').click();
   await expect(page.locator('.restcard')).toHaveCount(0);
+});
+
+test.describe('跑者休息站：手機', () => {
+  test.use({ viewport: { width: 393, height: 852 } });
+  test('抽屜全開時按「在地圖上顯示」：抽屜降到半開、地圖上看得到休息站的針', async ({ page, request }) => {
+    await restOn(request);
+    await page.addInitScript(restView('[25.0736,121.5401,15]'));
+    await enter(page);
+    await page.goto('/#/map?spot=seed07');
+    await expect(page.locator('#restNear .rnitem').first()).toBeVisible();
+    const sheet = page.locator('#msheet');
+    while ((await sheet.getAttribute('data-detent')) !== 'full') await page.locator('#grab').click();
+    await page.locator('#restShow').click();
+    await expect(sheet).toHaveAttribute('data-detent', 'half');
+    await expect(page.locator('.rpin').first()).toBeVisible();
+    await expect(page.locator('#restHint')).toBeHidden();
+    // 至少有一顆針在抽屜上面（看得到的地圖裡）
+    await expect.poll(async () => {
+      const top = (await sheet.boundingBox()).y;
+      const ys = await page.locator('.rpin').evaluateAll((els) => els.map((e) => e.getBoundingClientRect().y));
+      return ys.some((y) => y > 0 && y < top);
+    }).toBe(true);
+  });
+  test('網址帶 ?rest= 但讀不到那一處：回到地點清單，不停在「載入中」', async ({ page, request }) => {
+    await restOn(request);
+    await enter(page);
+    await page.goto('/#/map?rest=twd:NOPE404');
+    await expect(page.locator('#spotQ')).toBeVisible();
+    expect(page.url()).not.toContain('rest=');
+  });
 });
 
 test.describe('跑者休息站：離線', () => {

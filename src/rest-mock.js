@@ -3,11 +3,13 @@
 //   座標放在測試資料的「大佳河濱公園（9 號水門）」（seed07：25.07358, 121.54011）與「大安森林公園」（seed04：25.03356, 121.53528）附近。
 
 // 狀態：shrink＝直飲臺只剩 1 筆（完整性檢查要擋下）；drop＝直飲臺少 D4、騎跡少「末段補給站」（要停用）；
-//   failPage＝騎跡第幾頁的路線檔回 500（測中斷續跑）；change＝臺北公廁的資料變了（測幹部修正不被覆蓋）；hits＝每個網址被抓了幾次
-export const state = { shrink: false, drop: false, failPage: 0, change: false, hits: {} };
+//   failPage＝騎跡第幾頁的路線檔回 500（測中斷續跑）；change＝臺北公廁的資料變了（測幹部修正不被覆蓋）；
+//   big＝租借站回應超過 Worker 來源的 64 KB 上限；kill＝排程拿到這個來源後當成被平台強制中斷（測隔天重試）；hits＝每個網址被抓了幾次
+export const state = { shrink: false, drop: false, failPage: 0, change: false, big: false, kill: '', hits: {} };
 export function control(q) {
-  if (q.has('reset')) Object.assign(state, { shrink: false, drop: false, failPage: 0, change: false, hits: {} });
-  for (const k of ['shrink', 'drop', 'change']) if (q.has(k)) state[k] = q.get(k) === '1';
+  if (q.has('reset')) Object.assign(state, { shrink: false, drop: false, failPage: 0, change: false, big: false, kill: '', hits: {} });
+  for (const k of ['shrink', 'drop', 'change', 'big']) if (q.has(k)) state[k] = q.get(k) === '1';
+  if (q.has('kill')) state.kill = /^[a-z]{2,6}$/.test(q.get('kill')) ? q.get('kill') : '';
   if (q.has('failPage')) state.failPage = Number(q.get('failPage')) || 0;
   return { ...state };
 }
@@ -55,6 +57,9 @@ const bike = () => [
     緯度twd97: '2774100', 經度twd97: '304300', 緯度wgs84: '25.0736', 經度wgs84: '121.5379' },
   { 名稱: '彩虹站', 河濱公園: '彩虹站(彩虹河濱公園)', 位置: '麥帥一橋右岸下', 營業時間: '假日：08:00~18:00\n(中午不休息)\n(租車服務至17:00止)\n======================\n平日：平日不開放',
     電話: '0977-320530', 服務資訊: '', 租借費率: '', 緯度twd97: '', 經度twd97: '', 緯度wgs84: '25.053028', 經度wgs84: '121.57375' },
+  // 營運商列為假日站，但開放資料仍寫平日時段（真實資料的寫法）：只能主張假日有開
+  { 名稱: '木柵站', 河濱公園: '木柵站(道南左岸河濱公園)', 位置: '動物園前方道南河濱公園廣場上', 營業時間: BIKE, 電話: '0977-320526', 服務資訊: '', 租借費率: '',
+    緯度twd97: '', 經度twd97: '', 緯度wgs84: '24.999128', 經度wgs84: '121.579964' },
 ];
 const CPC_XML = `<?xml version="1.0" encoding="utf-8"?>
 <Dataset>
@@ -74,6 +79,11 @@ function route(i) {
   const data = [rest(`補給站${i}`, 23.5 + i * 0.01, 120.5, '廁所,飲水')];
   if (i === 1 || i === 25) data.push(rest('共用補給站', 23.4, 120.4, '廁所,無障礙廁所,飲水,維修'));   // 兩條路線都有：要合併成一筆
   if (i === 2) data.push(rest('7-ELEVEN 測試門市', 23.41, 120.41, '廁所,飲水,餐飲'));
+  // 真實資料的超商寫法（「7-11瑞權門市」「OK大溪中華店」）、只有廁所飲水的派出所（不算買得到補給）、付費淋浴
+  if (i === 3) data.push(rest('7-11測試門市', 23.42, 120.42, '廁所,飲水'));
+  if (i === 4) data.push(rest('OK測試中華店', 23.43, 120.43, '廁所'));
+  if (i === 5) data.push(rest('測試派出所', 23.44, 120.44, '廁所,飲水,急救箱'));
+  if (i === 6) data.push(rest('測試單車驛站', 23.45, 120.45, '廁所,淋浴(付費)'));
   if (i === 25 && !state.drop) data.push(rest('末段補給站', 23.3, 120.3, '廁所'));
   return JSON.stringify({ type: 'route', info: {}, local: [{ Type: 'BIKE', Data: [] }, { Type: 'REST', Data: data }] });
 }
@@ -88,6 +98,10 @@ const SAV = [SAV_HEAD,
   sav('臺北市大安運動中心', '羽球場', NSC, '付費對外開放使用', 25.033, 121.537),
   sav('測試市立游泳池', '室外游泳池', SINGLE, '免費對外開放使用', 25.076, 121.542),
   sav('不開放的游泳池', '室內游泳池', SINGLE, '不對外開放使用', 25.034, 121.535),
+  // 補充說明裡的時間多半是「不開放」的時段（真實資料的寫法）：不能變成開放時間
+  sav('測試國中游泳池', '室內游泳池', SINGLE, '付費對外開放使用', 25.101, 121.601, '除寒暑假外，平日08:30~17:30為學生游泳課時間，故不對外開放。'),
+  sav('測試國民運動中心', '健身房', NSC, '付費對外開放使用', 25.103, 121.603, '"開放時間: 06:00~22:00"'),
+  sav('測試國民運動中心', '游泳池(館)', NSC, '付費對外開放使用', 25.103, 121.603, '每日10：00~10：30清場，除夕及初一休館不對外開放。'),
   sav('測試籃球場', '籃球場', SINGLE, '免費對外開放使用', 25.034, 121.535),
 ].join('\r\n');
 
@@ -100,7 +114,7 @@ export function fetchMock(url) {
     if (rid.startsWith('181097e0')) return json(page(twd(), off));
     if (rid.startsWith('9e0e6ad4')) return json(page(tpt(), off));
     if (rid.startsWith('4b33aa03')) return json(page(tprv(), off));
-    if (rid.startsWith('22a8d6c4')) return json(page(bike(), off));
+    if (rid.startsWith('22a8d6c4')) return json(state.big ? page(Array.from({ length: 200 }, (_, i) => ({ ...bike()[0], 名稱: `大站${i}`, 位置: '很長的位置描述'.repeat(20) })), off) : page(bike(), off));
   }
   if (u.hostname === 'data.ntpc.gov.tw') return json(NT);
   if (u.hostname === 'vipmbr.cpc.com.tw') return u.pathname.includes('Accessibletoilets') ? new Response(CPC_XML, { headers: { 'content-type': 'text/xml' } }) : json(CPC_STN);

@@ -52,6 +52,8 @@ const X_SVG = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M1
 
 // ---- 狀態 ----
 let ctx = null, layer = null, meta = null, metaP = null, cur = null, timer = 0, painting = 0, warned = false;
+let kept = null;      // 剛關掉的那一處：下次移動地圖前不合併，焦點才回得去它的針
+let nearBust = 0;     // 幹部改過資料：附近休息站略過瀏覽器快取（伺服器給 5 分鐘的 max-age）
 const cells = new Map();     // 格子代碼 → { rev, stops }
 const loading = new Map();   // 格子代碼 → Promise
 let on = false, types = new Set(), openNow = false;
@@ -75,7 +77,7 @@ export const barHtml = () => (feat() ? `<div class="restbar" id="restBar" hidden
 
 // ---- 掛到地圖上（map.js 建好地圖後呼叫）----
 export function attach(c) {
-  ctx = c; cells.clear(); loading.clear(); meta = null; metaP = null; cur = null;
+  ctx = c; cells.clear(); loading.clear(); meta = null; metaP = null; cur = null; kept = null;
   if (!feat()) return;
   readPrefs();
   layer = c.L.layerGroup().addTo(c.map);
@@ -87,6 +89,7 @@ export function attach(c) {
     savePrefs(); paintChips(); paint();
   };
   paintChips();
+  c.map.on('movestart', () => { kept = null; });
   c.map.on('moveend', schedule);
   c.map.on('zoomend', schedule);
   if (on) { show(true); schedule(); }
@@ -109,9 +112,11 @@ export function setOn(v) {
   on = !!v; ctx.pref.set('rest', on ? '1' : '0');
   document.getElementById('restTog')?.setAttribute('aria-checked', String(on));
   show(on);
-  if (on) schedule(); else { layer?.clearLayers(); }
+  if (on) schedule(); else paint();   // 關掉圖層：只留正在看的那一處
 }
 export const isOn = () => on;
+// 抽屜高度變了（收合、拖曳）：露出來的地圖可能有還沒抓的格子
+export const viewChanged = () => schedule();
 function show(v) {
   const bar = document.getElementById('restBar');
   if (bar) bar.hidden = !v;
@@ -154,7 +159,7 @@ function schedule() {
 }
 async function refresh() {
   if (!on || !ctx?.map || !document.getElementById('restBar')) return;
-  if (hint()) { layer.clearLayers(); return; }
+  if (hint()) { paint(); return; }   // 縮放不夠：只畫正在看的那一處
   paint();
   let m;
   try { m = await getMeta(); } catch (e) {
@@ -178,7 +183,7 @@ async function refresh() {
 function warn(e) { if (!warned) { warned = true; toast(e?.message || '暫時讀不到休息站資料'); } }
 // 幹部改過資料：版本會變，重新抓
 async function reload() {
-  cells.clear();
+  cells.clear(); nearBust = Date.now();
   try { await getMeta(true); } catch {}
   if (on) refresh();
 }
@@ -189,34 +194,46 @@ const pinHtml = (s, sel) => {
   const o = openOf(s[8]);
   return `<div class="rpin t-${s[1]}${s[4] === 'customer' ? ' cust' : ''}${s[4] === 'unverified' ? ' unv' : ''}${o?.open === false ? ' closed' : ''}${sel ? ' sel' : ''}" data-rid="${esc(s[0])}">${rglyph(s[1])}</div>`;
 };
+// 正在看的那一處：不管類型 chip、「現在開放」、縮放程度，甚至圖層關著，都畫出來（從地點卡打開時才看得到在哪）
+const curPin = () => (cur?.s ? cur.s : null);
 function paint() {
   if (!layer || !ctx?.map) return;
+  // 重畫會換掉所有針：原本焦點在某一處的針上，畫完放回同一處
+  const ae = document.activeElement, fid = ae?.classList?.contains('rpin-host') ? ae.querySelector('.rpin[data-rid]')?.dataset.rid : null;
   layer.clearLayers();
-  if (!on || ctx.map.getZoom() < MIN_ZOOM) return;
-  const m = ctx.map, z = m.getZoom(), L = ctx.L, bounds = m.getBounds().pad(0.1), seen = new Set(), list = [];
-  for (const { stops } of cells.values()) for (const s of stops) {
-    if (seen.has(s[0]) || !bounds.contains([s[5], s[6]]) || !match(s)) continue;
-    seen.add(s[0]); list.push(s);
+  const m = ctx.map, z = m.getZoom(), L = ctx.L, seen = new Set(), list = [];
+  const sel = curPin();
+  if (sel) { seen.add(sel[0]); list.push(sel); }
+  if (on && z >= MIN_ZOOM) {
+    const bounds = m.getBounds().pad(0.1);
+    for (const { stops } of cells.values()) for (const s of stops) {
+      if (seen.has(s[0]) || !bounds.contains([s[5], s[6]]) || !match(s)) continue;
+      seen.add(s[0]); list.push(s);
+    }
   }
-  // 44 px 的格子分組（跟練跑地點分開）；16 級以上不合併；正在看的那一處不合併
-  const groups = new Map();
+  if (!list.length) return;
+  // 依距離分組（跟練跑地點的群集同一種做法）：離某一組第一處 44 px 內就加進去，泡泡畫在第一處的位置，相鄰的泡泡至少隔 44 px
+  //   16 級以上不合併；正在看的那一處、剛關掉的那一處不合併
+  const groups = [];
   for (const s of list) {
-    const pt = m.project([s[5], s[6]], z), k = z >= NO_CLUSTER || s[0] === cur?.id ? s[0] : `${Math.floor(pt.x / 44)}_${Math.floor(pt.y / 44)}`;
-    (groups.get(k) || groups.set(k, []).get(k)).push(s);
+    const pt = m.project([s[5], s[6]], z);
+    if (z >= NO_CLUSTER || s[0] === cur?.id || s[0] === kept) { groups.push({ pt, items: [s], solo: true }); continue; }
+    const g = groups.find((x) => !x.solo && Math.abs(x.pt.x - pt.x) < 44 && Math.abs(x.pt.y - pt.y) < 44);
+    if (g) g.items.push(s); else groups.push({ pt, items: [s], at: [s[5], s[6]] });
   }
-  for (const g of groups.values()) {
-    if (g.length === 1) {
-      const s = g[0], sel = s[0] === cur?.id;
-      const icon = L.divIcon({ className: 'rpin-host', iconSize: [44, 44], iconAnchor: [22, 22], html: pinHtml(s, sel) });
-      L.marker([s[5], s[6]], { icon, title: `${s[7]}・${subOf(s[1], s[2])}`, keyboard: true, zIndexOffset: sel ? 900 : -500, riseOnHover: true }).addTo(layer)
+  for (const g of groups) {
+    if (g.items.length === 1) {
+      const s = g.items[0], isSel = s[0] === cur?.id;
+      const icon = L.divIcon({ className: 'rpin-host', iconSize: [44, 44], iconAnchor: [22, 22], html: pinHtml(s, isSel) });
+      L.marker([s[5], s[6]], { icon, title: `${s[7]}・${subOf(s[1], s[2])}`, keyboard: true, zIndexOffset: isSel ? 900 : -500, riseOnHover: true }).addTo(layer)
         .on('click', () => pinClick(s));
       continue;
     }
-    const lat = g.reduce((n, s) => n + s[5], 0) / g.length, lng = g.reduce((n, s) => n + s[6], 0) / g.length;
-    const icon = L.divIcon({ className: 'rpin-host', iconSize: [44, 44], iconAnchor: [22, 22], html: `<div class="rclus"><b class="num">${g.length}</b></div>` });
-    L.marker([lat, lng], { icon, keyboard: true, title: `${g.length} 處休息站，點一下放大`, zIndexOffset: -600 }).addTo(layer)
-      .on('click', () => m.fitBounds(L.latLngBounds(g.map((s) => [s[5], s[6]])).pad(0.4), { maxZoom: NO_CLUSTER + 1 }));
+    const icon = L.divIcon({ className: 'rpin-host', iconSize: [44, 44], iconAnchor: [22, 22], html: `<div class="rclus"><b class="num">${g.items.length}</b></div>` });
+    L.marker(g.at, { icon, keyboard: true, title: `${g.items.length} 處休息站，點一下放大`, zIndexOffset: -600 }).addTo(layer)
+      .on('click', () => m.fitBounds(L.latLngBounds(g.items.map((s) => [s[5], s[6]])).pad(0.4), { maxZoom: NO_CLUSTER + 1 }));
   }
+  if (fid) document.querySelector(`.rpin[data-rid="${CSS.escape(fid)}"]`)?.closest('.leaflet-marker-icon')?.focus({ preventScroll: true });
 }
 // 畫路線、選位置時：點到休息站就當成點地圖那個位置（不打開卡片）
 function pinClick(s) {
@@ -234,7 +251,9 @@ function credits(x) {
   // 顯名整句連到授權條款（整句一個文字節點，英文介面才翻得完整）；顯名裡沒有提到授權的（臺灣騎跡）在後面加授權連結
   let a = esc(x.attribution);
   if (lic && x.attribution.includes(x.license)) a = `<a href="${esc(x.license_url)}" target="_blank" rel="noopener noreferrer">${a}</a>`; else if (lic) a += `（${lic}）`;
-  const when = x.source === 'cur' && x.checked_at ? `・最後查證 ${esc(x.checked_at)}` : x.source === 'man' && x.checked_at ? `・最後更新 ${esc(x.checked_at)}` : x.data_date ? `・資料日期 ${esc(x.data_date)}` : '';
+  // 分隔點與日期各自一個節點：「・資料日期」整段對到字典，英文才保得住前後的空白
+  const date = (label, d) => `<span>・${label}</span> <span class="num">${esc(d)}</span>`;
+  const when = x.source === 'cur' && x.checked_at ? date('最後查證', x.checked_at) : x.source === 'man' && x.checked_at ? date('最後更新', x.checked_at) : x.data_date ? date('資料日期', x.data_date) : '';
   return `${a}${when}`;
 }
 // 開放時間那一行：看得懂就顯示開放狀態，看不懂只顯示原文；店家、場館沒有時間時寫「依…」
@@ -246,16 +265,19 @@ function hoursLine(x) {
 }
 export async function openStop(id, opt = {}) {
   if (!ctx) return;
+  // 網址帶 ?rest= 打開但功能已關閉、或這一處讀不到（隱藏、停用、刪除）：回到地點清單，不要停在「載入中」
+  const bail = () => { if (opt.fly === 'jump') ctx.closeCard(); };
+  if (!feat()) return bail();
   const from = opt.from || null;
   let d;
-  try { d = await api(`/rest/${encodeURIComponent(id)}`); } catch (e) { toast(e.message); return; }
+  try { d = await api(`/rest/${encodeURIComponent(id)}`); } catch (e) { toast(e.message); return bail(); }
   const x = d.stop;
   ctx.leave();   // 關掉地點卡的即時影像、取消地點選取
-  cur = { id: x.id, from, opener: opt.opener || null, lat: x.lat, lng: x.lng };
+  cur = { id: x.id, from, opener: opt.opener || null, lat: x.lat, lng: x.lng, s: [x.id, x.type, x.subtype, x.svc, x.access, x.lat, x.lng, x.name, x.hours || null] };
   history.replaceState(null, '', `#/map?rest=${encodeURIComponent(x.id)}`);
   if (!opt.keep) ctx.setDetent('half');   // 幹部改完回到卡片：維持原本的高度
   if (opt.fly) ctx.focusOn([x.lat, x.lng], opt.fly === 'pan' ? ctx.map.getZoom() : Math.max(ctx.map.getZoom(), 16), opt.fly);
-  if (!on) setOn(true);
+  // 圖層關著也只畫這一處（不改這台裝置的圖層設定；打開圖層要從選單或「在地圖上顯示」）
   paint();
   const me = ctx.myPos();
   const dist = from ? `<span>從</span><span translate="no">「${esc(from.name)}」</span><span>直線 ${distTxt(hav([from.lat, from.lng], [x.lat, x.lng]))}</span>`
@@ -310,10 +332,12 @@ export async function openStop(id, opt = {}) {
 // 關掉休息站卡：焦點回到打開它的地方（地圖上的針、地點卡的那一列）
 function closeStop() {
   const c = cur;
-  cur = null; paint();
+  cur = null; kept = c?.id || null; paint();
   if (!c) return;
-  if (c.opener?.isConnected) c.opener.focus();
-  else document.querySelector(`.rpin[data-rid="${CSS.escape(c.id)}"]`)?.closest('.leaflet-marker-icon')?.focus();
+  if (c.opener?.isConnected) return c.opener.focus();
+  // 回到它的針（剛關掉的不合併）；圖層關著、被篩選掉沒有針時，焦點放在地圖上
+  const pin = document.querySelector(`.rpin[data-rid="${CSS.escape(c.id)}"]`)?.closest('.leaflet-marker-icon');
+  (pin || ctx.map.getContainer()).focus({ preventScroll: true });
 }
 export function close() { const c = cur; closeStop(); return c; }
 // 回到地點卡，焦點回到剛才點的那一列
@@ -337,7 +361,7 @@ async function nearLoad(s, editor) {
   const card = document.getElementById('restNear'), box = document.getElementById('restNearBox');
   if (!card) return;
   let r;
-  try { r = await api(`/spots/${encodeURIComponent(s.id)}/rest`); } catch (e) {
+  try { r = await api(`/spots/${encodeURIComponent(s.id)}/rest${nearBust ? `?r=${nearBust}` : ''}`); } catch (e) {
     if (!card.isConnected) return;
     if (/找不到休息站/.test(e.message)) { card.remove(); return; }   // 伺服器的功能開關已關閉
     card.hidden = false;
@@ -351,8 +375,10 @@ async function nearLoad(s, editor) {
   const notes = { water: s.info?.water || '', toilet: s.info?.toilet || '' };
   for (const k of ['water', 'toilet']) if (notes[k]) document.querySelector(`.infochips [data-info="${k}"]`)?.remove();
   if (document.querySelector('.infochips') && !document.querySelector('.infochips > span')) document.querySelector('.infochips').remove();
-  const row = (x) => { const o = openOf(x.hours); return `<button type="button" class="rnitem" data-rest="${esc(x.id)}"><span class="rnname">${subOf(x.type, x.subtype)}・<span translate="no">${esc(x.name)}${x.place ? ` ${esc(x.place)}` : ''}</span></span>
-      <span class="tiny">${distTxt(x.dist)}${o ? `・<span class="ostat ${o.open ? 'on' : 'off'}">${o.open ? '開放中' : '目前未開放'}</span>` : ''}${x.access === 'customer' ? '・店家' : x.access === 'paid' ? '・付費' : x.access === 'unverified' ? '・待確認' : ''}</span></button>`; };
+  // 分隔點用 .rsep（CSS 畫，中文「・」、英文「 · 」）：文字節點各自翻譯時前後的空白會被修掉，點不能跟文字黏在同一個節點
+  const sep = '<span class="rsep" aria-hidden="true"></span>';
+  const row = (x) => { const o = openOf(x.hours), a = { customer: '店家', paid: '付費', unverified: '待確認' }[x.access]; return `<button type="button" class="rnitem" data-rest="${esc(x.id)}"><span class="rnname"><span>${subOf(x.type, x.subtype)}</span>${sep}<span translate="no">${esc(x.name)}${x.place ? ` ${esc(x.place)}` : ''}</span></span>
+      <span class="tiny"><span>${distTxt(x.dist)}</span>${o ? `${sep}<span class="ostat ${o.open ? 'on' : 'off'}">${o.open ? '開放中' : '目前未開放'}</span>` : ''}${a ? `${sep}<span>${a}</span>` : ''}</span></button>`; };
   box.innerHTML = `<div class="rngroups">${Object.entries(TYPE).map(([k, v]) => `<div class="rng"><span class="rtile t-${k}" aria-hidden="true">${rglyph(k)}</span><div class="rngbody"><b>${v}</b>
       ${(g[k] || []).length ? (g[k] || []).map(row).join('') : '<p class="tiny" style="margin:0">1 公里內沒有資料</p>'}
       ${notes[k] ? `<p class="tiny rnnote" style="margin:0">幹部補充：<span translate="no">${esc(notes[k])}</span></p>` : ''}</div></div>`).join('')}</div>
@@ -362,7 +388,9 @@ async function nearLoad(s, editor) {
   show.hidden = !all.length;
   show.onclick = () => {
     setOn(true);
-    ctx.fitVisible([[s.lat, s.lng], ...all.map((x) => [x.lat, x.lng])]);
+    // 手機：先把抽屜降到半開，再用看得到的地圖範圍來框（全開時只剩一條 80 px 的地圖，框出來會縮到看不到休息站）；至少 13 級才畫得出針
+    if (!matchMedia('(min-width: 820px)').matches) ctx.setDetent('half');
+    ctx.fitVisible([[s.lat, s.lng], ...all.map((x) => [x.lat, x.lng])], MIN_ZOOM);
   };
   for (const b of box.querySelectorAll('[data-rest]')) b.onclick = () => openStop(b.dataset.rest, { from: { id: s.id, name: s.name, lat: s.lat, lng: s.lng }, opener: null, fly: 'pan' });
   document.getElementById('restAddNear')?.addEventListener('click', () => ctx.startPick((pt) => stopForm(null, pt)));
@@ -407,7 +435,8 @@ function stopForm(x, pt) {
   let at = pt;
   const mk = ctx.L.circleMarker(at, { radius: 9, color: '#fff', weight: 3, fillColor: '#8E8E93', fillOpacity: 1 }).addTo(ctx.drawLayer);
   ctx.focusOn(at, Math.max(ctx.map.getZoom(), 17));
-  document.getElementById('rsfPick').onclick = () => ctx.startPick((p) => { at = p; mk.setLatLng(p); document.getElementById('rsfPt').textContent = `${p[0].toFixed(5)}, ${p[1].toFixed(5)}`; });
+  // 選位置會清掉 drawLayer（連同這個點）：選好後再放回去
+  document.getElementById('rsfPick').onclick = () => ctx.startPick((p) => { at = p; mk.setLatLng(p).addTo(ctx.drawLayer); document.getElementById('rsfPt').textContent = `${p[0].toFixed(5)}, ${p[1].toFixed(5)}`; });
   const done = () => { ctx.drawLayer.clearLayers(); };
   document.getElementById('rsfX').onclick = () => { done(); x ? openStop(x.id, { keep: true }) : ctx.closeCard(); };
   f.name.focus();
@@ -440,7 +469,7 @@ function fixForm(x, e) {
   let at = null;
   const mk = ctx.L.circleMarker([x.lat, x.lng], { radius: 9, color: '#fff', weight: 3, fillColor: '#8E8E93', fillOpacity: 1 }).addTo(ctx.drawLayer);
   ctx.focusOn([x.lat, x.lng], Math.max(ctx.map.getZoom(), 17));
-  document.getElementById('rffPick').onclick = () => ctx.startPick((p) => { at = p; mk.setLatLng(p); document.getElementById('rffPt').textContent = `${p[0].toFixed(5)}, ${p[1].toFixed(5)}`; });
+  document.getElementById('rffPick').onclick = () => ctx.startPick((p) => { at = p; mk.setLatLng(p).addTo(ctx.drawLayer); document.getElementById('rffPt').textContent = `${p[0].toFixed(5)}, ${p[1].toFixed(5)}`; });
   document.getElementById('rffX').onclick = () => { ctx.drawLayer.clearLayers(); openStop(x.id, { keep: true }); };
   f.name.focus();
   f.onsubmit = async (ev) => {
