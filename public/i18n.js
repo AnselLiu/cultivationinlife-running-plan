@@ -15,13 +15,19 @@ const MON = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'Au
 const MO3 = MON.map((m) => m.slice(0, 3));
 // 動態句型：數字、日期、倒數等（先於片段替換）
 const PATTERNS = [
+  // 整句的確認訊息要排在最前面：後面的通用句型（N 筆待審核、剩 N 名額）會把句子拆碎
+  [/^還有 (\d+) 筆待審核，關閉審核會依報名順序直接錄取（額滿排候補）並通知他們。確定嗎？$/, '$1 pending requests. Turning off approval admits them in signup order (waitlisted when full) and notifies them. Continue?'],
+  [/^只剩 (\d+) 個名額，核准後依報名先後排正取，其餘 (\d+) 人排候補。確定？$/, 'Only $1 spots left. Approved people are confirmed in signup order and the other $2 go to the waitlist. Continue?'],
+  [/^其中 (\d+) 人已繳費，會標記待退費。$/, '$1 of them have paid and will be marked for refund.'],
+  [/^還有 (\d+) 筆待審核$/, '$1 pending requests'], [/^還有 (\d+) 筆待審核：/, '$1 pending: '],
+  [/^已選 (\d+) 人$/, '$1 selected'], [/^活動前 (\d+) 天$/, '$1 days before the event'], [/^選取 (.+)$/, 'Select $1'],
   // 報名期間：台北時間 10/5（日）20:00 → Sun 10/5 20:00（要在一般日期句型之前，避免時間黏在日期後面）
   [/(\d{1,2})\/(\d{1,2})（([日一二三四五六])）(\d\d:\d\d)/g, (_, m, d, w, hm) => `${WD[w]} ${m}/${d} ${hm}`],
   [/^報名將於 (.+) 開始$/, 'Signup opens $1'], [/^尚未開放報名・(.+) 開始$/, 'Signup not open yet · opens $1'],
   [/^報名期間 (.+?) – (.+?)(・需主辦審核)?$/, (_, a, b, c) => `Signup ${a === '即日起' ? 'now' : a} – ${b}${c ? ' · organizer approval required' : ''}`],
   [/^報名期間：(.+?) – (.+?)(（需主辦審核）)?$/, (_, a, b, c) => `Signup period: ${a === '即日起' ? 'now' : a} – ${b}${c ? ' (organizer approval required)' : ''}`],
   [/^回覆截止 (.+)$/, 'Responses close $1'],
-  [/^還有 (?:(\d+) 天 )?(\d+) 小時開放報名$/, (_, d, h) => `Signup opens in ${d ? `${d} d ` : ''}${h} h`], [/^還有 (\d+) 分鐘開放報名$/, 'Signup opens in $1 min'],
+  [/^(?:(\d+) 天 )?(\d+) 小時後開放報名$/, (_, d, h) => `Signup opens in ${d ? `${d} d ` : ''}${h} h`], [/^(\d+) 分鐘後開放報名$/, 'Signup opens in $1 min'],
   [/(\d{1,2}\/\d{1,2} \d\d:\d\d) 開放/g, 'opens $1'],
   [/^你在候補第 (\d+) 位，有人取消會自動遞補並通知你。$/, "You're number $1 on the waitlist and will be moved up automatically if someone cancels."],
   [/^人數已滿，已排入候補第 (\d+) 位，有人取消會自動遞補並通知你$/, "Event is full. You're number $1 on the waitlist and will be moved up automatically if someone cancels."],

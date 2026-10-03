@@ -145,17 +145,24 @@ function choose(title, message, options) {
   });
 }
 // 婉拒原因面板：常用理由 chips＋自由填寫（最多 120 字）；回傳 { note } 或 null（取消）
-function askReason(title, message, chips = []) {
+//   who：團員自己填的姓名，一律當純文字、不翻譯；lines：說明句（純文字，空字串略過）；ok：確認鍵文字（婉拒／移出）
+//   開著的時候 Tab 只在面板裡循環，關掉後焦點回到原本的按鈕
+function askReason(title, { who = '', lines = [], chips = [], ok = '婉拒' } = {}) {
   return new Promise((done) => {
+    const back = document.activeElement;
     const host = document.createElement('div');
     host.className = 'sheet'; host.setAttribute('role', 'dialog'); host.setAttribute('aria-modal', 'true'); host.setAttribute('aria-label', title);
-    host.innerHTML = `<div class="sheet-bg" data-x="1"></div><div class="sheet-card card"><h3>${esc(title)}</h3>${message ? `<p class="muted" style="margin:0">${message}</p>` : ''}
+    const text = lines.filter(Boolean);
+    host.innerHTML = `<div class="sheet-bg" data-x="1"></div><div class="sheet-card card"><h3>${esc(title)}</h3>
+      ${who ? `<p style="margin:0"><b translate="no">${esc(who)}</b></p>` : ''}
+      ${text.map((x) => `<p class="muted" style="margin:0">${esc(x)}</p>`).join('')}
       ${chips.length ? `<div class="chips" role="group" aria-label="常用原因">${chips.map((c) => `<button type="button" class="chip" data-c="${esc(c)}" aria-pressed="false">${esc(c)}</button>`).join('')}</div>` : ''}
       <label>原因（選填）<textarea maxlength="120" rows="3" aria-describedby="reasonHint"></textarea></label>
       <p class="tiny" id="reasonHint" style="margin:0">原因只有本人看得到，推播不會顯示原因</p>
-      <div class="choices"><button type="button" class="btn danger block" data-ok="1">婉拒</button><button type="button" class="btn ghost block" data-x="1">取消</button></div></div>`;
+      <div class="choices"><button type="button" class="btn danger block" data-ok="1">${esc(ok)}</button><button type="button" class="btn ghost block" data-x="1">取消</button></div></div>`;
     document.body.append(host);
     const ta = host.querySelector('textarea');
+    const close = (v) => { host.remove(); if (back?.isConnected) back.focus(); done(v); };
     host.querySelector('.chip, textarea')?.focus();
     host.addEventListener('click', (e) => {
       const c = e.target.closest('[data-c]');
@@ -165,10 +172,17 @@ function askReason(title, message, chips = []) {
         if (c.dataset.c === '其他') ta.focus();
         return;
       }
-      if (e.target.closest('[data-ok]')) { host.remove(); done({ note: ta.value.trim().slice(0, 120) }); return; }
-      if (e.target.closest('[data-x]')) { host.remove(); done(null); }
+      if (e.target.closest('[data-ok]')) { close({ note: ta.value.trim().slice(0, 120) }); return; }
+      if (e.target.closest('[data-x]')) close(null);
     });
-    host.addEventListener('keydown', (e) => { if (e.key === 'Escape') { host.remove(); done(null); } });
+    host.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') { close(null); return; }
+      if (e.key !== 'Tab') return;
+      const f = [...host.querySelectorAll('button, textarea')].filter((x) => !x.disabled);
+      const i = f.indexOf(document.activeElement);
+      if (e.shiftKey && i <= 0) { e.preventDefault(); f[f.length - 1].focus(); }
+      else if (!e.shiftKey && i === f.length - 1) { e.preventDefault(); f[0].focus(); }
+    });
   });
 }
 // 報名按鈕的文字：依活動類型、自己的狀態、是否額滿、是否需要審核
@@ -1001,7 +1015,7 @@ async function eventView(id) {
       ${myStatus === 'pending' ? `<p class="notice" style="margin:0">你的報名在等主辦幹部審核，結果會通知你${charges(ev) ? '；核准後再繳費' : ''}。</p>`
         : myStatus === 'rejected' ? `<p class="notice" style="margin:0">主辦未通過這筆報名${ev.myReviewNote ? `：<span translate="no">${esc(ev.myReviewNote)}</span>` : ''}。有疑問請聯絡主辦人。</p>`
         : myStatus === 'wait' ? `<p class="notice" style="margin:0">你在候補第 ${ev.myPosition || 1} 位，有人取消會自動遞補並通知你。</p>`
-        : st === 'soon' ? '<p class="notice" id="openCountdown" style="margin:0" aria-live="polite"></p>' : ''}
+        : st === 'soon' && !myStatus ? '<p class="notice" id="openCountdown" style="margin:0"></p>' : ''}
       ${!myStatus && canSubmit && ev.require_approval && !admin && (ev.capacity || (ev.items || []).some((i) => i.stock)) ? '<p class="tiny" style="margin:0">審核期間不保留名額與庫存</p>' : ''}
       ${live && ev.myAttended ? `<div class="row" style="gap:6px"><span class="pill solid">${IC.check}已出席</span></div>` : ''}
       <div class="roster">
@@ -1107,10 +1121,12 @@ async function eventView(id) {
   if (cd && ev.signup_start) {
     const left = () => Math.max(0, Date.parse(`${ev.signup_start}:00Z`) - Date.parse(`${nowTp()}:00Z`));
     const paint = () => { const m = Math.ceil(left() / 60e3), d = Math.floor(m / 1440), h = Math.floor((m % 1440) / 60);
-      cd.textContent = `還有 ${d ? `${d} 天 ` : ''}${d || h ? `${h} 小時` : `${m % 60} 分鐘`}開放報名`; };
-    paint();
-    const t = setInterval(() => { if (!cd.isConnected) return clearInterval(t); paint(); }, 60e3);
-    if (left() < 6 * 3600e3) setTimeout(() => { if (cd.isConnected) render(); }, left() + 1500);
+      cd.textContent = d || h ? `${d ? `${d} 天 ` : ''}${h} 小時後開放報名` : `${m % 60} 分鐘後開放報名`; };
+    // 頁面開著跨過 6 小時門檻也要排上重新讀取（每分鐘檢查一次，只排一次）
+    let armed = false;
+    const arm = () => { if (armed || left() >= 6 * 3600e3) return; armed = true; setTimeout(() => { if (cd.isConnected) render(); }, left() + 1500); };
+    paint(); arm();
+    const t = setInterval(() => { if (!cd.isConnected) return clearInterval(t); paint(); arm(); }, 60e3);
   }
   if (ev.spot) import('./weather.js').then((W) => W.load(ev.spot.lat, ev.spot.lng).then((w) => { if ($('#evWx')) $('#evWx').innerHTML = W.forEvent(w, ev.date, ev.gather_time); }))
     .catch((e) => { if ($('#evWx')) $('#evWx').innerHTML = `<p class="tiny" style="margin:0">${esc(e.message)}</p>`; });

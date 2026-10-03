@@ -1363,10 +1363,14 @@ html.fullmap{background:var(--sheet-solid)}
 /* 活動報名：待審核、未通過、整批審核 */
 .pill.no{background:color-mix(in srgb,var(--race) 12%,var(--glass-2));color:color-mix(in srgb,var(--race) 70%,var(--ink-2))}
 .mine.no{color:color-mix(in srgb,var(--race) 70%,var(--ink-2))}
-.chip[aria-checked="true"]{background:var(--accent);color:var(--on-accent);font-weight:650}
+/* 藍色 hero 卡片上的狀態 pill：半透明底對比不夠，改成白底深色字（與「已報名」一致） */
+.hero .pill.no{background:#fff;color:#B3261E}
+.hero .pill.wait{background:#fff;color:#8A4B00}
 .chip .num{opacity:.75;font-weight:500}
-.r.prow.rv{grid-template-columns:22px 36px minmax(0,1fr) auto}
-.prow .sel{width:20px;height:20px;margin:0;accent-color:var(--accent)}
+.r.prow.rv{grid-template-columns:44px 36px minmax(0,1fr) auto}
+/* 勾選框外面包一層 44×44 的點擊範圍，避免點到旁邊的出席 */
+.prow .selhit{display:grid;place-items:center;width:44px;height:44px;margin:-6px 0;cursor:pointer}
+.prow .sel{width:22px;height:22px;margin:0;accent-color:var(--accent)}
 .prow[data-st="pending"]{box-shadow:inset 3px 0 0 var(--warn);border-radius:12px}
 .prow .rvbtns{margin-top:6px;flex-wrap:wrap}
 .bulkbar{position:sticky;bottom:calc(env(safe-area-inset-bottom,0px) + 72px);z-index:5;display:flex;flex-wrap:wrap;align-items:center;gap:8px;

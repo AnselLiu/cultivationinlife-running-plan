@@ -28,6 +28,12 @@ UPDATE signups SET
   meal   = (SELECT t.meal   FROM tickets t WHERE t.event_id = signups.event_id AND t.member_id = signups.member_id)
 WHERE EXISTS (SELECT 1 FROM tickets t WHERE t.event_id = signups.event_id AND t.member_id = signups.member_id);
 
+-- 入場券只給正取（不變式 1）：舊版取消報名不會刪入場券，還沒到的活動把不是正取、也還沒入場的券清掉
+--   （要在上面補回攜伴與餐點之後；已經入場的保留當紀錄）
+DELETE FROM tickets WHERE checked_in_at IS NULL
+  AND event_id IN (SELECT id FROM events WHERE date >= date('now', '+8 hours'))
+  AND NOT EXISTS (SELECT 1 FROM signups s WHERE s.event_id = tickets.event_id AND s.member_id = tickets.member_id AND s.status = 'in');
+
 -- 報名截止以前沒檢查格式：空字串改 NULL、空白改 T、多的秒數去掉，其餘不合格式的清掉（改成活動開始時截止）
 UPDATE events SET deadline = NULL WHERE deadline = '';
 UPDATE events SET deadline = replace(deadline, ' ', 'T')

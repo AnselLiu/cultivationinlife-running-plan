@@ -162,7 +162,7 @@ test('審核：團員送出申請，幹部在統計頁核准與婉拒', async ({
   await apiAs(request, 't_other', `/events/${ev.id}/signup`, { method: 'POST', body: {} });
   await enter(page, 't_chair');
   await page.goto(`/#/e/${ev.id}/stats?f=pending`);
-  await expect(page.locator('[data-f="pending"]')).toHaveAttribute('aria-checked', 'true');
+  await expect(page.locator('[data-f="pending"]')).toHaveAttribute('aria-pressed', 'true');
   await page.locator('.prow[data-mid="t_runner"] [data-rv="approve"]').click();
   await expect(page.getByText(/已核准 1 人/)).toBeVisible();
   await runner.reload();

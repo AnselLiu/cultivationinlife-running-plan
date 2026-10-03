@@ -937,3 +937,52 @@ test('排程：開放報名推播一次、20:00 待審核整理、活動結束�
   await call('t_chair', `/events/${mid}`, { method: 'PUT', body: { ...evBase, ...body, date: '2027-08-12' } });
   assert.ok((await call(null, '/dev/cron?at=2027-08-11T12:00:00Z')).json.events >= 1, '改期後會再提醒');
 });
+
+test('審核補強：全會與邀請制的開放推播、移出後領取碼失效、改時間平移報名期間、監事不能審核、取消待辦不放金額', async () => {
+  // 開放推播：全會活動（沒有分團）與邀請制，參數綁定要對（D1 參數數量不符會丟錯，這場的推播就永遠不會送）
+  const aid = await mkEvent({ title: '全會開放', date: '2027-07-02', signup_start: '2027-06-21T20:00', notify: true });
+  const iid = await mkEvent({ title: '邀請開放', date: '2027-07-03', signup_start: '2027-06-22T20:00', notify: true, visibility: 'invite' });
+  await call('t_chair', `/events/${iid}/invites`, { method: 'POST', body: { member_ids: ['t_runner'], notify: false } });
+  const c1 = (await call(null, '/dev/cron?at=2027-06-21T12:30:00Z')).json;
+  assert.ok(c1.signupOpen >= 1, JSON.stringify(c1));
+  assert.ok((await notesFor('t_other', aid)).some((n) => n.title.startsWith('開放報名')));
+  const c2 = (await call(null, '/dev/cron?at=2027-06-22T12:30:00Z')).json;
+  assert.ok(c2.signupOpen >= 1, JSON.stringify(c2));
+  assert.ok((await notesFor('t_runner', iid)).some((n) => n.title.startsWith('開放報名')));
+  assert.ok(!(await notesFor('t_other', iid)).some((n) => n.title.startsWith('開放報名')), '不在受邀名單的人不推');
+  // 監事不能審核
+  assert.equal((await review('t_super', aid, { action: 'approve', member_ids: ['t_other'] })).status, 403);
+  // 團購到貨後被移出：領取碼失效，也不再回傳
+  const buy = await mkEvent({ kind: 'buy', title: '移出團購', date: plus(16), items: [{ name: '帽子', price: 200 }], pay_info: { methods: ['transfer'] } });
+  const hat = (await call('t_other', `/events/${buy}`)).json.items[0];
+  await signup('t_other', buy, { items: [{ id: hat.id, qty: 1 }] });
+  await call('t_chair', `/events/${buy}/arrived`, { method: 'POST', body: {} });
+  const code = (await call('t_other', `/events/${buy}`)).json.myPickCode;
+  assert.match(code, /^[A-Z2-9]{6}$/);
+  assert.equal((await review('t_chair', buy, { action: 'reject', member_ids: ['t_other'], revoke: true })).status, 200);
+  assert.equal((await call('t_other', `/events/${buy}`)).json.myPickCode, null);
+  const pk = await call('t_chair', `/events/${buy}/pickup`, { method: 'POST', body: { code } });
+  assert.equal(pk.status, 404);
+  assert.match(pk.json.error, /已失效/);
+  // 改時間（含日期）：報名截止與還沒到的開始時間跟著平移
+  const mv = await mkEvent({ title: '平移期間', date: plus(10), deadline: `${plus(9)}T22:00`, signup_start: `${plus(2)}T20:00` });
+  assert.equal((await call('t_chair', `/events/${mv}/notice`, { method: 'POST', body: { type: 'time', date: plus(6) } })).status, 200);
+  let e = (await call('t_chair', `/events/${mv}`)).json;
+  assert.deepEqual([e.date, e.deadline, e.signup_start], [plus(6), `${plus(5)}T22:00`, null], '截止跟著提前 4 天；開始時間平移後已經過了，改成立即開放');
+  assert.equal((await call('t_chair', `/events/${mv}/notice`, { method: 'POST', body: { type: 'time', date: plus(1), gather_time: '07:00' } })).status, 200);
+  e = (await call('t_chair', `/events/${mv}`)).json;
+  assert.ok(!e.deadline || e.deadline <= `${plus(1)}T07:00`, `截止不會晚於活動開始：${e.deadline}`);
+  // 已繳費的正取取消：主辦待辦不放金額
+  const paid = await mkEvent({ title: '退費待辦', options: [{ name: '一般', price: 300 }] });
+  await signup('t_runner', paid, { option: '一般' });
+  await call('t_chair', `/events/${paid}/payments`, { method: 'POST', body: { member_ids: ['t_runner'], paid: 'paid' } });
+  await unsign('t_runner', paid);
+  const todo = (await notesFor('t_chair', paid)).find((n) => n.title.endsWith('有人取消報名'));
+  assert.ok(todo, '主辦收到退費待辦');
+  assert.ok(!/NT\$/.test(todo.body || ''), todo.body);
+  // 標記已退費：待辦結掉，待退費備註清掉
+  await call('t_chair', `/events/${paid}/payments`, { method: 'POST', body: { member_ids: ['t_runner'], paid: 'refunded' } });
+  const row = (await call('t_chair', `/events/${paid}/stats`)).json.people.find((x) => x.member_id === 't_runner');
+  assert.equal(row?.paid, 'refunded');
+  assert.ok(!/待退費/.test(row?.paid_note || ''));
+});

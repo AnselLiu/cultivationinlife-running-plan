@@ -340,9 +340,10 @@ async function statsView(id) {
   const countOf = (k) => st.people.filter((x) => inFilter(x.status, k)).length;
   const STATUS_PILL = { wait: '<span class="pill wait">候補</span>', pending: '<span class="pill wait">待審核</span>', rejected: '<span class="pill no">未通過</span>', cancel: '<span class="pill">已取消</span>' };
   const off = isOffline() ? 'disabled' : '';
-  const prow = (x) => { const live = x.status === 'in';
+  // 已繳費後取消、婉拒或移出的人（待退費）也要能改繳費狀態，主辦才能標記已退費、結掉待辦
+  const prow = (x) => { const live = x.status === 'in', refund = !live && ['paid', 'refunded'].includes(x.paid);
     return `<div class="r prow ${st.canReview ? 'rv' : ''} ${x.payReported && x.paid !== 'paid' ? 'reported' : ''}" data-st="${x.status}" data-mid="${esc(x.member_id)}" data-name="${esc(`${x.name} ${x.nickname || ''}`)}">
-      ${st.canReview ? `<input type="checkbox" class="sel" data-sel aria-label="選取 ${esc(x.name)}" ${off}>` : ''}
+      ${st.canReview ? `<label class="selhit"><input type="checkbox" class="sel" data-sel aria-label="選取 ${esc(x.name)}" ${off}></label>` : ''}
       <label class="attend" title="出席"><input type="checkbox" data-att="${esc(x.member_id)}" aria-label="出席：${esc(x.name)}" ${x.attended ? 'checked' : ''} ${st.kind === 'party' || !live ? 'disabled' : ''}><i>${IC.check}</i></label>
       <span><b><span translate="no">${esc(x.name)}</span></b>${x.nickname ? ` <span class="tiny"><span translate="no">${esc(x.nickname)}</span></span>` : ''}${x.amount ? ` <span class="num tiny">${money2(x.amount)}</span>` : ''} ${STATUS_PILL[x.status] || ''}
         <span class="tiny" style="display:block">${x.option ? `${esc(x.option)}・` : ''}${itemText(x.items, st.items)}${st.groupReg ? (x.regOk ? '報名資料 OK・' : '報名資料未提供・') : ''}${x.guests ? `攜伴 ${x.guests}・` : ''}<span translate="no">${esc(x.paid_note || '')}</span></span>
@@ -353,7 +354,7 @@ async function statsView(id) {
         ${st.canReview ? `<span class="row rvbtns" style="gap:6px">${x.status === 'pending' ? `<button type="button" class="btn sm" data-rv="approve" ${off}>核准</button><button type="button" class="btn ghost sm" data-rv="reject" ${off}>婉拒</button>`
           : x.status === 'in' || x.status === 'wait' ? `<button type="button" class="btn ghost sm" data-rv="revoke" ${off}>移出名單</button>`
           : x.status === 'rejected' ? `<button type="button" class="btn ghost sm" data-rv="reopen" ${off}>重新審核</button>` : ''}</span>` : ''}</span>
-      ${money && live ? `<select data-pay="${esc(x.member_id)}" aria-label="繳費狀態" class="paysel ${x.paid}">${Object.entries(PAID_NAME).map(([k, v]) => `<option value="${k}" ${x.paid === k ? 'selected' : ''}>${v}</option>`).join('')}</select>` : '<span></span>'}
+      ${money && (live || refund) ? `<select data-pay="${esc(x.member_id)}" aria-label="繳費狀態" class="paysel ${x.paid}">${Object.entries(PAID_NAME).map(([k, v]) => `<option value="${k}" ${x.paid === k ? 'selected' : ''}>${v}</option>`).join('')}</select>` : '<span></span>'}
     </div>`; };
   const kpi = [[survey ? '回覆' : '正取', t.in], ...(survey ? [] : [['候補', t.wait]]),
     ...(st.canReview && (t.pending || st.requireApproval) ? [['待審核', `${t.pending}${t.pendingGuests ? `＋攜伴 ${t.pendingGuests}` : ''}`]] : []),
@@ -411,10 +412,10 @@ async function statsView(id) {
     </section>`).join('')}
     ${survey ? '' : `<section class="card">
       <div class="row spread"><h3>名單</h3><span class="tiny" id="pcount">${st.people.length} 人</span></div>
-      ${st.canReview ? `<div class="chips" role="radiogroup" aria-label="名單篩選">${FILTERS.map(([k, v]) => `<button type="button" class="chip" role="radio" data-f="${k}" aria-checked="${k === filt}">${v} <span class="num">${countOf(k)}</span></button>`).join('')}</div>` : ''}
+      ${st.canReview ? `<div class="chips" role="group" aria-label="名單篩選">${FILTERS.map(([k, v]) => `<button type="button" class="chip" data-f="${k}" aria-pressed="${k === filt}">${v} <span class="num">${countOf(k)}</span></button>`).join('')}</div>` : ''}
       <input id="pq" placeholder="搜尋姓名" aria-label="搜尋名單" autocomplete="off">
       <div class="roster" id="plist">${st.people.map(prow).join('')}</div>
-      <p class="tiny" style="margin:0">左邊勾選是點名出席${st.kind === 'party' ? '（餐敘以入場券報到為準）' : ''}${money ? '；右邊切換繳費狀態，只做紀錄，不串金流' : ''}。點名、繳費、領取只適用正取。</p>
+      <p class="tiny" style="margin:0">左邊勾選是點名出席${st.kind === 'party' ? '（餐敘以入場券報到為準）' : ''}${money ? '；右邊切換繳費狀態，只做紀錄，不串金流' : ''}。點名、繳費、領取只適用正取；已繳費後取消或移出的人，可在右邊改成已退費。</p>
       ${st.canReview ? `<div class="bulkbar" role="toolbar" aria-label="整批審核" hidden><span id="selN" aria-live="polite"></span>
         <button type="button" class="btn sm" data-bulk="approve">核准</button><button type="button" class="btn ghost sm" data-bulk="reject">婉拒</button>
         <button type="button" class="btn ghost sm" data-bulk="clear">取消選取</button></div>
@@ -427,10 +428,15 @@ async function statsView(id) {
         <button class="btn ghost sm" id="copyRoster2">複製名單（貼 LINE）</button></div>
     </section>`;
   $('#copyRoster2').onclick = async () => { try { copy((await api(`/events/${id}/roster`)).text); } catch (e) { toast(e.message); } };
-  // 搜尋與篩選同時生效
+  // 搜尋與篩選同時生效；被藏起來的列取消勾選，整批操作列跟著更新（不會默默少處理幾筆）
+  let repaint = null;
   const applyFilter = () => {
     const q = ($('#pq')?.value || '').trim(); let n = 0;
-    for (const r of document.querySelectorAll('.prow')) { r.hidden = (!!q && !r.dataset.name.includes(q)) || (st.canReview && !inFilter(r.dataset.st, filt)); if (!r.hidden) n++; }
+    for (const r of document.querySelectorAll('.prow')) {
+      r.hidden = (!!q && !r.dataset.name.includes(q)) || (st.canReview && !inFilter(r.dataset.st, filt)); if (!r.hidden) n++;
+      const c = r.hidden && r.querySelector('[data-sel]'); if (c) c.checked = false;
+    }
+    repaint?.();
     if ($('#pcount')) $('#pcount').textContent = `${n} 人`;
     const pend = st.people.filter((x) => x.status === 'pending').length;
     if ($('#allPendingRow')) { $('#allPendingRow').hidden = !(filt === 'pending' && pend); $('#approveAll').textContent = `全部核准（${pend}）`; }
@@ -438,12 +444,12 @@ async function statsView(id) {
   $('#pq')?.addEventListener('input', applyFilter);
   for (const c of document.querySelectorAll('[data-f]')) c.onclick = () => {
     filt = c.dataset.f;
-    for (const x of document.querySelectorAll('[data-f]')) x.setAttribute('aria-checked', String(x === c));
+    for (const x of document.querySelectorAll('[data-f]')) x.setAttribute('aria-pressed', String(x === c));
     history.replaceState(null, '', `#/e/${id}/stats${filt === 'all' ? '' : `?f=${filt}`}`);
     applyFilter();
   };
   applyFilter();
-  if (st.canReview) bindReview(id, st);
+  if (st.canReview) repaint = bindReview(id, st);
   for (const c of document.querySelectorAll('[data-att]')) c.onchange = async () => {
     try { await api(`/events/${id}/attendance`, { method: 'POST', body: { member_id: c.dataset.att, present: c.checked } }); } catch (e) { c.checked = !c.checked; toast(e.message); }
   };
@@ -506,9 +512,11 @@ function bindReview(id, st) {
     if (action === 'reject' || action === 'revoke') {
       const listed = rows.filter((r) => r.dataset.st === 'in' || r.dataset.st === 'wait');
       const paidN = listed.filter((r) => st.people.find((x) => x.member_id === r.dataset.mid)?.paid === 'paid').length;
-      const who = ids.length === 1 ? `「${nameOf(ids[0])}」` : `${ids.length} 人`;
-      const r = await askReason(listed.length ? '移出名單' : '婉拒報名', `${listed.length ? `移出${who}，空出的名額會由候補遞補。` : `婉拒${who}的報名。`}${paidN ? `其中 ${paidN} 人已繳費，會標記待退費。` : ''}`,
-        ['名額已滿', '資格不符', '資料不完整', '其他']);
+      // 姓名是團員自己填的：交給 askReason 當純文字顯示（不翻譯），說明句各自是一整句，方便翻譯
+      const r = await askReason(listed.length ? '移出名單' : '婉拒報名', {
+        who: ids.length === 1 ? nameOf(ids[0]) : '', lines: [ids.length === 1 ? '' : `已選 ${ids.length} 人`,
+          listed.length ? '移出後，空出的名額會由候補遞補。' : '婉拒後會通知本人。', paidN ? `其中 ${paidN} 人已繳費，會標記待退費。` : ''],
+        chips: ['名額已滿', '資格不符', '資料不完整', '其他'], ok: listed.length ? '移出名單' : '婉拒' });
       if (!r) return;
       body = { action: 'reject', member_ids: ids, note: r.note, revoke: listed.length > 0 };
     }
@@ -537,6 +545,7 @@ function bindReview(id, st) {
   };
   $('#approveAll')?.addEventListener('click', (e) => send([e.currentTarget], 'approve', [...document.querySelectorAll('.prow[data-st=pending]')]));
   if (isOffline()) for (const b of document.querySelectorAll('[data-bulk], #approveAll')) b.disabled = true;
+  return paintBar;
 }
 
 export { formView, statsView };
