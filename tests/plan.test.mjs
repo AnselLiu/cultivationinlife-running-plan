@@ -284,3 +284,44 @@ test('快速打勾的日期、週末比賽、其他週期的紀錄、週次標�
   assert.equal(P.logWeekLabel({ personal: 1, cycle_week: 5, week_no: 12 }), '個人 W5');
   assert.equal(P.logWeekLabel({}), '');
 });
+
+test('M16：課表列一律用 logMatches 對紀錄，其他檔案不直接比 week_no／plan_day', () => {
+  const files = fs.readdirSync(new URL('public/', ROOT)).filter((f) => f.endsWith('.js') && f !== 'plan.js' && !f.startsWith('i18n'));
+  for (const f of files) {
+    const src = read(`public/${f}`);
+    assert.ok(!/\.week_no\s*===?/.test(src), `${f} 不能直接比對 week_no（改用 P.logMatches）`);
+    assert.ok(!/\.plan_day\s*===?/.test(src), `${f} 不能直接比對 plan_day（改用 P.logMatches）`);
+  }
+});
+
+test('P3 首頁與課表頁：個人週期的今天、週六比賽、可省略與完成率一起變', async () => {
+  // 2027-03-21 的比賽：W1 從 2026-11-02 開始；W1 還沒公告（missing），W2 週三有課
+  const c = P.cycleOf('2027-03-21', { kind: 'race', name: '測試馬拉松' });
+  assert.equal(P.weekIndexOf('2026-11-04', c), 1);
+  assert.equal(await P.weekPlan(1, 'fm', 'D'), null);
+  const w2 = P.markOptional(await P.weekPlan(2, 'fm', 'D'), { days: 6, club: true }, 2);
+  const ses = P.todaySessions('2026-11-11', P.weekIndexOf('2026-11-11', c), w2, [], c);
+  assert.ok(ses.length >= 1 && ses.every((r) => r.d.includes('三')), '個人 W2 週三的課');
+  assert.deepEqual(P.cycleFields(c, 2), { cycle_anchor: '2027-03-21', cycle_week: 2 });
+  // 週六比賽：比賽日當天只有比賽那一列；隔天（週日）沒有課
+  const sat = P.cycleOf('2027-02-13', { kind: 'race', name: '週六馬' });
+  const w20 = await P.weekPlan(20, 'fm', 'D');
+  const raceDay = P.todaySessions('2027-02-13', 20, w20, [], sat);
+  assert.equal(raceDay.length, 1);
+  assert.ok(P.isRaceDay(raceDay[0], 20));
+  assert.deepEqual(P.todaySessions('2027-02-14', 20, w20, [], sat), []);
+  // 協會賽季 12/20：比賽那一列只在週日；週六只剩其他課（不含比賽）
+  assert.ok(P.todaySessions('2026-12-20', 20, w20, []).some((r) => P.isRaceDay(r, 20)));
+  assert.ok(!P.todaySessions('2026-12-19', 20, w20, []).some((r) => P.isRaceDay(r, 20)));
+  // 每週 4 天：可省略的課不算分母，課表頁與報表用同一個函式，所以一起變少
+  const raw = await P.weekPlan(9, 'fm', 'D');
+  const six = P.weekCompletion(P.markOptional(raw, { days: 6, club: true }, 9), () => []);
+  const four = P.weekCompletion(P.markOptional(raw, { days: 4, club: true }, 9), () => []);
+  assert.ok(four.req < six.req, `${four.req} < ${six.req}`);
+  // 可省略的課有練：算「加練」，不算進分母
+  const opt = P.markOptional(raw, { days: 4, club: true }, 9);
+  const o = opt.find((r) => r.opt);
+  const wc = P.weekCompletion(opt, (r) => (r === o ? [{ status: 'done' }] : []));
+  assert.equal(wc.extra, 1);
+  assert.equal(wc.done, 0);
+});

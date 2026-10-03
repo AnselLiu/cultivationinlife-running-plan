@@ -3012,6 +3012,17 @@ export default {
 "對照 220−年齡：": "vs. 220−age:",
 "Karvonen 儲備心率法・安靜心率": "Karvonen heart-rate reserve · resting HR",
 "預估全馬": "Predicted marathon",
-"預估半馬": "Predicted half"
+"預估半馬": "Predicted half",
+"待上傳：連上網路會自動上傳": "Waiting to upload: it'll upload when you're back online",
+"動態熱身": "dynamic warm-up",
+"團體動態熱身": "group dynamic warm-up",
+"團體熱身": "group warm-up",
+"核心/肌力/活動度/交叉訓練": "Core / strength / mobility / cross-training",
+"體感漸進": "progressive by feel",
+"漸進": "progressive",
+"休息日/主動恢復": "Rest day / active recovery",
+"主動恢復日": "Active recovery day",
+"或視個人賽前習慣完全休息": "or rest completely if that is your usual pre-race routine",
+"自主放鬆": "self-guided cool-down"
 };
 export const inner = {"團練": "group run", "課表": "training plan", "拍照": "photo", "跑步": "running", "我的": "my", "揪跑": "social run", "分團": "sub-club", "主團": "home club", "報名": "sign up", "幹部": "officers", "團員": "members", "跑友": "runners", "活動": "event", "協會": "Association", "行事曆": "calendar", "地點": "spot", "路線": "route", "天氣": "weather", "通知": "notifications", "賽事": "race", "組別": "group", "訓練紀錄": "training log", "內容": "details", "流程": "process", "選擇": "option", "跑法": "how to run", "起跑": "start", "慢跑": "jog", "小時": "hours", "碳水": "carbs", "熱身": "warm-up", "分段": "segments", "強度": "intensity", "主課": "main set", "前段": "first part", "組數": "sets", "比賽日": "race day", "可在": "can be done on"};

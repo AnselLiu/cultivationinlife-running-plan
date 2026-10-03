@@ -819,7 +819,9 @@ async function homeWeather(events) {
 let todayTick = null;   // 「完成了」要記的那一列：{ c, n, row, date }
 async function todayCard(events) {
   const t = ymd(new Date()), c = myCycle(), personal = c.kind !== 'club', wi = P.weekIndexOf(t, c);
-  const logs = takeBoot('todayLogs') || (await api(`/logs?from=${t}&to=${t}`).catch(() => ({ logs: [] }))).logs;
+  // 離線時先存在手機、還沒上傳的紀錄也算（剛按「完成了」就看得到，不會再按一次）
+  const pend = (from) => logQueue.get().filter((x) => x.date >= from && x.date <= t).map((x) => ({ ...x, id: null, pending: true }));
+  const logs = [...(takeBoot('todayLogs') || (await api(`/logs?from=${t}&to=${t}`).catch(() => ({ logs: [] }))).logs), ...pend(t)];
   const done = logs.find((l) => l.status !== 'skip') || logs[0];
   const todays = events.filter((e) => e.date === t && (e.mine === 'in' || e.mine === 'wait'));
   todayTick = null;
@@ -828,13 +830,16 @@ async function todayCard(events) {
     main = `<h2>${w1Line(c, t)}</h2><div class="row" style="gap:16px"><a class="tiny" href="#/plan/1">看 W1 ›</a>${personal ? '<a class="tiny" href="#/plan?c=club">先看協會課表 ›</a>' : ''}</div>`;
   } else if (wi > 21) {
     main = `<h2>這個週期結束了</h2><a class="tiny" href="${feat('plan_cycle') ? '#/plan/setup?go=cycle' : '#/me/races'}">設定下一場 ›</a>`;
+  } else if (!(await P.weekPlan(wi, me.dist, me.grp))) {
+    // 這週還沒有課表資料（W1 還沒公告；個人週期也照同一份範本）
+    main = `<h2>W${wi} 課表還沒公告</h2>${personal ? '<a class="tiny" href="#/plan?c=club">先看協會課表 ›</a>' : ''}`;
   } else {
-    const rows = P.markOptional((await P.weekPlan(wi, me.dist, me.grp)) || [], feat('coach') ? coachPrefs().plan : undefined, wi);
+    const rows = P.markOptional(await P.weekPlan(wi, me.dist, me.grp), feat('coach') ? coachPrefs().plan : undefined, wi);
     let ses = P.todaySessions(t, wi, rows, [], c);
     // 擇一天的課：前幾天已經記錄過就不再出現（要多查這週前幾天的紀錄）
     const firstDate = ses.map((r) => P.dayDates(wi, r.d, c, r)[0]).sort()[0];
     let weekLogs = logs;
-    if (firstDate && firstDate < t) weekLogs = (await api(`/logs?from=${firstDate}&to=${t}`).catch(() => ({ logs }))).logs;
+    if (firstDate && firstDate < t) weekLogs = [...(await api(`/logs?from=${firstDate}&to=${t}`).catch(() => ({ logs: logs.filter((l) => !l.pending) }))).logs, ...pend(firstDate)];
     const logOf = (r) => weekLogs.filter((l) => P.logMatches(l, c, wi, r));
     ses = ses.filter((r) => !logOf(r).some((l) => l.date < t));
     const race = ses.find((r) => P.isRaceDay(r, wi));
@@ -850,8 +855,10 @@ async function todayCard(events) {
       todayTick = { c, n: wi, row: next, date: t };
       act = `<div class="grid2">${feat('gps') ? `<a class="btn iconbtn" href="#/run" style="justify-content:center">${IC.runner}開始跑步</a>` : ''}<button type="button" class="btn ${feat('gps') ? 'ghost ' : ''}iconbtn" id="tdDone" style="justify-content:center${feat('gps') ? '' : ';grid-column:1/-1'}">${IC.check}完成了</button></div>
         <a class="tiny" href="#/log?w=${wi}&i=${next.i}${personal ? '&c=r' : ''}">填寫詳細 ›</a>`;
+    } else if (logged?.pending) {
+      act = '<p class="tiny" style="margin:0">待上傳：連上網路會自動上傳</p>';
     } else if (logged) {
-      act = logged.km || logged.seconds ? `<a class="btn ghost sm" href="#/log?id=${logged.id}">看今天的紀錄</a>` : `<a class="btn ghost sm" href="#/log?id=${logged.id}">補填距離</a>`;
+      act = logged.km || logged.seconds || logged.status === 'skip' ? `<a class="btn ghost sm" href="#/log?id=${logged.id}">看今天的紀錄</a>` : `<a class="btn ghost sm" href="#/log?id=${logged.id}">補填距離</a>`;
     }
   }
   if (!main && !todays.length && !done) return '';

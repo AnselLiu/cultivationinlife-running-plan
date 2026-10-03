@@ -32,6 +32,8 @@ const PATTERNS = [
   [/^已選 ([A-Z]) 組，按儲存才會生效$/, 'Group $1 selected — tap Save to apply'],
   [/^本週 (\d+) 堂用到$/, '$1 sessions this week use it'],
   [/^W(\d+) 課表還沒公告$/, 'W$1 plan not posted yet'],
+  // 詳細內容的主課：「2 km × 3 趟，再 400 m × 4 趟」
+  [/ × ([\d–~-]+) 趟/g, ' × $1'], [/，再 /g, ', then '],
   [/\+(\d+) 加練/g, '+$1 extra'],
   [/個人 ?W(\d+)/g, 'Personal W$1'], [/協會 W(\d+)/g, 'Club W$1'],
   [/^(\d+) 則未讀$/, '$1 unread'], [/^通知，(\d+) 則新通知$/, 'Notifications, $1 new'], [/^(\d{1,2}) 月$/, (_, m) => MON[m - 1]],
