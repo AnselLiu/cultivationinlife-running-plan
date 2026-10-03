@@ -1352,6 +1352,7 @@ html.fullmap{background:var(--sheet-solid)}
 .nfootbox{display:grid;gap:10px;justify-items:center}
 .nfootbox .btn.block{justify-self:stretch}
 .nhint{margin:0 6px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.nhint .linkbtn{min-height:32px;min-width:44px;padding:6px 10px;border-radius:999px}
 .npillbox:empty{display:none}.npillbox{display:flex;justify-content:center}
 .empty svg.ic{width:44px;height:44px}
 .empty .etitle{font-size:17px;font-weight:600;color:var(--ink)}
