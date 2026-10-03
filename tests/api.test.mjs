@@ -273,3 +273,48 @@ test('移交理事長：要輸入對方姓名確認；一步完成，雙方舊�
   assert.equal(back.status, 200);
   delete cookies.t_runner; delete cookies.t_chair;
 });
+
+test('團購與收費：尺寸、每人上限、庫存；早鳥與會員優惠由伺服器計算；回報繳費、確認收款、訂購單', async () => {
+  const ev = await call('t_chair', '/events', { method: 'POST', body: { kind: 'buy', title: '團服團購', date: plus(20), notify: false,
+    fee: 0, items: [{ name: '團服', price: 600, sizes: 'S,M,L', stock: 3, max: 2 }, { name: '帽子', price: 300 }],
+    pay_info: { account: '台灣銀行 004 帳號 123-456-789', due: plus(10), methods: ['transfer', 'cash'] }, min_qty: 10 } });
+  const id = ev.json.id;
+  const e = (await call('t_runner', `/events/${id}`)).json;
+  const shirt = e.items.find((i) => i.name === '團服'), hat = e.items.find((i) => i.name === '帽子');
+  assert.equal((await call('t_runner', `/events/${id}/signup`, { method: 'POST', body: {} })).status, 400, '團購至少選一項');
+  assert.equal((await call('t_runner', `/events/${id}/signup`, { method: 'POST', body: { items: [{ id: shirt.id, qty: 1 }] } })).status, 400, '要選尺寸');
+  assert.equal((await call('t_runner', `/events/${id}/signup`, { method: 'POST', body: { items: [{ id: shirt.id, size: 'M', qty: 3 }] } })).status, 400, '每人上限');
+  const r = await call('t_runner', `/events/${id}/signup`, { method: 'POST', body: { items: [{ id: shirt.id, size: 'M', qty: 2 }, { id: hat.id, qty: 1 }], amount: 1 } });
+  assert.equal(r.status, 200);
+  assert.equal(r.json.amount, 1500, '金額以伺服器計算為準，不信任前端送來的數字');
+  assert.equal((await call('t_other', `/events/${id}/signup`, { method: 'POST', body: { items: [{ id: shirt.id, size: 'S', qty: 2 }] } })).status, 400, '庫存只剩 1 件');
+  // 回報繳費 → 幹部確認
+  assert.equal((await call('t_runner', `/events/${id}/pay-report`, { method: 'POST', body: { method: 'transfer', ref: 'abc' } })).status, 400, '後五碼要是數字');
+  assert.equal((await call('t_runner', `/events/${id}/pay-report`, { method: 'POST', body: { method: 'transfer', ref: '12345' } })).status, 200);
+  let st = (await call('t_chair', `/events/${id}/stats`)).json;
+  assert.equal(st.money.expected, 1500);
+  assert.equal(st.money.reportedN, 1);
+  assert.equal(st.items.find((i) => i.name === '團服').by.M, 2);
+  assert.equal((await call('t_runner', `/events/${id}/payments`, { method: 'POST', body: { member_ids: ['t_runner'], paid: 'paid' } })).status, 403, '團員不能自己標已繳');
+  await call('t_chair', `/events/${id}/payments`, { method: 'POST', body: { member_ids: ['t_runner'], paid: 'paid' } });
+  st = (await call('t_chair', `/events/${id}/stats`)).json;
+  assert.equal(st.money.collected, 1500);
+  // 已繳後追加：改回未繳並記下差額
+  await call('t_runner', `/events/${id}/signup`, { method: 'POST', body: { items: [{ id: shirt.id, size: 'M', qty: 2 }, { id: hat.id, qty: 2 }] } });
+  const me2 = (await call('t_runner', `/events/${id}`)).json;
+  assert.equal(me2.myAmount, 1800);
+  assert.equal(me2.myPaid, 'unpaid');
+  assert.match(me2.myPaidNote, /追加 300/);
+  const csv = await call('t_chair', `/events/${id}/orders.csv`);
+  assert.equal(csv.status, 200);
+  assert.ok(csv.text.includes('團服（M）') && csv.text.includes('1800'));
+  assert.equal((await call('t_runner', `/events/${id}/orders.csv`)).status, 403);
+  // 早鳥＋會員優惠：只折報名費，折到 0 為止
+  const ev2 = await call('t_chair', '/events', { method: 'POST', body: { kind: 'race', title: '早鳥測試', date: plus(30), notify: false,
+    options: [{ name: '全馬', price: 1000 }], pricing: { early_until: plus(5), early_off: 200, member_off: 900 } } });
+  const r2 = await call('t_staff', `/events/${ev2.json.id}/signup`, { method: 'POST', body: { option: '全馬' } });
+  assert.equal(r2.json.amount, 800, '不是協會會員：只有早鳥');
+  await call('t_chair', '/members/t_runner/membership', { method: 'POST', body: { membership: 'active' } });
+  const r3 = await call('t_runner', `/events/${ev2.json.id}/signup`, { method: 'POST', body: { option: '全馬' } });
+  assert.equal(r3.json.amount, 0, '早鳥 200＋會員 900 超過報名費，折到 0');
+});

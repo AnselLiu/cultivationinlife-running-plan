@@ -1,5 +1,5 @@
 // 耕跑團 PWA — manage.js：從 app.js 拆出來、用到才載入的畫面（第一次開 App 不用下載）
-import { $, allow, api, bars, copy, dstr, emptyState, esc, feat, group, IC, KIND_NAME, largeTitle, me, money, PAID_NAME, row, teamAllow, teams, toast, view } from './app.js';
+import { $, ago, allow, api, bars, copy, dstr, emptyState, esc, feat, group, IC, KIND_NAME, largeTitle, me, money, PAID_NAME, row, teamAllow, teams, toast, view } from './app.js';
 
 // ---------- 幹部：新增／編輯活動 ----------
 async function formView(id) {
@@ -37,10 +37,8 @@ async function formView(id) {
       </div>
       <fieldset class="group" data-when="party">
         <legend>春酒餐敘</legend>
-        <div class="grid2">
-          <label>費用（元）<input type="number" name="fee" min="0" value="${d.fee ?? ''}" placeholder="0"></label>
-          <label>可攜伴人數<input type="number" name="guest_max" min="0" max="9" value="${d.guest_max || ''}" placeholder="不開放"></label>
-        </div>
+        <label>可攜伴人數<input type="number" name="guest_max" min="0" max="9" value="${d.guest_max || ''}" placeholder="不開放"></label>
+        <p class="tiny" style="margin:0">攜伴每位跟報名費同價，費用在下方「費用與收款」設定。</p>
         <label>餐點選項（逗號分隔）<input name="meal_options" maxlength="60" value="${esc(d.meal_options || '')}" placeholder="葷食,素食"></label>
       </fieldset>
       <label>報名截止（選填）<input type="datetime-local" name="deadline" value="${esc(d.deadline || '')}"></label>
@@ -52,6 +50,30 @@ async function formView(id) {
         <button type="button" class="btn ghost sm" id="addOpt">${IC.plus}新增一組</button>
         <label class="switch"><span>由幹部代為團體報名<span class="tiny" style="display:block">報名的人要先填好賽事報名資料並同意提供，幹部再下載整理送出</span></span><input type="checkbox" name="group_reg" ${d.group_reg ? 'checked' : ''}><i></i></label>
       </fieldset>
+      <details class="group" data-when="!survey" id="itemBox" ${(d.items || []).length || d.kind === 'buy' ? 'open' : ''}>
+        <summary>加購與團購商品${(d.items || []).length ? `・${d.items.length} 項` : ''}</summary>
+        <p class="tiny" style="margin:0">團服、毛巾、號碼布扣…報名時一起訂。尺寸用逗號分隔；有庫存就填，賣完會自動擋下。類型選「團購」時，報名的人至少要選一項。</p>
+        <div id="itemRows" class="qedit">${(d.items || []).map(itemRow).join('')}</div>
+        <button type="button" class="btn ghost sm" id="addItem">${IC.plus}新增商品</button>
+        <label>成團門檻（選填）<input type="number" name="min_qty" min="1" max="99999" inputmode="numeric" value="${d.min_qty || ''}" placeholder="例如 20 件以上才下單"></label>
+      </details>
+      <details class="group" data-when="!survey" ${d.fee || d.pricing || d.payInfo ? 'open' : ''}>
+        <summary>費用與收款</summary>
+        <label>報名費（元，沒有分組別時使用）<input type="number" name="fee" min="0" value="${d.fee ?? ''}" placeholder="0"></label>
+        <div class="grid3">
+          <label>早鳥截止日<input type="date" name="early_until" value="${esc(d.pricing?.early_until || '')}"></label>
+          <label>早鳥折扣（元）<input type="number" name="early_off" min="0" inputmode="numeric" value="${d.pricing?.early_off || ''}"></label>
+          <label>協會會員折扣（元）<input type="number" name="member_off" min="0" inputmode="numeric" value="${d.pricing?.member_off || ''}"></label>
+        </div>
+        <p class="tiny" style="margin:0">優惠只折報名費，不折加購商品；早鳥看第一次報名的日期。</p>
+        <label>收款帳戶<textarea name="pay_account" maxlength="200" placeholder="銀行名稱與代碼、帳號、戶名">${esc(d.payInfo?.account || '')}</textarea></label>
+        <div class="grid2">
+          <label>繳費期限<input type="date" name="pay_due" value="${esc(d.payInfo?.due || '')}"></label>
+          <fieldset class="qset"><legend>收款方式</legend><div class="chips">${Object.entries(PAY_METHOD).map(([k, v]) => `<label class="chip"><input type="checkbox" name="pay_methods" value="${k}" ${(d.payInfo?.methods || ['transfer']).includes(k) ? 'checked' : ''}><span>${v}</span></label>`).join('')}</div></fieldset>
+        </div>
+        <label>繳費說明（選填）<input name="pay_note" maxlength="200" value="${esc(d.payInfo?.note || '')}" placeholder="例如：轉帳後在 App 回報後五碼"></label>
+        <p class="tiny" style="margin:0">App 只做紀錄與對帳，不經手金流。團員回報後五碼，你在統計頁確認收款。</p>
+      </details>
       <fieldset class="group">
         <legend>報名問卷</legend>
         <p class="tiny" style="margin:0">想知道大家的尺寸、交通方式、要不要參加慶功宴…都可以加題目。報名時一起填，統計頁會自動算好。</p>
@@ -95,6 +117,10 @@ async function formView(id) {
   const bindQ = () => { for (const b of f.querySelectorAll('[data-rmq]')) b.onclick = () => b.closest('.qrow').remove(); };
   const bindO = () => { for (const b of f.querySelectorAll('[data-rmo]')) b.onclick = () => b.closest('.optrow').remove(); };
   bindO();
+  const bindI = () => { for (const b of f.querySelectorAll('[data-rmi]')) b.onclick = () => b.closest('.itemrow').remove(); };
+  bindI();
+  $('#addItem').onclick = () => { $('#itemRows').insertAdjacentHTML('beforeend', itemRow()); bindI(); $('#itemRows').lastElementChild.querySelector('input').focus(); };
+  f.kind.addEventListener('change', () => { if (f.kind.value === 'buy') { $('#itemBox').open = true; if (!f.querySelector('.itemrow')) $('#addItem').click(); } });
   $('#addOpt').onclick = () => { $('#optRows').insertAdjacentHTML('beforeend', optRow()); bindO(); $('#optRows').lastElementChild.querySelector('input').focus(); };
   bindQ();
   for (const b of f.querySelectorAll('[data-addq]')) b.onclick = () => {
@@ -118,7 +144,13 @@ async function formView(id) {
       link_url: f.link_url.value, link_label: f.link_label.value, deadline: f.deadline.value,
       week_no: num(f.week_no), capacity: num(f.capacity), fee: num(f.fee), guest_max: num(f.guest_max), meal_options: f.meal_options.value,
       signup_open: f.signup_open.checked, questions, visibility: f.visibility.value, group_reg: f.group_reg.checked,
-      options: [...f.querySelectorAll('.optrow')].map((r) => ({ name: r.querySelector('[data-k=name]').value.trim(), price: Number(r.querySelector('[data-k=price]').value) || 0 })).filter((o) => o.name), notify: f.notify ? f.notify.checked : undefined, copy_from: from || undefined,
+      options: [...f.querySelectorAll('.optrow')].map((r) => ({ name: r.querySelector('[data-k=name]').value.trim(), price: Number(r.querySelector('[data-k=price]').value) || 0 })).filter((o) => o.name),
+      items: [...f.querySelectorAll('.itemrow')].map((r) => { const v = (k) => r.querySelector(`[data-k=${k}]`).value.trim();
+        return { id: r.dataset.id || undefined, name: v('name'), price: Number(v('price')) || 0, sizes: v('sizes'), stock: v('stock') ? Number(v('stock')) : null, max: v('max') ? Number(v('max')) : 10 }; }).filter((x) => x.name),
+      min_qty: num(f.min_qty),
+      pricing: { early_until: f.early_until.value, early_off: Number(f.early_off.value) || 0, member_off: Number(f.member_off.value) || 0 },
+      pay_info: { account: f.pay_account.value.trim(), due: f.pay_due.value, note: f.pay_note.value.trim(), methods: [...f.querySelectorAll('[name=pay_methods]:checked')].map((c) => c.value) },
+      notify: f.notify ? f.notify.checked : undefined, copy_from: from || undefined,
     };
     try {
       if (id) { await api(`/events/${id}`, { method: 'PUT', body }); location.hash = `#/e/${id}`; }
@@ -129,6 +161,16 @@ async function formView(id) {
 }
 const optRow = (o = {}) => `<div class="optrow"><input data-k="name" maxlength="20" placeholder="組別，例如 全馬" aria-label="組別名稱" value="${esc(o.name || '')}">
   <input data-k="price" type="number" min="0" max="100000" inputmode="numeric" placeholder="價格" aria-label="價格（元）" value="${o.price ?? ''}"><button type="button" class="btn danger sm" data-rmo>移除</button></div>`;
+const money2 = (n) => `NT$${Number(n || 0).toLocaleString('zh-TW')}`;
+const itemText = (items, defs) => (items || []).map((x) => { const d = (defs || []).find((y) => y.id === x.id); return d ? `${d.name}${x.size ? ` ${x.size}` : ''}×${x.qty}・` : ''; }).join('');
+const PAY_METHOD = { transfer: '銀行轉帳', cash: '現金', linepay: 'LINE Pay' };
+const itemRow = (it = {}) => `<div class="itemrow" data-id="${esc(it.id || '')}">
+  <div class="grid2"><input data-k="name" maxlength="30" placeholder="商品，例如 團服" aria-label="商品名稱" value="${esc(it.name || '')}">
+    <input data-k="price" type="number" min="0" max="100000" inputmode="numeric" placeholder="單價" aria-label="單價（元）" value="${it.price ?? ''}"></div>
+  <div class="grid3"><input data-k="sizes" maxlength="80" placeholder="尺寸：S,M,L（沒有就空白）" aria-label="尺寸" value="${esc((it.sizes || []).join(','))}">
+    <input data-k="stock" type="number" min="1" inputmode="numeric" placeholder="庫存（不限）" aria-label="庫存" value="${it.stock ?? ''}">
+    <input data-k="max" type="number" min="1" max="99" inputmode="numeric" placeholder="每人上限 10" aria-label="每人上限" value="${it.max && it.max !== 10 ? it.max : ''}"></div>
+  <button type="button" class="btn danger sm" data-rmi>移除</button></div>`;
 const nextYear = (date) => { const [y, m, dd] = date.split('-'); return `${Number(y) + 1}-${m}-${dd}`; };
 const Q_TYPE_NAME = { single: '單選', multi: '複選', text: '簡答' };
 const qRow = (q = {}) => `<div class="qrow" data-type="${q.type || 'single'}" data-id="${esc(q.id || '')}">
@@ -144,17 +186,29 @@ async function statsView(id) {
   const st = await api(`/events/${id}/stats`);
   const t = st.total, survey = st.kind === 'survey';
   const kpi = [[survey ? '回覆' : '正取', t.in], ...(survey ? [] : [['候補', t.wait]]), ['取消', t.cancel],
-    ...(st.kind === 'party' ? [['攜伴', t.guests], ['已報到', `${t.checkedIn}/${t.in}`]] : survey ? [] : [['出席', `${t.attended}/${t.in}`]]), ['協會會員', t.members]];
+    ...(st.kind === 'party' ? [['攜伴', t.guests], ['已報到', `${t.checkedIn}/${t.in}`]] : survey ? [] : st.kind === 'buy' ? [['已領取', `${st.picked}/${t.in}`]] : [['出席', `${t.attended}/${t.in}`]]), ['協會會員', t.members]];
   const money = st.money, nf = (n) => n.toLocaleString('zh-TW');
   view.innerHTML = `
     ${largeTitle('統計', `${esc(st.title)}・${dstr(st.date)}`, `<a class="btn ghost sm" href="#/e/${id}">回活動</a>`)}
     <section class="kpis">${kpi.map(([k, v]) => `<div class="card kpi"><span class="tiny">${k}</span><b class="num">${v}</b></div>`).join('')}</section>
     ${st.capacity ? `<section class="card"><div class="row spread"><h3>名額</h3><span class="tiny num">${t.in}/${st.capacity}</span></div>
       <span class="bar big"><i style="width:${Math.min(100, Math.round(t.in / st.capacity * 100))}%"></i></span></section>` : ''}
-    ${money ? `<section class="card"><div class="row spread"><h3>繳費</h3><span class="tiny">${st.options.length ? '依報名組別計價' : `每人 ${nf(st.fee)} 元`}（攜伴另計）</span></div>
-      <div class="lstats"><span>已收 <b class="num">${nf(money.collected)}</b> / ${nf(money.expected)} 元</span>
-        ${Object.entries(PAID_NAME).map(([k, v]) => `<span>${v} <b class="num">${money.counts[k] || 0}</b></span>`).join('')}</div>
-      <span class="bar big"><i style="width:${money.expected ? Math.round(money.collected / money.expected * 100) : 0}%"></i></span></section>` : ''}
+    ${money ? `<section class="card"><div class="row spread"><h3>收款</h3>${money.payInfo?.due ? `<span class="tiny">繳費期限 ${esc(money.payInfo.due)}</span>` : ''}</div>
+      <div class="moneygrid">
+        <div><span class="tiny">應收</span><b class="num">${money2(money.expected)}</b></div>
+        <div class="ok"><span class="tiny">已收</span><b class="num">${money2(money.collected)}</b></div>
+        <div class="wait"><span class="tiny">已回報待確認</span><b class="num">${money2(money.reported)}</b><span class="tiny">${money.reportedN} 筆</span></div>
+        <div class="due"><span class="tiny">還沒收</span><b class="num">${money2(Math.max(0, money.expected - money.collected - money.reported))}</b></div>
+      </div>
+      <span class="bar big"><i style="width:${money.expected ? Math.round(money.collected / money.expected * 100) : 0}%"></i></span>
+      <div class="lstats">${Object.entries(PAID_NAME).map(([k, v]) => `<span>${v} <b class="num">${money.counts[k] || 0}</b></span>`).join('')}</div>
+      ${money.reportedN ? '<a class="btn sm" href="#plist" id="showReported">只看待確認的</a>' : ''}</section>` : ''}
+    ${(st.items || []).length ? `<section class="card"><div class="row spread"><h3>團購數量</h3>${st.minQty ? `<span class="tiny">成團門檻 ${st.minQty} 件</span>` : ''}</div>
+      ${st.minQty ? (() => { const sum = st.items.reduce((n, i) => n + i.total, 0); return `<div class="row spread"><span>${sum >= st.minQty ? `${IC.check} 已成團` : `還差 ${st.minQty - sum} 件成團`}</span><span class="tiny num">${sum}/${st.minQty}</span></div>
+        <span class="bar big"><i style="width:${Math.min(100, Math.round(sum / st.minQty * 100))}%"></i></span>`; })() : ''}
+      <div class="itemtable">${st.items.map((i) => `<div class="itr"><b>${esc(i.name)}</b><span class="tiny">${money2(i.price)}${i.stock ? `・庫存 ${i.stock}，剩 ${Math.max(0, i.stock - i.total)}` : ''}</span>
+        <span class="sizes">${Object.entries(i.by).map(([z, n]) => `<span class="pill">${z === '—' ? '數量' : esc(z)} <b class="num">${n}</b></span>`).join('') || '<span class="tiny">還沒有人訂</span>'}</span><b class="num">${i.total}</b></div>`).join('')}</div>
+      <div class="row"><a class="btn sm" href="/api/events/${id}/orders.csv" download>下載訂購單</a><span class="tiny">已領取 ${st.picked}/${t.in}</span></div></section>` : ''}
     ${st.groupReg ? `<section class="card"><div class="row spread"><h3>團體報名資料</h3><span class="tiny">${st.regReady}/${t.in} 人已同意提供</span></div>
       <span class="bar big"><i style="width:${t.in ? Math.round(st.regReady / t.in * 100) : 0}%"></i></span>
       <a class="btn sm" href="/api/events/${id}/registrations.csv" download>下載團體報名資料（含身分證字號）</a>
@@ -176,9 +230,12 @@ async function statsView(id) {
     ${survey ? '' : `<section class="card">
       <div class="row spread"><h3>名單</h3><span class="tiny">${st.people.length} 人</span></div>
       <input id="pq" placeholder="搜尋姓名" aria-label="搜尋名單" autocomplete="off">
-      <div class="roster" id="plist">${st.people.map((x) => `<div class="r prow" data-name="${esc(`${x.name} ${x.nickname || ''}`)}">
+      <div class="roster" id="plist">${st.people.map((x) => `<div class="r prow ${x.payReported && x.paid !== 'paid' ? 'reported' : ''}" data-name=""${esc(`${x.name} ${x.nickname || ''}`)}">
         <label class="attend" title="出席"><input type="checkbox" data-att="${esc(x.member_id)}" ${x.attended ? 'checked' : ''} ${st.kind === 'party' ? 'disabled' : ''}><i>${IC.check}</i></label>
-        <span><b>${esc(x.name)}</b>${x.nickname ? ` <span class="tiny">${esc(x.nickname)}</span>` : ''}<span class="tiny" style="display:block">${x.option ? `${esc(x.option)}・` : ''}${st.groupReg ? (x.regOk ? '報名資料 OK・' : '報名資料未提供・') : ''}${x.status === 'wait' ? '候補・' : ''}${x.guests ? `攜伴 ${x.guests}・` : ''}${esc(x.paid_note || '')}</span></span>
+        <span><b>${esc(x.name)}</b>${x.nickname ? ` <span class="tiny">${esc(x.nickname)}</span>` : ''}${x.amount ? ` <span class="num tiny">${money2(x.amount)}</span>` : ''}
+          <span class="tiny" style="display:block">${x.option ? `${esc(x.option)}・` : ''}${itemText(x.items, st.items)}${st.groupReg ? (x.regOk ? '報名資料 OK・' : '報名資料未提供・') : ''}${x.status === 'wait' ? '候補・' : ''}${x.guests ? `攜伴 ${x.guests}・` : ''}${esc(x.paid_note || '')}</span>
+          ${x.payReported && x.paid !== 'paid' ? `<span class="payrep">${PAY_METHOD[x.payMethod] || '已回報'}${x.payRef ? ` 後五碼 <b class="num">${esc(x.payRef)}</b>` : ''}・${ago(x.payReported)} <button type="button" class="btn sm" data-confirm="${esc(x.member_id)}">確認收款</button></span>` : ''}
+          ${(st.items || []).length && x.status === 'in' ? `<label class="inline tiny"><input type="checkbox" data-pick="${esc(x.member_id)}" ${x.picked ? 'checked' : ''}> 已領取</label>` : ''}</span>
         ${money ? `<select data-pay="${esc(x.member_id)}" aria-label="繳費狀態" class="paysel ${x.paid}">${Object.entries(PAID_NAME).map(([k, v]) => `<option value="${k}" ${x.paid === k ? 'selected' : ''}>${v}</option>`).join('')}</select>` : '<span></span>'}
       </div>`).join('')}</div>
       <p class="tiny" style="margin:0">左邊勾選是點名出席${st.kind === 'party' ? '（春酒以入場券報到為準）' : ''}${money ? '；右邊切換繳費狀態，只做紀錄，不串金流' : ''}。</p>
@@ -194,6 +251,16 @@ async function statsView(id) {
   for (const c of document.querySelectorAll('[data-att]')) c.onchange = async () => {
     try { await api(`/events/${id}/attendance`, { method: 'POST', body: { member_id: c.dataset.att, present: c.checked } }); } catch (e) { c.checked = !c.checked; toast(e.message); }
   };
+  for (const b of document.querySelectorAll('[data-confirm]')) b.onclick = async () => {
+    b.disabled = true;
+    try { await api(`/events/${id}/payments`, { method: 'POST', body: { member_ids: [b.dataset.confirm], paid: 'paid' } }); toast('已確認收款'); statsView(id); }
+    catch (e) { b.disabled = false; toast(e.message); }
+  };
+  for (const c of document.querySelectorAll('[data-pick]')) c.onchange = async () => {
+    try { await api(`/events/${id}/pickup`, { method: 'POST', body: { member_id: c.dataset.pick, picked: c.checked } }); toast(c.checked ? '已標記領取' : '已取消領取'); }
+    catch (e) { c.checked = !c.checked; toast(e.message); }
+  };
+  $('#showReported')?.addEventListener('click', () => { for (const r of document.querySelectorAll('.prow')) r.hidden = !r.classList.contains('reported'); });
   for (const sel of document.querySelectorAll('[data-pay]')) sel.onchange = async () => {
     try { await api(`/events/${id}/payments`, { method: 'POST', body: { member_ids: [sel.dataset.pay], paid: sel.value } }); sel.className = `paysel ${sel.value}`; toast(`已標記為${PAID_NAME[sel.value]}`); }
     catch (e) { toast(e.message); }

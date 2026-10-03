@@ -876,3 +876,44 @@ label.chip{background:none;padding:0;box-shadow:none;border-radius:999px}
 .vital{display:grid;gap:2px;padding:12px 14px;border-radius:var(--r-m);background:var(--glass-hi);border-left:4px solid var(--stroke)}
 .vital b{font-size:22px}
 .vital.good{border-left-color:#34C759}.vital.ok{border-left-color:#FF9F0A}.vital.poor{border-left-color:var(--race)}
+
+/* ---------- 團購、加購與收費 ---------- */
+details.group{border:1px solid var(--stroke);border-radius:var(--r-l);padding:12px 14px;display:grid;gap:12px;min-width:0}
+details.group > summary{font-size:15px;font-weight:650;color:var(--ink)}
+details.group[open] > summary{margin-bottom:2px}
+.itemrow{display:grid;gap:8px;padding:12px;border-radius:var(--r-m);background:var(--glass-hi);border:1px solid var(--stroke)}
+.itemrow .btn{justify-self:start}
+.items{gap:10px}
+.itempick{display:grid;gap:8px;padding:12px 14px;border-radius:var(--r-m);background:var(--glass-hi);border:1px solid var(--stroke)}
+.steppers{display:flex;flex-wrap:wrap;gap:8px}
+.stepper{display:inline-grid;grid-template-columns:auto 34px 28px 34px;align-items:center;gap:4px;padding:4px 4px 4px 12px;border-radius:999px;background:var(--glass-2);box-shadow:inset 0 1px 0 var(--rim)}
+.stepper > span{font-size:14px;font-weight:600;min-width:1.6em}
+.stepper button{width:34px;height:34px;border-radius:50%;border:0;background:var(--glass-hi);color:var(--accent);font-size:20px;font-weight:600;line-height:1;cursor:pointer;box-shadow:var(--shadow-s);transition:transform .15s var(--tap)}
+.stepper button:active{transform:scale(.9)}
+.stepper output{text-align:center;font-weight:700;font-size:16px}
+.quote{display:grid;gap:4px;padding:12px 14px;border-radius:var(--r-m);background:var(--accent-soft)}
+.quote:empty{display:none}
+.ql{display:flex;justify-content:space-between;gap:12px;font-size:15px}
+.ql.off{color:#1E8E3E}
+.ql.total{border-top:1px solid var(--stroke);margin-top:4px;padding-top:6px;font-weight:700}
+.ql.total b{font-size:20px}
+.paycard .amount{font-size:26px;letter-spacing:-.01em}
+.paycard.paid{background:color-mix(in srgb,#34C759 10%,var(--glass))}
+.paycard.reported{background:color-mix(in srgb,#FF9F0A 10%,var(--glass))}
+.acct{display:grid;grid-template-columns:1fr auto;gap:4px 10px;align-items:center;padding:12px 14px;border-radius:var(--r-m);background:var(--glass-hi);border:1px solid var(--stroke)}
+.acct .tiny{grid-column:1/-1}
+.acct pre{margin:0;font:inherit;font-weight:600;white-space:pre-wrap;user-select:all}
+.moneygrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px}
+.moneygrid > div{display:grid;gap:2px;padding:12px 14px;border-radius:var(--r-m);background:var(--glass-hi);border-left:4px solid var(--stroke)}
+.moneygrid > div b{font-size:20px}
+.moneygrid .ok{border-left-color:#34C759}.moneygrid .wait{border-left-color:#FF9F0A}.moneygrid .due{border-left-color:var(--race)}
+.itemtable{display:grid;gap:2px}
+.itr{display:grid;grid-template-columns:1fr auto;gap:4px 12px;align-items:center;padding:10px 0;border-bottom:1px solid var(--stroke)}
+.itr:last-child{border-bottom:0}
+.itr .sizes{display:flex;flex-wrap:wrap;gap:6px;grid-column:1}
+.itr > b.num{grid-row:1/3;grid-column:2;font-size:22px}
+.payrep{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:4px;font-size:13px;color:#B25E00}
+.prow.reported{background:color-mix(in srgb,#FF9F0A 8%,transparent);border-radius:12px}
+.pill.buy{background:color-mix(in srgb,#AF52DE 14%,transparent);color:#8E3BB8}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .ql.off{color:#5BD07A}:root:not([data-theme="light"]) .payrep{color:#FFB547}}
+:root[data-theme="dark"] .ql.off{color:#5BD07A}:root[data-theme="dark"] .payrep{color:#FFB547}

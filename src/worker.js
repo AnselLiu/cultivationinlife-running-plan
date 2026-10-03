@@ -8,6 +8,7 @@
 // 工作階段權杖放 HttpOnly cookie，D1 只存 SHA-256；寫入類 API 只接受同源 JSON（擋 CSRF）。
 import { subscribe, unsubscribe, push, validEndpoint } from './push.js';
 import * as WebAuthn from './webauthn.js';
+import { quote } from '../public/pricing.js';
 
 const COOKIE = '__Host-cil_sess';
 // 工作階段期限：一般跑友長期使用；幹部看得到別人的資料，期限短很多
@@ -32,7 +33,8 @@ const fail = (status, msg) => json({ error: msg }, status);
 const str = (v, max = 200) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
 const FM = ['S', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I'];
 const HM = ['A', 'B', 'C', 'D', 'E'];
-const KINDS = ['track', 'core', 'long', 'race', 'party', 'survey', 'other'];
+const KINDS = ['track', 'core', 'long', 'race', 'party', 'survey', 'buy', 'other'];
+const PAY_METHODS = { transfer: '銀行轉帳', cash: '現金', linepay: 'LINE Pay' };
 const isDate = (s) => /^\d{4}-\d{2}-\d{2}$/.test(s);
 const isTime = (s) => !s || /^\d{2}:\d{2}$/.test(s);
 // 「今天」一律用台北時間（UTC 會在台灣早上 8 點前還停在前一天）
@@ -316,7 +318,7 @@ async function openPrivate(env, enc) {
 const maskId = (v) => (v ? `${v.slice(0, 2)}${'*'.repeat(Math.max(0, v.length - 5))}${v.slice(-3)}` : '');
 
 // ---- 活動 ----
-const eventCols = 'id, kind, title, date, gather_time, end_time, place, lead, note, week_no, plan_text, capacity, signup_open, deadline, status, created_at, fee, guest_max, meal_options, link_url, link_label, team_id, questions, visibility, created_by, options, group_reg';
+const eventCols = 'id, kind, title, date, gather_time, end_time, place, lead, note, week_no, plan_text, capacity, signup_open, deadline, status, created_at, fee, guest_max, meal_options, link_url, link_label, team_id, questions, visibility, created_by, options, group_reg, items, pricing, pay_info, min_qty';
 
 // 報名問卷：單選、複選、簡答；最多 12 題
 const Q_TYPES = ['single', 'multi', 'text'];
@@ -334,7 +336,7 @@ function readQuestions(v) {
   }).filter((q) => q.label && (q.type === 'text' || q.options.length));
   return qs.length ? JSON.stringify(qs.map((q) => (q.type === 'text' ? { ...q, options: [] } : q))) : null;
 }
-const parseQ = (s) => { try { return JSON.parse(s || '[]'); } catch { return []; } };
+const parseQ = (s, d = []) => { if (!s) return d; try { return JSON.parse(s); } catch { return d; } };
 // 回答只接受題目裡有的選項；必填沒填就擋下
 function readAnswers(questions, raw) {
   const qs = parseQ(questions), out = {};
@@ -375,6 +377,27 @@ function readEvent(b) {
     options: (() => { const o = Array.isArray(b.options) ? b.options.slice(0, 10).map((x) => ({ name: str(x?.name, 20), price: Math.max(0, Math.min(Math.round(Number(x?.price) || 0), 100000)) })).filter((x) => x.name) : [];
       return o.length ? JSON.stringify(o) : null; })(),
     group_reg: b.group_reg === true ? 1 : 0,
+    // 加購／團購商品：[{id, name, price, sizes:['S','M'], stock, max}]，最多 20 項
+    items: (() => {
+      const it = Array.isArray(b.items) ? b.items.slice(0, 20).map((x, i) => ({
+        id: /^[a-z0-9]{1,8}$/.test(x?.id || '') ? x.id : `i${i + 1}`, name: str(x?.name, 30),
+        price: Math.max(0, Math.min(Math.round(Number(x?.price) || 0), 100000)),
+        sizes: (Array.isArray(x?.sizes) ? x.sizes : String(x?.sizes || '').split(/[,，、]/)).map((z) => str(z, 10)).filter(Boolean).slice(0, 12),
+        stock: Number.isInteger(x?.stock) && x.stock > 0 ? Math.min(x.stock, 99999) : null,
+        max: Number.isInteger(x?.max) && x.max > 0 ? Math.min(x.max, 99) : 10,
+      })).filter((x) => x.name) : [];
+      const ids = new Set(); for (const x of it) { while (ids.has(x.id)) x.id = `i${ids.size + 1}${x.id}`.slice(0, 8); ids.add(x.id); }
+      return it.length ? JSON.stringify(it) : null; })(),
+    // 優惠：早鳥截止日與折扣、協會會員折扣（只折報名費）
+    pricing: (() => { const p = b.pricing || {}, o = { early_until: isDate(p.early_until) ? p.early_until : '',
+        early_off: Math.max(0, Math.min(Math.round(Number(p.early_off) || 0), 100000)), member_off: Math.max(0, Math.min(Math.round(Number(p.member_off) || 0), 100000)) };
+      if (!o.early_until) o.early_off = 0;
+      return o.early_off || o.member_off ? JSON.stringify(o) : null; })(),
+    // 收款資訊：帳戶、繳費期限、可用方式（只做紀錄，不串金流）
+    pay_info: (() => { const p = b.pay_info || {}, o = { account: str(p.account, 200), due: isDate(p.due) ? p.due : '', note: str(p.note, 200),
+        methods: (Array.isArray(p.methods) ? p.methods : []).filter((m) => PAY_METHODS[m]).slice(0, 3) };
+      return o.account || o.due || o.note || o.methods.length ? JSON.stringify(o) : null; })(),
+    min_qty: Number.isInteger(b.min_qty) && b.min_qty > 0 ? Math.min(b.min_qty, 99999) : null,
   };
   if (!e.title || !isDate(e.date) || !isTime(e.gather_time) || !isTime(e.end_time)) return null;
   return e;
@@ -409,17 +432,45 @@ async function doSignup(env, ev, member, b) {
   }
   if (ev.deadline && new Date(ev.deadline) < new Date()) return fail(400, '已經過了報名截止時間');
   const n = (await env.DB.prepare("SELECT COUNT(*) AS n FROM signups WHERE event_id = ? AND status = 'in'").bind(ev.id).first()).n;
-  const mine = await env.DB.prepare('SELECT id, status FROM signups WHERE event_id = ? AND member_id = ?').bind(ev.id, member.id).first();
+  const mine = await env.DB.prepare('SELECT id, status, created_at, amount, paid FROM signups WHERE event_id = ? AND member_id = ?').bind(ev.id, member.id).first();
+  // 加購／團購：檢查品項、尺寸、每人上限與庫存（庫存扣掉其他人已訂的數量）
+  const defs = parseQ(ev.items), picked = {};
+  for (const x of Array.isArray(b.items) ? b.items.slice(0, 60) : []) {
+    const d = defs.find((y) => y.id === x?.id), qty = Math.round(Number(x?.qty) || 0);
+    if (!d || qty <= 0) continue;
+    const size = d.sizes.length ? (d.sizes.includes(x.size) ? x.size : null) : '';
+    if (size === null) return fail(400, `請選「${d.name}」的尺寸`);
+    const k = `${d.id}|${size}`; picked[k] = { id: d.id, size, qty: (picked[k]?.qty || 0) + qty };
+  }
+  const items = Object.values(picked);
+  for (const d of defs) {
+    const q = items.filter((x) => x.id === d.id).reduce((t, x) => t + x.qty, 0);
+    if (q > d.max) return fail(400, `「${d.name}」每人最多 ${d.max} 件`);
+    if (q && d.stock) {
+      const others = (await env.DB.prepare("SELECT items FROM signups WHERE event_id = ? AND status = 'in' AND member_id != ? AND items IS NOT NULL").bind(ev.id, member.id).all()).results
+        .reduce((t, r) => t + parseQ(r.items).filter((x) => x.id === d.id).reduce((u, x) => u + x.qty, 0), 0);
+      if (others + q > d.stock) return fail(400, `「${d.name}」只剩 ${Math.max(0, d.stock - others)} 件`);
+    }
+  }
+  if (ev.kind === 'buy' && !items.length) return fail(400, '請至少選一項商品');
+  // 金額由伺服器算：早鳥看第一次報名的日期（改報名內容不會失去早鳥）
+  const guests0 = ev.kind === 'party' ? Math.max(0, Math.min(Number(b.guests) || 0, ev.guest_max || 0)) : 0;
+  const q = quote({ ...ev, options: opts, items: defs, pricing: parseQ(ev.pricing, {}) },
+    { option, guests: guests0, items, membership: member.membership, signedOn: mine?.created_at ? tpDate(new Date(`${mine.created_at.replace(' ', 'T')}Z`)) : today() });
+  // 已繳費後追加：改回未繳，備註差額
+  const repay = mine?.paid === 'paid' && mine.amount != null && q.total > mine.amount;
   const full = ev.capacity && n >= ev.capacity && mine?.status !== 'in';
   const status = full ? 'wait' : 'in';
   if (mine) {
     await env.DB.prepare(`UPDATE signups SET name = ?, grp = ?, dist = ?, note = ?, status = ?, answers = ?, option = ?,
-      reg_consent_at = CASE WHEN ? THEN COALESCE(reg_consent_at, datetime('now')) ELSE NULL END WHERE id = ?`)
-      .bind(name, grp, dist, str(b.note, 100), status, ans.answers, option, ev.group_reg ? 1 : 0, mine.id).run();
+      reg_consent_at = CASE WHEN ? THEN COALESCE(reg_consent_at, datetime('now')) ELSE NULL END, items = ?, amount = ?, amount_detail = ?,
+      paid = CASE WHEN ? THEN 'unpaid' ELSE paid END, paid_note = CASE WHEN ? THEN ? ELSE paid_note END WHERE id = ?`)
+      .bind(name, grp, dist, str(b.note, 100), status, ans.answers, option, ev.group_reg ? 1 : 0, items.length ? JSON.stringify(items) : null, q.total, JSON.stringify(q.lines),
+        repay ? 1 : 0, repay ? 1 : 0, repay ? `追加 ${q.total - mine.amount} 元` : null, mine.id).run();
   } else {
-    await env.DB.prepare(`INSERT INTO signups (id, event_id, member_id, name, grp, dist, note, status, answers, option, reg_consent_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ${ev.group_reg ? "datetime('now')" : 'NULL'})`)
-      .bind(rid(8), ev.id, member.id, name, grp, dist, str(b.note, 100), status, ans.answers, option).run();
+    await env.DB.prepare(`INSERT INTO signups (id, event_id, member_id, name, grp, dist, note, status, answers, option, reg_consent_at, items, amount, amount_detail)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ${ev.group_reg ? "datetime('now')" : 'NULL'}, ?, ?, ?)`)
+      .bind(rid(8), ev.id, member.id, name, grp, dist, str(b.note, 100), status, ans.answers, option, items.length ? JSON.stringify(items) : null, q.total, JSON.stringify(q.lines)).run();
   }
   if (ev.kind === 'party' && status === 'in') {
     const guests = Math.max(0, Math.min(Number(b.guests) || 0, ev.guest_max || 0));
@@ -428,7 +479,7 @@ async function doSignup(env, ev, member, b) {
       ON CONFLICT(event_id, member_id) DO UPDATE SET guests = excluded.guests, meal = excluded.meal, note = excluded.note`)
       .bind(rid(8), ev.id, member.id, ticketCode(), guests, meal, str(b.note, 60)).run();
   }
-  return json({ ok: true, status });
+  return json({ ok: true, status, amount: q.total, lines: q.lines });
 }
 // 入場代碼：去掉容易看錯的 0/O/1/I
 const ticketCode = () => [...crypto.getRandomValues(new Uint8Array(6))].map((b) => 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[b % 32]).join('');
@@ -523,7 +574,8 @@ async function api(req, env, path, method) {
                  WHERE s.event_id = events.id AND s.status = 'in' ORDER BY s.created_at LIMIT 4) x) AS peek
        FROM events WHERE date BETWEEN ?3 AND ?4 ${past ? 'AND date < ?5' : ''} AND ${seeSQL} ORDER BY date ${past ? 'DESC' : 'ASC'}, gather_time LIMIT 100`)
       .bind(member.id, can(member, 'event') ? 1 : 0, ...range, ...(past ? [today()] : [])).all()).results;
-    return rows.map(({ questions, options, ...r }) => ({ ...r, survey: !!questions, options: parseQ(options), peek: JSON.parse(r.peek || '[]') }));
+    return rows.map(({ questions, options, items, pricing, pay_info, ...r }) => ({ ...r, survey: !!questions, options: parseQ(options),
+      items: parseQ(items).map((i) => ({ name: i.name, price: i.price })), peek: JSON.parse(r.peek || '[]') }));
   };
   // ---- 分團清單（/api/me 也會用到）----
   const teamOut = async (t, counts, leaders) => {
@@ -866,9 +918,9 @@ async function api(req, env, path, method) {
     if (e.team_id && !(await teamIds()).includes(e.team_id)) return fail(400, '找不到這個分團');
     if (!teamCan(e.team_id, 'event')) return fail(403, e.team_id ? '只有這個分團的團長與幹部可以建立活動' : '只有幹部可以建立全協會活動');
     const id = rid(8);
-    await env.DB.prepare(`INSERT INTO events (id, kind, title, date, gather_time, end_time, place, lead, note, week_no, plan_text, capacity, signup_open, deadline, created_by, fee, guest_max, meal_options, link_url, link_label, team_id, questions, visibility, options, group_reg)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .bind(id, e.kind, e.title, e.date, e.gather_time, e.end_time, e.place, e.lead, e.note, e.week_no, e.plan_text, e.capacity, e.signup_open, e.deadline, member.id, e.fee, e.guest_max, e.meal_options, e.link_url, e.link_label, e.team_id, e.questions, e.visibility, e.options, e.group_reg).run();
+    await env.DB.prepare(`INSERT INTO events (id, kind, title, date, gather_time, end_time, place, lead, note, week_no, plan_text, capacity, signup_open, deadline, created_by, fee, guest_max, meal_options, link_url, link_label, team_id, questions, visibility, options, group_reg, items, pricing, pay_info, min_qty)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .bind(id, e.kind, e.title, e.date, e.gather_time, e.end_time, e.place, e.lead, e.note, e.week_no, e.plan_text, e.capacity, e.signup_open, e.deadline, member.id, e.fee, e.guest_max, e.meal_options, e.link_url, e.link_label, e.team_id, e.questions, e.visibility, e.options, e.group_reg, e.items, e.pricing, e.pay_info, e.min_qty).run();
     // 複製活動：沿用原活動的座位圖（獎項每年不同，不複製）
     const from = str(b.copy_from, 32);
     if (from) {
@@ -890,7 +942,11 @@ async function api(req, env, path, method) {
     if (!cur || !(await canSee(cur))) return fail(404, '找不到這個活動');
     if (method === 'GET') {
       const ev = await eventWithSignups(env, id);
-      const mine = await env.DB.prepare('SELECT answers, paid, attended_at, option, reg_consent_at FROM signups WHERE event_id = ? AND member_id = ?').bind(id, member.id).first();
+      const mine = await env.DB.prepare('SELECT answers, paid, attended_at, option, reg_consent_at, items, amount, amount_detail, pay_ref, pay_method, pay_reported_at, picked_at, paid_note FROM signups WHERE event_id = ? AND member_id = ?').bind(id, member.id).first();
+      // 團購：每項已訂數量（算剩餘庫存與成團進度）
+      const itemDefs = parseQ(ev.items), sold = {};
+      if (itemDefs.length) for (const r of (await env.DB.prepare("SELECT items FROM signups WHERE event_id = ? AND status = 'in' AND items IS NOT NULL").bind(id).all()).results)
+        for (const x of parseQ(r.items)) sold[x.id] = (sold[x.id] || 0) + x.qty;
       const regRow = ev.group_reg ? await env.DB.prepare('SELECT complete FROM member_private WHERE member_id = ?').bind(member.id).first() : null;
       const team = ev.team_id ? await env.DB.prepare('SELECT id, name, color FROM teams WHERE id = ?').bind(ev.team_id).first() : null;
       const manage = canManage(ev);
@@ -900,6 +956,9 @@ async function api(req, env, path, method) {
       const attendTok = manage ? (await env.DB.prepare('SELECT attend_token FROM events WHERE id = ?').bind(id).first()).attend_token : null;
       return json({ ...ev, questions: parseQ(ev.questions), myAnswers: mine?.answers ? JSON.parse(mine.answers) : null,
         myPaid: mine?.paid || null, myAttended: mine?.attended_at || null, myOption: mine?.option || null, myRegConsent: !!mine?.reg_consent_at,
+        myItems: parseQ(mine?.items), myAmount: mine?.amount ?? null, myLines: parseQ(mine?.amount_detail), myPayRef: mine?.pay_ref || null, myPayMethod: mine?.pay_method || null,
+        myPayReported: mine?.pay_reported_at || null, myPicked: mine?.picked_at || null, myPaidNote: mine?.paid_note || null,
+        items: itemDefs, pricing: parseQ(ev.pricing, null), payInfo: parseQ(ev.pay_info, null), sold, myMembership: member.membership,
         options: parseQ(ev.options), regProfile: ev.group_reg ? (regRow ? (regRow.complete ? 'ok' : 'incomplete') : 'none') : null,
         team, manage, checkin: teamCan(ev.team_id, 'checkin'), invite: inv, attendToken: attendTok });
     }
@@ -909,8 +968,8 @@ async function api(req, env, path, method) {
       if (e.team_id && !(await teamIds()).includes(e.team_id)) return fail(400, '找不到這個分團');
       // 原本的分團與改過去的分團都要有權限
       if (!teamCan(cur.team_id, 'event') || !teamCan(e.team_id, 'event')) return fail(403, '沒有編輯這個活動的權限');
-      await env.DB.prepare(`UPDATE events SET kind=?, title=?, date=?, gather_time=?, end_time=?, place=?, lead=?, note=?, week_no=?, plan_text=?, capacity=?, signup_open=?, deadline=?, fee=?, guest_max=?, meal_options=?, link_url=?, link_label=?, team_id=?, questions=?, visibility=?, options=?, group_reg=? WHERE id = ?`)
-        .bind(e.kind, e.title, e.date, e.gather_time, e.end_time, e.place, e.lead, e.note, e.week_no, e.plan_text, e.capacity, e.signup_open, e.deadline, e.fee, e.guest_max, e.meal_options, e.link_url, e.link_label, e.team_id, e.questions, e.visibility, e.options, e.group_reg, id).run();
+      await env.DB.prepare(`UPDATE events SET kind=?, title=?, date=?, gather_time=?, end_time=?, place=?, lead=?, note=?, week_no=?, plan_text=?, capacity=?, signup_open=?, deadline=?, fee=?, guest_max=?, meal_options=?, link_url=?, link_label=?, team_id=?, questions=?, visibility=?, options=?, group_reg=?, items=?, pricing=?, pay_info=?, min_qty=? WHERE id = ?`)
+        .bind(e.kind, e.title, e.date, e.gather_time, e.end_time, e.place, e.lead, e.note, e.week_no, e.plan_text, e.capacity, e.signup_open, e.deadline, e.fee, e.guest_max, e.meal_options, e.link_url, e.link_label, e.team_id, e.questions, e.visibility, e.options, e.group_reg, e.items, e.pricing, e.pay_info, e.min_qty, id).run();
       await audit(env, req, member, 'event.update', 'event', id, `${e.title}${cur.visibility !== e.visibility ? `（改為${e.visibility === 'invite' ? '邀請制' : '公開'}）` : ''}`);
       return json({ ok: true });
     }
@@ -1054,7 +1113,7 @@ async function api(req, env, path, method) {
       'content-type': 'text/csv; charset=utf-8', 'content-disposition': `attachment; filename="registrations.csv"; filename*=UTF-8''${encodeURIComponent(`${ev.date}-${ev.title}-團體報名.csv`)}` } });
   }
   // ---- 活動營運：繳費、點名、自助報到、整批匯入 ----
-  const mops = path.match(/^\/api\/events\/([\w-]{1,32})\/(payments|attendance|attend|attend-token|bulk)$/);
+  const mops = path.match(/^\/api\/events\/([\w-]{1,32})\/(payments|attendance|attend|attend-token|bulk|pay-report|pickup)$/);
   if (mops && method === 'POST') {
     const g = need(); if (g) return g;
     const ev = await evById(mops[1]);
@@ -1072,6 +1131,25 @@ async function api(req, env, path, method) {
         .bind(rid(8), ev.id, member.id, member.name, member.grp, member.dist).run();
       return json({ ok: true, walkIn: !mine });
     }
+    // 團員回報已繳費（轉帳後五碼或現金），等幹部確認；不串金流
+    if (op === 'pay-report') {
+      const mine = await env.DB.prepare("SELECT id, amount, paid FROM signups WHERE event_id = ? AND member_id = ? AND status = 'in'").bind(ev.id, member.id).first();
+      if (!mine) return fail(400, '你還沒有報名這個活動');
+      if (!mine.amount) return fail(400, '這筆報名不用繳費');
+      if (mine.paid === 'paid') return fail(400, '幹部已經確認收款了');
+      if (b.cancel === true) {
+        await env.DB.prepare('UPDATE signups SET pay_ref = NULL, pay_method = NULL, pay_reported_at = NULL WHERE id = ?').bind(mine.id).run();
+        return json({ ok: true });
+      }
+      const method = PAY_METHODS[b.method] ? b.method : 'transfer';
+      const ref = str(b.ref, 20).replace(/\s/g, '');
+      if (method === 'transfer' && !/^\d{4,6}$/.test(ref)) return fail(400, '請填轉帳帳號的後五碼');
+      await env.DB.prepare("UPDATE signups SET pay_ref = ?, pay_method = ?, pay_reported_at = datetime('now') WHERE id = ?").bind(ref || null, method, mine.id).run();
+      const mgr = new Set([ev.created_by, ...(ev.team_id ? (await env.DB.prepare("SELECT member_id FROM team_members WHERE team_id = ? AND status = 'active' AND role IN ('lead','officer')").bind(ev.team_id).all()).results.map((r) => r.member_id) : [])]);
+      mgr.delete(member.id);
+      await notify(env, [...mgr].filter(Boolean), 'event', { title: `${ev.title}：有人回報繳費`, body: `${member.name} ${PAY_METHODS[method]} ${mine.amount} 元${ref ? `，後五碼 ${ref}` : ''}，請確認收款`, url: `/#/e/${ev.id}/stats` });
+      return json({ ok: true });
+    }
     if (!canManage(ev) && !(op === 'attendance' && teamCan(ev.team_id, 'checkin'))) return fail(403, '只有這個活動的幹部可以操作');
     if (op === 'payments') {
       const PAID = ['unpaid', 'paid', 'waived', 'refunded'];
@@ -1081,6 +1159,12 @@ async function api(req, env, path, method) {
         paid_at = CASE WHEN ? = 'paid' THEN datetime('now') ELSE paid_at END WHERE event_id = ? AND member_id = ?`)
         .bind(b.paid, str(b.note, 60) || null, b.paid, ev.id, mid)));
       await audit(env, req, member, 'event.payment', 'event', ev.id, `${ids.length} 人 → ${b.paid}`);
+      return json({ ok: true });
+    }
+    // 團購到貨：記錄誰已經領取
+    if (op === 'pickup') {
+      const mid = str(b.member_id, 32);
+      await env.DB.prepare(`UPDATE signups SET picked_at = ${b.picked === false ? 'NULL' : "COALESCE(picked_at, datetime('now'))"} WHERE event_id = ? AND member_id = ?`).bind(ev.id, mid).run();
       return json({ ok: true });
     }
     if (op === 'attendance') {
@@ -1712,7 +1796,7 @@ async function api(req, env, path, method) {
   }
 
   // ---- 活動統計與問卷結果（活動所屬分團的幹部，或協會幹部）----
-  const mst = path.match(/^\/api\/events\/([\w-]{1,32})\/(stats|export\.csv)$/);
+  const mst = path.match(/^\/api\/events\/([\w-]{1,32})\/(stats|export\.csv|orders\.csv)$/);
   if (mst && method === 'GET') {
     const g = need(); if (g) return g;
     const ev = await evById(mst[1]);
@@ -1721,6 +1805,7 @@ async function api(req, env, path, method) {
     const qs = parseQ(ev.questions);
     const rows = (await env.DB.prepare(
       `SELECT s.member_id, s.name, s.grp, s.dist, s.note, s.status, s.answers, s.created_at, s.paid, s.paid_note, s.attended_at, s.option, s.reg_consent_at,
+              s.items, s.amount, s.pay_ref, s.pay_method, s.pay_reported_at, s.picked_at,
               m.nickname, m.club, m.phone, m.membership,
               t.guests, t.meal, t.table_no, t.checked_in_at,
               (SELECT group_concat(tm.team_id) FROM team_members tm WHERE tm.member_id = s.member_id AND tm.status = 'active') AS teams
@@ -1729,6 +1814,22 @@ async function api(req, env, path, method) {
        WHERE s.event_id = ? ORDER BY s.created_at`).bind(ev.id).all()).results;
     const teamName = Object.fromEntries((await env.DB.prepare('SELECT id, name FROM teams').all()).results.map((t) => [t.id, t.name]));
     const ans = (r) => { try { return JSON.parse(r.answers || '{}'); } catch { return {}; } };
+    // 訂購單：給廠商或對帳用（姓名、品項尺寸數量、金額、繳費、後五碼、領取）
+    if (mst[2] === 'orders.csv') {
+      const cell = (v) => { let x = String(v ?? ''); if (/^[=+\-@\t\r]/.test(x)) x = `'${x}`; return `"${x.replace(/"/g, '""')}"`; };
+      const defs = parseQ(ev.items), PAID = { unpaid: '未繳', paid: '已繳', waived: '免繳', refunded: '已退費' };
+      const cols = defs.flatMap((d) => (d.sizes.length ? d.sizes.map((z) => [d.id, z, `${d.name}（${z}）`]) : [[d.id, '', d.name]]));
+      const ins2 = rows.filter((r) => r.status === 'in');
+      const lines = ins2.map((r) => { const it = parseQ(r.items);
+        return [r.name, r.option || '', ...cols.map(([id, z]) => it.filter((x) => x.id === id && (x.size || '') === z).reduce((n, x) => n + x.qty, 0) || ''),
+          r.amount ?? '', PAID[r.paid] || '未繳', r.pay_reported_at ? (PAY_METHODS[r.pay_method] || '') : '', r.pay_ref || '', r.picked_at ? '已領' : ''].map(cell).join(','); });
+      const totals = ['合計', '', ...cols.map(([id, z]) => ins2.reduce((n, r) => n + parseQ(r.items).filter((x) => x.id === id && (x.size || '') === z).reduce((u, x) => u + x.qty, 0), 0)),
+        ins2.reduce((n, r) => n + (r.amount || 0), 0), '', '', '', ''].map(cell).join(',');
+      const csv = '\uFEFF' + [['姓名', '報名組別', ...cols.map((c) => c[2]), '應繳', '繳費', '方式', '後五碼', '領取'].map(cell).join(','), ...lines, totals].join('\r\n');
+      await audit(env, req, member, 'event.orders_export', 'event', ev.id, `${ins2.length} 筆`);
+      return new Response(csv, { headers: { ...SEC_HEADERS, 'content-type': 'text/csv; charset=utf-8', 'cache-control': 'no-store',
+        'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent(`${ev.title}-訂購單.csv`)}` } });
+    }
     if (mst[2] === 'export.csv') {
       // 匯出含個資：寫稽核；電話只有可管理會籍的人看得到；開頭是 = + - @ 的儲存格加 ' 防公式注入
       const fullPhone = can(member, 'members') && !READONLY[norm(member.role)];
@@ -1759,12 +1860,22 @@ async function api(req, env, path, method) {
       fee: ev.fee || 0, options: parseQ(ev.options), groupReg: !!ev.group_reg,
       byOption: parseQ(ev.options).length ? tally(ins, (r) => r.option || '未選') : null,
       regReady: ev.group_reg ? ins.filter((r) => r.reg_consent_at).length : null,
-      money: ev.fee || parseQ(ev.options).some((o) => o.price) ? (() => { const price = Object.fromEntries(parseQ(ev.options).map((o) => [o.name, o.price]));
-        const due = (r) => (r.option && price[r.option] != null ? price[r.option] : ev.fee || 0) * (1 + (r.guests || 0));
-        return { expected: ins.filter((r) => r.paid !== 'waived').reduce((n, r) => n + due(r), 0),
-          collected: ins.filter((r) => r.paid === 'paid').reduce((n, r) => n + due(r), 0),
-          counts: tally(ins, (r) => r.paid || 'unpaid') }; })() : null,
+      money: ev.fee || parseQ(ev.options).some((o) => o.price) || parseQ(ev.items).some((i) => i.price) ? (() => { const price = Object.fromEntries(parseQ(ev.options).map((o) => [o.name, o.price]));
+        // 新的報名有伺服器算好的金額；舊資料照組別價格推算
+        const due = (r) => (r.amount != null ? r.amount : (r.option && price[r.option] != null ? price[r.option] : ev.fee || 0) * (1 + (r.guests || 0)));
+        const owe = ins.filter((r) => r.paid !== 'waived' && r.paid !== 'refunded' && due(r) > 0);
+        return { expected: owe.reduce((n, r) => n + due(r), 0),
+          collected: owe.filter((r) => r.paid === 'paid').reduce((n, r) => n + due(r), 0),
+          reported: owe.filter((r) => r.paid !== 'paid' && r.pay_reported_at).reduce((n, r) => n + due(r), 0),
+          reportedN: owe.filter((r) => r.paid !== 'paid' && r.pay_reported_at).length,
+          counts: tally(ins, (r) => r.paid || 'unpaid'), payInfo: parseQ(ev.pay_info, null) }; })() : null,
+      // 團購：每項每個尺寸的數量、成團門檻
+      items: parseQ(ev.items).map((d) => { const by = {}; let total = 0;
+        for (const r of ins) for (const x of parseQ(r.items)) if (x.id === d.id) { by[x.size || '—'] = (by[x.size || '—'] || 0) + x.qty; total += x.qty; }
+        return { ...d, total, by }; }),
+      minQty: ev.min_qty || null, picked: ins.filter((r) => r.picked_at).length,
       people: live.map((r) => ({ member_id: r.member_id, name: r.name, nickname: r.nickname, status: r.status, guests: r.guests || 0, option: r.option || null, regOk: !!r.reg_consent_at,
+        amount: r.amount, items: parseQ(r.items), payRef: r.pay_ref, payMethod: r.pay_method, payReported: r.pay_reported_at, picked: !!r.picked_at,
         paid: r.paid, paid_note: r.paid_note, attended: !!(r.attended_at || r.checked_in_at), created_at: r.created_at })),
       byTeam: Object.entries(tally(ins, (r) => (r.teams || '').split(',').filter(Boolean))).map(([k, n]) => ({ k: teamName[k] || k, n })),
       byGroup: tally(ins, (r) => `${r.dist === 'hm' ? '半馬' : '全馬'} ${r.grp}`),
