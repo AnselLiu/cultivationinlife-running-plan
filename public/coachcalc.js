@@ -108,6 +108,18 @@ export function termSpans(text){
 }
 export function termsIn(t){return [...new Set(termSpans(t).map(h=>h[2]))];}
 
+/* ---------- 課表每一列的「詳細內容」（課表頁 details.xd 用；純函式） ---------- */
+// 個人心率是一般公式算的：有 bpm 的地方一律標「估算」，並附上這句說明
+export const EST_LINE='估算：一般公式（Tanaka／Karvonen），個人誤差約 ±10 bpm；不是教練規定，課表上的 zone、HR130、RPE 以教練說明為準。';
+// coach.explain(row) → [{ label, value, est, zone }]；est＝含個人心率（bpm），zone＝心率這一列只有 zone 名稱（還沒填年齡）
+export function xdRows(coach,row){
+  const x={d:row.d,t:row.t,k:row.k??row.kind,race:row.race};
+  return coach.explain(x).map(([label,value])=>{
+    const hr=label==='心率', est=hr&&/（你約 \d+–\d+ 下）/.test(value);
+    return {label,value:String(value),est,zone:hr&&!est&&/^zone /.test(value)};
+  });
+}
+
 /* ---------- 行事曆（2412-2424） ---------- */
 const WD_IDX={'一':0,'二':1,'三':2,'四':3,'五':4,'六':5,'日':6,'末':6};
 export const icsDate=d=>`${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}`;

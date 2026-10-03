@@ -255,3 +255,32 @@ test('純函式：plan.js 只在 weeks() 用 fetch，不碰瀏覽器物件', () 
   const fn = src.slice(src.indexOf('export async function weeks()'));
   assert.ok(fn.indexOf('fetch(') < fn.indexOf('\n}'), 'fetch 只在 weeks() 裡');
 });
+
+test('快速打勾的日期、週末比賽、其他週期的紀錄、週次標示', () => {
+  const sat = P.cycleOf('2027-02-13'), sun = P.CLUB, wed = P.cycleOf('2027-03-17');
+  // 擇一天的課：候選日裡今天以前最近的一天；都還沒到就不能打勾
+  const wkend = { d: '週末', t: '20K LR', kind: 'long' };
+  assert.equal(P.tickDate(9, wkend, sun, '2026-10-03'), '2026-10-03');
+  assert.equal(P.tickDate(9, wkend, sun, '2026-10-04'), '2026-10-04');
+  assert.equal(P.tickDate(9, wkend, sun, '2026-10-02'), null);
+  assert.equal(P.tickDate(9, { d: '週五或週六', t: "60' easyjog", kind: 'easy' }, sun, '2026-10-03'), '2026-10-03');
+  // 比賽那一列只在比賽日
+  const race = { d: '週末', t: '臺北馬拉松', kind: 'race' };
+  assert.equal(P.tickDate(20, race, sun, '2026-12-19'), null);
+  assert.equal(P.tickDate(20, race, sun, '2026-12-20'), '2026-12-20');
+  assert.equal(P.weekendRace(sun), true);
+  assert.equal(P.weekendRace(sat), true);
+  assert.equal(P.weekendRace(wed), false);
+  // 其他週期的紀錄：不屬於這個週期這一週任何一列（自主加練另外算）
+  const rows = [{ d: '週二', t: 'x', kind: 'quality' }, { d: '週四', t: 'y', kind: 'quality' }];
+  const logs = [
+    { plan_day: '週二', week_no: 9, status: 'done' },                                       // 協會 W9 週二：這週的
+    { plan_day: '週二', cycle_anchor: '2027-03-21', cycle_week: 1, status: 'done' },        // 個人週期：其他週期
+    { plan_day: null, status: 'extra' },                                                    // 自主加練：不算
+  ];
+  assert.deepEqual(P.otherCycleLogs(logs, P.CLUB, 9, rows), [logs[1]]);
+  assert.equal(P.logWeekLabel(logs[0]), '協會 W9');
+  assert.equal(P.logWeekLabel(logs[1]), '個人 W1');
+  assert.equal(P.logWeekLabel({ personal: 1, cycle_week: 5, week_no: 12 }), '個人 W5');
+  assert.equal(P.logWeekLabel({}), '');
+});

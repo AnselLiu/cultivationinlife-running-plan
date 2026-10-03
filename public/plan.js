@@ -174,6 +174,19 @@ export function raceStage(todayISO, raceISO) {
   return d === 0 ? 'race' : d >= 1 && d <= 14 ? 'prep' : d <= -1 && d >= -7 ? 'recover' : null;
 }
 
+// 快速打勾記在哪一天：候選日期裡今天（含）以前最近的一天；都還沒到回傳 null（未來的課不能先打勾）
+export function tickDate(n, row, c = CLUB, todayISO) {
+  const ds = dayDates(n, row.d, c, row).filter((d) => d <= todayISO);
+  return ds.length ? ds[ds.length - 1] : null;
+}
+// 這週日期範圍內、不屬於這個週期這一週任何一列的照課表紀錄（例如換週期以前記的）：只算里程，不算完成率
+export const otherCycleLogs = (logs, c, n, rows) =>
+  (logs || []).filter((l) => l.plan_day && l.status !== 'extra' && !(rows || []).some((r) => logMatches(l, c, n, r)));
+// 比賽在週末（六、日）：課表範本假設週日比賽，平日比賽的賽事週要請教練確認
+export const weekendRace = (c) => { const d = parseISO(c.anchor); return !!d && (d.getDay() === 0 || d.getDay() === 6); };
+// 紀錄屬於哪個週期的第幾週（畫面標示）：個人週期「個人 W5」、協會賽季「協會 W12」
+export const logWeekLabel = (l) => (l.cycle_anchor || l.personal ? `個人 W${l.cycle_week}` : l.week_no ? `協會 W${l.week_no}` : '');
+
 // 取某週、某組的課表；回傳 [{ d, t, kind }]
 export async function weekPlan(n, dist, grp) {
   const w = (await weeks())[n - 1];

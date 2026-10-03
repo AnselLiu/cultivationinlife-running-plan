@@ -15,6 +15,25 @@ const MON = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'Au
 const MO3 = MON.map((m) => m.slice(0, 3));
 // 動態句型：數字、日期、倒數等（先於片段替換）
 const PATTERNS = [
+  // 課表與課表週期（整句，要在日期句型之前）
+  [/^你的 W1 從 (\d{1,2})\/(\d{1,2})（([日一二三四五六])）開始，還有 (\d+) 天$/, (_, m, d, w, n) => `Your W1 starts ${WD[w]} ${m}/${d} — ${n} days to go`],
+  [/^W1 (\d{1,2})\/(\d{1,2})（([日一二三四五六])）開始，還有 (\d+) 天$/, (_, m, d, w, n) => `W1 starts ${WD[w]} ${m}/${d} — ${n} days to go`],
+  [/^這是協會賽季 W(\d+)，只能看$/, 'This is club season W$1 — view only'],
+  [/^協會 W(\d+) 公告（你的課表照個人週期排，內容可能不同）$/, 'Club W$1 posts (your plan follows your personal cycle, so the content may differ)'],
+  [/^賽前 (\d+) 天$/, '$1 days to race'],
+  [/^每週 (\d+) 天$/, '$1 days/week'],
+  [/^(\d+) 分鐘$/, '$1 min'],
+  [/^離比賽只剩 (\d+) 週左右，課表從 W(\d+) 接著跑；前面的週次可以參考，不用回頭補。$/, 'About $1 weeks to go — pick up the plan at W$2. Earlier weeks are for reference; don’t try to make them up.'],
+  [/^目前每週跑量偏低，([A-Z]) 組的課表大約需要每週 (\d+)K 以上的基礎。可以考慮先選慢一組，練幾週再調整。$/, 'Your weekly mileage is on the low side — Group $1 assumes a base of about $2K/week. Consider starting one group slower and moving up after a few weeks.'],
+  [/^([A-Z]) 組的跑量較大，每週 4 天以下比較難完成，建議至少 5 天。$/, 'Group $1 carries high volume — 4 days or fewer a week makes it hard to complete. At least 5 days is recommended.'],
+  [/^現在是 W(\d+)，從這週接著跑$/, 'You are in W$1 now — pick up the plan from this week'],
+  [/^已改成跟 (.+) 排課$/, 'Your plan now follows $1'],
+  [/^本週 (\d+) 堂用到 ›$/, '$1 sessions this week ›'],
+  [/^已選 ([A-Z]) 組，按儲存才會生效$/, 'Group $1 selected — tap Save to apply'],
+  [/^本週 (\d+) 堂用到$/, '$1 sessions this week use it'],
+  [/^W(\d+) 課表還沒公告$/, 'W$1 plan not posted yet'],
+  [/\+(\d+) 加練/g, '+$1 extra'],
+  [/個人 ?W(\d+)/g, 'Personal W$1'], [/協會 W(\d+)/g, 'Club W$1'],
   [/^(\d+) 則未讀$/, '$1 unread'], [/^通知，(\d+) 則新通知$/, 'Notifications, $1 new'], [/^(\d{1,2}) 月$/, (_, m) => MON[m - 1]],
   [/^(\d{4}) 年 (\d{1,2}) 月$/, (_, y, m) => `${MON[m - 1]} ${y}`],
   [/^(\d{1,2}) 月 (\d{1,2}) 日・週(.)$/, (_, m, d, w) => `${WD[w]}, ${MO3[m - 1]} ${d}`],
