@@ -9,6 +9,8 @@
 import { subscribe, unsubscribe, push, validEndpoint } from './push.js';
 import * as WebAuthn from './webauthn.js';
 import { quote } from '../public/pricing.js';
+import { hourOf } from '../public/wxrule.js';
+import { BADGES, earned, weeksOf } from '../public/badges.js';
 
 const COOKIE = '__Host-cil_sess';
 // 工作階段期限：一般跑友長期使用；幹部看得到別人的資料，期限短很多
@@ -182,7 +184,7 @@ const pub = (m) => ({
   nickname: m.nickname || '', club: m.club || '', meal_pref: m.meal_pref || '', phone: m.phone || '',
   membership: m.membership || 'none', membershipName: MEMBERSHIP[m.membership || 'none'],
   member_type: m.member_type || null, member_no: m.member_no || null, paid_until: m.paid_until || null,
-  share_logs: !!m.share_logs, show_rank: !!m.show_rank, main_team: m.main_team || null, can: PERMS[norm(m.role)],
+  share_logs: !!m.share_logs, show_rank: !!m.show_rank, main_team: m.main_team || null, home_spot: m.home_spot || null, can: PERMS[norm(m.role)],
   mfaPending: !!m.mfa_pending, realRole: m.real_role ? norm(m.real_role) : null, realRoleName: m.real_role ? ROLES[norm(m.real_role)] : null, mfa: !!m.s_mfa,
 });
 
@@ -546,6 +548,22 @@ async function countdownTarget(env, member, rows) {
 }
 const racePresets = async (env) => { try { return JSON.parse((await env.DB.prepare("SELECT value FROM settings WHERE key = 'race_presets'").first())?.value || '[]'); } catch { return []; } };
 
+// 天氣：Open-Meteo 預報＋空氣品質，同一格（0.01 度）快取 30 分鐘；API 與排程（壞天氣提醒）共用
+async function getWeather(env, lat, lng) {
+  const k = `${Number(lat).toFixed(2)},${Number(lng).toFixed(2)}`, cache = caches.default, key = new Request(`https://cil-run.internal/weather/v1/${k}`);
+  const hit = await cache.match(key);
+  if (hit) return { body: await hit.text(), hit: true };
+  const [la, lo] = k.split(',');
+  const fc = `https://api.open-meteo.com/v1/forecast?latitude=${la}&longitude=${lo}&hourly=temperature_2m,apparent_temperature,relative_humidity_2m,precipitation_probability,precipitation,weather_code,wind_speed_10m,uv_index&daily=sunrise,sunset,temperature_2m_max,temperature_2m_min,precipitation_probability_max,uv_index_max,weather_code&timezone=Asia%2FTaipei&forecast_days=7&wind_speed_unit=ms`;
+  const aq = `https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${la}&longitude=${lo}&hourly=pm2_5,us_aqi&timezone=Asia%2FTaipei&forecast_days=5`;
+  const [a, b] = await Promise.all([fetch(fc).then((r) => (r.ok ? r.json() : null)).catch(() => null), fetch(aq).then((r) => (r.ok ? r.json() : null)).catch(() => null)]);
+  if (!a?.hourly) return null;
+  const body = JSON.stringify({ at: new Date().toISOString(), hourly: a.hourly, daily: a.daily, air: b?.hourly ? { time: b.hourly.time, pm2_5: b.hourly.pm2_5, us_aqi: b.hourly.us_aqi } : null });
+  const put = cache.put(key, new Response(body, { headers: { 'content-type': 'application/json', 'cache-control': 'public, max-age=1800' } }));
+  env.ctx?.waitUntil ? env.ctx.waitUntil(put) : await put;
+  return { body, hit: false };
+}
+
 // ---- 路由 ----
 async function api(req, env, path, method) {
   // 登入狀態（含我在各分團的身分）與系統設定同時查，一次往返就好
@@ -650,6 +668,65 @@ async function api(req, env, path, method) {
   };
 
   // 行事曆訂閱的 .ics：只列本人有報名（正取或候補）的活動，過去 30 天到未來 180 天
+  // ---- 每月里程挑戰 ----
+  // 個人：自己的里程、次數、徽章；分團：全部團員加總與平均（不揭露個人）；排行：只列有同意上排行榜的人
+  if (path === '/api/challenge' && method === 'GET') {
+    const g = need(); if (g) return g;
+    const mo = /^\d{4}-(0[1-9]|1[0-2])$/.test(url0(req).searchParams.get('month') || '') ? url0(req).searchParams.get('month') : today().slice(0, 7);
+    const [mine, teamsAgg, top] = await Promise.all([
+      env.DB.prepare("SELECT date, km FROM training_logs WHERE member_id = ? AND date BETWEEN ? AND ? AND status != 'skip'").bind(member.id, `${mo}-01`, `${mo}-31`).all(),
+      env.DB.prepare(`SELECT t.id, t.name, t.color, COUNT(DISTINCT tm.member_id) AS members, COALESCE(SUM(l.km), 0) AS km, COUNT(DISTINCT l.member_id) AS active
+        FROM teams t JOIN team_members tm ON tm.team_id = t.id AND tm.status = 'active'
+        LEFT JOIN training_logs l ON l.member_id = tm.member_id AND l.date BETWEEN ? AND ? AND l.status != 'skip'
+        WHERE t.private = 0 OR t.id IN (SELECT team_id FROM team_members WHERE member_id = ? AND status = 'active') GROUP BY t.id ORDER BY t.sort`).bind(`${mo}-01`, `${mo}-31`, member.id).all(),
+      env.DB.prepare(`SELECT m.id, COALESCE(NULLIF(m.nickname, ''), m.name) AS name, SUM(l.km) AS km, COUNT(*) AS runs FROM training_logs l JOIN members m ON m.id = l.member_id
+        WHERE l.date BETWEEN ? AND ? AND l.status != 'skip' AND m.show_rank = 1 GROUP BY m.id HAVING km > 0 ORDER BY km DESC LIMIT 20`).bind(`${mo}-01`, `${mo}-31`).all(),
+    ]);
+    const logs = mine.results, km = Math.round(logs.reduce((n, l) => n + (l.km || 0), 0) * 10) / 10;
+    const stat = { km, runs: logs.length, weeks: weeksOf(mo, logs.map((l) => l.date)) };
+    return json({ month: mo, me: { ...stat, badges: earned(stat), rank: member.show_rank ? top.results.findIndex((x) => x.id === member.id) + 1 || null : null },
+      badges: BADGES.map(({ id, name, desc }) => ({ id, name, desc })),
+      teams: teamsAgg.results.map((t) => ({ ...t, km: Math.round(t.km * 10) / 10, avg: t.members ? Math.round((t.km / t.members) * 10) / 10 : 0 })),
+      top: top.results.map((x) => ({ name: x.name, km: Math.round(x.km * 10) / 10, runs: x.runs, me: x.id === member.id })), showRank: !!member.show_rank });
+  }
+  // ---- 會籍卡 ----
+  // 卡上的 QR：會員代碼＋簽章（用 AUDIT_KEY 簽，無法偽造），幹部掃了看得到會籍狀態
+  const cardSig = async (id) => (await hmac(env, `card|${id}`) || '').slice(0, 16);
+  if (path === '/api/me/card' && method === 'GET') {
+    const g = need(); if (g) return g;
+    const st = await getSettings(env, settingRows.filter((r) => r.key === 'org'));
+    return json({ name: member.name, nickname: member.nickname, member_no: member.member_no, member_type: member.member_type, membership: member.membership,
+      paid_until: member.paid_until, joined_on: member.joined_on || null, org: st.org?.name || '台灣耕跑團協會', qr: `CILM:${member.id}.${await cardSig(member.id)}` });
+  }
+  if (path === '/api/members/verify' && method === 'GET') {
+    const g = need(); if (g) return g;
+    if (!can(member, 'roster') && !can(member, 'checkin')) return fail(403, '只有幹部可以驗證會籍');
+    const m0 = (url0(req).searchParams.get('c') || '').match(/^CILM:([\w-]{1,32})\.([0-9a-f]{16})$/);
+    if (!m0 || m0[2] !== await cardSig(m0[1])) return fail(400, '這不是有效的會籍卡');
+    const m = await env.DB.prepare('SELECT name, nickname, membership, member_type, member_no, paid_until FROM members WHERE id = ?').bind(m0[1]).first();
+    if (!m) return fail(404, '找不到這位會員');
+    await audit(env, req, member, 'member.verify', 'member', m0[1], '掃描會籍卡');
+    return json({ ...m, valid: m.membership === 'active' && (!m.paid_until || m.paid_until >= today()) });
+  }
+  // ---- 備份 ----
+  if (path === '/api/backups' && method === 'GET') {
+    const g = need(); if (g) return g;
+    if (!can(member, 'settings') && !can(member, 'audit')) return fail(403, '只有理事長、行政人員與監事可以看');
+    const store = backupStore(env);
+    if (!store) return json({ enabled: false, list: [] });
+    const l = await store.list();
+    return json({ enabled: !!env.BACKUP_KEY, where: store.kind, list: l.sort((a, b) => b.key.localeCompare(a.key)).slice(0, 40) });
+  }
+  if (path === '/api/backups' && method === 'POST') {
+    const g = need(); if (g) return g;
+    if (norm(member.role) !== 'chair' && norm(member.role) !== 'staff') return fail(403, '只有理事長與行政人員可以手動備份');
+    { const su = await needStepUp(); if (su) return su; }
+    if (!backupStore(env) || !env.BACKUP_KEY) return fail(400, '備份還沒設定');
+    if (await limited(env, `backup:${member.id}`, 3, 3600)) return fail(429, '一小時最多手動備份 3 次');
+    const r = await runBackup(env, `${today()}-manual-${Date.now().toString(36)}`);
+    await audit(env, req, member, 'backup.manual', 'system', null, `${r.tables} 張表 ${r.rows} 筆`);
+    return json(r);
+  }
   // ---- 練跑地圖 ----
   const SPOT_KINDS = ['track', 'river', 'park', 'trail', 'road', 'other'];
   // 地點審核與管理：協會層級有建立活動權限的幹部（分團幹部可以提議，不能改別人的）
@@ -754,17 +831,9 @@ async function api(req, env, path, method) {
     const u = url0(req), lat = Number(u.searchParams.get('lat')), lng = Number(u.searchParams.get('lng'));
     if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) return fail(400, '座標不正確');
     if (await limited(env, `wx:${member.id}`, 60, 600)) return fail(429, '查詢太頻繁，請稍後再試');
-    const k = `${lat.toFixed(2)},${lng.toFixed(2)}`, cache = caches.default, key = new Request(`https://cil-run.internal/weather/v1/${k}`);
-    const hit = await cache.match(key);
-    if (hit) return new Response(hit.body, { headers: { ...SEC_HEADERS, 'content-type': 'application/json; charset=utf-8', 'cache-control': 'private, max-age=300', 'x-weather-cache': 'hit' } });
-    const [la, lo] = k.split(',');
-    const fc = `https://api.open-meteo.com/v1/forecast?latitude=${la}&longitude=${lo}&hourly=temperature_2m,apparent_temperature,relative_humidity_2m,precipitation_probability,precipitation,weather_code,wind_speed_10m,uv_index&daily=sunrise,sunset,temperature_2m_max,temperature_2m_min,precipitation_probability_max,uv_index_max,weather_code&timezone=Asia%2FTaipei&forecast_days=7&wind_speed_unit=ms`;
-    const aq = `https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${la}&longitude=${lo}&hourly=pm2_5,us_aqi&timezone=Asia%2FTaipei&forecast_days=5`;
-    const [a, b2] = await Promise.all([fetch(fc).then((r) => (r.ok ? r.json() : null)).catch(() => null), fetch(aq).then((r) => (r.ok ? r.json() : null)).catch(() => null)]);
-    if (!a?.hourly) return fail(502, '天氣預報暫時查不到，請稍後再試');
-    const out = JSON.stringify({ at: new Date().toISOString(), hourly: a.hourly, daily: a.daily, air: b2?.hourly ? { time: b2.hourly.time, pm2_5: b2.hourly.pm2_5, us_aqi: b2.hourly.us_aqi } : null });
-    env.ctx?.waitUntil(cache.put(key, new Response(out, { headers: { 'content-type': 'application/json', 'cache-control': 'public, max-age=1800' } })));
-    return new Response(out, { headers: { ...SEC_HEADERS, 'content-type': 'application/json; charset=utf-8', 'cache-control': 'private, max-age=300', 'x-weather-cache': 'miss' } });
+    const w = await getWeather(env, lat, lng);
+    if (!w) return fail(502, '天氣預報暫時查不到，請稍後再試');
+    return new Response(w.body, { headers: { ...SEC_HEADERS, 'content-type': 'application/json; charset=utf-8', 'cache-control': 'private, max-age=300', 'x-weather-cache': w.hit ? 'hit' : 'miss' } });
   }
   // 路線：在地圖上畫的路線，可以分享給全團、下載 GPX、拿來開揪跑
   if (path === '/api/routes' && method === 'GET') {
@@ -1133,6 +1202,7 @@ async function api(req, env, path, method) {
     return json({ member: member ? pub(member) : null, vapid: env.VAPID_PUBLIC_KEY || null, googleLogin: !!(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET),
       settings: st, privacyVersion: st.privacy.version, needConsent: !!member && member.consent_version !== st.privacy.version,
       race, teams: teamList, calendarOn: !!member?.cal_token_hash, calScope: member?.cal_scope || 'all', requireMfa: !!security.require_mfa, shortcut: setting('health_shortcut') || null,
+      homeSpot: member?.home_spot ? await env.DB.prepare("SELECT id, name, lat, lng FROM spots WHERE id = ? AND status = 'approved'").bind(member.home_spot).first() : null,
       ...(boot ? { boot: { events, todayLogs, today: today() } } : {}) });
   }
 
@@ -1188,9 +1258,10 @@ async function api(req, env, path, method) {
     const grp = (str(b.grp, 2) || member.grp).toUpperCase();
     if (!validGroup(dist, grp)) return fail(400, '組別不正確');
     // 所屬跑團跟著主團（由管理員設定），本人不能改
-    const extra = { nickname: str(b.nickname, 20), meal_pref: str(b.meal_pref, 10), phone: str(b.phone, 20) };
-    await env.DB.prepare('UPDATE members SET name = ?, dist = ?, grp = ?, nickname = ?, meal_pref = ?, phone = ? WHERE id = ?')
-      .bind(name, dist, grp, extra.nickname, extra.meal_pref, extra.phone, member.id).run();
+    const extra = { nickname: str(b.nickname, 20), meal_pref: str(b.meal_pref, 10), phone: str(b.phone, 20),
+      home_spot: /^[\w-]{1,32}$/.test(b.home_spot || '') && await env.DB.prepare("SELECT 1 FROM spots WHERE id = ? AND status = 'approved'").bind(b.home_spot).first() ? b.home_spot : null };
+    await env.DB.prepare('UPDATE members SET name = ?, dist = ?, grp = ?, nickname = ?, meal_pref = ?, phone = ?, home_spot = ? WHERE id = ?')
+      .bind(name, dist, grp, extra.nickname, extra.meal_pref, extra.phone, extra.home_spot, member.id).run();
     return json({ member: pub({ ...member, name, dist, grp, ...extra }) });
   }
 
@@ -1260,7 +1331,8 @@ async function api(req, env, path, method) {
     if (!cur || !(await canSee(cur))) return fail(404, '找不到這個活動');
     if (method === 'GET') {
       const ev = await eventWithSignups(env, id);
-      const mine = await env.DB.prepare('SELECT answers, paid, attended_at, option, reg_consent_at, items, amount, amount_detail, pay_ref, pay_method, pay_reported_at, picked_at, paid_note FROM signups WHERE event_id = ? AND member_id = ?').bind(id, member.id).first();
+      const mine = await env.DB.prepare('SELECT answers, paid, attended_at, option, reg_consent_at, items, amount, amount_detail, pay_ref, pay_method, pay_reported_at, picked_at, paid_note, pick_code FROM signups WHERE event_id = ? AND member_id = ?').bind(id, member.id).first();
+      const arr = await env.DB.prepare('SELECT arrived_at, pickup_note, status FROM events WHERE id = ?').bind(id).first();
       // 團購：每項已訂數量（算剩餘庫存與成團進度）
       const itemDefs = parseQ(ev.items), sold = {};
       if (itemDefs.length) for (const r of (await env.DB.prepare("SELECT items FROM signups WHERE event_id = ? AND status = 'in' AND items IS NOT NULL").bind(id).all()).results)
@@ -1276,6 +1348,7 @@ async function api(req, env, path, method) {
         myPaid: mine?.paid || null, myAttended: mine?.attended_at || null, myOption: mine?.option || null, myRegConsent: !!mine?.reg_consent_at,
         myItems: parseQ(mine?.items), myAmount: mine?.amount ?? null, myLines: parseQ(mine?.amount_detail), myPayRef: mine?.pay_ref || null, myPayMethod: mine?.pay_method || null,
         myPayReported: mine?.pay_reported_at || null, myPicked: mine?.picked_at || null, myPaidNote: mine?.paid_note || null,
+        arrived: arr?.arrived_at || null, pickupNote: arr?.pickup_note || null, myPickCode: arr?.arrived_at ? mine?.pick_code || null : null, cancelled: arr?.status === 'cancelled',
         items: itemDefs, pricing: parseQ(ev.pricing, null), payInfo: parseQ(ev.pay_info, null), sold, myMembership: member.membership,
         options: parseQ(ev.options), regProfile: ev.group_reg ? (regRow ? (regRow.complete ? 'ok' : 'incomplete') : 'none') : null,
         team, manage, checkin: teamCan(ev.team_id, 'checkin'), invite: inv, attendToken: attendTok,
@@ -1441,7 +1514,7 @@ async function api(req, env, path, method) {
       'content-type': 'text/csv; charset=utf-8', 'content-disposition': `attachment; filename="registrations.csv"; filename*=UTF-8''${encodeURIComponent(`${ev.date}-${ev.title}-團體報名.csv`)}` } });
   }
   // ---- 活動營運：繳費、點名、自助報到、整批匯入 ----
-  const mops = path.match(/^\/api\/events\/([\w-]{1,32})\/(payments|attendance|attend|attend-token|bulk|pay-report|pickup)$/);
+  const mops = path.match(/^\/api\/events\/([\w-]{1,32})\/(payments|attendance|attend|attend-token|bulk|pay-report|pickup|arrived|notice|reconcile)$/);
   if (mops && method === 'POST') {
     const g = need(); if (g) return g;
     const ev = await evById(mops[1]);
@@ -1489,8 +1562,60 @@ async function api(req, env, path, method) {
       await audit(env, req, member, 'event.payment', 'event', ev.id, `${ids.length} 人 → ${b.paid}`);
       return json({ ok: true });
     }
-    // 團購到貨：記錄誰已經領取
+    // 團購到貨：通知訂購的人來領，每個人一個領取 QR
+    if (op === 'arrived') {
+      const note = str(b.note, 120);
+      const rows = (await env.DB.prepare("SELECT id, member_id, pick_code FROM signups WHERE event_id = ? AND status = 'in' AND items IS NOT NULL").bind(ev.id).all()).results;
+      for (const r of rows) if (!r.pick_code) await env.DB.prepare('UPDATE signups SET pick_code = ? WHERE id = ?').bind(ticketCode(), r.id).run();
+      await env.DB.prepare("UPDATE events SET arrived_at = COALESCE(arrived_at, datetime('now')), pickup_note = ? WHERE id = ?").bind(note || null, ev.id).run();
+      const ids = rows.map((r) => r.member_id).filter(Boolean);
+      if (ids.length) await notify(env, ids, 'event', { title: `到貨了：${ev.title}`, body: `${note || '請到活動頁看領取方式'}。領取時出示 App 裡的領取 QR。`, url: `/#/e/${ev.id}`, tag: `arrived-${ev.id}` });
+      await audit(env, req, member, 'event.arrived', 'event', ev.id, `${ids.length} 人`);
+      return json({ ok: true, count: ids.length });
+    }
+    // 活動異動：取消、改地點、改時間或其他，通知所有報名（含候補）的人
+    if (op === 'notice') {
+      const type = ['cancel', 'place', 'time', 'other'].includes(b.type) ? b.type : 'other', msg = str(b.message, 300);
+      const place = str(b.place, 120), time = isTime(str(b.gather_time, 5)) && str(b.gather_time, 5) ? str(b.gather_time, 5) : '';
+      if (type === 'place' && !place) return fail(400, '請填新的地點');
+      if (type === 'time' && !time) return fail(400, '請填新的集合時間');
+      if (type === 'other' && !msg) return fail(400, '請填異動內容');
+      if (type === 'cancel') await env.DB.prepare("UPDATE events SET status = 'cancelled', signup_open = 0 WHERE id = ?").bind(ev.id).run();
+      if (type === 'place') await env.DB.prepare('UPDATE events SET place = ?, spot_id = ? WHERE id = ?').bind(place, /^[\w-]{1,32}$/.test(b.spot_id || '') ? b.spot_id : null, ev.id).run();
+      if (type === 'time') await env.DB.prepare('UPDATE events SET gather_time = ?, remind_hour_at = NULL WHERE id = ?').bind(time, ev.id).run();
+      const ids = (await env.DB.prepare("SELECT member_id FROM signups WHERE event_id = ? AND status IN ('in', 'wait') AND member_id IS NOT NULL").bind(ev.id).all()).results.map((r) => r.member_id).filter((x) => x !== member.id);
+      const TITLE = { cancel: '活動取消', place: '改地點', time: '改時間', other: '活動異動' };
+      const body2 = type === 'cancel' ? `${ev.date} 這場取消${msg ? `：${msg}` : ''}` : type === 'place' ? `改到 ${place}${msg ? `。${msg}` : ''}` : type === 'time' ? `改成 ${time} 集合${msg ? `。${msg}` : ''}` : msg;
+      if (ids.length) await notify(env, ids, 'event', { title: `${TITLE[type]}：${ev.title}`, body: body2, url: `/#/e/${ev.id}`, tag: `notice-${ev.id}` });
+      await audit(env, req, member, 'event.notice', 'event', ev.id, `${TITLE[type]}：${body2}`.slice(0, 200));
+      return json({ ok: true, count: ids.length });
+    }
+    // 銀行對帳：上傳的入帳明細（金額＋明細裡的數字），跟團員回報的後五碼與應繳金額比對，對上的標記已繳
+    if (op === 'reconcile') {
+      const rows = (Array.isArray(b.rows) ? b.rows : []).slice(0, 2000).map((r) => ({ amount: Math.round(Number(r?.amount) || 0), refs: (Array.isArray(r?.refs) ? r.refs : []).map((x) => str(x, 12)).filter((x) => /^\d{4,6}$/.test(x)).slice(0, 10), date: str(r?.date, 10) }))
+        .filter((r) => r.amount > 0 && r.refs.length);
+      const due = (await env.DB.prepare("SELECT member_id, name, amount, pay_ref FROM signups WHERE event_id = ? AND status = 'in' AND paid NOT IN ('paid', 'waived', 'refunded') AND amount > 0").bind(ev.id).all()).results;
+      const used = new Set(), matched = [];
+      for (const s0 of due) {
+        if (!s0.pay_ref) continue;
+        const i = rows.findIndex((r, k) => !used.has(k) && r.amount === s0.amount && r.refs.some((x) => x.endsWith(s0.pay_ref) || s0.pay_ref.endsWith(x)));
+        if (i < 0) continue;
+        used.add(i); matched.push({ member_id: s0.member_id, name: s0.name, amount: s0.amount, date: rows[i].date });
+      }
+      if (matched.length && b.apply === true) {
+        await env.DB.batch(matched.map((m) => env.DB.prepare("UPDATE signups SET paid = 'paid', paid_at = datetime('now'), paid_note = ? WHERE event_id = ? AND member_id = ?").bind(`對帳 ${m.date || today()}`, ev.id, m.member_id)));
+        await audit(env, req, member, 'event.reconcile', 'event', ev.id, `對上 ${matched.length} 筆`);
+      }
+      return json({ matched, unmatchedRows: rows.filter((_, k) => !used.has(k)).length, unpaid: due.filter((d) => !matched.some((m) => m.member_id === d.member_id)).map((d) => ({ name: d.name, amount: d.amount, pay_ref: d.pay_ref })) });
+    }
+    // 團購到貨：記錄誰已經領取（點名或掃領取 QR）
     if (op === 'pickup') {
+      if (b.code) {
+        const r = await env.DB.prepare("SELECT member_id, name, items, picked_at FROM signups WHERE event_id = ? AND pick_code = ?").bind(ev.id, str(b.code, 12).toUpperCase()).first();
+        if (!r) return fail(404, '找不到這個領取碼');
+        if (!r.picked_at) await env.DB.prepare("UPDATE signups SET picked_at = datetime('now') WHERE event_id = ? AND member_id = ?").bind(ev.id, r.member_id).run();
+        return json({ ok: true, name: r.name, already: !!r.picked_at, items: parseQ(r.items) });
+      }
       const mid = str(b.member_id, 32);
       await env.DB.prepare(`UPDATE signups SET picked_at = ${b.picked === false ? 'NULL' : "COALESCE(picked_at, datetime('now'))"} WHERE event_id = ? AND member_id = ?`).bind(ev.id, mid).run();
       return json({ ok: true });
@@ -2678,16 +2803,132 @@ async function remindEvents(env, now) {
   return sent;
 }
 
-// 會費到期：到期前 30 天提醒本人一次（同一個到期日只提醒一次）
+// 會費到期：到期前 30 天、7 天、到期當天各提醒本人一次（同一個到期日的同一階段只提醒一次）
 async function remindRenewals(env, now) {
   const until = tpDate(new Date(now.getTime() + 30 * 864e5)), today0 = tpDate(now);
-  const rows = (await env.DB.prepare(`SELECT id, paid_until FROM members WHERE membership = 'active' AND paid_until IS NOT NULL
-    AND paid_until BETWEEN ? AND ? AND (renew_notified IS NULL OR renew_notified != paid_until) LIMIT 500`).bind(today0, until).all()).results;
+  const rows = (await env.DB.prepare(`SELECT id, paid_until, renew_notice FROM members WHERE membership = 'active' AND paid_until IS NOT NULL
+    AND paid_until BETWEEN ? AND ? LIMIT 1000`).bind(today0, until).all()).results;
+  let n = 0;
   for (const r of rows) {
-    await notify(env, [r.id], 'system', { title: '會費即將到期', body: `你的協會會費繳至 ${r.paid_until}，記得續繳`, url: '/#/me' });
-    await env.DB.prepare('UPDATE members SET renew_notified = ? WHERE id = ?').bind(r.paid_until, r.id).run();
+    const days = Math.round((Date.parse(`${r.paid_until}T00:00:00Z`) - Date.parse(`${today0}T00:00:00Z`)) / 864e5);
+    const stage = days <= 0 ? 0 : days <= 7 ? 7 : 30, key = `${r.paid_until}:${stage}`;
+    if (r.renew_notice === key) continue;
+    await notify(env, [r.id], 'system', { title: stage === 0 ? '會費今天到期' : `會費 ${days} 天後到期`, body: `你的協會會費繳至 ${r.paid_until}，續繳後會籍卡就會更新`, url: '/#/me/card' });
+    await env.DB.prepare('UPDATE members SET renew_notice = ? WHERE id = ?').bind(key, r.id).run();
+    n++;
   }
-  return rows.length;
+  return n;
+}
+
+// 壞天氣提醒：前一晚 20:00，明天有指定地點的活動，集合時間預報「不建議」、大雨或空氣不佳，通知報名的人與主辦幹部
+async function weatherAlerts(env, now) {
+  if (taipei(now).getUTCHours() !== 20) return 0;
+  const tomorrow = tpDate(new Date(now.getTime() + 864e5));
+  const evs = (await env.DB.prepare(`SELECT e.id, e.title, e.gather_time, e.team_id, e.created_by, s.name AS spot, s.lat, s.lng FROM events e JOIN spots s ON s.id = e.spot_id
+    WHERE e.date = ? AND e.status = 'open' AND e.kind != 'survey' AND e.wx_alert_at IS NULL`).bind(tomorrow).all()).results;
+  let sent = 0;
+  for (const ev of evs) {
+    await env.DB.prepare("UPDATE events SET wx_alert_at = datetime('now') WHERE id = ?").bind(ev.id).run();
+    const w = await getWeather(env, ev.lat, ev.lng);
+    if (!w) continue;
+    const hh = /^\d{2}:\d{2}$/.test(ev.gather_time || '') ? ev.gather_time.slice(0, 2) : '07';
+    const x = hourOf(JSON.parse(w.body), `${tomorrow}T${hh}:00`);
+    if (!x || !(x.advice.level === 'poor' || (x.rain >= 70 && x.mm >= 2) || x.aqi >= 101)) continue;
+    const why = x.advice.why.join('；');
+    const ids = await signedIds(env, ev.id);
+    if (ids.length) await notify(env, ids, 'event', { title: `明天${x.advice.level === 'poor' ? '天氣不佳' : '天氣提醒'}：${ev.title}`, body: `${hh}:00 ${ev.spot}：${x.text}，體感 ${Math.round(x.feel)}°。${why}。有異動幹部會再通知。`, url: `/#/e/${ev.id}`, tag: `wx-${ev.id}` });
+    if (x.advice.level === 'poor') {
+      const mgr = [...new Set([ev.created_by, ...(ev.team_id ? (await env.DB.prepare("SELECT member_id FROM team_members WHERE team_id = ? AND status = 'active' AND role IN ('lead','officer')").bind(ev.team_id).all()).results.map((r) => r.member_id) : [])])].filter(Boolean);
+      if (mgr.length) await notify(env, mgr, 'event', { title: `要不要調整：${ev.title}`, body: `明天 ${hh}:00 預報不建議跑步（${why}）。可以在活動頁「發布異動」通知大家。`, url: `/#/e/${ev.id}`, tag: `wxm-${ev.id}` });
+    }
+    sent += ids.length;
+  }
+  return sent;
+}
+
+// 跑完接續：團練結束 15 分鐘後，提醒有報名的人記錄今天的訓練（帶入課表），記完可以直接拍照分享
+async function runFollowups(env, now) {
+  const today0 = tpDate(now), t = taipei(now), nowMin = t.getUTCHours() * 60 + t.getUTCMinutes();
+  const evs = (await env.DB.prepare(`SELECT id, title, gather_time, end_time FROM events WHERE date = ? AND status = 'open' AND kind IN ('track', 'core', 'long', 'race', 'other')
+    AND followup_at IS NULL AND gather_time IS NOT NULL AND gather_time != ''`).bind(today0).all()).results;
+  let sent = 0;
+  for (const ev of evs) {
+    const [gh, gm] = ev.gather_time.split(':').map(Number);
+    const end = /^\d{2}:\d{2}$/.test(ev.end_time || '') && ev.end_time > ev.gather_time ? ev.end_time.split(':').map(Number).reduce((h, m) => h * 60 + m) : gh * 60 + gm + 120;
+    if (nowMin < end + 15) continue;
+    await env.DB.prepare("UPDATE events SET followup_at = datetime('now') WHERE id = ?").bind(ev.id).run();
+    const ids = await signedIds(env, ev.id);
+    if (!ids.length) continue;
+    await notify(env, ids, 'event', { title: '跑完了嗎？', body: `記錄今天「${ev.title}」的訓練，再拍張照分享`, url: `/#/log?event=${ev.id}`, tag: `fu-${ev.id}` });
+    sent += ids.length;
+  }
+  return sent;
+}
+
+// 每月 1 號 09:00：上個月的里程挑戰總結（個人里程與徽章、分團平均第一名），只通知上個月有紀錄的人
+async function monthSummary(env, now) {
+  const t = taipei(now);
+  if (t.getUTCDate() !== 1 || t.getUTCHours() !== 9) return 0;
+  const prev = new Date(Date.UTC(t.getUTCFullYear(), t.getUTCMonth() - 1, 1)).toISOString().slice(0, 7);
+  if (!(await onceOn(env, 'month_summary', prev))) return 0;
+  const logs = (await env.DB.prepare("SELECT member_id, date, km FROM training_logs WHERE date BETWEEN ? AND ? AND status != 'skip'").bind(`${prev}-01`, `${prev}-31`).all()).results;
+  const by = {};
+  for (const l of logs) (by[l.member_id] ||= []).push(l);
+  const teams = (await env.DB.prepare(`SELECT t.name, COUNT(DISTINCT tm.member_id) AS members, COALESCE(SUM(l.km), 0) AS km FROM teams t
+    JOIN team_members tm ON tm.team_id = t.id AND tm.status = 'active' LEFT JOIN training_logs l ON l.member_id = tm.member_id AND l.date BETWEEN ? AND ? AND l.status != 'skip'
+    WHERE t.private = 0 GROUP BY t.id`).bind(`${prev}-01`, `${prev}-31`).all()).results.filter((x) => x.members).sort((a, b) => b.km / b.members - a.km / a.members);
+  const champ = teams[0] && teams[0].km > 0 ? `分團平均第一：${teams[0].name}（每人 ${(teams[0].km / teams[0].members).toFixed(1)} 公里）` : '';
+  let n = 0;
+  for (const [mid, list] of Object.entries(by)) {
+    const km = list.reduce((s0, l) => s0 + (l.km || 0), 0), stat = { km, runs: list.length, weeks: weeksOf(prev, list.map((l) => l.date)) };
+    const got = earned(stat).map((id) => BADGES.find((b) => b.id === id).name);
+    await notify(env, [mid], 'system', { title: `${Number(prev.slice(5))} 月跑了 ${km.toFixed(1)} 公里`, body: `${list.length} 次訓練${got.length ? `，獲得徽章：${got.join('、')}` : ''}。${champ}`, url: `/#/challenge?m=${prev}` });
+    n++;
+  }
+  return n;
+}
+
+// 備份存放：有綁 R2（BACKUP）就存 R2，否則存 Workers KV（BACKUP_KV）；兩邊格式一樣
+const backupStore = (env) => (env.BACKUP ? {
+  put: (k, v, meta) => env.BACKUP.put(k, v, { customMetadata: meta }),
+  list: async () => (await env.BACKUP.list({ prefix: 'daily/', include: ['customMetadata'] })).objects.map((o) => ({ key: o.key, size: o.size, at: o.uploaded, ...o.customMetadata })),
+  del: (k) => env.BACKUP.delete(k), kind: 'R2',
+} : env.BACKUP_KV ? {
+  put: (k, v, meta) => env.BACKUP_KV.put(k, v, { metadata: { ...meta, size: v.length, at: new Date().toISOString() } }),
+  list: async () => (await env.BACKUP_KV.list({ prefix: 'daily/' })).keys.map((o) => ({ key: o.name, ...o.metadata })),
+  del: (k) => env.BACKUP_KV.delete(k), kind: 'KV',
+} : null);
+// 每天 03:00：資料庫加密備份（保留 35 天）。格式：CILB1＋IV＋AES-GCM(gzip(JSON))，還原見 tools/restore-backup.mjs
+async function dailyBackup(env, now) {
+  if (!backupStore(env) || !env.BACKUP_KEY || taipei(now).getUTCHours() !== 3 || !(await onceOn(env, 'backup', tpDate(now)))) return null;
+  return runBackup(env, tpDate(now));
+}
+async function runBackup(env, label) {
+  const skip = ['sessions', 'rate_limits', 'webauthn_challenges', 'd1_migrations'];
+  const tables = (await env.DB.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%'").all()).results.map((r) => r.name).filter((n) => !skip.includes(n));
+  const data = { format: 'cil-backup', version: 1, at: new Date().toISOString(), tables: {} };
+  let rows = 0;
+  for (const tb of tables) {
+    const out = [];
+    for (let off = 0; ; off += 1000) {
+      const r = (await env.DB.prepare(`SELECT * FROM "${tb.replace(/"/g, '')}" LIMIT 1000 OFFSET ${off}`).all()).results;
+      out.push(...r);
+      if (r.length < 1000) break;
+    }
+    data.tables[tb] = out; rows += out.length;
+  }
+  const gz = await new Response(new Blob([JSON.stringify(data)]).stream().pipeThrough(new CompressionStream('gzip'))).arrayBuffer();
+  const key = await crypto.subtle.importKey('raw', WebAuthn.unb64u(env.BACKUP_KEY.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')), 'AES-GCM', false, ['encrypt']);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: new TextEncoder().encode('cil-backup-v1') }, key, gz));
+  const blob = new Uint8Array(5 + 12 + ct.length);
+  blob.set(new TextEncoder().encode('CILB1'), 0); blob.set(iv, 5); blob.set(ct, 17);
+  const store = backupStore(env);
+  await store.put(`daily/${label}.bin`, blob, { tables: String(tables.length), rows: String(rows) });
+  const cut = `daily/${tpDate(new Date(Date.now() - 35 * 864e5))}`;
+  for (const o of await store.list()) if (o.key < cut) await store.del(o.key);
+  await audit(env, null, null, 'backup.daily', 'system', label, `${tables.length} 張表 ${rows} 筆，${blob.length} bytes`);
+  return { label, tables: tables.length, rows, bytes: blob.length };
 }
 
 // 每季第一天 09:00：提醒理事長與監事檢視幹部名單與權限（ISO 27001 A.5.18）
@@ -2771,7 +3012,8 @@ async function auditDigest(env, now) {
 
 async function scheduled(env, now = new Date()) {
   const res = {};
-  for (const [k, fn] of [['events', remindEvents], ['renewals', remindRenewals], ['review', quarterlyReview], ['retention', retention], ['fatigue', fatigueCheck], ['auditDigest', auditDigest]]) {
+  for (const [k, fn] of [['events', remindEvents], ['weather', weatherAlerts], ['followups', runFollowups], ['renewals', remindRenewals], ['monthSummary', monthSummary],
+    ['review', quarterlyReview], ['retention', retention], ['fatigue', fatigueCheck], ['auditDigest', auditDigest], ['backup', dailyBackup]]) {
     try { res[k] = await fn(env, now); } catch (e) { console.error('cron', k, e); res[k] = `error: ${e.message}`; }
   }
   return res;

@@ -4,13 +4,15 @@
 //   更新：新版本裝好後先等待，畫面提示「有新版本」，使用者按下才切換（不會在填表單時突然重整）
 //   推播：顯示通知並更新主畫面圖示的未讀數字
 //   分享：從其他 App 分享 GPX／TCX 檔過來，暫存後打開拍照分享
-const CACHE = 'cil-v31';
+const CACHE = 'cil-v32';
 const API_CACHE = 'cil-api';
 const SHARE_CACHE = 'cil-share';
-const SHELL = ['/', '/index.html', '/style.css', '/app.js', '/plan.js', '/data/season-2026.json', '/manifest.webmanifest', '/coach.html', '/party.js', '/qr.js', '/vendor/qrcode.js', '/studio.js', '/run.js', '/guide.js', '/admin.js', '/photo.js', '/report.js', '/manage.js', '/teams.js', '/pricing.js', '/calendar.js', '/map.js', '/weather.js', '/vendor/leaflet.js', '/vendor/leaflet.css', '/i18n.js', '/i18n-en.js',
+// 地圖圖磚：看過的與「下載離線地圖」存的都在這裡，最多約 3000 張，先存的先清
+const TILE_CACHE = 'cil-tiles', TILE_HOSTS = ['wmts.nlsc.gov.tw', 'tile.openstreetmap.org'], TILE_MAX = 3000;
+const SHELL = ['/', '/index.html', '/style.css', '/app.js', '/plan.js', '/data/season-2026.json', '/manifest.webmanifest', '/coach.html', '/party.js', '/qr.js', '/vendor/qrcode.js', '/studio.js', '/run.js', '/guide.js', '/admin.js', '/photo.js', '/report.js', '/manage.js', '/teams.js', '/pricing.js', '/calendar.js', '/map.js', '/weather.js', '/wxrule.js', '/challenge.js', '/badges.js', '/vendor/leaflet.js', '/vendor/leaflet.css', '/i18n.js', '/i18n-en.js',
   '/icons/icon-192.png', '/teams/youth.webp', '/teams/kids.webp', '/teams/core.webp', '/teams/geng.webp'];
 // 斷線時可以用上次資料的 API（都是本人看得到的內容；登出時整個清掉）
-const OFFLINE_API = [/^\/api\/me$/, /^\/api\/my\/tickets$/, /^\/api\/my\/prizes$/, /^\/api\/events$/, /^\/api\/events\/[\w-]+$/, /^\/api\/events\/[\w-]+\/seats$/,
+const OFFLINE_API = [/^\/api\/spots$/, /^\/api\/spots\/[\w-]+$/, /^\/api\/routes$/, /^\/api\/routes\/[\w-]+$/, /^\/api\/me$/, /^\/api\/my\/tickets$/, /^\/api\/my\/prizes$/, /^\/api\/events$/, /^\/api\/events\/[\w-]+$/, /^\/api\/events\/[\w-]+\/seats$/,
   /^\/api\/plans$/, /^\/api\/logs$/, /^\/api\/teams$/, /^\/api\/notifications$/, /^\/api\/races$/];
 
 self.addEventListener('install', (e) => {
@@ -18,7 +20,7 @@ self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL.map((u) => new Request(u, { cache: 'reload' })))));
 });
 self.addEventListener('activate', (e) => {
-  e.waitUntil(caches.keys().then((ks) => Promise.all(ks.filter((k) => ![CACHE, API_CACHE, SHARE_CACHE].includes(k)).map((k) => caches.delete(k))))
+  e.waitUntil(caches.keys().then((ks) => Promise.all(ks.filter((k) => ![CACHE, API_CACHE, SHARE_CACHE, TILE_CACHE].includes(k)).map((k) => caches.delete(k))))
     .then(() => self.clients.claim()));
 });
 self.addEventListener('message', (e) => {
@@ -29,6 +31,7 @@ self.addEventListener('message', (e) => {
 
 self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
+  if (TILE_HOSTS.includes(url.hostname) && e.request.method === 'GET') { e.respondWith(tile(e.request)); return; }
   if (url.origin !== location.origin) return;
   // 從其他 App 分享檔案進來（manifest 的 share_target）
   if (e.request.method === 'POST' && url.pathname === '/share-target') { e.respondWith(receiveShare(e.request)); return; }
@@ -46,6 +49,19 @@ self.addEventListener('fetch', (e) => {
   }));
 });
 
+let tilePuts = 0;
+async function tile(req) {
+  const c = await caches.open(TILE_CACHE), hit = await c.match(req.url);
+  if (hit) return hit;
+  try {
+    const res = await fetch(req);
+    if (res.ok && res.type !== 'opaque') {
+      await c.put(req.url, res.clone());
+      if (++tilePuts % 200 === 0) { const ks = await c.keys(); for (const k of ks.slice(0, Math.max(0, ks.length - TILE_MAX))) await c.delete(k); }
+    }
+    return res;
+  } catch { return new Response('', { status: 504 }); }
+}
 async function networkFirst(req) {
   try {
     const res = await fetch(req);

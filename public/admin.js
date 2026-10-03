@@ -1,6 +1,6 @@
 // 耕跑團 PWA — admin.js：從 app.js 拆出來、用到才載入的畫面（第一次開 App 不用下載）
 import * as Party from './party.js';
-import { $, ago, allow, api, applyFeatures, avatar, barChart, bars, bindStepup, cfg, esc, group, IC, largeTitle, me, mfaBanner, org, pad2, paintCountdown, passkey, refreshMe, render, ROLE_NAME, row, studio, TAB_DEFAULT, TEAM_PERMS, teamAllow, teamIcon, teamOf, teams, toast, view } from './app.js';
+import { $, scanSheet, ago, allow, api, applyFeatures, avatar, barChart, bars, bindStepup, cfg, esc, group, IC, largeTitle, me, mfaBanner, org, pad2, paintCountdown, passkey, refreshMe, render, ROLE_NAME, row, studio, TAB_DEFAULT, TEAM_PERMS, teamAllow, teamIcon, teamOf, teams, toast, view } from './app.js';
 
 // ---------- 管理介面（RBAC、會籍、座位圖）----------
 const MEMBERSHIP_NAME = { none: '跑友', applied: '申請中', active: '協會會員', expired: '會籍到期' };
@@ -135,7 +135,7 @@ function bindMemberSearch(form, listEl, rowFn, after) {
 async function membersPanel(meta) {
   const chips = Object.entries(MEMBERSHIP_NAME).map(([k, v]) => `<span class="pill ${k === 'active' ? 'solid' : k === 'applied' ? 'wait' : ''}">${v} ${meta.counts[k] || 0}</span>`).join('');
   return `
-    <section class="card"><div class="row" style="gap:6px">${chips}</div>
+    <section class="card"><div class="row spread"><div class="row" style="gap:6px">${chips}</div><button class="btn ghost sm" id="verifyCard" type="button">掃描會籍卡</button></div>
       <p class="tiny" style="margin:0">跑友只要加入就能報名團練；協會會員要另外申請與繳費，兩者分開管理。</p></section>
     ${meta.counts.applied ? `<section class="card"><h3>待審核入會（${meta.counts.applied}）</h3><div class="roster" id="appliedList"></div></section>` : ''}
     <section class="card"><h3>查詢跑友</h3>${memberFilterForm('mf2')}<div class="roster" id="mlist"></div></section>
@@ -151,6 +151,8 @@ const memberRow = (m) => `<div class="r mrow">
       <button class="btn ghost sm" data-ms="${m.id}">${MEMBERSHIP_NAME[m.membership]}</button></span>
   </div>`;
 function bindMembers() {
+  $('#verifyCard')?.addEventListener('click', () => scanSheet({ title: '驗證會籍卡', hint: '把會員 App 裡的會籍卡 QR 對準框內', placeholder: '或貼上 QR 內容',
+    onCode: async (c) => { const r = await api(`/members/verify?c=${encodeURIComponent(c)}`); return `${r.valid ? '有效會員' : '會籍已到期'}：${r.name}${r.member_no ? `・No. ${r.member_no}` : ''}${r.paid_until ? `・繳至 ${r.paid_until}` : ''}`; } }));
   const setMain = async (ids, team) => {
     try { const r = await api('/members/main-team', { method: 'POST', body: { member_ids: ids, team_id: team || null } }); toast(`已設定 ${r.count} 人的主團`); }
     catch (e) { toast(e.message); }
@@ -501,6 +503,9 @@ function settingsPanel() {
     <div id="holOut"></div>
   </section>
   <h3 class="sgt">安全與隱私</h3>
+  <section class="card" id="bkCard"><div class="row spread"><h3>每日加密備份</h3><button type="button" class="btn ghost sm" id="bkNow">立即備份</button></div>
+    <p class="tiny" style="margin:0">每天凌晨 3 點自動把資料庫加密備份（AES-GCM），保留 35 天。還原用 tools/restore-backup.mjs，金鑰另外保存在理事長的電腦與密碼管理器。</p>
+    <div id="bkList" class="roster"><p class="tiny" style="margin:0">載入中…</p></div></section>
   ${(me.realRole || me.role) === 'chair' ? `<section class="card">
     <h3>幹部兩步驟驗證</h3>
     <label class="switch"><span>幹部要用通行金鑰驗證才能使用管理功能<span class="tiny" style="display:block">理事、監事、行政人員、教練都適用；一般跑友不受影響</span></span>
@@ -523,6 +528,19 @@ const docRow = (d = {}) => `<div class="drow">
   <input data-k="note" placeholder="說明（選填）" maxlength="80" value="${esc(d.note || '')}">
   <button type="button" class="btn danger sm" data-rmdoc aria-label="移除">移除</button></div>`;
 function bindSettings() {
+  const loadBk = async () => {
+    const r = await api('/backups').catch(() => null);
+    if (!$('#bkList')) return;
+    $('#bkList').innerHTML = !r ? '<p class="tiny" style="margin:0">沒有權限</p>' : !r.enabled ? '<p class="tiny" style="margin:0">備份還沒設定</p>'
+      : r.list.length ? r.list.slice(0, 7).map((b) => `<div class="r"><span class="av num" style="font-size:10px">${esc(String(b.key).slice(11, 16).replace('-', '/'))}</span><span><b>${esc(String(b.key).replace('daily/', '').replace('.bin', ''))}</b><span class="tiny" style="display:block">${b.tables || '—'} 張表・${b.rows || '—'} 筆・${Math.round((b.size || 0) / 1024)} KB・存在 ${esc(r.where || '')}</span></span></div>`).join('')
+      : '<p class="tiny" style="margin:0">還沒有備份，今晚 3 點會自動執行第一次。</p>';
+  };
+  loadBk();
+  $('#bkNow')?.addEventListener('click', async (e) => {
+    e.target.disabled = true;
+    try { const r = await api('/backups', { method: 'POST', body: {} }); toast(`已備份 ${r.tables} 張表、${r.rows} 筆`); loadBk(); } catch (err) { toast(err.message); }
+    e.target.disabled = false;
+  });
   const loadHol = async () => {
     const { years } = await api('/holidays').catch(() => ({ years: [] }));
     if ($('#holYears')) $('#holYears').innerHTML = years.length ? years.map((y) => `<span>${y.year} 年 <b class="num">${y.named}</b> 個節日</span>`).join('') : '<span class="tiny">還沒有匯入任何一年</span>';

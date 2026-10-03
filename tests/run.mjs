@@ -11,7 +11,7 @@ sh(`npx wrangler d1 execute cil-run --local --persist-to ${STATE} --file tests/s
 
 const vars = { DEV_LOGIN: '1', JOIN_CODE: 'test-join', CHAIR_CODE: 'test-chair', HASH_SALT: 'test-salt', AUDIT_KEY: 'test-audit-key',
   GOOGLE_CLIENT_ID: 'test-client.apps.googleusercontent.com', GOOGLE_CLIENT_SECRET: 'test-google-secret',
-  RACE_KEY: 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8' };
+  RACE_KEY: 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8', BACKUP_KEY: 'HyAhIiMkJSYnKCkqKywtLi8wMTIzNDU2Nzg5Ojs8PT4' };
 const dev = spawn('npx', ['wrangler', 'dev', '--port', String(PORT), '--persist-to', STATE, ...Object.entries(vars).flatMap(([k, v]) => ['--var', `${k}:${v}`])],
   { stdio: ['ignore', 'pipe', 'inherit'], detached: process.platform !== 'win32' });
 let log = '';

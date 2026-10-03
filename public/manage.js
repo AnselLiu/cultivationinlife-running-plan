@@ -1,5 +1,5 @@
 // 耕跑團 PWA — manage.js：從 app.js 拆出來、用到才載入的畫面（第一次開 App 不用下載）
-import { $, ago, allow, api, bars, copy, dstr, emptyState, esc, feat, group, IC, KIND_NAME, largeTitle, me, money, PAID_NAME, row, teamAllow, teams, toast, view } from './app.js';
+import { $, ago, downloadAuthed, scanSheet, allow, api, bars, copy, dstr, emptyState, esc, feat, group, IC, KIND_NAME, largeTitle, me, money, PAID_NAME, row, teamAllow, teams, toast, view } from './app.js';
 
 // ---------- 幹部：新增／編輯活動 ----------
 async function formView(id) {
@@ -180,6 +180,25 @@ async function formView(id) {
 }
 const optRow = (o = {}) => `<div class="optrow"><input data-k="name" maxlength="20" placeholder="組別，例如 全馬" aria-label="組別名稱" value="${esc(o.name || '')}">
   <input data-k="price" type="number" min="0" max="100000" inputmode="numeric" placeholder="價格" aria-label="價格（元）" value="${o.price ?? ''}"><button type="button" class="btn danger sm" data-rmo>移除</button></div>`;
+// 網路銀行入帳明細：各家格式不同，只取「正的金額」與「明細裡 4 位以上的數字（取後五碼）」，日期有就帶上
+const readText = async (f) => { const buf = await f.arrayBuffer(); try { return new TextDecoder('utf-8', { fatal: true }).decode(buf); } catch { return new TextDecoder('big5').decode(buf); } };
+function parseBank(text) {
+  const lines = text.split(/\r?\n/).map((l) => l.split(/,(?=(?:[^"]*"[^"]*")*[^"]*$)/).map((c) => c.replace(/^"|"$/g, '').trim()));
+  const head = lines.findIndex((r) => r.some((c) => /存入|轉入|入帳|收入|金額|Deposit|Credit/i.test(c)));
+  const cols = head >= 0 ? lines[head] : [];
+  const amtIdx = cols.findIndex((c) => /存入|轉入|入帳|收入|Deposit|Credit/i.test(c));
+  const amountCol = amtIdx >= 0 ? amtIdx : cols.findIndex((c) => /金額/.test(c));
+  const out = [];
+  for (const r of lines.slice(head + 1)) {
+    const num = (c) => Number(String(c || '').replace(/[,\s$NT]/g, ''));
+    const amount = amountCol >= 0 ? num(r[amountCol]) : Math.max(...r.map(num).filter((x) => Number.isFinite(x) && x > 0 && x < 1e6));
+    if (!(amount > 0)) continue;
+    const refs = [...new Set(r.filter((_, i) => i !== amountCol).join(' ').match(/\d{4,}/g) || [])].map((d) => d.slice(-5)).filter((d) => d.length >= 4);
+    const date = (r.join(' ').match(/(20\d{2})[\/-](\d{1,2})[\/-](\d{1,2})/) || []).slice(1).map((x) => x.padStart(2, '0')).join('-');
+    if (refs.length) out.push({ amount: Math.round(amount), refs: refs.slice(0, 10), date });
+  }
+  return out.slice(0, 2000);
+}
 const money2 = (n) => `NT$${Number(n || 0).toLocaleString('zh-TW')}`;
 const itemText = (items, defs) => (items || []).map((x) => { const d = (defs || []).find((y) => y.id === x.id); return d ? `${d.name}${x.size ? ` ${x.size}` : ''}×${x.qty}・` : ''; }).join('');
 const PAY_METHOD = { transfer: '銀行轉帳', cash: '現金', linepay: 'LINE Pay' };
@@ -221,16 +240,24 @@ async function statsView(id) {
       </div>
       <span class="bar big"><i style="width:${money.expected ? Math.round(money.collected / money.expected * 100) : 0}%"></i></span>
       <div class="lstats">${Object.entries(PAID_NAME).map(([k, v]) => `<span>${v} <b class="num">${money.counts[k] || 0}</b></span>`).join('')}</div>
-      ${money.reportedN ? '<a class="btn sm" href="#plist" id="showReported">只看待確認的</a>' : ''}</section>` : ''}
+      <div class="row" style="gap:8px">${money.reportedN ? '<a class="btn sm" href="#plist" id="showReported">只看待確認的</a>' : ''}
+        <label class="btn ghost sm filebtn">匯入銀行明細對帳<input type="file" accept=".csv,text/csv,.txt" id="bankCsv" hidden></label></div>
+      <div id="reconOut"></div>
+      <p class="tiny" style="margin:0">從網路銀行下載入帳明細（CSV），系統用「金額＋轉帳後五碼」比對團員回報的資料，先預覽再確認標記已繳。檔案只在你的手機裡讀取，只送出金額與數字。</p></section>` : ''}
     ${(st.items || []).length ? `<section class="card"><div class="row spread"><h3>團購數量</h3>${st.minQty ? `<span class="tiny">成團門檻 ${st.minQty} 件</span>` : ''}</div>
       ${st.minQty ? (() => { const sum = st.items.reduce((n, i) => n + i.total, 0); return `<div class="row spread"><span>${sum >= st.minQty ? `${IC.check} 已成團` : `還差 ${st.minQty - sum} 件成團`}</span><span class="tiny num">${sum}/${st.minQty}</span></div>
         <span class="bar big"><i style="width:${Math.min(100, Math.round(sum / st.minQty * 100))}%"></i></span>`; })() : ''}
       <div class="itemtable">${st.items.map((i) => `<div class="itr"><b><span translate="no">${esc(i.name)}</span></b><span class="tiny">${money2(i.price)}${i.stock ? `・庫存 ${i.stock}，剩 ${Math.max(0, i.stock - i.total)}` : ''}</span>
         <span class="sizes">${Object.entries(i.by).map(([z, n]) => `<span class="pill">${z === '—' ? '數量' : esc(z)} <b class="num">${n}</b></span>`).join('') || '<span class="tiny">還沒有人訂</span>'}</span><b class="num">${i.total}</b></div>`).join('')}</div>
-      <div class="row"><a class="btn sm" href="/api/events/${id}/orders.csv" download>下載訂購單</a><span class="tiny">已領取 ${st.picked}/${t.in}</span></div></section>` : ''}
+      <div class="row"><a class="btn sm" href="/api/events/${id}/orders.csv" download>下載訂購單</a><span class="tiny">已領取 ${st.picked}/${t.in}</span></div>
+      <details class="group"><summary>到貨與領取</summary>
+        <form id="arrForm" class="row" style="gap:8px"><input name="note" maxlength="120" placeholder="領取地點與時間，例如 週四團練現場 19:00" aria-label="領取地點與時間" style="flex:1;min-width:200px"><button class="btn sm">通知到貨</button></form>
+        <p class="tiny" style="margin:0">通知後，每位訂購的人會有自己的領取 QR；現場用下面的按鈕掃描就會記錄已領取。</p>
+        <button class="btn ghost sm iconbtn" id="pickScan" type="button">${IC.check}掃描領取 QR</button>
+      </details></section>` : ''}
     ${st.groupReg ? `<section class="card"><div class="row spread"><h3>團體報名資料</h3><span class="tiny">${st.regReady}/${t.in} 人已同意提供</span></div>
       <span class="bar big"><i style="width:${t.in ? Math.round(st.regReady / t.in * 100) : 0}%"></i></span>
-      <a class="btn sm" href="/api/events/${id}/registrations.csv" download>下載團體報名資料（含身分證字號）</a>
+      <button class="btn sm" id="regCsv">下載團體報名資料（含身分證字號）</button>
       <p class="tiny" style="margin:0">只包含已同意提供的人。檔案含身分證字號等個資，送出報名後請立刻刪除，下載紀錄會寫進稽核。</p></section>` : ''}
     <div class="statgrid">
       ${st.byOption ? `<section class="card"><h3>報名組別</h3>${bars(Object.entries(st.byOption), t.in)}</section>` : ''}
@@ -279,6 +306,30 @@ async function statsView(id) {
     try { await api(`/events/${id}/pickup`, { method: 'POST', body: { member_id: c.dataset.pick, picked: c.checked } }); toast(c.checked ? '已標記領取' : '已取消領取'); }
     catch (e) { c.checked = !c.checked; toast(e.message); }
   };
+  $('#regCsv')?.addEventListener('click', () => downloadAuthed(`/api/events/${id}/registrations.csv`, `${st.title}-團體報名資料.csv`).catch((e) => toast(e.message)));
+  $('#arrForm')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (!confirm('通知所有訂購的人到貨了？')) return;
+    try { const r = await api(`/events/${id}/arrived`, { method: 'POST', body: { note: e.target.note.value.trim() } }); toast(`已通知 ${r.count} 人`); } catch (err) { toast(err.message); }
+  });
+  $('#pickScan')?.addEventListener('click', () => scanSheet({ title: '掃描領取 QR', hint: '把團員的領取 QR 對準框內', placeholder: '或輸入 6 碼領取代碼',
+    onCode: async (code) => { const r = await api(`/events/${id}/pickup`, { method: 'POST', body: { code: code.toUpperCase() } }); return `${r.already ? '已經領過：' : '領取完成：'}${r.name}・${(r.items || []).map((x) => `${(st.items.find((d) => d.id === x.id) || {}).name || ''}${x.size ? ` ${x.size}` : ''}×${x.qty}`).join('、')}`; } }));
+  $('#bankCsv')?.addEventListener('change', async (e) => {
+    const f = e.target.files[0]; if (!f) return;
+    const rows = parseBank(await readText(f));
+    if (!rows.length) return toast('讀不到入帳資料，請確認是網路銀行的入帳明細 CSV');
+    const show = async (apply) => {
+      const r = await api(`/events/${id}/reconcile`, { method: 'POST', body: { rows, apply } });
+      $('#reconOut').innerHTML = `<div class="notice" style="margin:0;display:grid;gap:8px">
+        <b>${apply ? `已標記 ${r.matched.length} 筆為已繳` : `讀到 ${rows.length} 筆入帳，對上 ${r.matched.length} 筆`}</b>
+        ${r.matched.length ? `<span class="tiny">${r.matched.map((m) => `<span translate="no">${esc(m.name)}</span> ${money2(m.amount)}`).join('、')}</span>` : ''}
+        ${r.unpaid.length ? `<span class="tiny">還沒對上：${r.unpaid.map((u) => `<span translate="no">${esc(u.name)}</span> ${money2(u.amount)}${u.pay_ref ? `（後五碼 ${esc(u.pay_ref)}）` : '（沒回報）'}`).join('、')}</span>` : ''}
+        ${!apply && r.matched.length ? '<button class="btn sm" id="reconApply">確認，標記為已繳</button>' : ''}</div>`;
+      $('#reconApply')?.addEventListener('click', async () => { await show(true); setTimeout(() => statsView(id), 1200); });
+    };
+    try { await show(false); } catch (err) { toast(err.message); }
+    e.target.value = '';
+  });
   $('#showReported')?.addEventListener('click', () => { for (const r of document.querySelectorAll('.prow')) r.hidden = !r.classList.contains('reported'); });
   for (const sel of document.querySelectorAll('[data-pay]')) sel.onchange = async () => {
     try { await api(`/events/${id}/payments`, { method: 'POST', body: { member_ids: [sel.dataset.pay], paid: sel.value } }); sel.className = `paysel ${sel.value}`; toast(`已標記為${PAID_NAME[sel.value]}`); }

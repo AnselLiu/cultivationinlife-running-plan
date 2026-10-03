@@ -409,3 +409,59 @@ test('資安：刪除帳號會清乾淨新功能的資料；跨站請求與偽�
   assert.equal(del.status, 200);
   assert.equal((await call('t_runner', `/routes/${rt.json.id}`)).status, 404, '分享出去的路線也一起刪除');
 });
+
+test('活動異動、跑完接續、團購到貨領取 QR、銀行對帳、會籍卡、每月挑戰、備份', async () => {
+  // 活動異動：改時間、取消；跑友不能發
+  const ev = await call('t_chair', '/events', { method: 'POST', body: { kind: 'long', title: '異動測試', date: '2027-05-01', gather_time: '06:00', notify: false } });
+  await call('t_runner', `/events/${ev.json.id}/signup`, { method: 'POST', body: {} });
+  assert.equal((await call('t_runner', `/events/${ev.json.id}/notice`, { method: 'POST', body: { type: 'cancel' } })).status, 403);
+  assert.equal((await call('t_chair', `/events/${ev.json.id}/notice`, { method: 'POST', body: { type: 'time', gather_time: '07:00', message: '晚一小時' } })).json.count, 1);
+  assert.equal((await call('t_runner', `/events/${ev.json.id}`)).json.gather_time, '07:00');
+  // 跑完接續：結束 15 分鐘後提醒（台北 2027-05-01 09:30 → UTC 01:30）
+  const fu = (await call(null, '/dev/cron?at=2027-05-01T01:30:00Z')).json;
+  assert.equal(fu.followups, 1);
+  assert.equal((await call(null, '/dev/cron?at=2027-05-01T02:30:00Z')).json.followups, 0, '只提醒一次');
+  await call('t_chair', `/events/${ev.json.id}/notice`, { method: 'POST', body: { type: 'cancel', message: '颱風' } });
+  assert.equal((await call('t_runner', `/events/${ev.json.id}`)).json.cancelled, true);
+
+  // 團購：到貨前看不到領取碼；到貨後掃碼領取
+  const buy = await call('t_chair', '/events', { method: 'POST', body: { kind: 'buy', title: '毛巾團購', date: plus(15), notify: false, items: [{ name: '毛巾', price: 300 }], pay_info: { methods: ['transfer'] } } });
+  const towel = (await call('t_runner', `/events/${buy.json.id}`)).json.items[0];
+  await call('t_runner', `/events/${buy.json.id}/signup`, { method: 'POST', body: { items: [{ id: towel.id, qty: 2 }] } });
+  assert.equal((await call('t_runner', `/events/${buy.json.id}`)).json.myPickCode, null);
+  assert.equal((await call('t_runner', `/events/${buy.json.id}/arrived`, { method: 'POST', body: {} })).status, 403);
+  assert.equal((await call('t_chair', `/events/${buy.json.id}/arrived`, { method: 'POST', body: { note: '週四團練現場領取' } })).json.count, 1);
+  const code = (await call('t_runner', `/events/${buy.json.id}`)).json.myPickCode;
+  assert.match(code, /^[A-Z2-9]{6}$/);
+  const pk = await call('t_chair', `/events/${buy.json.id}/pickup`, { method: 'POST', body: { code } });
+  assert.equal(pk.json.already, false);
+  assert.equal((await call('t_chair', `/events/${buy.json.id}/pickup`, { method: 'POST', body: { code } })).json.already, true);
+  // 銀行對帳：後五碼＋金額都對上才標已繳
+  await call('t_runner', `/events/${buy.json.id}/pay-report`, { method: 'POST', body: { method: 'transfer', ref: '13579' } });
+  const rows = [{ amount: 600, refs: ['0081234513579'.slice(-5), '20271001'.slice(-5)], date: '2027-01-02' }, { amount: 999, refs: ['55555'] }];
+  const dry = await call('t_chair', `/events/${buy.json.id}/reconcile`, { method: 'POST', body: { rows } });
+  assert.equal(dry.json.matched.length, 1);
+  assert.equal((await call('t_runner', `/events/${buy.json.id}`)).json.myPaid, 'unpaid', '預覽不會改資料');
+  await call('t_chair', `/events/${buy.json.id}/reconcile`, { method: 'POST', body: { rows, apply: true } });
+  assert.equal((await call('t_runner', `/events/${buy.json.id}`)).json.myPaid, 'paid');
+
+  // 會籍卡：簽章對才能驗；跑友不能驗別人
+  const card = (await call('t_runner', '/me/card')).json;
+  assert.match(card.qr, /^CILM:t_runner\.[0-9a-f]{16}$/);
+  assert.equal((await call('t_other', `/members/verify?c=${encodeURIComponent(card.qr)}`)).status, 403);
+  assert.equal((await call('t_staff', `/members/verify?c=${encodeURIComponent(card.qr)}`)).json.name, '測試跑友');
+  assert.equal((await call('t_staff', `/members/verify?c=${encodeURIComponent(card.qr.replace(/.$/, (c) => (c === '0' ? '1' : '0')))}`)).status, 400, '改過的 QR 不能用');
+
+  // 每月挑戰
+  await call('t_runner', '/logs', { method: 'POST', body: { date: today, status: 'extra', km: 12.5 } });
+  const ch = (await call('t_runner', '/challenge')).json;
+  assert.ok(ch.me.km >= 12.5);
+  assert.ok(Array.isArray(ch.teams) && ch.badges.length >= 4);
+
+  // 備份：只有理事長、行政人員；寫得進去也列得出來
+  assert.equal((await call('t_runner', '/backups', { method: 'POST', body: {} })).status, 403);
+  const bk = await call('t_chair', '/backups', { method: 'POST', body: {} });
+  assert.equal(bk.status, 200);
+  assert.ok(bk.json.tables > 20 && bk.json.rows > 10);
+  assert.ok((await call('t_super', '/backups')).json.list.some((x) => x.key.includes('manual')));
+});

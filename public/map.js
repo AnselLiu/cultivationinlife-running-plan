@@ -56,7 +56,7 @@ async function mapView() {
   view.innerHTML = `
     ${largeTitle('練跑地圖', '地點、現場回報、天氣與路線')}
     <div class="seg mapbase" role="group" aria-label="底圖">${Object.entries(BASES).map(([k, v]) => `<button data-base="${k}" aria-pressed="${pref.get('base', 'emap') === k}">${v[0]}</button>`).join('')}</div>
-    <section class="mapwrap card">
+    <div class="mapgrid"><section class="mapwrap card">
       <div id="map" role="application" aria-label="練跑地圖"></div>
       <div class="mapfab">
         <button class="fab" id="locBtn" aria-label="移到我的位置"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3"/><circle cx="12" cy="12" r="7"/></svg></button>
@@ -65,11 +65,11 @@ async function mapView() {
       </div>
       <div class="drawbar" id="drawBar" hidden>
         <span><b class="num" id="drawLen">0.00 公里</b><span class="tiny" id="drawPts">點地圖加上路線的點</span></span>
-        <span class="row" style="gap:6px"><button class="btn ghost sm" id="drawUndo">復原</button><button class="btn ghost sm" id="drawLoop">繞回起點</button><button class="btn sm" id="drawDone">完成</button><button class="btn ghost sm" id="drawCancel">取消</button></span>
+        <span class="row" style="gap:6px"><button class="btn ghost sm" id="drawFree" aria-pressed="false" title="打開後用手指拖就是畫線；Apple Pencil 隨時都能直接畫">手繪</button><button class="btn ghost sm" id="drawUndo">復原</button><button class="btn ghost sm" id="drawLoop">繞回起點</button><button class="btn sm" id="drawDone">完成</button><button class="btn ghost sm" id="drawCancel">取消</button></span>
       </div>
       <div class="drawbar" id="pickBar" hidden><span class="tiny">點地圖選地點的位置</span><button class="btn ghost sm" id="pickCancel">取消</button></div>
     </section>
-    <div id="panel"><section class="card"><p class="tiny" style="margin:0">載入中…</p></section></div>`;
+    <div id="panel"><section class="card"><p class="tiny" style="margin:0">載入中…</p></section></div></div>`;
   // 這次畫的容器：載入 Leaflet 的期間畫面可能已經換掉（例如背景更新重畫），換掉了就交給新的那次
   const el = $('#map');
   let L;
@@ -87,7 +87,9 @@ async function mapView() {
   $('#locBtn').onclick = locate;
   $('#drawBtn').onclick = () => startDraw();
   $('#addBtn').onclick = () => startPick((pt) => spotForm(null, pt));
-  $('#drawUndo').onclick = () => { draft.pop(); paintDraft(); };
+  $('#drawUndo').onclick = () => { draft.length = strokes.length ? strokes.pop() : Math.max(0, draft.length - 1); paintDraft(); };
+  $('#drawFree').onclick = () => { freehand = !freehand; $('#drawFree').setAttribute('aria-pressed', String(freehand)); el.classList.toggle('freehand', freehand); toast(freehand ? '手繪：用手指拖就是畫線，兩指移動地圖' : '點選：點一下加一個點'); };
+  bindFreehand(el);
   $('#drawLoop').onclick = () => { if (draft.length > 1) { draft.push(draft[0]); paintDraft(); } };
   $('#drawCancel').onclick = endDraw;
   $('#drawDone').onclick = () => (draft.length < 2 ? toast('至少點兩個點') : routeForm());
@@ -102,7 +104,8 @@ async function mapView() {
 function setBase(k) {
   const b = BASES[k] || BASES.emap;
   if (layer) map.removeLayer(layer);
-  layer = window.L.tileLayer(b[1], { maxNativeZoom: b[2], maxZoom: 20, attribution: b[3], className: `base-${k in BASES ? k : 'emap'}` }).addTo(map);
+  // crossOrigin：圖磚用 CORS 抓，Service Worker 才能存起來離線用
+  layer = window.L.tileLayer(b[1], { maxNativeZoom: b[2], maxZoom: 20, attribution: b[3], crossOrigin: 'anonymous', className: `base-${k in BASES ? k : 'emap'}` }).addTo(map);
   pref.set('base', k);
 }
 function locate() {
@@ -128,22 +131,66 @@ async function loadSpots() {
 }
 
 function onMapClick(pt) {
-  if (mode === 'draw') { draft.push(pt); paintDraft(); return; }
+  if (mode === 'draw') { if (Date.now() < quietUntil) return; strokes.push(draft.length); draft.push(pt); paintDraft(); return; }
   if (mode === 'pick') { const cb = pickCb; endPick(); cb?.(pt); }
 }
 function startPick(cb) { endDraw(); mode = 'pick'; pickCb = cb; $('#pickBar').hidden = false; $('#map').classList.add('picking'); toast('點地圖選位置'); }
 function endPick() { mode = 'browse'; pickCb = null; $('#pickBar').hidden = true; $('#map')?.classList.remove('picking'); }
-function startDraw(seed = []) {
-  endPick(); mode = 'draw'; draft = [...seed]; routeLayer.clearLayers();
-  $('#drawBar').hidden = false; $('#map').classList.add('picking'); paintDraft();
-  $('#panel').innerHTML = `<section class="card"><h3>畫路線</h3><p class="tiny" style="margin:0">沿著要跑的路依序點地圖，轉彎處多點幾下比較準。完成後可以存起來分享、下載 GPX，或直接開揪跑。</p></section>`;
+// iPad 畫路線：Apple Pencil 隨時直接畫（手指照樣移動、縮放地圖）；打開「手繪」後單指拖也能畫，兩指移動地圖
+let freehand = false, strokes = [], quietUntil = 0;
+function bindFreehand(el) {
+  let pid = null, last = null, start = 0;
+  const draws = (e) => mode === 'draw' && (e.pointerType === 'pen' || (freehand && e.isPrimary));
+  el.addEventListener('pointerdown', (e) => {
+    if (!draws(e) || pid != null) return;
+    pid = e.pointerId; last = [e.clientX, e.clientY]; start = draft.length;
+    strokes.push(draft.length);
+    map.dragging.disable();
+    el.setPointerCapture?.(e.pointerId);
+    addAt(e); e.preventDefault(); e.stopPropagation();
+  }, { capture: true });
+  el.addEventListener('pointermove', (e) => {
+    if (e.pointerId !== pid) return;
+    // 每移動 6 像素取一個點，畫得快也不會太多點
+    if (Math.hypot(e.clientX - last[0], e.clientY - last[1]) < 6) return;
+    last = [e.clientX, e.clientY]; addAt(e); e.preventDefault(); e.stopPropagation();
+  }, { capture: true });
+  const end = (e) => {
+    if (e.pointerId !== pid) return;
+    pid = null; map.dragging.enable(); quietUntil = Date.now() + 350;
+    if (draft.length - start < 2 && strokes.length) { draft.length = strokes.pop(); }   // 只是點一下，交給點選處理
+    else simplify(start);
+    paintDraft();
+  };
+  el.addEventListener('pointerup', end, { capture: true });
+  el.addEventListener('pointercancel', end, { capture: true });
+  // 兩指時把畫到一半的線收掉，讓地圖可以移動
+  el.addEventListener('touchstart', (e) => { if (e.touches.length > 1 && pid != null) { pid = null; map.dragging.enable(); } }, { passive: true });
 }
-function endDraw() { mode = 'browse'; draft = []; drawLayer?.clearLayers(); if ($('#drawBar')) $('#drawBar').hidden = true; $('#map')?.classList.remove('picking'); }
-function paintDraft() {
+function addAt(e) {
+  const r = $('#map').getBoundingClientRect(), ll = map.containerPointToLatLng([e.clientX - r.left, e.clientY - r.top]);
+  draft.push([+ll.lat.toFixed(6), +ll.lng.toFixed(6)]);
+  if (draft.length % 3 === 0) paintDraft(true);
+}
+// 手繪的點太密：相鄰小於 4 公尺的併掉
+function simplify(from) {
+  const out = draft.slice(0, from + 1);
+  for (const p of draft.slice(from + 1)) if (hav(out[out.length - 1], p) >= 4) out.push(p);
+  draft = out;
+}
+function startDraw(seed = []) {
+  endPick(); mode = 'draw'; draft = [...seed]; strokes = []; routeLayer.clearLayers();
+  $('#drawBar').hidden = false; $('#map').classList.add('picking'); paintDraft();
+  $('#panel').innerHTML = `<section class="card"><h3>畫路線</h3><p class="tiny" style="margin:0">沿著要跑的路依序點地圖，轉彎處多點幾下比較準；iPad 可以用 Apple Pencil 直接畫，或打開「手繪」用手指畫。完成後可以存起來分享、下載 GPX，或直接開揪跑。</p></section>`;
+}
+function endDraw() { mode = 'browse'; draft = []; strokes = []; freehand = false; $('#drawFree')?.setAttribute('aria-pressed', 'false'); $('#map')?.classList.remove('freehand'); drawLayer?.clearLayers(); if ($('#drawBar')) $('#drawBar').hidden = true; $('#map')?.classList.remove('picking'); }
+function paintDraft(quick) {
   drawLayer.clearLayers();
   if (draft.length) {
-    window.L.polyline(draft, { color: '#0A84FF', weight: 5, opacity: 0.9 }).addTo(drawLayer);
-    for (const [i, p] of draft.entries()) window.L.circleMarker(p, { radius: i === 0 ? 7 : 4, color: '#fff', weight: 2, fillColor: i === 0 ? '#34C759' : '#0A84FF', fillOpacity: 1 }).addTo(drawLayer);
+    window.L.polyline(draft, { color: '#0A84FF', weight: 5, opacity: 0.9, interactive: false }).addTo(drawLayer);
+    // 點選畫的路線顯示每個點；手繪點很多時只標起點與目前終點
+    const dots = draft.length <= 25 ? draft.map((p, i) => [p, i]) : [[draft[0], 0], [draft[draft.length - 1], draft.length - 1]];
+    if (!quick) for (const [p, i] of dots) window.L.circleMarker(p, { radius: i === 0 ? 7 : 4, color: '#fff', weight: 2, fillColor: i === 0 ? '#34C759' : '#0A84FF', fillOpacity: 1, interactive: false }).addTo(drawLayer);
   }
   $('#drawLen').textContent = km(lenOf(draft));
   $('#drawPts').textContent = draft.length ? `${draft.length} 個點` : '點地圖加上路線的點';
@@ -186,7 +233,7 @@ async function openSpot(id, fly) {
         <button class="btn ghost sm" id="backList" aria-label="回地點清單">全部</button></div>
       ${s.intro ? `<p class="muted" style="margin:0;white-space:pre-wrap"><span translate="no">${esc(s.intro)}</span></p>` : ''}
       ${Object.keys(s.info || {}).length ? `<div class="infochips">${Object.entries(INFO).filter(([k]) => s.info[k]).map(([k, v]) => `<span><span class="tiny">${v}</span><b>${esc(s.info[k])}</b></span>`).join('')}</div>` : ''}
-      <div class="row" style="gap:8px"><a class="btn sm" href="${nav}" target="_blank" rel="noopener">導航 ${IC.external}</a>${s.status === 'approved' ? `<a class="btn ghost sm" href="#/new?spot=${esc(s.id)}">在這裡開揪跑</a>` : ''}
+      <div class="row" style="gap:8px"><a class="btn sm" href="${nav}" target="_blank" rel="noopener">導航 ${IC.external}</a><button class="btn ghost sm" id="offBtn">下載離線地圖</button>${s.status === 'approved' ? `<a class="btn ghost sm" href="#/new?spot=${esc(s.id)}">在這裡開揪跑</a>` : ''}
         ${data.editor || (s.mine && s.status === 'pending') ? '<button class="btn ghost sm" id="editSpot">編輯</button>' : ''}</div>
       ${s.status === 'pending' && d.editor ? '<div class="row" style="gap:8px"><button class="btn sm" id="approve">通過</button><button class="btn danger sm" id="reject">不通過</button></div>' : ''}
     </section>
@@ -202,6 +249,7 @@ async function openSpot(id, fly) {
       ${d.routes.length ? `<div class="roster">${d.routes.map((r) => `<button class="r spotrow" data-route="${esc(r.id)}"><span class="av num" style="font-size:11px">${(r.distance / 1000).toFixed(1)}</span><span><b><span translate="no">${esc(r.name)}</span></b></span><span class="tiny">›</span></button>`).join('')}</div>` : '<p class="muted" style="margin:0">還沒有路線。</p>'}</section>`;
   $('#backList').onclick = () => { history.replaceState(null, '', '#/map'); listPanel(); };
   $('#editSpot')?.addEventListener('click', () => spotForm(s, [s.lat, s.lng]));
+  $('#offBtn').onclick = () => saveOffline(s);
   for (const [b, ok] of [[$('#approve'), true], [$('#reject'), false]]) b?.addEventListener('click', async () => {
     try { await api(`/spots/${s.id}/review`, { method: 'POST', body: { approve: ok } }); toast(ok ? '已通過' : '已退回'); await loadSpots(); ok ? openSpot(s.id) : listPanel(); } catch (e) { toast(e.message); }
   });
@@ -210,6 +258,25 @@ async function openSpot(id, fly) {
   for (const b of document.querySelectorAll('[data-route]')) b.onclick = () => showRoute(b.dataset.route, true);
   $('#drawHere').onclick = () => { startDraw([[s.lat, s.lng]]); spotForRoute = s.id; };
   W.load(s.lat, s.lng).then((w) => { if ($('#wxBox')) $('#wxBox').innerHTML = W.strip(w); }).catch((e) => { if ($('#wxBox')) $('#wxBox').innerHTML = `<p class="tiny" style="margin:0">${esc(e.message)}</p>`; });
+}
+// 離線地圖：把地點附近約 1.5 公里、縮放 13–17 級的圖磚存在手機（目前的底圖），沒訊號時也看得到地圖與路線
+async function saveOffline(s) {
+  const b = BASES[pref.get('base', 'emap')] || BASES.emap, urls = [];
+  const tx = (lng, z) => Math.floor(((lng + 180) / 360) * 2 ** z), ty = (lat, z) => Math.floor(((1 - Math.log(Math.tan(rad(lat)) + 1 / Math.cos(rad(lat))) / Math.PI) / 2) * 2 ** z);
+  for (let z = 13; z <= Math.min(17, b[2]); z++) {
+    for (let x = tx(s.lng - 0.016, z); x <= tx(s.lng + 0.016, z); x++) for (let y = ty(s.lat + 0.014, z); y <= ty(s.lat - 0.014, z); y++) urls.push(b[1].replace('{z}', z).replace('{x}', x).replace('{y}', y));
+  }
+  const btn = $('#offBtn'), cache = await caches.open('cil-tiles');
+  let done = 0, fail = 0;
+  btn.disabled = true;
+  for (let i = 0; i < urls.length; i += 6) {
+    await Promise.all(urls.slice(i, i + 6).map(async (u) => {
+      try { if (!(await cache.match(u))) { const r = await fetch(u, { mode: 'cors' }); if (r.ok) await cache.put(u, r); else fail++; } } catch { fail++; }
+      done++; if (btn.isConnected) btn.textContent = `下載中 ${Math.round((done / urls.length) * 100)}%`;
+    }));
+  }
+  if (btn.isConnected) { btn.textContent = fail ? `完成（${fail} 張失敗）` : '已存離線地圖'; }
+  toast(`已存 ${urls.length - fail} 張地圖，沒有網路也看得到這附近`);
 }
 const agoShort = (ts) => { const m = Math.round((Date.now() - Date.parse(`${ts.replace(' ', 'T')}Z`)) / 60000); return m < 1 ? '剛剛' : m < 60 ? `${m} 分鐘前` : `${Math.round(m / 60)} 小時前`; };
 let spotForRoute = null;

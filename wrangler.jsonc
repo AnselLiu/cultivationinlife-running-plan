@@ -27,6 +27,8 @@
   "observability": { "enabled": true, "head_sampling_rate": 1 },
   // Smart Placement：API 一次請求要查好幾次資料庫，讓 Worker 跑在靠近 D1 的地方，比跑在使用者旁邊快（靜態檔仍由最近的節點回）
   "placement": { "mode": "smart" },
+  // 每日加密備份：先存在 Workers KV；在 Cloudflare 後台啟用 R2 後，改綁 R2（"r2_buckets": [{ "binding": "BACKUP", "bucket_name": "cil-run-backup" }]）就會自動改存 R2
+  "kv_namespaces": [{ "binding": "BACKUP_KV", "id": "8f91539529ab4d4faca88306d6e3ebf8" }],
   // 測試環境：npm run deploy:staging → https://cil-run-staging.anselliu7.workers.dev（獨立資料庫，不影響正式站；不跑排程）
   "env": {
     "staging": {
@@ -34,7 +36,8 @@
       "d1_databases": [
         { "binding": "DB", "database_name": "cil-run-staging", "database_id": "08b71fd7-6681-4363-a670-558e3edf8e97", "migrations_dir": "migrations" }
       ],
-      "triggers": { "crons": [] }
+      "triggers": { "crons": [] },
+      "kv_namespaces": [{ "binding": "BACKUP_KV", "id": "f13b4414508140418e8fb9547d897aba" }]
     }
   }
   // 設定值全部用 secrets（npx wrangler secret put 名稱 --name cil-run），不寫在這裡：
@@ -42,6 +45,8 @@
   //   CHAIR_CODE            一次性的初始理事長設定碼（有理事長之後自動失效）
   //   HASH_SALT             IP 雜湊用的鹽
   //   AUDIT_KEY             稽核紀錄防竄改的 HMAC 金鑰
+  //   RACE_KEY              賽事報名資料（身分證字號等）的 AES-GCM 金鑰
+  //   BACKUP_KEY            每日備份的 AES-GCM 金鑰（還原時要用，請另外保存在安全的地方）
   //   GOOGLE_CLIENT_ID／GOOGLE_CLIENT_SECRET   Google 登入
   //   VAPID_PUBLIC_KEY／VAPID_PRIVATE_JWK／VAPID_SUBJECT   推播
 }

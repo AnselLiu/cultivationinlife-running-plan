@@ -2,8 +2,9 @@
 //   資料：Open-Meteo 預報與空氣品質，經伺服器 /api/weather 快取 30 分鐘
 //   跑步建議依體感溫度、降雨、空氣品質、紫外線與風速，給「適合／注意／不建議」與原因
 import { api, esc } from './app.js';
+import { hourOf, advice } from './wxrule.js';
+export { advice };
 
-const WX = (c) => (c === 0 ? '晴' : c <= 2 ? '晴時多雲' : c === 3 ? '陰' : c <= 48 ? '有霧' : c <= 57 ? '毛毛雨' : c <= 67 ? '下雨' : c <= 77 ? '下雪' : c <= 82 ? '陣雨' : '雷雨');
 const memo = new Map();
 export async function load(lat, lng) {
   const k = `${Number(lat).toFixed(2)},${Number(lng).toFixed(2)}`, hit = memo.get(k);
@@ -13,30 +14,7 @@ export async function load(lat, lng) {
   return v;
 }
 // 某個小時的天氣與跑步建議
-export function at(w, isoHour) {
-  const i = w.hourly.time.indexOf(isoHour);
-  if (i < 0) return null;
-  const h = (k) => w.hourly[k]?.[i];
-  const ai = w.air ? w.air.time.indexOf(isoHour) : -1;
-  const x = { time: isoHour, temp: h('temperature_2m'), feel: h('apparent_temperature'), hum: h('relative_humidity_2m'), rain: h('precipitation_probability'),
-    mm: h('precipitation'), code: h('weather_code'), wind: h('wind_speed_10m'), uv: h('uv_index'), aqi: ai >= 0 ? w.air.us_aqi[ai] : null, pm25: ai >= 0 ? w.air.pm2_5[ai] : null };
-  x.text = WX(x.code);
-  x.advice = advice(x);
-  return x;
-}
-export function advice(x) {
-  const why = [], warn = [];
-  if (x.feel >= 33) why.push(`體感 ${Math.round(x.feel)}°，熱傷害風險高`);
-  else if (x.feel >= 28) warn.push(`體感 ${Math.round(x.feel)}°，放慢配速、多補水`);
-  if (x.aqi >= 151) why.push(`空氣品質不良（AQI ${x.aqi}）`);
-  else if (x.aqi >= 101) warn.push(`空氣品質對敏感族群不佳（AQI ${x.aqi}）`);
-  if (x.code >= 95) why.push('雷雨');
-  else if (x.rain >= 70 && x.mm >= 2) warn.push(`降雨機率 ${x.rain}%，路面濕滑`);
-  if (x.wind >= 10) warn.push(`風很大（${Math.round(x.wind)} m/s）`);
-  if (x.uv >= 8) warn.push(`紫外線 ${Math.round(x.uv)}，做好防曬`);
-  if (x.feel != null && x.feel <= 8) warn.push(`體感 ${Math.round(x.feel)}°，注意保暖`);
-  return why.length ? { level: 'poor', label: '不建議', why: [...why, ...warn] } : warn.length ? { level: 'ok', label: '注意', why: warn } : { level: 'good', label: '適合跑步', why: ['天氣條件良好'] };
-}
+export const at = hourOf;
 const hh = (t) => t.slice(11, 13);
 // 地點卡片用：現在起 12 小時＋今天概況
 export function strip(w) {

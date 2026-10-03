@@ -1022,3 +1022,69 @@ body.guest .top .brand{opacity:0;pointer-events:none}
 .leaflet-bar a:last-child{border-bottom:0!important}
 :root[data-theme="dark"] .leaflet-control-attribution{background:rgba(11,27,51,.7)!important;color:var(--ink-2)}
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .leaflet-control-attribution{background:rgba(11,27,51,.7)!important;color:var(--ink-2)}}
+
+/* ---------- 地圖：iPad 與大螢幕左右排；手繪模式 ---------- */
+.mapgrid{display:grid;gap:14px}
+@media (min-width:820px){
+  .mapgrid{grid-template-columns:minmax(0,1.55fr) minmax(320px,1fr);align-items:start}
+  .mapgrid #map{height:calc(100dvh - 230px);min-height:480px}
+  .mapgrid #panel{max-height:calc(100dvh - 230px);overflow:auto;display:grid;gap:14px;align-content:start;scrollbar-width:thin}
+  .mapgrid .fab{width:48px;height:48px}
+}
+#map.freehand{cursor:crosshair;touch-action:none}
+#drawFree[aria-pressed="true"]{background:var(--accent);color:var(--on-accent)}
+
+/* ---------- 活動異動、團購領取、記錄完成 ---------- */
+.cancelled{margin:0;display:inline-block;padding:4px 12px;border-radius:999px;background:var(--race);color:#fff;font-weight:700;font-size:14px;justify-self:start}
+.noticeform{display:grid;gap:10px;margin-top:10px}
+.pickbox{display:grid;grid-template-columns:auto 1fr;gap:14px;align-items:center;padding:12px;border-radius:var(--r-m);background:var(--glass-hi);border:1px solid var(--stroke)}
+.pickbox .qrbox{width:120px}
+.pickbox .code{display:block;font-size:22px;letter-spacing:.18em;font-weight:700;margin-top:4px}
+.donecard{justify-items:center;text-align:center;padding:32px 20px}
+.donemark{width:64px;height:64px;border-radius:50%;display:grid;place-items:center;background:color-mix(in srgb,#34C759 18%,transparent);color:#1E8E3E;animation:pop .45s var(--tap)}
+.donemark svg.ic{width:34px;height:34px}
+@keyframes pop{0%{transform:scale(.4);opacity:0}70%{transform:scale(1.08)}100%{transform:scale(1);opacity:1}}
+
+/* ---------- 首頁天氣 ---------- */
+.wxmini{display:grid!important;grid-template-columns:auto 1fr auto;gap:12px;align-items:center;border-left:5px solid var(--stroke)}
+.wxmini .wxt{font-size:30px;font-weight:700;letter-spacing:-.02em}
+.wxmini.good{border-left-color:#34C759}.wxmini.ok{border-left-color:#FF9F0A}.wxmini.poor{border-left-color:var(--race)}
+
+/* ---------- 會籍卡 ---------- */
+.membercard{position:relative;display:grid;gap:18px;padding:22px;border-radius:24px;color:#fff;overflow:hidden;isolation:isolate;
+  background:linear-gradient(135deg,#1C4698 0%,#2E5FC2 55%,#0B1B33 100%);box-shadow:0 24px 48px rgba(28,70,152,.35),inset 0 1px 0 rgba(255,255,255,.25)}
+.membercard::after{content:"";position:absolute;inset:-40% -20% auto auto;width:70%;height:120%;background:radial-gradient(circle,rgba(253,243,109,.35),transparent 65%);z-index:-1}
+.membercard.expired{filter:grayscale(.85)}
+.mc-top{display:flex;gap:12px;align-items:center}.mc-top img{border-radius:12px}
+.mc-top b{display:block;font-size:17px}.mc-top small{font-size:10px;letter-spacing:.24em;opacity:.75}
+.mc-mid{display:grid;grid-template-columns:1fr auto;gap:12px;align-items:end}
+.mc-mid b{display:block;font-size:26px;margin:2px 0}.mc-mid .tiny{color:rgba(255,255,255,.75)}
+.mc-mid .qrbox{width:132px;padding:8px;border-radius:14px;background:#fff}
+.mc-foot{display:flex;gap:12px;align-items:center;flex-wrap:wrap;font-size:13px;opacity:.95}
+.mc-foot .pill{margin-left:auto}
+
+/* ---------- 每月里程挑戰 ---------- */
+.monthnav{margin-top:-6px}
+.chme{display:grid!important;grid-template-columns:auto 1fr;gap:18px;align-items:center}
+.chring{--p:0;width:120px;height:120px;border-radius:50%;display:grid;place-items:center;align-content:center;
+  background:conic-gradient(var(--accent) calc(var(--p)*1%),var(--accent-soft) 0);position:relative}
+.chring::before{content:"";position:absolute;inset:10px;border-radius:50%;background:var(--glass-hi)}
+.chring b,.chring small{position:relative}.chring b{font-size:30px;line-height:1}.chring small{font-size:12px;color:var(--ink-3)}
+.chstats{display:grid;gap:6px}.chstats b{font-size:18px}
+.weeks{display:flex;gap:6px}.weeks i{width:22px;height:8px;border-radius:4px;background:var(--stroke)}.weeks i.on{background:#34C759}
+.badges{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px}
+.badge{display:grid;gap:2px;justify-items:start;padding:14px;border-radius:var(--r-m);background:var(--glass-hi);border:1px solid var(--stroke);opacity:.55}
+.badge.got{opacity:1;border-color:color-mix(in srgb,var(--accent) 40%,transparent);box-shadow:0 6px 18px color-mix(in srgb,var(--accent) 18%,transparent)}
+.badge .bi{width:40px;height:40px;border-radius:12px;display:grid;place-items:center;background:var(--accent-soft);color:var(--accent);margin-bottom:6px}
+.badge .bi svg{width:24px;height:24px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.badge.got .bi{background:var(--accent);color:var(--on-accent)}
+.teamrace{display:grid;gap:10px}
+.tr{display:grid;grid-template-columns:22px minmax(0,1.2fr) 2fr auto;gap:10px;align-items:center}
+.tr .rk{font-weight:800;color:var(--ink-3)}.tr .bar{height:10px}.tr .bar i{border-radius:5px}
+.toplist{margin:0;padding-left:1.4em;display:grid;gap:6px}
+.toplist li{display:grid;grid-template-columns:1fr auto auto;gap:10px;align-items:baseline}
+.toplist li.me{font-weight:700;color:var(--accent)}
+@media (prefers-reduced-motion:reduce){.donemark{animation:none}}
+.wxmini.good .pill{background:color-mix(in srgb,#34C759 16%,transparent);color:#1E7E34}
+.wxmini.ok .pill{background:color-mix(in srgb,#FF9F0A 16%,transparent);color:#A15C00}
+.wxmini.poor .pill{background:color-mix(in srgb,var(--race) 14%,transparent);color:var(--race)}
