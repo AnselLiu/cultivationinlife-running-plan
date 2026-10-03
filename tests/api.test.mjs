@@ -179,3 +179,24 @@ test('Google 登入：導向 Google 授權頁、只要 openid profile、綁定�
   assert.equal((await call(null, '/me')).json.googleLogin, true);
   assert.equal((await fetch(`${BASE}/api/line/start`, { redirect: 'manual' })).status, 404, 'LINE 登入已移除');
 });
+
+test('倒數：可以選自己的賽事、協會預設或不顯示；常用賽事清單只有幹部能改', async () => {
+  assert.equal((await call('t_runner', '/settings/race-presets', { method: 'POST', body: { presets: [] } })).status, 403);
+  const p = await call('t_chair', '/settings/race-presets', { method: 'POST', body: { presets: [{ name: '測試馬', date: plus(30), dist: '全馬' }, { name: '沒日期' }] } });
+  assert.equal(p.json.presets.length, 1, '沒日期的要濾掉');
+  assert.equal((await call('t_runner', '/races')).json.presets.length, 1);
+  await call('t_runner', '/me/countdown', { method: 'POST', body: { mode: 'off' } });
+  assert.equal((await call('t_runner', '/me')).json.race, null);
+  await call('t_runner', '/me/countdown', { method: 'POST', body: { mode: 'club' } });
+  assert.equal((await call('t_runner', '/me')).json.race.mine, false);
+  await call('t_runner', '/races', { method: 'POST', body: { name: '我的比賽', date: plus(10), is_primary: true } });
+  await call('t_runner', '/me/countdown', { method: 'POST', body: { mode: 'mine' } });
+  assert.equal((await call('t_runner', '/me')).json.race.name, '我的比賽');
+});
+
+test('GPS 跑步記錄可以存成訓練紀錄（來源 gps）', async () => {
+  const r = await call('t_runner', '/logs', { method: 'POST', body: { date: today, status: 'extra', km: 5.2, seconds: 1800, source: 'gps' } });
+  assert.equal(r.status, 200);
+  const l = (await call('t_runner', `/logs?from=${today}&to=${today}`)).json.logs.find((x) => x.id === r.json.id);
+  assert.equal(l.source, 'gps');
+});

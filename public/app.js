@@ -3,6 +3,7 @@ import * as P from './plan.js';
 import * as Party from './party.js';
 import { qrSVG, canScan, scan } from './qr.js';
 import * as S from './studio.js';
+import * as Run from './run.js';
 
 // 對外公開的乾淨網址（Google 同意畫面等會連到這裡）：/privacy → #/privacy
 if (location.pathname === '/privacy' && !location.hash) history.replaceState(null, '', '/#/privacy');
@@ -269,14 +270,59 @@ function applyFeatures() {
 
 // 倒數：自己的主要賽事 → 最近的自己的賽事 → 協會預設
 function paintCountdown() {
-  const r = cfg.race;
-  if (!r?.date) { $('#countdown').innerHTML = ''; return; }
+  const r = cfg.race, el = $('#countdown');
+  el.hidden = !me;
+  if (!r?.date) { el.innerHTML = me ? '<small>設定倒數</small>' : ''; el.title = '選擇要倒數的比賽'; return; }
   const t = new Date(`${r.date}T00:00:00`), now = new Date(); now.setHours(0, 0, 0, 0);
   const days = Math.round((t - now) / 864e5);
-  const short = r.name.replace(/^20\d\d\s*/, '').replace('馬拉松', '馬').slice(0, 6);
+  const short = r.name.replace(/^20\d\d\s*/, '').replace('馬拉松', '馬').slice(0, 7);
   $('#countdown').innerHTML = days > 0 ? `<b class="num">${days}</b>天到${esc(short)}` : days === 0 ? `<b>今天</b>${esc(short)}` : '';
-  $('#countdown').title = `${r.name}（${r.date}）`;
+  $('#countdown').title = `${r.name}（${r.date}），點一下可以換`;
 }
+// 點右上角倒數：選要倒數哪一場（自己的賽事、常用賽事清單、協會預設，或不顯示）
+async function countdownPicker() {
+  if (!me) return;
+  $('#cdSheet')?.remove();
+  const d = await api('/races');
+  const days = (date) => Math.round((new Date(`${date}T00:00:00`) - new Date().setHours(0, 0, 0, 0)) / 864e5);
+  const upcoming = d.races.filter((r) => days(r.date) >= 0);
+  const mineIds = new Set(d.races.map((r) => `${r.name}|${r.date}`));
+  const sheet = document.createElement('div');
+  sheet.id = 'cdSheet'; sheet.className = 'sheet'; sheet.setAttribute('role', 'dialog'); sheet.setAttribute('aria-label', '選擇倒數的比賽');
+  sheet.innerHTML = `<div class="sheet-bg" data-close></div><section class="card sheet-card">
+    <div class="row spread"><h3>倒數哪一場比賽</h3><button class="btn ghost sm" data-close>完成</button></div>
+    <div class="cdlist">
+      ${upcoming.map((r) => `<button class="cdopt ${d.mode === 'mine' && r.is_primary ? 'on' : ''}" data-race="${r.id}"><span><b>${esc(r.name)}</b><span class="tiny">${esc(r.date)}${r.dist ? `・${esc(r.dist)}` : ''}${r.goal ? `・目標 ${esc(r.goal)}` : ''}</span></span><span class="num">${days(r.date)} 天</span></button>`).join('')}
+      ${d.club ? `<button class="cdopt ${d.mode === 'club' ? 'on' : ''}" data-mode="club"><span><b>${esc(d.club.name)}</b><span class="tiny">協會預設・${esc(d.club.date)}</span></span><span class="num">${days(d.club.date)} 天</span></button>` : ''}
+      <button class="cdopt ${d.mode === 'off' ? 'on' : ''}" data-mode="off"><span><b>不顯示倒數</b></span></button>
+    </div>
+    ${d.presets.filter((p) => !mineIds.has(`${p.name}|${p.date}`)).length ? `<h3 style="margin-top:6px">常用賽事</h3><div class="cdlist">${d.presets.filter((p) => !mineIds.has(`${p.name}|${p.date}`)).map((p, i) => `<button class="cdopt" data-preset="${i}"><span><b>${esc(p.name)}</b><span class="tiny">${esc(p.date)}${p.dist ? `・${esc(p.dist)}` : ''}</span></span><span class="tiny">加入並倒數</span></button>`).join('')}</div>` : ''}
+    <details><summary class="tiny" style="cursor:pointer">自己新增一場</summary>
+      <form id="cdAdd" class="filters" style="margin-top:8px">
+        <input name="name" maxlength="30" placeholder="比賽名稱，例如 2027 東京馬拉松" required aria-label="比賽名稱">
+        <div class="grid2"><input type="date" name="date" required aria-label="比賽日期"><input name="goal" maxlength="10" placeholder="目標成績（選填）" aria-label="目標成績"></div>
+        <button class="btn sm">加入並倒數</button></form></details>
+  </section>`;
+  document.body.append(sheet);
+  const presets = d.presets.filter((p) => !mineIds.has(`${p.name}|${p.date}`));
+  const done = async (msg) => { const r = await api('/me'); cfg = r; me = r.member; paintCountdown(); toast(msg); sheet.remove(); };
+  sheet.addEventListener('click', async (e) => {
+    const t = e.target.closest('[data-close],[data-race],[data-mode],[data-preset]'); if (!t) return;
+    try {
+      if (t.dataset.close != null) { sheet.remove(); return; }
+      if (t.dataset.race) { await api(`/races/${t.dataset.race}/primary`, { method: 'POST' }); await api('/me/countdown', { method: 'POST', body: { mode: 'mine' } }); return done('已換成這場比賽'); }
+      if (t.dataset.mode) { await api('/me/countdown', { method: 'POST', body: { mode: t.dataset.mode } }); return done(t.dataset.mode === 'off' ? '已關閉倒數' : '已換成協會預設'); }
+      if (t.dataset.preset) { const p = presets[Number(t.dataset.preset)]; await api('/races', { method: 'POST', body: { ...p, is_primary: true } }); await api('/me/countdown', { method: 'POST', body: { mode: 'mine' } }); return done(`開始倒數：${p.name}`); }
+    } catch (err) { toast(err.message); }
+  });
+  $('#cdAdd').onsubmit = async (e) => {
+    e.preventDefault(); const f = e.target;
+    try { await api('/races', { method: 'POST', body: { name: f.name.value, date: f.date.value, goal: f.goal.value, is_primary: true } }); await api('/me/countdown', { method: 'POST', body: { mode: 'mine' } }); done(`開始倒數：${f.name.value}`); }
+    catch (err) { toast(err.message); }
+  };
+  addEventListener('keydown', function esc0(e) { if (e.key === 'Escape') { sheet.remove(); removeEventListener('keydown', esc0); } });
+}
+$('#countdown').addEventListener('click', countdownPicker);
 
 // ---------- 隱私權政策（個人資料保護法第 8 條告知事項）----------
 // 協會名稱、聯絡方式、保存期限、政策內容都由後台「系統設定」管理
@@ -309,7 +355,7 @@ function privacyView() {
          系統紀錄：登入時間、裝置型號摘要、IP 位址的單向雜湊值（無法還原）。<br>
          個人賽事：你自己加入的賽事名稱、日期與目標成績（用於倒數）。<br>
          訓練紀錄：你照課表記錄的日期、距離、時間、心率、自覺強度、感覺與備註；預設只有你看得到，你打開分享後，教練與分團幹部只看得到完成率、里程與平均強度，看不到備註。<br>
-         照片：數據照在你的裝置上合成，照片不會上傳到我們的伺服器。<br>
+         照片：拍照分享的照片在你的手機上合成，不會上傳到我們的伺服器。<br>
          <b>我們不蒐集</b>身分證字號、地址、生日；協會入會申請另以協會的 Google 表單辦理。</p>
       <h3>三、利用期間、地區、對象與方式</h3>
       <p>期間：${esc(PRIVACY.retention)}。<br>
@@ -400,7 +446,8 @@ async function todayCard(events) {
     ${day ? (day.kind === 'rest' ? '<h2>今天休息</h2><p class="muted" style="margin:0">好好睡、補充水分，明天再練。</p>'
       : `<h2 class="${day.kind}">${esc(fixText(day.t))}</h2><p class="muted" style="margin:0">${P.KIND_LABEL[day.kind]}${P.paceHint(day.t, me.dist, me.grp) ? `・${P.paceHint(day.t, me.dist, me.grp)}` : ''}</p>`) : ''}
     ${todays.map((e) => `<a class="todayev" href="#/e/${e.id}">${IC.calendar}<span><b>${esc(e.title)}</b><span class="tiny" style="display:block">${e.gather_time ? `${e.gather_time} 集合` : ''}${e.place ? `・${esc(e.place)}` : ''}${e.mine === 'wait' ? '・候補中' : ''}</span></span><span class="tiny">›</span></a>`).join('')}
-    ${day && day.kind !== 'rest' ? (done ? `<a class="btn ghost sm" href="#/log?id=${done.id}">看今天的紀錄</a>` : `<a class="btn block iconbtn" href="#/log?w=${w}&i=${idx}" style="justify-content:center">${IC.check}練完了，記錄一下</a>`) : ''}
+    ${day && day.kind !== 'rest' ? (done ? `<a class="btn ghost sm" href="#/log?id=${done.id}">看今天的紀錄</a>`
+      : `<div class="grid2">${feat('gps') ? `<a class="btn iconbtn" href="#/run" style="justify-content:center">${IC.runner}開始跑步</a>` : ''}<a class="btn ${feat('gps') ? 'ghost ' : ''}iconbtn" href="#/log?w=${w}&i=${idx}" style="justify-content:center${feat('gps') ? '' : ';grid-column:1/-1'}">${IC.check}練完了，記錄</a></div>`) : ''}
   </section>`;
 }
 // 本週在整季的哪裡：階段、週次進度與三堂重點課
@@ -995,7 +1042,7 @@ const AUDIT_NAME = {
   'layout.update': '修改座位圖', 'account.create': '建立帳號', login: '登入', 'join.denied': '邀請碼錯誤', 'bootstrap.chair': '初始理事長',
   'bootstrap.denied': '初始設定被拒', 'privacy.export': '下載個資', 'privacy.delete': '刪除帳號', 'privacy.consent': '同意隱私權政策',
   'settings.org': '修改協會資訊', 'settings.features': '修改功能開關', 'settings.docs': '修改協會文件', 'settings.privacy': '修改隱私權政策',
-  'settings.club_race': '修改預設倒數', 'event.update': '編輯活動', 'event.export': '匯出報名名單',
+  'settings.club_race': '修改預設倒數', 'settings.race_presets': '修改常用賽事清單', 'event.update': '編輯活動', 'event.export': '匯出報名名單',
   'team.create': '新增分團', 'team.update': '修改分團', 'team.delete': '刪除分團', 'team.join': '加入分團', 'team.leave': '退出分團',
   'team.approve': '通過入團', 'team.reject': '婉拒入團', 'team.remove': '移出分團', 'team.role': '變更分團身分', 'team.add': '加進分團', 'team.icon': '更新分團圖示', 'event.invite': '邀請參加活動', 'event.uninvite': '移出受邀名單', 'event.invite_link': '設定邀請連結',
   'event.invite_accept': '用邀請連結加入', 'review.reminder': '每季權限檢視提醒', 'event.payment': '更新繳費狀態', 'event.attend_token': '設定現場報到', 'event.bulk': '整批匯入',
@@ -1113,7 +1160,7 @@ function bindEventsPanel() {
 
 
 // ---------- 系統設定（理事長、行政人員）----------
-const FEATURE_NAME = { studio: '數據照', health: 'Apple 健康匯入', file: 'GPX／TCX 檔匯入', coach: '課表教練', party: '春酒餐敘活動' };
+const FEATURE_NAME = { gps: '跑步記錄（計時＋GPS）', studio: '拍照分享', health: 'Apple 健康匯入', file: 'GPX／TCX 檔匯入', coach: '課表教練', party: '春酒餐敘活動' };
 function settingsPanel() {
   const o = org(), f = cfg.settings?.features || {}, docs = cfg.settings?.docs || [], pv = cfg.settings?.privacy || {};
   return `
@@ -1183,6 +1230,10 @@ function settingsPanel() {
       <label>日期<input type="date" name="date" value="${esc(cfg.race && !cfg.race.mine ? cfg.race.date : '')}"></label>
       <button class="btn ghost sm" style="grid-column:1/-1">儲存預設倒數</button>
     </form>
+    <details id="presetBox"><summary class="tiny" style="cursor:pointer">常用賽事清單（團員點右上角倒數就能直接挑）</summary>
+      <div id="presetRows" class="docedit" style="margin-top:8px"></div>
+      <div class="row" style="gap:8px"><button type="button" class="btn ghost sm" id="presetAdd">${IC.plus}新增一場</button><button type="button" class="btn sm" id="presetSave">儲存清單</button></div>
+    </details>
     <form id="scForm2" class="row" style="gap:8px">
       <input name="url" placeholder="Apple 健康捷徑 iCloud 連結" aria-label="Apple 健康捷徑 iCloud 連結" value="${esc(cfg.shortcut || '')}" style="flex:1;min-width:200px">
       <button class="btn ghost sm">儲存捷徑</button>
@@ -1222,6 +1273,22 @@ function bindSettings() {
     save('privacy', { body: e.target.body.value, bump: true }, '已儲存隱私權政策'); };
   $('#clubRace2').onsubmit = async (e) => { e.preventDefault(); const f = e.target;
     try { await api('/settings/club-race', { method: 'POST', body: { name: f.name.value, date: f.date.value } }); await reload('已更新預設倒數'); } catch (err) { toast(err.message); } };
+  // 常用賽事清單
+  const presetRow = (p = {}) => `<div class="drow"><input data-k="name" placeholder="比賽名稱" maxlength="40" aria-label="比賽名稱" value="${esc(p.name || '')}">
+    <input data-k="date" type="date" aria-label="比賽日期" value="${esc(p.date || '')}"><input data-k="dist" placeholder="全馬／半馬／10K" maxlength="10" aria-label="距離" value="${esc(p.dist || '')}">
+    <button type="button" class="btn danger sm" data-rmpre>移除</button></div>`;
+  const bindPre = () => { for (const b of document.querySelectorAll('[data-rmpre]')) b.onclick = () => b.closest('.drow').remove(); };
+  $('#presetBox').addEventListener('toggle', async (e) => {
+    if (!e.target.open || $('#presetRows').dataset.loaded) return;
+    const r = await api('/races'); $('#presetRows').dataset.loaded = '1';
+    $('#presetRows').innerHTML = r.presets.map(presetRow).join(''); bindPre();
+  });
+  $('#presetAdd').onclick = () => { $('#presetRows').insertAdjacentHTML('beforeend', presetRow()); bindPre(); };
+  $('#presetSave').onclick = async () => {
+    const presets = [...document.querySelectorAll('#presetRows .drow')].map((r) => Object.fromEntries([...r.querySelectorAll('input')].map((i) => [i.dataset.k, i.value.trim()]))).filter((p) => p.name || p.date);
+    if (presets.some((p) => !p.name || !p.date)) return toast('每一場都要有名稱和日期');
+    try { const r = await api('/settings/race-presets', { method: 'POST', body: { presets } }); toast(`已儲存 ${r.presets.length} 場`); } catch (err) { toast(err.message); }
+  };
   $('#scForm2').onsubmit = async (e) => { e.preventDefault();
     try { await api('/settings/shortcut', { method: 'POST', body: { url: e.target.url.value.trim() } }); await reload('已儲存捷徑連結'); } catch (err) { toast(err.message); } };
 }
@@ -1615,13 +1682,19 @@ function confetti() {
 }
 
 
-// ---------- 數據照（手動／Apple 健康／檔案 → 照片合成 → 分享 IG）----------
+// ---------- 拍照分享（手動／Apple 健康／檔案／跑步記錄 → 照片合成 → 分享 IG）----------
 const studio = { stats: null, bg: null, template: 'minimal', size: 'story', source: 'manual', acts: null };
 const TEMPLATES = { minimal: '極簡', route: '路線', bib: '號碼布' };
 function defaultStats() {
   return { title: '週四團練', date: new Date().toISOString().slice(0, 10), distance: 10000, seconds: 3300, elevation: 42, avg_hr: null, route: [] };
 }
 async function studioView() {
+  // 手機上有剛跑完、還沒清掉的跑步記錄：直接帶進來（距離、時間、爬升、路線）
+  if (!studio.stats && Run.session()?.status === 'done') {
+    const r = Run.summary();
+    studio.stats = { title: '今天的跑步', date: r.date, distance: r.distance, seconds: r.seconds, elevation: r.gain, avg_hr: null, route: r.route };
+    if (r.route.length > 1) studio.template = 'route';
+  }
   studio.stats ||= defaultStats();
   const q = new URLSearchParams(location.hash.split('?')[1] || '');
   if (q.get('km')) {
@@ -1648,15 +1721,16 @@ async function studioView() {
   }
   if ((studio.source === 'health' && !feat('health')) || (studio.source === 'file' && !feat('file'))) studio.source = 'manual';
   view.innerHTML = `
-    ${largeTitle('數據照', '把跑步數據疊在照片上，分享到 IG')}
+    ${largeTitle('拍照分享', '把今天的距離、時間和配速放進照片，分享到 IG')}
+    ${feat('gps') ? `<a class="card tight lit" href="#/run"><div class="row spread"><span class="row" style="gap:10px">${IC.runner}<span><b>${Run.active() ? '正在記錄跑步' : '用手機記錄這次跑步'}</b><span class="tiny" style="display:block">計時加上 GPS，跑完直接拍照分享</span></span></span><span class="tiny">›</span></div></a>` : ''}
     <div class="dash studio">
       <section class="card stage-card">
-        <div class="frame ${studio.size}"><canvas id="cv" aria-label="數據照預覽"></canvas></div>
+        <div class="frame ${studio.size}"><canvas id="cv" aria-label="照片預覽"></canvas></div>
         <div class="seg" role="group" aria-label="尺寸">${Object.entries(S.SIZES).map(([k, v]) => `<button data-size="${k}" aria-pressed="${studio.size === k}">${v[2]}</button>`).join('')}</div>
       </section>
       <div style="display:grid;gap:14px">
         <section class="card">
-          <h3>1　跑步數據</h3>
+          <h3>1　跑步成績</h3>
           <div class="seg" role="group" aria-label="資料來源">
             ${[['manual', '手動'], ...(feat('health') ? [['health', 'Apple 健康']] : []), ...(feat('file') ? [['file', '匯入檔案']] : [])].map(([k, v]) => `<button data-src="${k}" aria-pressed="${studio.source === k}">${v}</button>`).join('')}
           </div>
@@ -1677,7 +1751,7 @@ async function studioView() {
         </section>
         <section class="card actions">
           <button class="btn block" id="shareImg">分享圖片</button>
-          <button class="btn ghost block" id="toLog">記錄到課表</button>
+          <button class="btn ghost block" id="toLog">存到訓練紀錄</button>
           <button class="btn ghost block" id="makeReel">產生 Reels 短片（6 秒）</button>
           <p class="tiny center" style="margin:0">分享時選 Instagram，就能發到限時動態、貼文或 Reels。</p>
         </section>
@@ -1694,7 +1768,7 @@ async function studioView() {
   };
   $('#noPhoto')?.addEventListener('click', () => { studio.bg = null; studioView(); });
   $('#arBtn').onclick = () => arCamera();
-  // 把這次的數據帶到訓練紀錄（自動對上那天的課表）
+  // 把這次的成績帶到訓練紀錄（自動對上那天的課表）
   $('#toLog').onclick = () => {
     const x = studio.stats, p = new URLSearchParams({ date: x.date, km: (x.distance / 1000).toFixed(2), sec: String(Math.round(x.seconds || 0)), src: studio.source === 'manual' ? 'manual' : studio.source });
     if (x.avg_hr) p.set('hr', String(x.avg_hr));
@@ -1743,13 +1817,13 @@ async function sourcePanel() {
     };
   } else if (studio.source === 'health') {
     box.innerHTML = `<div class="howto">
-      ${cfg.shortcut ? `<a class="btn block" href="${esc(cfg.shortcut)}" target="_blank" rel="noopener">加入「耕跑團數據照」捷徑</a>` : '<p class="notice" style="margin:0">幹部還沒提供捷徑連結，可以先用「手動」或「匯入檔案」。</p>'}
+      ${cfg.shortcut ? `<a class="btn block" href="${esc(cfg.shortcut)}" target="_blank" rel="noopener">加入「耕跑團記錄」捷徑</a>` : '<p class="notice" style="margin:0">幹部還沒提供捷徑連結，可以先用「手動」或「匯入檔案」。</p>'}
       <ol class="steps">
         <li>第一次執行時，允許捷徑讀取「健康」的體能訓練</li>
-        <li>跑完步，打開捷徑 App 點「耕跑團數據照」，或對 Siri 說「耕跑團數據照」</li>
-        <li>會自動打開這裡，帶入最新一筆跑步的距離與時間；按「記錄到課表」就會存成訓練紀錄</li>
+        <li>跑完步，打開捷徑 App 點「耕跑團記錄」，或對 Siri 說「耕跑團記錄」</li>
+        <li>會自動打開這裡，帶入最新一筆跑步的距離與時間；按「存到訓練紀錄」就會對上當天的課表</li>
       </ol>
-      <p class="tiny" style="margin:0">想跳過數據照、直接記錄訓練：幹部可以另外做一個網址改成 <code>#/log</code> 的捷徑，做法見協會文件的「Apple 健康捷徑製作說明」。</p>
+      <p class="tiny" style="margin:0">想跳過拍照、直接存成訓練紀錄：幹部可以另外做一個網址改成 <code>#/log</code> 的捷徑，做法見協會文件的「Apple 健康捷徑製作說明」。</p>
       <p class="tiny" style="margin:0">資料只在你的 iPhone 和這個頁面之間傳遞，不會經過協會的伺服器。Android 或手錶請改用「匯入檔案」。</p>
       ${allow('event') ? `<details><summary class="tiny" style="cursor:pointer">幹部：設定捷徑連結</summary>
         <form id="scForm" class="row" style="gap:8px;margin-top:8px">
@@ -1860,7 +1934,7 @@ async function planView(n) {
       <div class="lsum">
         <h3>本週訓練紀錄</h3>
         <div class="lstats"><span><b class="num">${doneN}</b>/${planned.length} 完成</span><span><b class="num">${km.toFixed(1)}</b> km</span>${avgRpe ? `<span>RPE <b class="num">${avgRpe.toFixed(1)}</b></span>` : ''}</div>
-        <div class="row" style="gap:8px"><a class="btn ghost sm" href="#/log?extra=1">${IC.plus}自主加練</a><a class="btn ghost sm" href="#/report">報表 ›</a>
+        <div class="row" style="gap:8px">${feat('gps') ? `<a class="btn sm iconbtn" href="#/run">${IC.runner}開始跑步</a>` : ''}<a class="btn ghost sm" href="#/log?extra=1">${IC.plus}自主加練</a><a class="btn ghost sm" href="#/report">報表 ›</a>
           ${allow('plan') || teams().some((t) => teamAllow(t.id, 'roster')) ? '<a class="btn ghost sm" href="#/logs/team">團員訓練 ›</a>' : ''}</div>
         <p class="tiny" style="margin:0">${me.share_logs ? '教練與分團幹部看得到你的完成率與里程（看不到備註）。' : '紀錄只有你自己看得到；想讓教練看到，到「我的 → 隱私與帳號」打開分享。'}</p>
       </div>
@@ -1910,14 +1984,14 @@ async function logView() {
   } else if (week) {
     day = (await P.weekPlan(week, me.dist, me.grp))?.[Number(q.get('i'))] || null;
   }
-  // 從數據照或捷徑帶進來的數據
+  // 從拍照分享、跑步記錄或捷徑帶進來的數據
   const num = (k, max) => { const v = parseFloat(String(q.get(k) || '').replace(',', '.')); return v > 0 && v < max ? v : null; };
   const incoming = q.get('km') ? { km: num('km', 400), seconds: num('sec', 200000) || (num('min', 3000) ? Math.round(num('min', 3000) * 60) : null), hr: num('hr', 230),
-    date: /^\d{4}-\d{2}-\d{2}$/.test(q.get('date') || '') ? q.get('date') : null, source: q.get('src') === 'health' ? 'health' : 'manual' } : null;
+    date: /^\d{4}-\d{2}-\d{2}$/.test(q.get('date') || '') ? q.get('date') : null, source: ['health', 'gps'].includes(q.get('src')) ? q.get('src') : 'manual' } : null;
   const today = ymd(new Date());
   let date = log?.date || incoming?.date || (day ? dayDates(week, day.d).reduce((a, d) => (d <= today ? d : a), dayDates(week, day.d)[0]) : today);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date > today) date = today;
-  // 沒有指定課表日：用日期去找那週同一天的課表（從數據照進來時自動對上）
+  // 沒有指定課表日：用日期去找那週同一天的課表（從拍照分享或跑步記錄進來時自動對上）
   if (!log && !day && !q.get('extra')) {
     const w = P.weekOf(date), plan = await P.weekPlan(w, me.dist, me.grp);
     const hit = plan?.find((d) => d.kind !== 'rest' && dayDates(w, d.d).includes(date));
@@ -1932,7 +2006,7 @@ async function logView() {
     ${largeTitle(log ? '修改紀錄' : extra ? '自主加練' : '記錄訓練', week && label ? `W${week}・${esc(dayLabel(label))}` : '')}
     ${planText ? `<section class="card plancard ${log?.kind || day?.kind || ''}"><span class="tiny">當天課表</span><p style="margin:0;font-weight:600">${esc(fixText(planText))}</p>
       <span class="hint">${P.paceHint(planText, me.dist, me.grp)}</span></section>` : ''}
-    ${incoming ? `<div class="notice">已帶入${incoming.source === 'health' ? ' Apple 健康' : ''}的數據，確認後按儲存。</div>` : ''}
+    ${incoming ? `<div class="notice">已帶入${incoming.source === 'health' ? ' Apple 健康' : incoming.source === 'gps' ? '這次 GPS 跑步' : ''}的數據，確認後按儲存。</div>` : ''}
     <section class="card">
       <form id="lf" class="logform">
         ${statuses.length > 1 ? `<div class="chips status">${statuses.map((k) => `<label class="chip"><input type="radio" name="status" value="${k}" ${v.status === k ? 'checked' : ''}><span>${LOG_ICON[k]} ${LOG_STATUS_NAME[k]}</span></label>`).join('')}</div>`
@@ -1973,7 +2047,11 @@ async function logView() {
       rpe: Number(f.rpe.value), feel: Number(f.querySelector('[name=feel]:checked')?.value) || null, note: f.note.value,
       source: log?.source || incoming?.source || 'manual' };
     if (st !== 'skip' && !body.km && !body.seconds) return toast('填一下距離或時間');
-    try { await api('/logs', { method: 'POST', body }); toast(st === 'skip' ? '已記下，休息也是訓練的一部分' : '已記錄，辛苦了！'); location.hash = `#/plan${week ? `/${week}` : ''}`; }
+    try {
+      await api('/logs', { method: 'POST', body });
+      if (body.source === 'gps' && Run.session()?.status === 'done') Run.discard();   // 已存成紀錄，清掉手機上的這次跑步
+      toast(st === 'skip' ? '已記下，休息也是訓練的一部分' : '已記錄，辛苦了！'); location.hash = `#/plan${week ? `/${week}` : ''}`;
+    }
     catch (err) {
       // 斷線（fetch 本身失敗）：先存在手機，連上網路後自動上傳
       if (!navigator.onLine || err instanceof TypeError) { queueLog(body); toast('目前離線，已先存在手機，連上網路會自動上傳'); location.hash = `#/plan${week ? `/${week}` : ''}`; }
@@ -2139,6 +2217,169 @@ async function logsTeamView(week, team) {
   $('#wnext').onclick = () => logsTeamView(week + 1, team);
   $('#tsel').onchange = (ev) => logsTeamView(week, ev.target.value);
 }
+
+// ---------- 跑步記錄：計時器＋GPS ----------
+const hms = (sec) => { sec = Math.max(0, Math.round(sec)); const h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60), x = sec % 60; return `${h ? `${h}:` : ''}${h ? pad2(m) : m}:${pad2(x)}`; };
+const paceStr = (secPerKm) => (secPerKm && secPerKm < 1800 ? `${Math.floor(secPerKm / 60)}'${pad2(Math.round(secPerKm % 60))}"` : '—');
+const GPS_NAME = { waiting: '正在定位…', good: 'GPS 良好', ok: 'GPS 普通', weak: 'GPS 訊號弱', denied: '沒有定位權限', off: '只計時' };
+let runTick = null;
+// 路線預覽（SVG，不載地圖圖資，路線不離開手機）
+function routeSvg(route) {
+  if (route.length < 2) return '';
+  const lats = route.map((p) => p[0]), lons = route.map((p) => p[1]);
+  const mid = (Math.min(...lats) + Math.max(...lats)) / 2, kx = Math.cos(mid * Math.PI / 180);
+  const minX = Math.min(...lons) * kx, maxX = Math.max(...lons) * kx, minY = Math.min(...lats), maxY = Math.max(...lats);
+  const w = Math.max(maxX - minX, 1e-6), h = Math.max(maxY - minY, 1e-6), sc = Math.min(560 / w, 260 / h);
+  const P = ([la, lo]) => `${(20 + (lo * kx - minX) * sc + (560 - w * sc) / 2).toFixed(1)},${(20 + (maxY - la) * sc + (260 - h * sc) / 2).toFixed(1)}`;
+  return `<svg class="routesvg" viewBox="0 0 600 300" role="img" aria-label="這次跑步的路線"><polyline points="${route.map(P).join(' ')}"/>
+    <circle cx="${P(route[0]).split(',')[0]}" cy="${P(route[0]).split(',')[1]}" r="8" class="st"/><circle cx="${P(route[route.length - 1]).split(',')[0]}" cy="${P(route[route.length - 1]).split(',')[1]}" r="8" class="en"/></svg>`;
+}
+async function runView() {
+  clearInterval(runTick);
+  const x = Run.session();
+  // 結束後的成績頁
+  if (x?.status === 'done') {
+    const r = Run.summary(x);
+    const t = ymd(new Date());
+    const { logs } = await api(`/logs?from=${r.date}&to=${r.date}`).catch(() => ({ logs: [] }));
+    const dayKm = logs.filter((l) => l.status !== 'skip').reduce((n, l) => n + (l.km || 0), 0), daySec = logs.reduce((n, l) => n + (l.seconds || 0), 0);
+    view.innerHTML = `${largeTitle('跑完了', `${r.date === t ? '今天' : dstr(r.date)} ${r.start} 開始`)}
+      <section class="kpis">
+        <div class="card kpi"><span class="tiny">距離</span><b class="num">${(r.distance / 1000).toFixed(2)}<small> km</small></b></div>
+        <div class="card kpi"><span class="tiny">時間</span><b class="num">${hms(r.seconds)}</b></div>
+        <div class="card kpi"><span class="tiny">平均配速</span><b class="num">${paceStr(r.pace)}</b></div>
+        <div class="card kpi"><span class="tiny">爬升</span><b class="num">${r.gain ? `${r.gain}<small> m</small>` : '—'}</b></div>
+      </section>
+      ${!r.gps || r.distance < 50 ? `<section class="card"><h3>距離</h3><p class="tiny" style="margin:0">${r.gps ? 'GPS 沒有記到距離（可能在室內或訊號太弱），' : '這次沒有開 GPS，'}請填實際跑的距離，例如跑步機上的數字或操場圈數。</p>
+        <form id="manDist" class="row" style="gap:8px"><input name="km" inputmode="decimal" placeholder="例如 8.0" aria-label="實際距離（公里）" style="flex:1" value="${x.manualDist ? (x.manualDist / 1000).toFixed(2) : ''}"><span>km</span><button class="btn sm">更新</button></form></section>` : ''}
+      ${r.route.length > 1 ? `<section class="card"><div class="row spread"><h3>路線</h3><span class="tiny">只留在你的手機上</span></div>${routeSvg(r.route)}</section>` : ''}
+      <div class="statgrid">
+        ${r.splits.length ? `<section class="card"><h3>每公里分段</h3><div class="splits">${r.splits.map((sp) => `<div><span>${sp.km} km</span><b class="num">${paceStr(sp.sec)}</b></div>`).join('')}</div></section>` : ''}
+        ${r.laps.length ? `<section class="card"><h3>計圈</h3><div class="splits">${r.laps.map((l) => `<div><span>第 ${l.n} 圈・${l.m} m</span><b class="num">${hms(l.sec)}${l.m >= 100 ? `<small>　${paceStr(l.sec / (l.m / 1000))}</small>` : ''}</b></div>`).join('')}</div></section>` : ''}
+      </div>
+      <section class="card"><div class="row spread"><h3>${r.date === t ? '今天' : dstr(r.date)}累計</h3><span class="tiny">包含這一次</span></div>
+        <div class="lstats"><span><b class="num">${(dayKm + r.distance / 1000).toFixed(1)}</b> km</span><span><b class="num">${hms(daySec + r.seconds)}</b></span><span><b class="num">${logs.filter((l) => l.status !== 'skip').length + 1}</b> 次</span></div></section>
+      <section class="card actions">
+        <a class="btn block iconbtn" style="justify-content:center" href="#/log?${new URLSearchParams({ date: r.date, km: (r.distance / 1000).toFixed(2), sec: String(r.seconds), src: 'gps' })}">${IC.check}存到訓練紀錄</a>
+        ${feat('studio') ? '<button class="btn ghost block" id="toStudio">拍照分享到 IG</button>' : ''}
+        ${r.route.length > 1 ? '<button class="btn ghost block" id="dlGpx">下載 GPX 檔</button>' : ''}
+        <button class="btn danger block" id="runDiscard">刪除這次記錄</button>
+      </section>`;
+    $('#manDist')?.addEventListener('submit', (e) => { e.preventDefault(); Run.setDistance(parseFloat(e.target.km.value) * 1000); runView(); });
+    $('#toStudio')?.addEventListener('click', () => {
+      studio.stats = { title: '今天的跑步', date: r.date, distance: r.distance, seconds: r.seconds, elevation: r.gain, avg_hr: null, route: r.route };
+      studio.source = 'manual'; studio.template = r.route.length > 1 ? 'route' : studio.template; location.hash = '#/studio';
+    });
+    $('#dlGpx')?.addEventListener('click', async () => {
+      const res = await S.shareFile(new Blob([Run.gpx(x)], { type: 'application/gpx+xml' }), `耕跑團-${r.date}.gpx`, '跑步軌跡');
+      if (res === 'downloaded') toast('已下載 GPX');
+    });
+    $('#runDiscard').onclick = () => { if (confirm('刪除這次跑步記錄？還沒存成訓練紀錄的話就不見了。')) { Run.discard(); runView(); } };
+    return;
+  }
+  // 開始前
+  if (!x) {
+    view.innerHTML = `${largeTitle('跑步記錄', '計時加上 GPS，跑完自動算出今天的成績')}
+      <section class="card runstart">
+        <button class="runbtn go" id="runGo" aria-label="開始跑步記錄"><span>開始</span></button>
+        <p class="tiny center" style="margin:0">第一次使用會詢問定位權限。跑步時螢幕會保持亮著；如果鎖上螢幕，iPhone 會暫停定位，解鎖後再接著記錄。</p>
+        <button class="btn ghost block" id="runNoGps">不用 GPS，只計時（跑步機、操場）</button>
+      </section>
+      <section class="card"><h3>小提醒</h3><ol class="steps">
+        <li>到戶外等「GPS 良好」再開始，距離會比較準</li><li>練間歇或在操場跑，可以按「計圈」把每一趟分開記</li>
+        <li>跑完按「結束」，再按「存到訓練紀錄」，系統會自動對上今天的課表</li></ol>
+        <p class="tiny" style="margin:0">路線只留在你的手機上，協會只會收到你存下來的距離和時間。</p></section>`;
+    const goal = await todayGoal();
+    if (goal) $('.runstart').insertAdjacentHTML('afterbegin', `<span class="pill">今天的課表：${esc(goal.text)}</span>`);
+    $('#runGo').onclick = () => { Run.start({ useGps: true, goal }); runView(); };
+    $('#runNoGps').onclick = () => { Run.start({ useGps: false, goal }); runView(); };
+    return;
+  }
+  // 記錄中
+  view.innerHTML = `<section class="card runlive ${x.status}">
+      <div class="row spread"><span class="pill gps ${x.gps}">${GPS_NAME[x.gps] || ''}${x.acc ? `・±${x.acc} m` : ''}</span><span class="tiny" id="rState">${x.status === 'paused' ? (x.auto ? '停下來了，自動暫停' : '已暫停') : '記錄中'}</span></div>
+      <div class="bigtime num" id="rTime">${hms(Run.elapsed() / 1000)}</div>
+      <div class="runstats">
+        <div><span class="tiny">距離</span><b class="num" id="rDist">${(x.dist / 1000).toFixed(2)}</b><span class="tiny">km</span></div>
+        <div><span class="tiny">目前配速</span><b class="num" id="rPace">—</b><span class="tiny">/km</span></div>
+        <div><span class="tiny">平均配速</span><b class="num" id="rAvg">—</b><span class="tiny">/km</span></div>
+      </div>
+      <div class="runbtns">
+        ${x.status === 'running'
+          ? '<button class="runbtn lap" id="rLap">計圈</button><button class="runbtn pause" id="rPause">暫停</button>'
+          : '<button class="runbtn go" id="rResume">繼續</button><button class="runbtn stop" id="rStop">結束</button>'}
+      </div>
+      ${x.goal ? `<div class="goalbar"><span class="tiny">今天的課表：${esc(x.goal.text)}</span><span class="bar big"><i id="rGoal" style="width:0%"></i></span></div>` : ''}
+      <div id="rLaps" class="splits"></div>
+    </section>
+    <div id="askDone"></div>`;
+  const paint = () => {
+    const y = Run.session(); if (!y || location.hash.split('?')[0] !== '#/run') { clearInterval(runTick); return; }
+    const sec = Run.elapsed() / 1000, d = y.dist;
+    $('#rTime').textContent = hms(sec);
+    $('#rDist').textContent = (d / 1000).toFixed(2);
+    $('#rPace').textContent = paceStr(Run.currentPace());
+    $('#rAvg').textContent = d > 50 ? paceStr(sec / (d / 1000)) : '—';
+    const g = $('.pill.gps'); if (g) { g.className = `pill gps ${y.gps}`; g.textContent = `${GPS_NAME[y.gps] || ''}${y.acc ? `・±${y.acc} m` : ''}`; }
+    $('#rLaps').innerHTML = y.laps.map((l, i) => `<div><span>第 ${i + 1} 圈</span><b class="num">${hms((l.at - (i ? y.laps[i - 1].at : 0)) / 1000)}</b></div>`).reverse().join('');
+    if (y.goal && $('#rGoal')) $('#rGoal').style.width = `${Math.min(100, y.goal.km ? d / (y.goal.km * 10) : sec / (y.goal.min * 0.6))}%`;
+    // 自動暫停或自動繼續時，按鈕要跟著換
+    if ((y.status === 'paused') !== !!$('#rResume')) { runView(); return; }
+    if ($('#rState')) $('#rState').textContent = y.status === 'paused' ? (y.auto ? '停下來了，自動暫停' : '已暫停') : '記錄中';
+  };
+  paint();
+  runTick = setInterval(paint, 1000);
+  showAsk();
+  $('#rLap')?.addEventListener('click', () => { Run.lap(); navigator.vibrate?.(60); paint(); });
+  $('#rPause')?.addEventListener('click', () => { Run.pause(); runView(); });
+  $('#rResume')?.addEventListener('click', () => { Run.resume(); runView(); });
+  $('#rStop')?.addEventListener('click', () => { Run.finish(); runView(); });
+}
+// 問「跑完了嗎？」：停太久或課表目標到了；畫面在背景時也用通知提醒
+function askFinish(kind) {
+  const y = Run.session(); if (!y) return;
+  const msg = kind === 'goal' ? `今天的課表（${y.goal.text}）完成了，要結束這次記錄嗎？` : '已經停下來 3 分鐘了，跑完了嗎？';
+  navigator.vibrate?.([200, 100, 200]);
+  if (document.visibilityState === 'hidden' && window.Notification?.permission === 'granted')
+    navigator.serviceWorker?.ready.then((reg) => reg.showNotification('跑完了嗎？', { body: msg, tag: 'run-ask', data: { url: '/#/run' }, icon: '/icons/icon-192.png' })).catch(() => {});
+  pendingAsk = { kind, msg };
+  if (location.hash.split('?')[0] !== '#/run') location.hash = '#/run'; else showAsk();
+}
+let pendingAsk = null;
+function showAsk() {
+  const box = $('#askDone'); if (!box || !pendingAsk) return;
+  const { kind, msg } = pendingAsk;
+  box.innerHTML = `<section class="card askcard" role="alertdialog" aria-label="跑完了嗎"><b>${esc(msg)}</b>
+    <div class="grid2"><button class="btn" id="askEnd">結束，看成績</button><button class="btn ghost" id="askGo">還沒，繼續</button></div></section>`;
+  box.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  $('#askEnd').onclick = () => { pendingAsk = null; Run.finish(); runView(); };
+  $('#askGo').onclick = () => { pendingAsk = null; Run.dismissAsk(); if (Run.session()?.status === 'paused' && kind === 'finish') Run.resume(); runView(); };
+}
+// 每秒檢查自動暫停與提醒（在其他頁面時也會檢查）
+setInterval(() => { const k = Run.check(); if (k) askFinish(k); }, 1000);
+// 今天課表的目標：「11K jog」取距離、「60' easyjog」取分鐘，間歇課不設目標
+async function todayGoal() {
+  const t = ymd(new Date()), w = P.currentWeek();
+  const day = ((await P.weekPlan(w, me.dist, me.grp)) || []).find((d) => d.kind !== 'rest' && dayDates(w, d.d).includes(t));
+  if (!day || day.kind === 'quality') return null;
+  const km = day.t.match(/(\d+(?:\.\d+)?)\s*(?:[~～-]\s*\d+(?:\.\d+)?)?\s*K(?![a-z])/i), min = day.t.match(/^(\d{2,3})\s*['’]/);
+  if (km) return { km: Number(km[1]), text: `${km[1]} 公里` };
+  if (min) return { min: Number(min[1]), text: `${min[1]} 分鐘` };
+  return null;
+}
+// 在別的頁面時，畫面下方顯示「記錄中」，點了回到跑步記錄
+function runBar() {
+  let bar = document.getElementById('runbar');
+  const onRun = location.hash.split('?')[0] === '#/run';
+  if (!Run.active() || onRun) { bar?.remove(); return; }
+  if (!bar) {
+    bar = document.createElement('a'); bar.id = 'runbar'; bar.className = 'runbar'; bar.href = '#/run';
+    document.body.append(bar);
+  }
+  const y = Run.session();
+  bar.innerHTML = `<i class="${y.status}"></i><span>${y.status === 'paused' ? '已暫停' : '記錄中'}</span><b class="num">${hms(Run.elapsed() / 1000)}</b><b class="num">${(y.dist / 1000).toFixed(2)} km</b>`;
+}
+setInterval(runBar, 1000);
 
 // ---------- 課表教練（原本的 GitHub Pages 頁面）----------
 function coachView() {
@@ -2707,7 +2948,9 @@ async function meView() {
   });
   const refreshCfg = async () => { const r = await api('/me'); me = r.member; cfg = r; paintCountdown(); };
   const loadRaces = async () => {
+    if (!$('#raceList')) return;   // 已經換到別的頁面
     const { races } = await api('/races');
+    if (!$('#raceList')) return;
     $('#raceList').innerHTML = races.map((r) => {
       const d = Math.round((new Date(`${r.date}T00:00:00`) - new Date().setHours(0, 0, 0, 0)) / 864e5);
       return `<div class="r"><span class="av num" style="font-size:11px">${d >= 0 ? d : IC.check}</span>
@@ -2822,7 +3065,15 @@ async function togglePush(sub) {
 const urlB64 = (s) => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((s.length + 3) % 4)), (c) => c.charCodeAt(0));
 
 // ---------- 路由 ----------
+// 畫面一次只畫一個：還在載入時又換頁（例如剛登入就點「我的」），等這次畫完再畫最新的網址，
+// 避免比較慢的舊畫面最後才完成、把新畫面蓋掉
+let rendering = null, renderAgain = false;
 async function render() {
+  if (rendering) { renderAgain = true; return rendering; }
+  rendering = (async () => { do { renderAgain = false; await renderOnce(); } while (renderAgain); })();
+  try { await rendering; } finally { rendering = null; }
+}
+async function renderOnce() {
   if (stopScan) { stopScan(); stopScan = null; }
   const raw = location.hash.replace(/^#/, '') || '/';
   const hash = raw.split('?')[0];
@@ -2869,6 +3120,7 @@ async function route(hash) {
     if (hash === '/teams') return await teamsView();
     if (hash === '/tickets') return await ticketsView();
     if (hash === '/log') return await logView();
+    if (hash === '/run') return feat('gps') ? await runView() : (view.innerHTML = `<div class="card">${emptyState('runner', '這個功能目前沒有開放')}</div>`);
     if (hash === '/logs/team') return await logsTeamView();
     if (hash === '/report') return await reportView();
     const lm = hash.match(/^\/logs\/m\/([\w-]+)$/);

@@ -5,7 +5,7 @@
   X-Frame-Options: DENY
   Referrer-Policy: strict-origin-when-cross-origin
   Strict-Transport-Security: max-age=31536000; includeSubDomains
-  Permissions-Policy: camera=(self), geolocation=(), microphone=(), payment=(), usb=(), interest-cohort=()
+  Permissions-Policy: camera=(self), geolocation=(self), screen-wake-lock=(self), microphone=(), payment=(), usb=(), interest-cohort=()
   Cross-Origin-Opener-Policy: same-origin
 
 /sw.js

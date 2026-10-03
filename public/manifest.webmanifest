@@ -42,6 +42,17 @@
   ],
   "shortcuts": [
     {
+      "name": "開始跑步",
+      "short_name": "跑步",
+      "url": "/#/run",
+      "icons": [
+        {
+          "src": "/icons/icon-192.png",
+          "sizes": "192x192"
+        }
+      ]
+    },
+    {
       "name": "記錄訓練",
       "short_name": "記錄",
       "url": "/#/plan",
@@ -64,18 +75,8 @@
       ]
     },
     {
-      "name": "數據照",
+      "name": "拍照分享",
       "url": "/#/studio",
-      "icons": [
-        {
-          "src": "/icons/icon-192.png",
-          "sizes": "192x192"
-        }
-      ]
-    },
-    {
-      "name": "通知",
-      "url": "/#/notifications",
       "icons": [
         {
           "src": "/icons/icon-192.png",

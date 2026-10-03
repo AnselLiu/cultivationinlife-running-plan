@@ -410,17 +410,19 @@ async function cancelSignup(env, ev, member) {
   return json({ ok: true });
 }
 
-// 倒數目標：自己設定的主要賽事 → 最近一場自己的賽事 → 協會預設
+// 倒數目標：看本人的設定（off 不顯示、club 協會預設）；預設是自己的主要賽事 → 最近一場自己的賽事 → 協會預設
 async function countdownTarget(env, member) {
-  if (member) {
+  if (member?.countdown_mode === 'off') return null;
+  if (member && member.countdown_mode !== 'club') {
     const r = await env.DB.prepare(
-      `SELECT name, date, dist, goal FROM races WHERE member_id = ? AND date >= date('now')
+      `SELECT name, date, dist, goal FROM races WHERE member_id = ? AND date >= date('now', '+8 hours')
        ORDER BY is_primary DESC, date ASC LIMIT 1`).bind(member.id).first();
     if (r) return { ...r, mine: true };
   }
   const c = await env.DB.prepare("SELECT value FROM settings WHERE key = 'club_race'").first();
   try { return c ? { ...JSON.parse(c.value), mine: false } : null; } catch { return null; }
 }
+const racePresets = async (env) => { try { return JSON.parse((await env.DB.prepare("SELECT value FROM settings WHERE key = 'race_presets'").first())?.value || '[]'); } catch { return []; } };
 
 // ---- 路由 ----
 async function api(req, env, path, method) {
@@ -1070,7 +1072,9 @@ async function api(req, env, path, method) {
   if (path === '/api/races' && method === 'GET') {
     const g = need(); if (g) return g;
     const rows = (await env.DB.prepare('SELECT id, name, date, dist, goal, is_primary FROM races WHERE member_id = ? ORDER BY date').bind(member.id).all()).results;
-    return json({ races: rows });
+    const club = await env.DB.prepare("SELECT value FROM settings WHERE key = 'club_race'").first();
+    return json({ races: rows, presets: (await racePresets(env)).filter((p) => p.date >= today()), mode: member.countdown_mode || 'mine',
+      club: (() => { try { return JSON.parse(club?.value || 'null'); } catch { return null; } })() });
   }
   if (path === '/api/races' && method === 'POST') {
     const g = need(); if (g) return g;
@@ -1098,6 +1102,23 @@ async function api(req, env, path, method) {
       ]);
       return json({ ok: true });
     }
+  }
+  // 倒數要顯示哪一種：mine 自己的主要賽事｜club 協會預設｜off 不顯示
+  if (path === '/api/me/countdown' && method === 'POST') {
+    const g = need(); if (g) return g;
+    const want = (await body()).mode, mode = ['mine', 'club', 'off'].includes(want) ? want : 'mine';
+    await env.DB.prepare('UPDATE members SET countdown_mode = ? WHERE id = ?').bind(mode, member.id).run();
+    return json({ ok: true, race: await countdownTarget(env, { ...member, countdown_mode: mode }) });
+  }
+  // 常用賽事清單（後台維護）
+  if (path === '/api/settings/race-presets' && method === 'POST') {
+    const g = need(); if (g) return g;
+    if (!can(member, 'settings') && !can(member, 'event')) return fail(403, '只有幹部可以維護賽事清單');
+    const raw = (await body()).presets, list = Array.isArray(raw) ? raw : [];
+    const clean = list.slice(0, 40).map((p) => ({ name: str(p.name, 40), date: str(p.date, 10), dist: str(p.dist, 10) })).filter((p) => p.name && isDate(p.date));
+    await env.DB.prepare("INSERT INTO settings (key, value) VALUES ('race_presets', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(JSON.stringify(clean)).run();
+    await audit(env, req, member, 'settings.race_presets', 'settings', 'race_presets', `${clean.length} 場`);
+    return json({ ok: true, presets: clean });
   }
   // 協會預設倒數（建立活動權限即可修改）
   if (path === '/api/settings/club-race' && method === 'POST') {
@@ -1128,7 +1149,7 @@ async function api(req, env, path, method) {
       if (b.parent_url && !value.parent_url) return fail(400, '企業網站要是 https:// 開頭的網址');
     } else if (key === 'features') {
       value = {};
-      for (const f of ['studio', 'health', 'file', 'coach', 'party']) value[f] = b[f] !== false;
+      for (const f of ['gps', 'studio', 'health', 'file', 'coach', 'party']) value[f] = b[f] !== false;
     } else if (key === 'docs') {
       const list = Array.isArray(b.docs) ? b.docs.slice(0, 30) : [];
       value = list.map((d) => ({ title: str(d.title, 40), url: httpsUrl(d.url), note: str(d.note, 80) })).filter((d) => d.title && d.url);
@@ -1165,7 +1186,7 @@ async function api(req, env, path, method) {
     return from > to || Date.parse(to) - Date.parse(from) > maxDays * 864e5 ? null : [from, to];
   };
   const LOG_STATUS = ['done', 'partial', 'skip', 'extra'];
-  const LOG_SOURCES = ['manual', 'health', 'file'];
+  const LOG_SOURCES = ['manual', 'health', 'file', 'gps'];
   const LOG_KINDS = ['easy', 'quality', 'long', 'strength', 'race', 'rest'];
   if (path === '/api/logs' && method === 'GET') {
     const g = need(); if (g) return g;
