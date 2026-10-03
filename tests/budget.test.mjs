@@ -258,3 +258,94 @@ test('大量輸入：排桌（同一個代碼以最後一筆為準）與一次�
 test('大量輸入：清掉測試資料', async () => {
   assert.equal((await call(null, '/dev/seed-bulk?clear=1')).json.ok, true);
 });
+
+// ---- 推播佇列（PUSH_MOCK=1：不連外，記下 endpoint 與 payload id）----
+const mock = async (q = '') => (await call(null, `/dev/push-mock?${q}`)).json;
+async function drainAllNow() {
+  let r;
+  for (let i = 0; i < 100; i++) {
+    r = (await call(null, '/dev/drain')).json;
+    assert.ok(r._budget.root.sub <= 50, `送推播用了 ${r._budget.root.sub} 個子請求`);
+    if (!r.queue) return r;
+  }
+  throw new Error(`佇列送不完：還有 ${r.queue}`);
+}
+const bEndpoints = (list) => new Set(list.filter((x) => x.endpoint.includes('/b_')).map((x) => x.endpoint));
+
+test('推播佇列：300 人、400 台裝置的大量廣播，每次執行都在 50 以內，每台各一則、id 對得到通知列', async () => {
+  await call(null, '/dev/seed-bulk?members=300&subs=400');
+  await drainAllNow();
+  await mock('clear=1');
+  const r = await call('t_chair', '/events', { method: 'POST', body: evBody({ title: '全體廣播測試', notify: true }) });
+  ok50(r, '建立活動並通知全體');
+  assert.ok(r.json.notified >= 300);
+  assert.equal((await call(null, '/dev/notes?like=新活動：全體廣播測試')).json.rows, r.json.notified, '通知中心每人一列');
+  await drainAllNow();
+  const m = await mock('verify=1');
+  assert.equal(bEndpoints(m.list).size, 400, '400 台裝置都收到');
+  assert.equal(m.list.filter((x) => x.endpoint.includes('/b_')).length, 400, '每台只送一次');
+  assert.equal(m.bad, 0, 'payload 的 id 都是那台裝置主人的通知列');
+  assert.equal(m.queue, 0);
+  assert.deepEqual(await violations(), []);
+});
+
+test('推播佇列：關掉分類的人仍寫進通知中心但不推播；活動異動（不能關）照推；410 刪掉訂閱與佇列', async () => {
+  await call(null, '/dev/seed-bulk?mute=b_0001&cats=event,change');
+  await mock('clear=1');
+  const id = ok50(await call('t_chair', '/events', { method: 'POST', body: evBody({ title: '關閉分類測試', notify: true }) }), '建立活動').id;
+  await drainAllNow();
+  let m = await mock();
+  const mine = ['https://fcm.googleapis.com/fcm/send/b_00001', 'https://fcm.googleapis.com/fcm/send/b_00301'];
+  assert.ok(!m.list.some((x) => mine.includes(x.endpoint)), '關掉「活動與邀請」的人不推播');
+  assert.equal(bEndpoints(m.list).size, 398);
+  assert.equal((await call(null, '/dev/notes?like=新活動：關閉分類測試')).json.rows >= 300, true, '通知中心照寫');
+  // 活動異動（locked）：關掉也照推
+  await rounds('t_chair', `/events/${id}/bulk`, { action: 'signup', names: '大量測試0001' });
+  await mock('clear=1');
+  ok50(await call('t_chair', `/events/${id}/notice`, { method: 'POST', body: { type: 'other', message: '集合點改到停車場' } }), '活動異動');
+  await drainAllNow();
+  m = await mock();
+  assert.deepEqual([...bEndpoints(m.list)].sort(), mine, '活動異動不能關');
+  // 410：訂閱刪掉，佇列裡同一個 endpoint 的列也一起刪掉
+  const subs0 = m.subs;
+  await mock(`clear=1&gone=${encodeURIComponent('https://fcm.googleapis.com/fcm/send/b_00002')}`);
+  ok50(await call('t_chair', '/events', { method: 'POST', body: evBody({ title: '失效訂閱測試', notify: true }) }), '建立活動');
+  await drainAllNow();
+  m = await mock();
+  assert.equal(m.subs, subs0 - 1, '回 410 的訂閱刪掉');
+  assert.equal(m.queue, 0);
+  assert.deepEqual(await violations(), []);
+});
+
+test('推播佇列：20:00 起 30 場明天的活動（每場 10 人），每次執行 50 以內，前一晚提醒每人只送一次', async () => {
+  await call(null, '/dev/seed-bulk?events=30&per=10&date=2032-06-11');
+  for (const h of ['12', '13', '14', '15']) {
+    const r = await cron(`at=2032-06-10T${h}:00:00Z`);
+    within(r, `台北 ${Number(h) + 8}:00`);
+  }
+  const n = (await call(null, '/dev/notes?like=明天：大量活動&ev=bev20320611')).json;
+  assert.equal(n.events, 30);
+  assert.equal(n.marked, 30, '30 場都標記了');
+  assert.equal(n.rows, 300, '300 人各一則');
+  assert.equal(n.members, 300);
+  assert.equal((await cron('at=2032-06-10T15:30:00Z')).events, 0, '不再重送');
+  assert.equal((await call(null, '/dev/notes?like=明天：大量活動')).json.rows, 300);
+  await drainAllNow();
+  assert.deepEqual(await violations(), []);
+});
+
+test('推播佇列：每月 1 號 300 人的月總結一次做完', async () => {
+  await call(null, '/dev/seed-bulk?members=300&logs=2032-04');
+  const r = await cron('at=2032-05-01T01:00:00Z&skip=backup,retention');
+  within(r, '月總結');
+  assert.ok(r.monthSummary >= 300, JSON.stringify(r.monthSummary));
+  assert.ok(r._budget.jobs.monthSummary.sub <= 20, `月總結用了 ${r._budget.jobs.monthSummary.sub} 個子請求`);
+  assert.equal((await cron('at=2032-05-01T02:00:00Z&skip=backup,retention')).monthSummary, 0, '只做一次');
+  await drainAllNow();
+  assert.deepEqual(await violations(), []);
+});
+
+test('推播佇列：清掉測試資料', async () => {
+  assert.equal((await call(null, '/dev/seed-bulk?clear=1')).json.ok, true);
+  assert.equal((await mock('clear=1')).queue, 0);
+});

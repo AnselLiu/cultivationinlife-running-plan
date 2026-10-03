@@ -6,7 +6,7 @@
 //   A.8.15 日誌：特權操作寫入 audit_log，監事可查
 //   A.5.34 個資：最小蒐集、電話遮罩、IP 只存雜湊、本人可匯出與刪除
 // 工作階段權杖放 HttpOnly cookie，D1 只存 SHA-256；寫入類 API 只接受同源 JSON（擋 CSRF）。
-import { subscribe, unsubscribe, push, validEndpoint } from './push.js';
+import { subscribe, unsubscribe, pushTest, drainPush, vapidOn, validEndpoint, pushMock } from './push.js';
 import * as WebAuthn from './webauthn.js';
 import { quote } from '../public/pricing.js';
 import { hourOf } from '../public/wxrule.js';
@@ -77,10 +77,13 @@ async function currentMember(req, env) {
   const th = await sha(token);
   const row = await env.DB.prepare(
     `SELECT m.*, s.last_seen_at AS s_seen, s.role_at_issue AS s_role, s.created_at AS s_created, s.mfa_at AS s_mfa, s.token_hash AS s_th,
-       (SELECT json_group_array(json_object('team_id', tm.team_id, 'role', tm.role, 'status', tm.status, 'title', tm.title)) FROM team_members tm WHERE tm.member_id = m.id) AS s_teams
+       (SELECT json_group_array(json_object('team_id', tm.team_id, 'role', tm.role, 'status', tm.status, 'title', tm.title)) FROM team_members tm WHERE tm.member_id = m.id) AS s_teams,
+       (SELECT 1 FROM push_queue WHERE lease_until IS NULL OR lease_until < datetime('now') LIMIT 1) AS s_pq
      FROM sessions s JOIN members m ON m.id = s.member_id
      WHERE s.token_hash = ? AND s.expires_at > datetime('now')`).bind(th).first();
   if (!row) return null;
+  // 推播佇列有待送的：這次請求結束後用剩下的額度順便送幾台（不多花一句查詢）
+  if (row.s_pq) env.pushKick = true;
   // 分團團長、幹部看得到分團名冊與活動報名資料，工作階段期限比照協會幹部
   const teamOfficer = JSON.parse(row.s_teams || '[]').some((t) => t.status === 'active' && (t.role === 'lead' || t.role === 'officer'));
   row.team_officer = teamOfficer;
@@ -226,34 +229,71 @@ const pub = (m) => ({
 // 分類只在伺服器端決定（public/notif-cats.js）；帳號安全只能經由 securityNotify 寫入，群發無法偽裝
 const SEC = Symbol('security');   // 模組私有：沒有任何請求路徑拿得到
 const REF_RE = /^(e|t|spot|log|join|apply|pay|wx|review|sr):[\w:-]{1,70}$/;   // sr＝報名待審核（signup review）
+// 寫通知：通知中心與推播佇列各一句（每 1000 位收件人），句數跟人數無關（免費方案一次執行只有 50 個子請求）
+//   items：[通知 id, 收件人, 標題, 內文, 網址, ref, 推播內容 JSON]，後 5 欄沒有就用 o 的共同值
+//   推播佇列只排「沒有關掉這一類」的人的裝置（locked 類別或 force 一律排）；opt.also 的語句放在同一個 batch（同一個交易）
+//   有排進佇列就標記 env.wantDrain：這次執行結束前用剩下的額度先送一段，剩下的由之後的請求與每小時排程送完
+const NOTE_SQL = `INSERT INTO notifications (id, member_id, kind, category, ref, title, body, url)
+  SELECT json_extract(j.value, '$[0]'), m.id, ?2, ?3, COALESCE(json_extract(j.value, '$[5]'), ?4), COALESCE(json_extract(j.value, '$[2]'), ?5),
+    COALESCE(json_extract(j.value, '$[3]'), ?6), COALESCE(json_extract(j.value, '$[4]'), ?7)
+  FROM json_each(?1) j JOIN members m ON m.id = json_extract(j.value, '$[1]')`;
+const QUEUE_SQL = `INSERT INTO push_queue (endpoint, notif_id, payload, urgency, expires_at)
+  SELECT s.endpoint, json_extract(j.value, '$[0]'), COALESCE(json_extract(j.value, '$[6]'), ?2), ?3, datetime('now', '+' || ?4 || ' seconds')
+  FROM json_each(?1) j JOIN push_subs s ON s.member_id = json_extract(j.value, '$[1]') JOIN members m ON m.id = s.member_id
+  WHERE ?5 = 1 OR m.notif_mute IS NULL OR instr(',' || m.notif_mute || ',', ?6) = 0`;
+async function writeNotes(env, cat, items, o) {
+  const push = vapidOn(env), stmts = [];
+  for (let i = 0; i < items.length; i += 1000) {
+    const j = JSON.stringify(items.slice(i, i + 1000));
+    stmts.push(env.DB.prepare(NOTE_SQL).bind(j, o.kind, cat, o.ref ?? null, o.title ?? null, o.body ?? null, o.url ?? null));
+    if (push) stmts.push(env.DB.prepare(QUEUE_SQL).bind(j, o.payload ?? null, o.urgency || 'normal', Math.max(60, Math.round(o.ttl || 86400)), o.force ? 1 : 0, `,${cat},`));
+  }
+  const res = await env.DB.batch([...stmts, ...(o.also || [])]);
+  let rows = 0, queued = 0;
+  res.slice(0, stmts.length).forEach((r, k) => { if (push && k % 2) queued += r.meta?.changes || 0; else rows += r.meta?.changes || 0; });
+  if (queued) env.wantDrain = true;
+  return { rows, queued };
+}
+const pushPayload = (cat, def, msg, ref) => JSON.stringify({ cat, ts: Date.now(), title: str(msg.push?.title ?? msg.title, 80), body: str(msg.push?.body ?? msg.body, 160),
+  url: msg.url || '/#/notifications', tag: msg.tag || (ref ? `r-${ref}`.slice(0, 64) : undefined), re: msg.renotify === true || def.locked });
+// 同樣內容給一群人；回傳 { rows, queued }
 async function notify(env, memberIds, cat, msg, opt = {}) {
   if (!isCat(cat)) throw new Error(`notify: unknown category ${cat}`);
   if (cat === 'security' && opt[SEC] !== true) throw new Error('notify: security only via securityNotify');
   const def = CATS[cat], ids = [...new Set(memberIds)].filter(Boolean);
-  if (!ids.length) return;
-  const ref = REF_RE.test(msg.ref || '') ? msg.ref : null, rowIds = new Map(ids.map((id) => [id, rid(8)]));
-  // 一律寫進通知中心（不管有沒有推播）
-  for (let i = 0; i < ids.length; i += 40) await env.DB.batch(ids.slice(i, i + 40).map((id) => env.DB.prepare(
-    'INSERT INTO notifications (id, member_id, kind, category, ref, title, body, url) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-    .bind(rowIds.get(id), id, msg.kind || cat, cat, ref, str(msg.title, 80), str(msg.body, 300), str(msg.url, 200) || null)));
-  // 推播名單：locked 類別或 force 一律推；其他類別去掉關掉這一類的人
-  let pushIds = ids;
-  if (!def.locked && !opt.force) {
-    const muted = new Set();
-    for (let i = 0; i < ids.length; i += 90) {
-      const part = ids.slice(i, i + 90);
-      for (const r of (await env.DB.prepare(`SELECT id FROM members WHERE id IN (${part.map(() => '?').join(',')})
-        AND notif_mute IS NOT NULL AND instr(',' || notif_mute || ',', ?) > 0`).bind(...part, `,${cat},`).all()).results) muted.add(r.id);
-    }
-    pushIds = ids.filter((id) => !muted.has(id));
+  if (!ids.length) { if (opt.also?.length) await env.DB.batch(opt.also); return { rows: 0, queued: 0 }; }
+  const ref = REF_RE.test(msg.ref || '') ? msg.ref : null;
+  return writeNotes(env, cat, ids.map((id) => [rid(8), id]), { kind: msg.kind || cat, ref, title: str(msg.title, 80), body: str(msg.body, 300), url: str(msg.url, 200) || null,
+    payload: pushPayload(cat, def, msg, ref), ttl: msg.ttl ?? def.ttl, urgency: msg.urgency ?? def.urgency, force: def.locked || opt.force, also: opt.also });
+}
+// 每人內容不同（例如每月總結、疲勞提醒、會費到期、收款）：list 每一項 { member_id, title, body, url, ref, tag, push }，同樣 2 句
+async function notifyMany(env, cat, list, opt = {}) {
+  if (!isCat(cat) || cat === 'security') throw new Error(`notifyMany: bad category ${cat}`);
+  const def = CATS[cat];
+  const items = list.filter((x) => x?.member_id).map((x) => {
+    const ref = REF_RE.test(x.ref || '') ? x.ref : null;
+    return [rid(8), x.member_id, str(x.title, 80), str(x.body, 300), str(x.url, 200) || null, ref, pushPayload(cat, def, x, ref)];
+  });
+  if (!items.length) { if (opt.also?.length) await env.DB.batch(opt.also); return { rows: 0, queued: 0 }; }
+  return writeNotes(env, cat, items, { kind: opt.kind || cat, ttl: opt.ttl ?? def.ttl, urgency: opt.urgency ?? def.urgency, force: def.locked || opt.force, also: opt.also });
+}
+// 送出推播佇列的一段；過期或送不出去而被丟掉的寫稽核 push.dropped（取代以前的 push.truncated）
+async function drain(env, opt = {}) {
+  const r = await drainPush(env, opt);
+  if (r.dropped) await audit(env, null, null, 'push.dropped', 'notifications', null, `略過 ${r.dropped} 則（過期或送不出去）`);
+  return r;
+}
+// 一直送到佇列空了或額度用完（每小時排程、/api/dev/drain、self 模式的 Jobs.drainPush）；回傳是否可能還有剩
+async function drainAll(env) {
+  let sent = 0, more = false;
+  for (let i = 0; i < 50; i++) {
+    if (!env.budget.room(6 + 1)) { more = true; env.budget.stop('push'); break; }
+    const r = await drain(env, {});
+    sent += r.sent;
+    if (!r.leased) break;
+    more = true;
   }
-  if (!pushIds.length) return;
-  const payload = { cat, ts: Date.now(),
-    title: str(msg.push?.title ?? msg.title, 80), body: str(msg.push?.body ?? msg.body, 160),
-    url: msg.url || '/#/notifications', tag: msg.tag || (ref ? `r-${ref}`.slice(0, 64) : undefined),
-    re: msg.renotify === true || def.locked };
-  env.defer(push(env, pushIds, payload, { rowIds, ttl: msg.ttl ?? def.ttl, urgency: msg.urgency ?? def.urgency })
-    .then((r) => (r.dropped || r.failed) && audit(env, null, null, 'push.truncated', 'notifications', null, `${cat}｜送出 ${r.sent}｜略過 ${r.dropped} 台裝置｜連線失敗 ${r.failed || 0}`)));
+  return { sent, more };
 }
 const securityNotify = (env, memberIds, msg) => notify(env, memberIds, 'security', msg, { [SEC]: true });
 // 一位幹部處理完，其他收件幹部的同一則待辦一起標為已讀
@@ -2253,12 +2293,10 @@ const api = (async function api(req, env, path, method) {
         .bind(b.paid, str(b.note, 60) || null, ev.id, pj).run();
       await audit(env, req, member, 'event.payment', 'event', ev.id, `${ids.length} 人 → ${b.paid}`);
       if (b.paid !== 'unpaid') await settleTodo(env, ...ids.map((mid) => `pay:${ev.id}:${mid}`));
+      // 每人金額不同：notifyMany 一次寫完（2 句）
       if (ev.notify_signup && (b.paid === 'paid' || b.paid === 'refunded'))
-        for (const r of before.filter((x) => x.paid !== b.paid && x.member_id !== member.id)) {
-          if (!env.budget.room(notifyCost(1))) { env.budget.stop('payments:notify'); break; }   // 額度不夠：收款狀態已更新，通知只送到這裡
-          await notify(env, [r.member_id], 'signup', { kind: 'signup', ref: `e:${ev.id}`, tag: `signup-${ev.id}`, url: `/#/e/${ev.id}`,
-            title: `${b.paid === 'paid' ? '已確認收款' : '已退費'}：${ev.title}`, body: `NT$${r.amount || 0}` });
-        }
+        await notifyMany(env, 'signup', before.filter((x) => x.paid !== b.paid && x.member_id !== member.id).map((r) => ({ member_id: r.member_id, ref: `e:${ev.id}`, tag: `signup-${ev.id}`, url: `/#/e/${ev.id}`,
+          title: `${b.paid === 'paid' ? '已確認收款' : '已退費'}：${ev.title}`, body: `NT$${r.amount || 0}` })), { kind: 'signup' });
       return json({ ok: true });
     }
     // 團購到貨：通知訂購的人來領，每個人一個領取 QR
@@ -3734,7 +3772,7 @@ const api = (async function api(req, env, path, method) {
   if (path === '/api/push/test' && method === 'POST') {
     const g = need(); if (g) return g;
     if (await limited(env, `pushtest:${member.id}`, 10, 3600)) return fail(429, '測試太頻繁，請稍後再試');
-    const { sent } = await push(env, [member.id], { cat: 'test', title: '耕跑團', body: '通知設定完成，新團練和報名提醒都會通知你。', url: '/#/me/notify', ts: Date.now() });
+    const { sent } = await pushTest(env, member.id, { cat: 'test', title: '耕跑團', body: '通知設定完成，新團練和報名提醒都會通知你。', url: '/#/me/notify', ts: Date.now() });
     return sent ? json({ ok: true, sent }) : fail(400, '沒有送出，請確認這台裝置已開啟通知');
   }
 
@@ -3777,8 +3815,8 @@ const failStmt = (env, job, msg) => env.DB.prepare('UPDATE job_runs SET last_err
 const yieldTo = async (env, job, name, result = 'deferred') => { env.budget.stop(name); await yieldStmt(env, job).run(); return { done: false, result }; };
 // 額度夠不夠處理下一項；不夠就記下「因額度停下」
 const fits = (env, n, name) => { if (env.budget.room(n)) return true; env.budget.stop(name); return false; };
-// notify() 一次用掉的子請求（C1 的版本：通知中心每位收件人一句、關閉分類查詢與推播名單每 90 人一句、推播另外佔用剩下的額度）
-const notifyCost = (n) => (n ? n + 2 * Math.ceil(n / 90) + 1 : 0);
+// notify()／notifyMany() 一次用掉的子請求：通知中心與推播佇列各一句（每 1000 人）；推播在執行結束前用剩下的額度送
+const notifyCost = (n) => (n ? 2 * Math.ceil(n / 1000) : 0);
 
 const signedIds = async (env, eid) => (await env.DB.prepare("SELECT member_id FROM signups WHERE event_id = ? AND status = 'in' AND member_id IS NOT NULL").bind(eid).all()).results.map((r) => r.member_id);
 
@@ -3793,9 +3831,9 @@ async function remindEvents(env, now) {
       if (!fits(env, 2, 'events')) return { done: false, result: sent };
       const ids = await signedIds(env, ev.id);
       if (!fits(env, 1 + notifyCost(ids.length), 'events')) return { done: false, result: sent };
-      await env.DB.prepare("UPDATE events SET remind_day_at = datetime('now') WHERE id = ?").bind(ev.id).run();
-      if (!ids.length) continue;
-      await notify(env, ids, 'signup', { kind: 'event', ref: `e:${ev.id}`, title: `明天：${ev.title}`, body: `${ev.gather_time ? `${ev.gather_time} 集合` : '明天'}${ev.place ? `・${ev.place}` : ''}${ev.kind === 'party' ? '・記得帶入場券 QR Code' : ''}`, url: `/#/e/${ev.id}`, tag: `day-${ev.id}` });
+      // 提醒標記和通知在同一個 batch：不會標了沒送、也不會送了沒標（下個整點重送）
+      await notify(env, ids, 'signup', { kind: 'event', ref: `e:${ev.id}`, title: `明天：${ev.title}`, body: `${ev.gather_time ? `${ev.gather_time} 集合` : '明天'}${ev.place ? `・${ev.place}` : ''}${ev.kind === 'party' ? '・記得帶入場券 QR Code' : ''}`, url: `/#/e/${ev.id}`, tag: `day-${ev.id}` },
+        { also: [env.DB.prepare("UPDATE events SET remind_day_at = datetime('now') WHERE id = ?").bind(ev.id)] });
       sent += ids.length;
     }
   }
@@ -3809,11 +3847,9 @@ async function remindEvents(env, now) {
     if (!fits(env, 2, 'events')) return { done: false, result: sent };
     const ids = await signedIds(env, ev.id);
     if (!fits(env, 1 + notifyCost(ids.length), 'events')) return { done: false, result: sent };
-    await env.DB.prepare("UPDATE events SET remind_hour_at = datetime('now') WHERE id = ?").bind(ev.id).run();
-    if (!ids.length) continue;
     // 集合前提醒 1 小時就過期，不會隔天才收到
     await notify(env, ids, 'signup', { kind: 'event', ref: `e:${ev.id}`, title: `${ev.gather_time} 集合：${ev.title}`, body: `${ev.place || ''}${ev.kind === 'party' ? '　入場券在「我的入場券」' : '　出門前記得暖身補水'}`, url: ev.kind === 'party' ? '/#/tickets' : `/#/e/${ev.id}`, tag: `hour-${ev.id}`,
-      ttl: 3600, urgency: 'high' });
+      ttl: 3600, urgency: 'high' }, { also: [env.DB.prepare("UPDATE events SET remind_hour_at = datetime('now') WHERE id = ?").bind(ev.id)] });
     sent += ids.length;
   }
   return { done: true, result: sent };
@@ -3824,17 +3860,19 @@ async function remindRenewals(env, now) {
   const until = tpDate(new Date(now.getTime() + 30 * 864e5)), today0 = tpDate(now);
   const rows = (await env.DB.prepare(`SELECT id, paid_until, renew_notice FROM members WHERE membership = 'active' AND paid_until IS NOT NULL
     AND paid_until BETWEEN ? AND ? LIMIT 1000`).bind(today0, until).all()).results;
-  let n = 0;
+  const list = [], marks = [];
   for (const r of rows) {
     const days = Math.round((Date.parse(`${r.paid_until}T00:00:00Z`) - Date.parse(`${today0}T00:00:00Z`)) / 864e5);
     const stage = days <= 0 ? 0 : days <= 7 ? 7 : 30, key = `${r.paid_until}:${stage}`;
     if (r.renew_notice === key) continue;
-    if (!fits(env, notifyCost(1) + 1, 'renewals')) return { done: false, result: n };
-    await notify(env, [r.id], 'membership', { kind: 'system', title: stage === 0 ? '會費今天到期' : `會費 ${days} 天後到期`, body: `你的協會會費繳至 ${r.paid_until}，續繳後會籍卡就會更新`, url: '/#/me/card' });
-    await env.DB.prepare('UPDATE members SET renew_notice = ? WHERE id = ?').bind(key, r.id).run();
-    n++;
+    list.push({ member_id: r.id, title: stage === 0 ? '會費今天到期' : `會費 ${days} 天後到期`, body: `你的協會會費繳至 ${r.paid_until}，續繳後會籍卡就會更新`, url: '/#/me/card' });
+    marks.push([r.id, key]);
   }
-  return { done: true, result: n };
+  // 所有人一次寫完（通知＋標記同一個 batch，共 3 句）
+  if (!fits(env, notifyCost(list.length) + 1, 'renewals')) return { done: false, result: 0 };
+  await notifyMany(env, 'membership', list, { kind: 'system', also: marks.length ? [env.DB.prepare(`UPDATE members SET renew_notice = json_extract(j.value, '$[1]')
+    FROM json_each(?1) j WHERE members.id = json_extract(j.value, '$[0]')`).bind(JSON.stringify(marks))] : [] });
+  return { done: true, result: list.length };
 }
 
 // 壞天氣提醒：前一晚 20:00 起，明天有指定地點的活動，集合時間預報「不建議」、大雨或空氣不佳，通知報名的人與主辦幹部
@@ -3898,19 +3936,16 @@ async function monthSummary(env, now) {
     JOIN team_members tm ON tm.team_id = t.id AND tm.status = 'active' LEFT JOIN training_logs l ON l.member_id = tm.member_id AND l.date BETWEEN ? AND ? AND l.status != 'skip'
     WHERE t.private = 0 GROUP BY t.id`).bind(`${prev}-01`, `${prev}-31`).all()).results.filter((x) => x.members).sort((a, b) => b.km / b.members - a.km / a.members);
   const champ = teams[0] && teams[0].km > 0 ? `分團平均第一：${teams[0].name}（每人 ${(teams[0].km / teams[0].members).toFixed(1)} 公里）` : '';
-  const list0 = Object.entries(by);
-  // 每人一則、沒有個別標記：額度不夠就整批留到下個整點（不會只送一半又重送）
-  if (!fits(env, list0.length * notifyCost(1) + 1, 'monthSummary')) return yieldTo(env, 'month_summary', 'monthSummary');
-  let n = 0;
-  for (const [mid, list] of list0) {
+  // 每人一則，所有人一次寫完；完成標記放在同一個 batch（不會只送一半又重送）
+  const notes = Object.entries(by).map(([mid, list]) => {
     const km = list.reduce((s0, l) => s0 + (l.km || 0), 0), stat = { km, runs: list.length, weeks: weeksOf(prev, list.map((l) => l.date)) };
     const got = earned(stat).map((id) => BADGES.find((b) => b.id === id).name);
-    await notify(env, [mid], 'training', { kind: 'system', title: `${Number(prev.slice(5))} 月跑了 ${km.toFixed(1)} 公里`, body: `${list.length} 次訓練${got.length ? `，獲得徽章：${got.join('、')}` : ''}。${champ}`, url: `/#/challenge?m=${prev}`,
-      push: { title: `${Number(prev.slice(5))} 月訓練總結`, body: '點開看本月里程與徽章' } });
-    n++;
-  }
-  await doneStmt(env, 'month_summary', prev).run();
-  return { done: true, result: n };
+    return { member_id: mid, title: `${Number(prev.slice(5))} 月跑了 ${km.toFixed(1)} 公里`, body: `${list.length} 次訓練${got.length ? `，獲得徽章：${got.join('、')}` : ''}。${champ}`, url: `/#/challenge?m=${prev}`,
+      push: { title: `${Number(prev.slice(5))} 月訓練總結`, body: '點開看本月里程與徽章' } };
+  });
+  if (!fits(env, notifyCost(notes.length) + 1, 'monthSummary')) return yieldTo(env, 'month_summary', 'monthSummary');
+  await notifyMany(env, 'training', notes, { kind: 'system', also: [doneStmt(env, 'month_summary', prev)] });
+  return { done: true, result: notes.length };
 }
 
 // 備份存放：有綁 R2（BACKUP）就存 R2，否則存 Workers KV（BACKUP_KV）；兩邊格式一樣
@@ -4027,22 +4062,25 @@ async function fatigueCheck(env, now) {
       SUM(CASE WHEN date >= ?1 THEN COALESCE(km, 0) ELSE 0 END) AS km7,
       SUM(CASE WHEN date < ?1 THEN COALESCE(km, 0) ELSE 0 END) AS km21
     FROM training_logs WHERE date BETWEEN ?2 AND ?3 GROUP BY member_id`).bind(d7, d28, today0).all()).results;
-  let n = 0;
+  // 7 天內通知過的人跳過（fatigue_notified 在同一句查詢帶出來）；所有人一次寫完，標記與完成標記同一個 batch
+  const last = new Map((await env.DB.prepare('SELECT id, fatigue_notified FROM members WHERE id IN (SELECT value FROM json_each(?)) AND fatigue_notified IS NOT NULL')
+    .bind(JSON.stringify(rows.map((r) => r.member_id))).all()).results.map((m) => [m.id, m.fatigue_notified]));
+  const notes = [];
   for (const r of rows) {
     const jump = r.km7 > 20 && r.km21 > 0 && r.km7 > (r.km21 / 3) * 1.3;
     if (!(r.hard >= 3 || jump)) continue;
-    if (!fits(env, 2 + notifyCost(1) + 1, 'fatigue')) return yieldTo(env, 'fatigue', 'fatigue', n);
-    const m = await env.DB.prepare('SELECT fatigue_notified FROM members WHERE id = ?').bind(r.member_id).first();
-    if (m?.fatigue_notified && Date.parse(today0) - Date.parse(m.fatigue_notified) < 7 * 864e5) continue;
+    const prev = last.get(r.member_id);
+    if (prev && Date.parse(today0) - Date.parse(prev) < 7 * 864e5) continue;
     // 鎖定畫面不放 RPE 與公里數
-    await notify(env, [r.member_id], 'training', { kind: 'log', title: '這週練得很兇，注意恢復',
+    notes.push({ member_id: r.member_id, title: '這週練得很兇，注意恢復',
       body: r.hard >= 3 ? `最近 7 天有 ${r.hard} 次自覺強度 8 以上，安排一兩天輕鬆跑或休息吧` : `最近 7 天跑了 ${Math.round(r.km7)} 公里，比前三週平均多了不少，小心受傷`, url: '/#/report',
       push: { body: '點開看本週訓練量與恢復建議' } });
-    await env.DB.prepare('UPDATE members SET fatigue_notified = ? WHERE id = ?').bind(today0, r.member_id).run();
-    n += 1;
   }
-  await doneStmt(env, 'fatigue', today0).run();
-  return { done: true, result: n };
+  if (!fits(env, notifyCost(notes.length) + 2, 'fatigue')) return yieldTo(env, 'fatigue', 'fatigue', 0);
+  await notifyMany(env, 'training', notes, { kind: 'log', also: [
+    ...(notes.length ? [env.DB.prepare('UPDATE members SET fatigue_notified = ?1 WHERE id IN (SELECT value FROM json_each(?2))').bind(today0, JSON.stringify(notes.map((x) => x.member_id)))] : []),
+    doneStmt(env, 'fatigue', today0)] });
+  return { done: true, result: notes.length };
 }
 
 // 每天台北 09:00 起：把前一天（UTC）的稽核 HMAC 串成摘要鏈；有人刪掉或改掉紀錄，重算就對不上（audit_digests 本身防止重複）
@@ -4094,13 +4132,11 @@ async function signupReviews(env, now) {
       if (!fits(env, 2, 'signupReviews')) return yieldTo(env, 'signup_review_digest', 'signupReviews', 0);
       plan.push([ev, await eventManagers(env, ev)]);
     }
-    if (!fits(env, plan.reduce((s0, [, to]) => s0 + notifyCost(to.length), 0) + 1, 'signupReviews')) return yieldTo(env, 'signup_review_digest', 'signupReviews', 0);
-    for (const [ev, to] of plan) {
-      if (to.length) await notify(env, to, 'todo', { kind: 'event', ref: `sr:${ev.id}`, tag: `review-${ev.id}`, url: `/#/e/${ev.id}/stats?f=pending`,
-        title: `還有 ${ev.n} 筆待審核：${ev.title}`, body: `活動 ${tpDay(ev.date)}，請在活動開始前處理` });
-      n += to.length;
-    }
-    await doneStmt(env, 'signup_review_digest', tpDate(now)).run();
+    const notes = plan.flatMap(([ev, to]) => to.map((mid) => ({ member_id: mid, ref: `sr:${ev.id}`, tag: `review-${ev.id}`, url: `/#/e/${ev.id}/stats?f=pending`,
+      title: `還有 ${ev.n} 筆待審核：${ev.title}`, body: `活動 ${tpDay(ev.date)}，請在活動開始前處理` })));
+    if (!fits(env, notifyCost(notes.length) + 1, 'signupReviews')) return yieldTo(env, 'signup_review_digest', 'signupReviews', 0);
+    await notifyMany(env, 'todo', notes, { kind: 'event', also: [doneStmt(env, 'signup_review_digest', tpDate(now))] });
+    n = notes.length;
   }
   // 逾期失效：結束時間（或集合＋120 分）＋15 分；取消的活動直接失效、不另外通知（已收到取消通知）
   const nowTp = tpNow(now.getTime());
@@ -4164,6 +4200,13 @@ async function syncCams(env, now) {
   return { done: true, result: null };
 }
 
+// 推播佇列：用這次執行剩下的額度送；JOB_DISPATCH=self 時還有剩就開下一段自己的執行（Jobs.drainPush，最多 plan.pushDepth 段）
+async function pushJob(env, now, ctx) {
+  const r = await drainAll(env);
+  if (r.more && env.JOB_DISPATCH === 'self' && ctx?.exports?.Jobs) { env.budget.take('rpc'); ctx.waitUntil(ctx.exports.Jobs.drainPush({ depth: 1 }).catch((e) => console.error('drainPush', e))); }
+  return { done: !r.more, result: r.sent };
+}
+
 // ---- 排程分派 ----
 const hhmm = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
 const tparts = (now) => {
@@ -4186,7 +4229,8 @@ const CRON_PROBE = `SELECT
   EXISTS (SELECT 1 FROM signups WHERE status = 'pending') AS sr,
   EXISTS (SELECT 1 FROM signups s JOIN events e ON e.id = s.event_id WHERE s.status = 'pending' AND (e.date <= ?1 OR e.status = 'cancelled')) AS sr_exp,
   EXISTS (SELECT 1 FROM audit_digests WHERE day = ?7) AS ad,
-  EXISTS (SELECT 1 ${SWEEP_SQL}) AS ps`;
+  EXISTS (SELECT 1 ${SWEEP_SQL}) AS ps,
+  EXISTS (SELECT 1 FROM push_queue WHERE lease_until IS NULL OR lease_until < datetime('now')) AS pq`;
 async function cronProbe(env, now) {
   const t = taipei(now), nowMin = t.getUTCHours() * 60 + t.getUTCMinutes(), today0 = tpDate(now);
   const r = await env.DB.prepare(CRON_PROBE).bind(today0, hhmm(Math.min(nowMin + 120, 1439)), tpDate(new Date(now.getTime() + 864e5)),
@@ -4219,6 +4263,7 @@ const JOBS = {
   monthSummary:  { prio: 42, cost: 12, idle: 0, due: (t, s) => t.d === 1 && t.h >= 9 && open(s, 'month_summary', t.prev), run: monthSummary },
   review:        { prio: 43, cost: 10, idle: 0, due: (t, s) => t.d === 1 && t.m % 3 === 0 && t.h >= 9 && open(s, 'quarterly_review', t.q), run: quarterlyReview },
   fatigue:       { prio: 44, cost: 12, min: 6, idle: 0, due: (t, s) => t.h >= 21 && open(s, 'fatigue', t.date), run: fatigueCheck },
+  push:          { prio: 90, cost: 15, min: 8, idle: 0, due: (t, s, env) => !!s.pq || !!env.wantDrain, run: pushJob },
   cams:          { prio: 50, cost: 9, idle: null, due: (t, s) => Cams.featureOn(s.features) && t.h >= 4 && camsDue(t, s).length > 0, run: syncCams },
 };
 const JOB_ORDER = Object.keys(JOBS).sort((a, b) => JOBS[a].prio - JOBS[b].prio);
@@ -4293,8 +4338,24 @@ export class Jobs extends WorkerEntrypoint {
     if (fail && this.env.DEV_LOGIN === '1') e.failAfterClaim = String(fail);
     try {
       const r = await runJob(e, job, new Date(t), this.ctx);
-      await settled(e);   // defer 裡的工作（例如推播）也算進這次的用量
+      if (e.wantDrain && job !== 'push') await drain(e, {}).catch((x) => console.error('drain', x));   // 這項工作排進佇列的推播，用剩下的額度先送一段
+      await settled(e);   // defer 裡的工作也算進這次的用量
       return { done: !!r.done, result: r.result ?? null, used: b.sub - b.inherit, budget: b.summary() };
+    } finally { logBudget(b); }
+  }
+  // 推播佇列的下一段（只在 JOB_DISPATCH=self 時由 pushJob 呼叫）：depth 必須在 1–plan.pushDepth 之間
+  async drainPush({ depth = 0 } = {}) {
+    const d = Number(depth), plan = planOf(this.env);
+    if (!Number.isInteger(d) || d < 1 || d > plan.pushDepth) throw new Error('bad depth');
+    const b = new Budget(this.env, { kind: 'push', name: `drain#${d}` }), e = invocationEnv(this.env, this.ctx, b);
+    try {
+      const r = await drainAll(e);
+      if (r.more && d < plan.pushDepth && this.env.JOB_DISPATCH === 'self' && this.ctx.exports?.Jobs) {
+        b.take('rpc');
+        this.ctx.waitUntil(this.ctx.exports.Jobs.drainPush({ depth: d + 1 }).catch((x) => console.error('drainPush', x)));
+      }
+      await settled(e);
+      return { sent: r.sent, more: r.more };
     } finally { logBudget(b); }
   }
 }
@@ -4361,8 +4422,51 @@ async function devRoute(req, env, ctx, url, path) {
     if (np && q.get('event')) stmts.push(env.DB.prepare(`INSERT OR IGNORE INTO signups (id, event_id, member_id, name, grp, dist, status, created_at)
       SELECT printf('bs%04d%s', value, substr(?1, 1, 8)), ?1, printf('b_%04d', value), printf('大量測試%04d', value), 'D', 'fm', 'pending', datetime('now', printf('-%d seconds', ?2 - value))
       FROM json_each(?3)`).bind(str(q.get('event'), 32), np, seq(np)));
+    // ?mute=<id>&cats=event：關掉某人的推播分類；?events=30&per=10&date=YYYY-MM-DD：建 30 場活動、每場 10 位假會員正取；?logs=YYYY-MM：每位假會員那個月一筆訓練紀錄
+    if (q.get('mute')) stmts.push(env.DB.prepare('UPDATE members SET notif_mute = ? WHERE id = ?').bind(str(q.get('cats'), 100) || null, str(q.get('mute'), 32)));
+    const ne = Math.min(Number(q.get('events')) || 0, 100), per = Math.min(Number(q.get('per')) || 0, 50), day = str(q.get('date'), 10);
+    if (ne && isDate(day)) {
+      stmts.push(env.DB.prepare(`INSERT OR IGNORE INTO events (id, kind, title, date, gather_time, status, created_by, open_notified_at)
+        SELECT printf('bev%s%02d', replace(?1, '-', ''), value), 'track', printf('大量活動 %d', value), ?1, '07:00', 'open', 't_chair', datetime('now') FROM json_each(?2)`).bind(day, seq(ne)));
+      if (per) stmts.push(env.DB.prepare(`INSERT OR IGNORE INTO signups (id, event_id, member_id, name, grp, dist, status)
+        SELECT printf('bsg%s%04d', replace(?1, '-', ''), value), printf('bev%s%02d', replace(?1, '-', ''), value / ?3), printf('b_%04d', value), printf('大量測試%04d', value), 'D', 'fm', 'in' FROM json_each(?2)`)
+        .bind(day, seq(ne * per), per));
+    }
+    if (/^\d{4}-\d{2}$/.test(q.get('logs') || '') && nm) stmts.push(env.DB.prepare(`INSERT OR IGNORE INTO training_logs (id, member_id, date, status, km)
+      SELECT printf('blg%s%04d', replace(?1, '-', ''), value), printf('b_%04d', value), ?1 || '-10', 'done', 10 FROM json_each(?2)`).bind(q.get('logs'), seq(nm)));
     if (stmts.length) await env.DB.batch(stmts);
     return json({ ok: true, members: nm, subs: ns, pending: np });
+  }
+  // 推播模擬（PUSH_MOCK=1）：收到的 endpoint 與 payload id；?clear=1 清空、?gone=<endpoint> 讓它回 410；
+  //   ?verify=1 檢查每個 payload 的 id 都對得到「那台裝置的主人」的通知列
+  if (path === '/api/dev/push-mock' && env.PUSH_MOCK === '1') {
+    if (q.get('clear') === '1') { pushMock.list.length = 0; pushMock.gone.clear(); }
+    if (q.get('gone')) pushMock.gone.add(str(q.get('gone'), 300));
+    const [qn, sn] = await env.DB.batch([env.DB.prepare('SELECT COUNT(*) AS n FROM push_queue'), env.DB.prepare('SELECT COUNT(*) AS n FROM push_subs')]);
+    let bad = null;
+    if (q.get('verify') === '1') {
+      const pairs = JSON.stringify(pushMock.list.map((x) => [x.endpoint, x.id]));
+      bad = (await env.DB.prepare(`SELECT COUNT(*) AS n FROM json_each(?1) j LEFT JOIN notifications n ON n.id = json_extract(j.value, '$[1]')
+        LEFT JOIN push_subs s ON s.endpoint = json_extract(j.value, '$[0]') WHERE n.id IS NULL OR s.member_id IS NOT n.member_id`).bind(pairs).first()).n;
+    }
+    return json({ list: pushMock.list, endpoints: new Set(pushMock.list.map((x) => x.endpoint)).size, queue: qn.results[0].n, subs: sn.results[0].n, bad });
+  }
+  // 通知列統計（測試用）：?like=標題開頭 → 幾列、幾位收件人；&ev=活動 id 開頭 → 其中幾場已經標記前一晚提醒
+  if (path === '/api/dev/notes') {
+    const like = `${str(q.get('like'), 40).replace(/[%_]/g, '')}%`, ev = `${str(q.get('ev'), 32).replace(/[%_]/g, '')}%`;
+    const [a, c] = await env.DB.batch([
+      env.DB.prepare('SELECT COUNT(*) AS n, COUNT(DISTINCT member_id) AS m FROM notifications WHERE title LIKE ?').bind(like),
+      env.DB.prepare('SELECT COUNT(*) AS n, SUM(remind_day_at IS NOT NULL) AS marked FROM events WHERE id LIKE ?').bind(ev),
+    ]);
+    return json({ rows: a.results[0].n, members: a.results[0].m, events: c.results[0].n, marked: c.results[0].marked || 0 });
+  }
+  // 送推播佇列（一次執行，用完額度為止）
+  if (path === '/api/dev/drain') {
+    const b = new Budget(env, { kind: 'push', name: 'dev' }), e = invocationEnv(env, ctx, b);
+    const r = await drainAll(e);
+    await settled(e);
+    const left = (await env.DB.prepare('SELECT COUNT(*) AS n FROM push_queue').first()).n;
+    return json({ ...r, queue: left, _budget: { root: b.summary(), jobs: {} } });
   }
   // 測試用：附近即時影像的假來源狀態（只有 CAM_MOCK=1）
   if (path === '/api/dev/cams-mock' && env.CAM_MOCK === '1') return json(Cams.mockControl(q));
@@ -4418,7 +4522,13 @@ export default {
     // 每次請求一個 env（綁定包裝成會計數的版本、這次請求專用的 ctx 與 defer），不改共用的 env
     const b = new Budget(env, { kind: 'request', name: `${req.method} ${routeName(path)}` }), e = invocationEnv(env, ctx, b);
     let res;
-    try { res = await handle(req, e, ctx, url, path); } finally { ctx.waitUntil(settled(e).then(() => logBudget(b))); }
+    try {
+      res = await handle(req, e, ctx, url, path);
+      // 推播：這次請求排進佇列的，回應送出後用剩下的額度先送一段；一般流量看到佇列有待送的，順便送 plan.pushKick 台
+      const plan = planOf(env);
+      if (e.wantDrain) e.defer(drain(e, { max: plan.pushPerHop }));
+      else if (e.pushKick && b.room(4 + plan.pushKick)) e.defer(drain(e, { max: plan.pushKick }));
+    } finally { ctx.waitUntil(settled(e).then(() => logBudget(b))); }
     // 測試用：回應帶這次請求到目前為止用掉的額度（只有 DEV_LOGIN=1 的本機）
     if (env.DEV_LOGIN === '1' && LOCAL.includes(url.hostname)) {
       try { const x = b.summary(); res.headers.set('x-budget', `d1=${x.d1};kv=${x.kv};fetch=${x.fetch};rpc=${x.rpc};sub=${x.sub}`); } catch {}

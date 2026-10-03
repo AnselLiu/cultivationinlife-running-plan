@@ -117,6 +117,8 @@ npx wrangler secret put VAPID_SUBJECT     # 例如 mailto:you@example.com
 
 iPhone 要先用 Safari 的「分享 → 加到主畫面」，再從主畫面開啟才收得到通知。
 
+推播走佇列（`push_queue`）：通知寫進通知中心時，同時把每台裝置排一列，免費方案一次執行大約送 10 台（每段同時最多 4 個連線）。發通知的那次請求會先用剩下的額度送一段，之後每個一般請求順便送 3 台、每小時排程把剩下的額度用完。訂閱數量少時跟以前一樣幾乎馬上收到；訂閱很多時（例如 400 台）大量廣播可能要好幾個小時才送完，訂閱超過約 50 台以前，要先在 staging 驗證 `JOB_DISPATCH=self` 再切換。過期或試 3 次都送不出去的會丟掉，並寫稽核 `push.dropped`。
+
 ## 課表資料怎麼更新
 
 教練每週發新課表後，在 `gengpao-running-coach` skill 更新原文並重建 `season-2026.json`，再覆蓋 `public/data/season-2026.json`。W9 以後目前是依 2025 臺北馬同期推估，畫面與公告都會標示「以教練公告為準」。

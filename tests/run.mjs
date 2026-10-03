@@ -13,6 +13,11 @@ sh(`npx wrangler d1 execute cil-run --local --persist-to ${STATE} --file tests/s
 const vars = { DEV_LOGIN: '1', POST_MOCK: '1', CAM_MOCK: '1', PLAN: 'free', BUDGET_STRICT: '1', JOB_DISPATCH: 'inline', NTPC_MOCK: '1', JOIN_CODE: 'test-join', CHAIR_CODE: 'test-chair', HASH_SALT: 'test-salt', AUDIT_KEY: 'test-audit-key',
   GOOGLE_CLIENT_ID: 'test-client.apps.googleusercontent.com', GOOGLE_CLIENT_SECRET: 'test-google-secret',
   RACE_KEY: 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8', BACKUP_KEY: 'HyAhIiMkJSYnKCkqKywtLi8wMTIzNDU2Nzg5Ojs8PT4' };
+// 推播：PUSH_MOCK=1 不連外；VAPID 測試金鑰每次啟動用 WebCrypto 臨時產生，只存在記憶體
+const kp = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
+Object.assign(vars, { PUSH_MOCK: '1', VAPID_SUBJECT: 'mailto:test@example.com',
+  VAPID_PUBLIC_KEY: Buffer.from(await crypto.subtle.exportKey('raw', kp.publicKey)).toString('base64url'),
+  VAPID_PRIVATE_JWK: JSON.stringify(await crypto.subtle.exportKey('jwk', kp.privateKey)) });
 const dev = spawn('npx', ['wrangler', 'dev', '--port', String(PORT), '--inspector-port', '0', '--persist-to', STATE, ...Object.entries(vars).flatMap(([k, v]) => ['--var', `${k}:${v}`])],
   { stdio: ['ignore', 'pipe', 'inherit'], detached: process.platform !== 'win32' });
 let log = '';
@@ -27,5 +32,5 @@ for (let i = 0; ; i++) {
   if (i > 120) { console.error(log); stop(); process.exit(1); }
   await new Promise((r) => setTimeout(r, 500));
 }
-const t = spawn(process.execPath, ['--test', '--test-concurrency=1', 'tests/hours.test.mjs', 'tests/ics.test.mjs', 'tests/sql-limits.test.mjs', 'tests/signup-window.test.mjs', 'tests/api.test.mjs', 'tests/passkey.test.mjs', 'tests/budget.test.mjs'], { stdio: 'inherit', env: { ...process.env, BASE: base } });
+const t = spawn(process.execPath, ['--test', '--test-concurrency=1', 'tests/hours.test.mjs', 'tests/ics.test.mjs', 'tests/push.test.mjs', 'tests/sql-limits.test.mjs', 'tests/signup-window.test.mjs', 'tests/api.test.mjs', 'tests/passkey.test.mjs', 'tests/budget.test.mjs'], { stdio: 'inherit', env: { ...process.env, BASE: base } });
 t.on('exit', (code) => { stop(); process.exit(code ?? 1); });
