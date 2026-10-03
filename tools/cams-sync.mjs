@@ -60,7 +60,10 @@ async function main() {
   const S = sourceOf(source);
   if (!S?.offline) { console.error('用法：node tools/cams-sync.mjs thb [--staging] [--out cams-thb.sql] [--last-count N]（只處理 offline 的來源）'); process.exit(1); }
   const staging = flags.includes('--staging'), out = opt('--out') || `cams-${source}.sql`;
-  const lastCount = opt('--last-count') != null ? Number(opt('--last-count')) : lastCountRemote(source, staging);
+  // --last-count 打錯（不是正整數）就停下：NaN 或 0 會讓 70% 完整性檢查失效
+  const lc = opt('--last-count');
+  if (flags.includes('--last-count') && !/^[1-9]\d*$/.test(lc || '')) { console.error('--last-count 要是正整數（上次的鏡頭支數）'); process.exit(1); }
+  const lastCount = lc != null ? Number(lc) : lastCountRemote(source, staging);
   console.log(`上次的筆數：${lastCount ?? '（沒有紀錄）'}`);
   const { rows, stmts } = buildSql(source, await fetchList(S.list), { lastCount });
   writeFileSync(out, `${stmts.join('\n')}\n`);

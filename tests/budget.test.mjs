@@ -63,12 +63,15 @@ test('執行額度：備份解得回來，格式與筆數都對', async () => {
   // 每日備份（上一個測試的 2028-03-15）
   const d = (await call(null, '/dev/backup-check?label=2028-03-15')).json;
   assert.equal(d.format, 'cil-backup');
-  assert.equal(d.version, 1);
-  assert.ok(!('sessions' in d.counts) && !('client_metrics' in d.counts) && !('client_errors' in d.counts), '暫存與遙測不在備份裡');
+  assert.equal(d.version, 2);
+  assert.ok(d.parts >= 1);
+  assert.ok(!('sessions' in d.counts) && !('client_metrics' in d.counts) && !('client_errors' in d.counts) && !('notifications' in d.counts), '暫存、遙測、通知中心不在備份裡');
   assert.ok(d.counts.members >= 5);
+  assert.deepEqual(d.counts, d.manifest, '每一段接回來的筆數和目錄一致');
   // 手動備份之後馬上對照：除了稽核紀錄（備份完才寫），每張表的筆數都和現在一樣
   const bk = await call('t_chair', '/backups', { method: 'POST', body: {} });
   assert.equal(bk.status, 200, bk.text);
+  assert.equal(bk.json.parts, 1, '資料少時一段做完');
   const sub = Number(/sub=(\d+)/.exec(bk.headers.get('x-budget'))?.[1]);
   assert.ok(sub > 0 && sub <= 50, `手動備份用了 ${sub} 個子請求`);
   const m = (await call(null, '/dev/backup-check')).json;
@@ -113,6 +116,75 @@ test('執行額度：失敗後下個整點重跑；連續失敗 3 次就放棄�
   // 隔天重新計算
   const next = await cron('at=2028-03-18T19:00:00Z');
   assert.equal(next.backup?.label, '2028-03-19');
+  assert.deepEqual(await violations(), []);
+});
+
+test('執行額度：資料多時備份分段做，好幾個整點接著做完，接回來的筆數都對', async () => {
+  // 第一段只做 4 KB、之後每段 64 KB：台北 2028-03-21 03:00 起每個整點一段
+  const first = await cron('at=2028-03-20T19:00:00Z&seg=4096&skip=retention');
+  within(first, '第一段');
+  assert.equal(first.backup, 'deferred', JSON.stringify(first.backup));
+  let j = await jobs();
+  assert.equal(j.backup.claim_key, '2028-03-21');
+  assert.ok(j.backup.cursor && JSON.parse(j.backup.cursor).n === 1, '游標記下做到第幾段');
+  assert.equal(j.backup.attempts, 0, '分段停下不算失敗');
+  assert.equal((await call(null, '/dev/backup-check?label=2028-03-21')).status, 404, '還沒做完，清單上看不到');
+  let r, h = 20;
+  for (; h < 44; h++) {
+    r = await cron(`at=${new Date(Date.UTC(2028, 2, 20, h)).toISOString()}&seg=65536&skip=retention`);
+    within(r, `第 ${h - 18} 段`);
+    if (r.backup && typeof r.backup === 'object') break;
+  }
+  assert.equal(r.backup.label, '2028-03-21', '跨日也接著做同一份');
+  assert.ok(r.backup.parts >= 2, `分成 ${r.backup.parts} 段`);
+  j = await jobs();
+  assert.equal(j.backup.last_run, '2028-03-21');
+  assert.equal(j.backup.cursor, null);
+  const d = (await call(null, '/dev/backup-check?label=2028-03-21')).json;
+  assert.equal(d.parts, r.backup.parts);
+  assert.deepEqual(d.counts, d.manifest);
+  assert.equal(d.rid, Object.values(d.counts).reduce((x, y) => x + y, 0), '每筆都帶分段用的 rowid');
+  assert.ok(d.counts.members >= 5 && d.counts.events >= 1);
+  assert.deepEqual(await violations(), []);
+});
+
+test('執行額度：被平台終止（沒有留下錯誤）的工作補記錯誤；第 3 次寫 cron.gave_up，管理後台顯示已停止', async () => {
+  // 模擬：每日備份第 3 次佔用之後整個執行被終止（佔用 20 分鐘前、沒有錯誤訊息）
+  await call(null, '/dev/jobs?stale=backup&key=2028-04-02&attempts=3');
+  let h = (await call('t_chair', '/admin/health')).json;
+  assert.equal(h.jobs.find((x) => x.job === 'backup').state, 'gave_up', '佔用過期、已經 3 次就算放棄');
+  const r = await cron('at=2028-04-01T20:00:00Z&skip=backup,retention');
+  within(r, '補記');
+  const j = await jobs();
+  assert.match(j.backup.last_error, /中途被終止/);
+  const au = (await call('t_chair', `/audit?from=${plus(-1)}&to=${plus(1)}&action=cron.gave`)).json.items;
+  assert.ok(au.some((x) => x.target_id === 'backup' && x.detail.includes('2028-04-02') && x.detail.includes('中途被終止')), JSON.stringify(au));
+  h = (await call('t_chair', '/admin/health')).json;
+  assert.equal(h.jobs.find((x) => x.job === 'backup').state, 'gave_up');
+  // 只補記一次
+  await cron('at=2028-04-01T21:00:00Z&skip=backup,retention');
+  const au2 = (await call('t_chair', `/audit?from=${plus(-1)}&to=${plus(1)}&action=cron.gave`)).json.items;
+  assert.equal(au2.filter((x) => x.detail.includes('2028-04-02')).length, 1);
+  // 還沒到 3 次：補記錯誤、釋放佔用，下個整點重跑
+  await call(null, '/dev/jobs?stale=backup&key=2028-04-03&attempts=1');
+  const r2 = await cron('at=2028-04-02T19:00:00Z&skip=retention');
+  within(r2, '重跑');
+  assert.equal(r2.backup?.label, '2028-04-03', JSON.stringify(r2.backup));
+  assert.equal((await jobs()).backup.last_error, null);
+  assert.deepEqual(await violations(), []);
+});
+
+test('執行額度：佔用之前就失敗的工作記在工作名稱那一列，下次成功就清掉', async () => {
+  const f = await cron('at=2028-04-05T01:00:00Z&failpre=auditDigest&skip=backup,retention');
+  assert.match(String(f.auditDigest), /^error: /);
+  let h = (await call('t_chair', '/admin/health')).json;
+  const a = h.jobs.find((x) => x.job === 'auditDigest');
+  assert.equal(a.state, 'failed'); assert.equal(a.attempts, 1);
+  const ok = await cron('at=2028-04-05T02:00:00Z&skip=backup,retention');
+  assert.ok(ok.auditDigest && typeof ok.auditDigest === 'object', JSON.stringify(ok.auditDigest));
+  h = (await call('t_chair', '/admin/health')).json;
+  assert.equal(h.jobs.find((x) => x.job === 'auditDigest').state, 'done');
+  assert.ok(!h.jobs.some((x) => x.job === 'promote_sweep'), '遞補補做的內部紀錄不顯示');
   assert.deepEqual(await violations(), []);
 });
 
@@ -213,7 +285,7 @@ test('大量輸入：審核 60 人，分段處理，依報名先後排進正取'
   const id = ok50(await call('t_chair', '/events', { method: 'POST', body: evBody({ title: '額度審核', capacity: 30, require_approval: true }) }), '建立活動').id;
   await call(null, `/dev/seed-bulk?event=${id}&pending=60`);
   const rs = await rounds('t_chair', `/events/${id}/review`, { action: 'approve', member_ids: bids(0, 60) });
-  assert.ok(rs.length > 1, '一輪做不完，要分段');
+  assert.equal(rs.length, 1, '句數跟人數無關，一次處理完（以前每輪只有 2 人，按到限流也做不完）');
   assert.equal(rs.reduce((n, r) => n + r.in.length + r.wait.length, 0), 60);
   assert.equal(rs.at(-1).pending, 0);
   const ev = (await call('t_chair', `/events/${id}`)).json;
@@ -224,6 +296,49 @@ test('大量輸入：審核 60 人，分段處理，依報名先後排進正取'
   assert.deepEqual(ev.signups.filter((x) => x.status === 'wait').map((x) => x.member_id), bids(30, 30), '候補順序依報名先後');
   // 繳費標記 60 人一句
   ok50(await call('t_chair', `/events/${id}/payments`, { method: 'POST', body: { member_ids: bids(0, 60), paid: 'waived' } }), '繳費標記');
+  // 移出 30 位正取：一次處理，空出的 30 個名額由候補依序遞補
+  const rj = await rounds('t_chair', `/events/${id}/review`, { action: 'reject', member_ids: bids(0, 30), revoke: true });
+  assert.equal(rj.length, 1);
+  assert.equal(rj[0].rejected.length, 30);
+  const ev2 = (await call('t_chair', `/events/${id}`)).json;
+  assert.deepEqual(ev2.signups.filter((x) => x.status === 'in').map((x) => x.member_id).sort(), bids(30, 30), '候補全部遞補');
+  const au = (await call('t_chair', `/audit?from=${plus(-1)}&to=${plus(1)}&action=event.signup`)).json.items;
+  assert.equal(au.filter((x) => x.action === 'event.signup_reject' && x.target_id?.startsWith('b_')).length, 30, '每位一列稽核');
+  const v = (await call('t_chair', `/audit/verify?from=${plus(-1)}&to=${plus(1)}`)).json;
+  assert.equal(v.modified, 0, '一句寫入的稽核簽章都對');
+  assert.deepEqual(await violations(), []);
+});
+
+test('大量輸入：關閉審核並直接錄取 80 人，一次處理完，名額 20 依報名先後', async () => {
+  const id = ok50(await call('t_chair', '/events', { method: 'POST', body: evBody({ title: '額度關閉審核', capacity: 20, require_approval: true }) }), '建立活動').id;
+  await call(null, `/dev/seed-bulk?event=${id}&pending=80`);
+  const cur = (await call('t_chair', `/events/${id}`)).json;
+  const r = await call('t_chair', `/events/${id}`, { method: 'PUT', body: { ...evBody({ title: '額度關閉審核', capacity: 20, require_approval: false }), date: cur.date, pending_action: 'admit' } });
+  ok50(r, '關閉審核');
+  assert.deepEqual(r.json.admitted, { in: 20, wait: 60, skipped: 0 });
+  const ev = (await call('t_chair', `/events/${id}`)).json;
+  assert.equal(ev.pendingCount, 0, '沒有人留在待審核');
+  assert.deepEqual(ev.signups.filter((x) => x.status === 'in').map((x) => x.member_id).sort(), bids(0, 20));
+  // 名額從 20 調到 70：一次遞補 50 位
+  const up = await call('t_chair', `/events/${id}`, { method: 'PUT', body: { ...evBody({ title: '額度關閉審核', capacity: 70, require_approval: false }), date: cur.date } });
+  ok50(up, '調高名額');
+  assert.equal((await call('t_chair', `/events/${id}`)).json.signups.filter((x) => x.status === 'in').length, 70);
+  assert.deepEqual(await violations(), []);
+});
+
+test('大量輸入：候補都因為庫存不夠排不進去的場次，每小時的遞補補做不會吃掉額度，也不會一直重試', async () => {
+  const id = ok50(await call('t_chair', '/events', { method: 'POST', body: evBody({ title: '額度團購', capacity: 50, items: [{ id: 'a', name: 'T恤', price: 0, stock: 1 }] }) }), '建立活動').id;
+  await call(null, `/dev/seed-bulk?waititems=${id}&n=40`);
+  const others = 'events,backup,signupOpen,followups,weather,signupReviews,renewals,retention,auditDigest,monthSummary,review,fatigue,cams,push';
+  const r1 = await cron(`skip=${others}`);
+  within(r1, '第一次');
+  assert.equal(r1.promoteSweep, 1, '庫存只夠 1 位');
+  const r2 = await cron(`skip=${others}`);
+  within(r2, '第二次');
+  assert.equal(r2.promoteSweep, 0);
+  assert.ok(r2._budget.jobs.promoteSweep.sub <= 8, `遞補不了的場次只花固定句數：${r2._budget.jobs.promoteSweep.sub}`);
+  const r3 = await cron(`skip=${others}`);
+  assert.equal(r3._budget.jobs.promoteSweep, undefined, '狀態沒變就不再試');
   assert.deepEqual(await violations(), []);
 });
 
@@ -342,6 +457,42 @@ test('推播佇列：每月 1 號 300 人的月總結一次做完', async () => 
   assert.ok(r._budget.jobs.monthSummary.sub <= 20, `月總結用了 ${r._budget.jobs.monthSummary.sub} 個子請求`);
   assert.equal((await cron('at=2032-05-01T02:00:00Z&skip=backup,retention')).monthSummary, 0, '只做一次');
   await drainAllNow();
+  assert.deepEqual(await violations(), []);
+});
+
+test('推播佇列：時效短的先送；裝置換人時前一個人的推播不送；一般請求順便送 3 台；過期的寫 push.dropped', async () => {
+  await drainAllNow();
+  await mock('clear=1');
+  const ev = ok50(await call('t_chair', '/events', { method: 'POST', body: evBody({ title: '佇列順序測試', notify: true }) }), '大量廣播');
+  await rounds('t_chair', `/events/${ev.id}/bulk`, { action: 'signup', names: '大量測試0007' });
+  // 大量廣播排在前面，活動異動（urgency high）後到：這次請求送出的那一段就先送它
+  await mock('clear=1');
+  ok50(await call('t_chair', `/events/${ev.id}/notice`, { method: 'POST', body: { type: 'other', message: '集合點改到停車場' } }), '活動異動');
+  await new Promise((r) => setTimeout(r, 300));
+  const hi = ['https://fcm.googleapis.com/fcm/send/b_00007', 'https://fcm.googleapis.com/fcm/send/b_00307'];
+  assert.deepEqual([...bEndpoints((await mock()).list)].filter((x) => hi.includes(x)).sort(), hi, '活動異動沒有被廣播擠到後面');
+  // 同一台裝置換人訂閱：前一個人還在佇列裡的推播一起刪掉
+  const moved = 'https://fcm.googleapis.com/fcm/send/b_00009';
+  const sub = await call('t_runner', '/push/subscribe', { method: 'POST', body: { endpoint: moved, keys: { p256dh: 'B'.repeat(65), auth: 'a'.repeat(22) } } });
+  assert.equal(sub.status, 200, sub.text);
+  await mock('clear=1');
+  // 一般請求看到佇列有待送的，順便送（免費方案 3 台）
+  assert.equal((await call('t_super', '/me')).status, 200);
+  await new Promise((r) => setTimeout(r, 300));
+  const kicked = (await mock()).list.length;
+  assert.ok(kicked >= 1 && kicked <= 3, `順便送了 ${kicked} 台`);
+  await drainAllNow();
+  const m = await mock('verify=1');
+  assert.ok(m.list.length > 300);
+  assert.ok(!m.list.some((x) => x.endpoint === moved), '換人之後不送前一個人的通知');
+  assert.equal(m.bad, 0);
+  // 過期：不送，刪掉並寫稽核 push.dropped
+  ok50(await call('t_chair', '/events', { method: 'POST', body: evBody({ title: '過期測試', notify: true }) }), '再廣播一次');
+  await mock('expire=1');
+  const d = (await call(null, '/dev/drain')).json;
+  assert.equal(d.sent, 0); assert.equal(d.queue, 0);
+  const au = (await call('t_chair', `/audit?from=${plus(-1)}&to=${plus(1)}&action=push.dropped`)).json.items;
+  assert.ok(au.length >= 1 && /過期/.test(au[0].detail), JSON.stringify(au[0]));
   assert.deepEqual(await violations(), []);
 });
 

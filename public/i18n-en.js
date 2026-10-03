@@ -2908,6 +2908,24 @@ export default {
 "公路局的清單改用電腦上的同步工具更新（tools/cams-sync.mjs），這裡不能同步": "The Highway Bureau list is updated with the sync tool on a computer (tools/cams-sync.mjs); it can't be synced here",
 "只有理事長可以執行": "Only the chair can run this",
 "一小時最多 3 次": "At most 3 times per hour",
-"這個環境沒有 ctx.exports": "ctx.exports is not available in this environment"
+"這個環境沒有 ctx.exports": "ctx.exports is not available in this environment",
+"鏡頭狀態重設（公路局）": "Camera status reset (Highway Bureau)",
+"手動備份": "Manual backup",
+"活動提醒": "Event reminders",
+"開放報名通知": "Sign-up opening alerts",
+"跑完接續": "Post-run follow-ups",
+"壞天氣提醒": "Bad weather alerts",
+"待審核失效": "Pending sign-up expiry",
+"候補遞補": "Waitlist promotion",
+"會費到期提醒": "Membership renewal reminders",
+"稽核摘要": "Audit digest",
+"鏡頭清單": "Camera lists",
+"地點卡會列出 1.5 公里內的政府公開攝影機（沒有就列 3 公里內最近一支），畫面由本站轉送、不保存，跑友的 IP 不會送到影像來源。功能開關打開後，水利署與水利處的鏡頭清單每天清晨 04:00 起自動同步（每小時只同步一個來源）；公路局的清單由電腦上的同步工具更新。關掉來源後立即不再顯示，也不再連線。": "Spot cards list public government cameras within 1.5 km (or the nearest one within 3 km if there are none). Images are relayed by this site and not stored, and runners’ IP addresses are never sent to the camera source. Once the feature switch is on, the Water Resources Agency and Taipei Hydraulic Engineering Office camera lists sync automatically every morning from 04:00 (one source per hour); the Highway Bureau list is updated with a sync tool run on a computer. Turning a source off hides it immediately and stops all connections to it.",
+"每天凌晨 3 點起自動把資料庫加密備份（AES-GCM），保留 35 天；資料多時分成好幾段，在接下來的整點陸續做完。還原用 tools/restore-backup.mjs，金鑰另外保存在理事長的電腦與密碼管理器。": "From 3 a.m. every day the database is backed up with AES-GCM encryption and kept for 35 days. When there is a lot of data, the backup is split into parts that finish over the following hours. Restore with tools/restore-backup.mjs; the key is kept on the President’s computer and in a password manager.",
+"資料較多，備份會在接下來的整點分段做完": "There is a lot of data, so the backup will finish in parts over the next few hours",
+"上一次手動備份還在分段進行中，會在接下來的整點做完": "The previous manual backup is still running in parts and will finish over the next few hours",
+"開始（資料較多，分段進行）": "Started (large data, running in parts)",
+"點開看繳費狀態": "Open to see your payment status",
+"段": " parts"
 };
 export const inner = {"團練": "group run", "課表": "training plan", "拍照": "photo", "跑步": "running", "我的": "my", "揪跑": "social run", "分團": "sub-club", "主團": "home club", "報名": "sign up", "幹部": "officers", "團員": "members", "跑友": "runners", "活動": "event", "協會": "Association", "行事曆": "calendar", "地點": "spot", "路線": "route", "天氣": "weather", "通知": "notifications", "賽事": "race", "組別": "group", "訓練紀錄": "training log"};

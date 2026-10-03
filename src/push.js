@@ -88,24 +88,35 @@ const PERMANENT = (st) => st === 404 || st === 410 || (st >= 400 && st < 500 && 
 //   max：這段最多送幾台；實際取 min(max, plan.pushPerHop, 剩下的額度 − 6)
 //   送成功與永久失敗（404、410、其他 4xx）的刪掉，404／410 連訂閱一起刪（佇列跟著 cascade）；5xx、429、網路錯誤留著，租約（120 秒）到期後重送
 //   過期或試滿 3 次的刪掉，筆數放在 dropped，由呼叫端寫稽核 push.dropped
+// 推播佇列裡過期、或試滿 3 次而且租約已過的列：刪掉，回傳筆數（VAPID 沒設定時也要清，不然通知內容會一直留在 D1）
+export const PUSH_EXPIRED = `DELETE FROM push_queue WHERE expires_at <= datetime('now') OR (attempts >= 3 AND (lease_until IS NULL OR lease_until < datetime('now'))) RETURNING id`;
 export async function drainPush(env, { max = Infinity } = {}) {
   const out = { leased: 0, sent: 0, failed: 0, dropped: 0 };
-  if (!vapidOn(env)) return out;
+  if (!vapidOn(env)) {
+    // 推播關閉（VAPID 拿掉）：不送，但過期的照樣清掉，通知內容不會一直留在 D1（資料清理也會清）
+    if (!env.budget || env.budget.room(1)) out.dropped = (await env.DB.prepare(PUSH_EXPIRED).all()).results.length;
+    return out;
+  }
   const plan = planOf(env), n = Math.min(max, plan.pushPerHop, (env.budget ? env.budget.left() : Infinity) - 6);
   if (!(n >= 1)) return out;
+  // 有時效的先送：urgency high（集合前提醒、帳號安全）優先，再依過期時間、排入順序；大量廣播排在前面時，時效短的不會被擠到過期
+  //   收件人那一列通知的主人必須還是這台裝置的主人（裝置換人登入、重新訂閱之後，前一個人還沒送的推播不會送到新主人的裝置）
   const rows = (await env.DB.prepare(`UPDATE push_queue SET lease_until = datetime('now', '+120 seconds'), attempts = attempts + 1
     WHERE id IN (SELECT id FROM push_queue WHERE (lease_until IS NULL OR lease_until < datetime('now'))
-                 AND expires_at > datetime('now') AND attempts < 3 ORDER BY id LIMIT ?1)
+                 AND expires_at > datetime('now') AND attempts < 3 ORDER BY urgency = 'high' DESC, expires_at, id LIMIT ?1)
     RETURNING id, endpoint, notif_id, payload, urgency, attempts,
       CAST(strftime('%s', expires_at) AS INTEGER) - CAST(strftime('%s', 'now') AS INTEGER) AS ttl`).bind(Math.floor(n)).all()).results;
   out.leased = rows.length;
   const done = [], gone = [];
   if (rows.length) {
-    const keys = new Map((await env.DB.prepare('SELECT endpoint, p256dh, auth FROM push_subs WHERE endpoint IN (SELECT value FROM json_each(?1))')
-      .bind(JSON.stringify([...new Set(rows.map((r) => r.endpoint))])).all()).results.map((s) => [s.endpoint, s]));
+    const keys = new Map((await env.DB.prepare(`SELECT s.endpoint, s.p256dh, s.auth, s.member_id, json_extract(j.value, '$[1]') AS nid,
+        (SELECT n.member_id FROM notifications n WHERE n.id = json_extract(j.value, '$[1]')) AS owner
+      FROM json_each(?1) j JOIN push_subs s ON s.endpoint = json_extract(j.value, '$[0]')`)
+      .bind(JSON.stringify(rows.map((r) => [r.endpoint, r.notif_id]))).all()).results.map((s) => [`${s.endpoint} ${s.nid}`, s]));
     const res = await pool(rows, plan.pushConc, async (r) => {
-      const sub = keys.get(r.endpoint);
+      const sub = keys.get(`${r.endpoint} ${r.notif_id}`);
       if (!sub) return 410;   // 訂閱已經不在了
+      if (r.notif_id && sub.owner !== sub.member_id) return 403;   // 裝置已經換人（或通知已刪）：不送，直接丟掉這一列
       let msg; try { msg = JSON.parse(r.payload); } catch { return 400; }
       // TTL 是剩下的秒數（從 expires_at 算）
       return sendOne(env, sub, JSON.stringify({ ...msg, id: r.notif_id || undefined }), { ttl: r.ttl, urgency: r.urgency });
@@ -114,7 +125,7 @@ export async function drainPush(env, { max = Infinity } = {}) {
       const x = res[i], st = x.ok ? x.v : 0;
       if (x.ok && st < 300) { out.sent++; done.push(r.id); return; }
       out.failed++;
-      if (x.ok && (st === 404 || st === 410)) gone.push(r.endpoint);
+      if (x.ok && (st === 404 || st === 410) && keys.has(`${r.endpoint} ${r.notif_id}`)) gone.push(r.endpoint);
       if (x.ok && PERMANENT(st)) done.push(r.id);
       else if (r.attempts >= 3) { done.push(r.id); out.dropped++; }   // 暫時性失敗已經試滿 3 次
     });
@@ -122,7 +133,7 @@ export async function drainPush(env, { max = Infinity } = {}) {
   const fin = [];
   if (done.length) fin.push(env.DB.prepare('DELETE FROM push_queue WHERE id IN (SELECT value FROM json_each(?1))').bind(JSON.stringify(done)));
   if (gone.length) fin.push(env.DB.prepare('DELETE FROM push_subs WHERE endpoint IN (SELECT value FROM json_each(?1))').bind(JSON.stringify([...new Set(gone)])));
-  fin.push(env.DB.prepare(`DELETE FROM push_queue WHERE expires_at <= datetime('now') OR (attempts >= 3 AND (lease_until IS NULL OR lease_until < datetime('now'))) RETURNING id`));
+  fin.push(env.DB.prepare(PUSH_EXPIRED));
   const r = await env.DB.batch(fin);
   out.dropped += r[r.length - 1].results.length;
   return out;
@@ -135,7 +146,9 @@ export const validEndpoint = (s) => { try { const u = new URL(s); return u.proto
 
 export async function subscribe(env, memberId, { endpoint, p256dh, auth }) {
   // 每人最多 10 台：超過就刪掉最舊的（一句），再寫入這一台
+  //   同一台裝置換人訂閱（共用裝置、前一個人的工作階段逾時沒有登出）：前一個人還在佇列裡的推播一起刪掉，不會送到新主人的裝置
   await env.DB.batch([
+    env.DB.prepare('DELETE FROM push_queue WHERE endpoint = ?2 AND EXISTS (SELECT 1 FROM push_subs WHERE endpoint = ?2 AND member_id != ?1)').bind(memberId, endpoint),
     env.DB.prepare(`DELETE FROM push_subs WHERE member_id = ?1 AND endpoint != ?2 AND endpoint NOT IN
       (SELECT endpoint FROM push_subs WHERE member_id = ?1 AND endpoint != ?2 ORDER BY created_at DESC LIMIT ?3)`).bind(memberId, endpoint, MAX_DEVICES - 1),
     env.DB.prepare(`INSERT INTO push_subs (endpoint, member_id, p256dh, auth) VALUES (?, ?, ?, ?)

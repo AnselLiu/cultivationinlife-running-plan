@@ -8,7 +8,7 @@
 //   每支鏡頭向來源抓取的間隔由這裡保證（至少 60 秒）；影像只在 Cache API（約 60 秒）與記憶體（最多 10 分鐘）暫存，不寫入 D1、KV 或 R2。
 //   整個功能由「功能開關」的 features.cams 控制，預設關閉（staging 實測 Cache API、出口 IP 與解析 CPU 時間之後才開）。
 import * as Mock from './cams-mock.js';
-import { xfetch } from './budget.js';
+import { xfetch, cacheOf } from './budget.js';
 
 const UA = 'cil-run camera relay (+https://cil-run.anselliu7.workers.dev)';
 // 來源登錄表：清單網址、解析、主機白名單、顯名。主機白名單跟資安有關（避免變成開放代理），寫在程式碼裡
@@ -256,7 +256,7 @@ export async function forSpot(env, spot) {
   if (!srcs.length) return { cams: [], enabled: false, link };
   const ver = fnv(JSON.stringify(srcs.map((s) => [s.source, s.rev])));
   const key = new Request(`https://cil-run.internal/spotcams/v2/${encodeURIComponent(spot.id)}/${spot.lat},${spot.lng}/${ver}`);
-  const cache = globalThis.caches?.default;
+  const cache = cacheOf(env);
   let cams = null;
   try { const hit = await cache?.match(key); if (hit) cams = await hit.json(); } catch {}
   if (!cams) {
@@ -296,7 +296,7 @@ const frameFail = (status, msg, extra = {}) => new Response(JSON.stringify({ err
 export async function frame(env, cam, throttle) {
   const iv = Math.max(MIN_IV, cam.min_interval || MIN_IV);
   const key = new Request(`https://cil-run.internal/cam/v1/${encodeURIComponent(cam.id)}`);
-  const cache = globalThis.caches?.default;
+  const cache = cacheOf(env);
   try {
     const hit = await cache?.match(key);
     if (hit) return frameRes(await hit.arrayBuffer(), hit.headers.get('content-type'), hit.headers.get('x-cam-at') || '', iv, 'hit');

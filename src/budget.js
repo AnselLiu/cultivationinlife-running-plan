@@ -5,9 +5,12 @@
 //   測試嚴格模式（DEV_LOGIN=1 且 BUDGET_STRICT=1）：超過上限就丟 BudgetExceeded，並記到 strictViolations。
 //   之後改用付費方案，只要把 wrangler.jsonc 的 PLAN 改成 paid，程式不用動。
 export const PLANS = {
-  free: { sub: 50,   d1: 50,   soft: 44,  pushPerHop: 10,  pushKick: 3,  pushDepth: 20, pushConc: 4, holidayPages: 10 },
-  paid: { sub: 1000, d1: 1000, soft: 900, pushPerHop: 200, pushKick: 20, pushDepth: 25, pushConc: 6, holidayPages: 20 },
+  free: { sub: 50,   d1: 50,   soft: 44,  pushPerHop: 10,  pushKick: 3,  pushDepth: 20, pushConc: 4, holidayPages: 10, backupSeg: 256 * 1024, backupHops: 4 },
+  paid: { sub: 1000, d1: 1000, soft: 900, pushPerHop: 200, pushKick: 20, pushDepth: 25, pushConc: 6, holidayPages: 20, backupSeg: 16 * 1024 * 1024, backupHops: 4 },
 };
+// backupSeg：每日備份一段（一次執行）最多處理多少 JSON 字元。CPU 跟資料量成正比（M4 上 stringify＋gzip 約 10 ms／MB），
+//   256 KB 約 3 ms，乘 2 換算 Cloudflare 主機還在 10 ms 內；資料多時分好幾段、好幾個整點做完（見 worker.js 的 backupStep）
+// backupHops：JOB_DISPATCH=self（staging 驗證過每次呼叫自己都有自己的額度）時，一個整點最多接著做幾段
 export const planOf = (env) => PLANS[env?.PLAN] || PLANS.free;   // 沒設定或寫錯，一律當免費方案（安全的那一邊）
 
 export class BudgetExceeded extends Error {}
@@ -17,7 +20,7 @@ export const strictViolations = [];
 export class Budget {
   constructor(env, { kind = 'request', name = '', inherit = 0 } = {}) {
     this.plan = planOf(env); this.kind = kind; this.name = String(name).slice(0, 80);
-    this.d1 = 0; this.kv = 0; this.fetch = 0; this.rpc = 0;
+    this.d1 = 0; this.kv = 0; this.fetch = 0; this.rpc = 0; this.cache = 0;
     this.inherit = Math.max(0, Number(inherit) || 0);   // 呼叫自己時，父執行已經用掉的（保守算法：假設和父執行共用額度）
     this.sub = this.inherit; this.child = 0;
     this.stopped = []; this.over = false; this.t0 = Date.now();
@@ -31,7 +34,7 @@ export class Budget {
     if (strictViolations.length < 200) strictViolations.push(v);
     throw new BudgetExceeded(`執行額度超過上限：${this.kind} ${this.name} sub=${this.sub} d1=${this.d1}`);
   }
-  // type：d1 | kv | fetch | rpc，全部都加到 sub
+  // type：d1 | kv | fetch | rpc | cache，全部都加到 sub
   take(type, n = 1) { this[type] += n; this.sub += n; this.check(); }
   // 子執行（呼叫自己）回報的用量：父執行保守地加回自己的預算
   absorb(n) { const k = Math.max(0, Number(n) || 0); this.child += k; this.sub += k; this.check(); }
@@ -39,7 +42,7 @@ export class Budget {
   left() { return this.plan.soft - this.sub; }
   stop(reason) { if (this.stopped.length < 20) this.stopped.push(String(reason).slice(0, 60)); }
   summary() {
-    return { kind: this.kind, name: this.name, d1: this.d1, kv: this.kv, fetch: this.fetch, rpc: this.rpc, child: this.child, inherit: this.inherit,
+    return { kind: this.kind, name: this.name, d1: this.d1, kv: this.kv, fetch: this.fetch, rpc: this.rpc, cache: this.cache, child: this.child, inherit: this.inherit,
       sub: this.sub, stopped: this.stopped.join(',') || null, over: this.over, ms: Date.now() - this.t0 };
   }
 }
@@ -76,7 +79,15 @@ function wrapStore(s, b) {
   return { get: w('get'), put: w('put'), list: w('list'), delete: w('delete'), getWithMetadata: w('getWithMetadata'), head: w('head') };
 }
 
-// 對外 fetch：一律經過這裡（env.ASSETS.fetch 與 Cache API 不算）
+// Cache API（caches.default）：官方限制頁寫 put()、match()、delete() 和子請求共用同一份額度，所以各算 1 個（保守算法）
+function wrapCache(c, b) {
+  const w = (k) => async (...a) => { b.take('cache'); return c[k](...a); };
+  return { match: w('match'), put: w('put'), delete: w('delete') };
+}
+// 沒有這次執行的 env（例如單元測試）時直接用 caches.default
+export const cacheOf = (env) => env?.cache || globalThis.caches?.default || null;
+
+// 對外 fetch：一律經過這裡（env.ASSETS.fetch 不算）
 export const xfetch = (env, input, init) => {
   try { env?.budget?.take('fetch'); } catch (e) { return Promise.reject(e); }
   return fetch(input, init);
@@ -98,6 +109,7 @@ export function invocationEnv(env, ctx, budget) {
   if (env.DB) e.DB = wrapD1(env.DB, budget);
   if (env.BACKUP_KV) e.BACKUP_KV = wrapStore(env.BACKUP_KV, budget);
   if (env.BACKUP) e.BACKUP = wrapStore(env.BACKUP, budget);
+  if (globalThis.caches?.default) e.cache = wrapCache(globalThis.caches.default, budget);
   e.http = (input, init) => xfetch(e, input, init);
   return e;
 }

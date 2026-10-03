@@ -1039,7 +1039,8 @@ test('附近即時影像：功能開關預設關閉、同步與完整性檢查�
   await mock('drop=0');
   assert.equal((await cron('2027-06-17T20:30:00Z')).wra, 4);
   // 公路局（offline）不在排程裡，也不能在後台立即同步；清單由電腦上的同步工具更新（這裡用測試入口模擬）
-  assert.equal(await cron('2027-06-17T21:30:00Z'), null, '公路局被跳過');
+  // 排程只做每天一次的健康狀態重設（連續抓不到畫面而停用推薦的鏡頭，隔天再給一次機會）
+  assert.deepEqual(await cron('2027-06-17T21:30:00Z'), { thb: 'reset' }, '公路局只重設健康狀態，不同步清單');
   assert.equal((await call('t_chair', '/cams/sources')).json.sources.find((s) => s.source === 'thb').offline, true);
   const ts = await call('t_chair', '/cams/sync', { method: 'POST', body: { source: 'thb' } });
   assert.equal(ts.status, 400); assert.match(ts.json.error, /cams-sync\.mjs/);
