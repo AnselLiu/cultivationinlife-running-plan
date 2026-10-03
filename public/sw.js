@@ -4,7 +4,7 @@
 //   更新：新版本裝好後先等待，畫面提示「有新版本」，使用者按下才切換（不會在填表單時突然重整）
 //   推播：顯示通知並更新主畫面圖示的未讀數字
 //   分享：從其他 App 分享 GPX／TCX 檔過來，暫存後打開拍照分享
-const CACHE = 'cil-v37';
+const CACHE = 'cil-v38';
 const API_CACHE = 'cil-api';
 const SHARE_CACHE = 'cil-share';
 // 地圖圖磚：看過的與「下載離線地圖」存的都在這裡，最多約 3000 張，先存的先清
@@ -45,7 +45,11 @@ self.addEventListener('fetch', (e) => {
     if (OFFLINE_API.some((r) => r.test(url.pathname))) e.respondWith(networkFirst(e.request));
     return;
   }
+  // 程式與頁面（js、css、html、json、頁面導覽）有快取就只用快取，不在背景一個一個換新：
+  //   不然同一次使用中會新舊版混在一起（新模組配舊主程式就會壞）；換版一律靠新版 Service Worker 整批安裝
+  const code = e.request.mode === 'navigate' || url.pathname === '/' || url.pathname === '/coach' || /\.(js|mjs|css|html|json|webmanifest)$/.test(url.pathname);
   e.respondWith(caches.match(e.request, { ignoreSearch: true }).then(async (hit) => {
+    if (hit && code) return clean(hit);
     const net = fetch(e.request).then(async (res) => {
       if (res.ok) { const c = await clean(res.clone()); caches.open(CACHE).then((x) => x.put(e.request, c)); }
       return res;

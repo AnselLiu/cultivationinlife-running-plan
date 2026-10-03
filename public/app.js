@@ -12,9 +12,24 @@ import * as I18N from './i18n.js';
 const calendarView = (...a) => lazy('./calendar.js', 'calendarView')(...a);
 const mapView = (...a) => lazy('./map.js', 'mapView')(...a);
 const challengeView = (...a) => lazy('./challenge.js', 'challengeView')(...a);
+// 新舊版本混在一起（畫面還是舊版、用到才載入的模組已經是新版）會 import 失敗：
+//   重新載入整個 App 換成同一版；30 秒內不重複，避免一直重整
+const VERSION_SKEW = /Importing binding name|does not provide an export named|requested module .* does not provide/i;
+function reloadForUpdate() {
+  try {
+    if (Date.now() - Number(sessionStorage.getItem('cil-skew') || 0) < 30000) return false;
+    sessionStorage.setItem('cil-skew', String(Date.now()));
+  } catch { return false; }
+  location.reload();
+  return true;
+}
 const lazy = (file, name) => async (...a) => {
   let m;
-  try { m = await import(file); } catch { await new Promise((r) => setTimeout(r, 800)); m = await import(`${file}?r=${Date.now()}`); }
+  try { m = await import(file); } catch (e) {
+    if ((e?.name === 'SyntaxError' || VERSION_SKEW.test(e?.message || '')) && reloadForUpdate()) return new Promise(() => {});
+    await new Promise((r) => setTimeout(r, 800)); m = await import(`${file}?r=${Date.now()}`);
+  }
+  if (typeof m[name] !== 'function' && reloadForUpdate()) return new Promise(() => {});
   return m[name](...a);
 };
 
@@ -38,6 +53,7 @@ const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<
 // 寫入中的請求數：送出表單時按鈕先停用，等所有寫入完成才恢復（避免連點送出兩次）
 let writes = 0;
 const idleWaiters = [];
+let formDirty = false, hiddenAt = 0;   // 表單填到一半、App 進背景的時間（決定能不能自動換新版）
 const apiTimes = [];   // [路徑, 總毫秒, 伺服器毫秒]，送速度紀錄時整理成中位數
 const api = async (path, opt = {}, retried = false) => {
   const method = opt.method || 'GET';
@@ -2477,6 +2493,7 @@ function paintBack(hash) {
   btn.onclick = () => { if (navStack.length > 1) history.back(); else location.hash = href; };
 }
 async function renderOnce() {
+  formDirty = false;
   if (stopScan) { stopScan(); stopScan = null; }
   const raw = location.hash.replace(/^#/, '') || '/';
   const hash = raw.split('?')[0];
@@ -2590,7 +2607,9 @@ async function route(hash) {
     view.innerHTML = `<div class="card">${emptyState('runner', '找不到這個頁面')}</div>`;
   } catch (e) {
     view.innerHTML = `<div class="card">${emptyState('runner', esc(e.message))}<div class="row" style="justify-content:center;gap:8px"><button class="btn sm" id="retryBtn">重試</button><a class="btn ghost sm" href="#/">回首頁</a></div></div>`;
-    $('#retryBtn').onclick = () => render();
+    // 版本混在一起的錯誤：重試要重新載入整個 App，只重畫這一頁還是會用到舊程式
+    $('#retryBtn').onclick = () => (VERSION_SKEW.test(e.message || '') ? location.reload() : render());
+    if (VERSION_SKEW.test(e.message || '')) reloadForUpdate();
   }
 }
 
@@ -2642,13 +2661,17 @@ addEventListener('hashchange', () => {
 });
 // 英文介面：先載入字典再畫第一個畫面，避免先閃一下中文
 I18N.init().catch(() => {}).finally(() => render());
-// Service Worker：新版本裝好後先等待，跳出提示讓使用者決定什麼時候更新
+// Service Worker：新版本裝好後先等待；剛打開 App、或在背景放了 3 分鐘以上回來，而且沒有填到一半的表單、沒在跑步時，
+//   直接換新版（不然一直不關 App 的人會停在舊版）；其他時候跳出提示讓使用者決定
+document.addEventListener('input', (e) => { if (e.target.closest?.('#view form')) formDirty = true; }, true);
+const busyRunning = () => { try { return ['running', 'paused'].includes(Run.session()?.status); } catch { return false; } };
+const quietMoment = () => !formDirty && !busyRunning() && (performance.now() < 15000 || (hiddenAt && Date.now() - hiddenAt > 180000));
 if ('serviceWorker' in navigator) {
   const hadController = !!navigator.serviceWorker.controller;
   navigator.serviceWorker.register('/sw.js').then((reg) => {
     const ask = (w) => {
       if (!w) return;
-      if (!hadController) { w.postMessage({ type: 'SKIP_WAITING' }); return; }   // 第一次安裝直接啟用
+      if (!hadController || quietMoment()) { w.postMessage({ type: 'SKIP_WAITING' }); return; }   // 第一次安裝、或現在換版不會打斷人
       if (document.getElementById('updbar')) return;
       const bar = document.createElement('div');
       bar.id = 'updbar'; bar.className = 'updbar'; bar.role = 'status';
@@ -2663,7 +2686,10 @@ if ('serviceWorker' in navigator) {
       w?.addEventListener('statechange', () => { if (w.state === 'installed') ask(w); });
     });
     // 打開 App、切回前景時檢查有沒有新版本
-    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') reg.update().catch(() => {}); });
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') { hiddenAt = Date.now(); return; }
+      reg.update().catch(() => {}).finally(() => { if (reg.waiting) ask(reg.waiting); hiddenAt = 0; });
+    });
   }).catch(() => {});
   let reloading = false;
   navigator.serviceWorker.addEventListener('controllerchange', () => { if (hadController && !reloading) { reloading = true; location.reload(); } });

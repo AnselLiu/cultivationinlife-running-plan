@@ -85,3 +85,22 @@ test('管理後台：切換每個分頁不會整頁跳動；離開後點下方�
   await expect(page).toHaveURL(/#\/me$/);
   await expect(page.locator('.adminseg')).toHaveCount(0);
 });
+
+test('新舊版本混在一起（新模組要的東西舊主程式沒有）：自動重新載入一次就恢復', async ({ page }) => {
+  await enter(page, 't_chair');
+  // 第一次載入 admin.js 時，模擬新版模組：多 import 一個舊版 app.js 沒有的名稱
+  let first = true;
+  await page.route(/\/admin\.js(\?.*)?$/, async (route) => {
+    if (!first) return route.continue();
+    first = false;
+    const body = (await (await route.fetch()).text()).replace("import { $,", "import { 不存在的新功能, $,");
+    await route.fulfill({ body, contentType: 'text/javascript' });
+  });
+  let loads = 0;
+  page.on('load', () => { loads += 1; });
+  await page.goto('/#/admin');   // 只換 #，不會重新載入頁面
+  await expect(page.locator('.adminseg')).toBeVisible({ timeout: 15000 });
+  await expect(page.locator('#view')).not.toContainText('Importing binding');
+  expect(first).toBe(false);
+  expect(loads, '有自動重新載入一次').toBe(1);
+});
