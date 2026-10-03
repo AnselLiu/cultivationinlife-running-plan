@@ -40,6 +40,6 @@
   //   CHAIR_CODE            一次性的初始理事長設定碼（有理事長之後自動失效）
   //   HASH_SALT             IP 雜湊用的鹽
   //   AUDIT_KEY             稽核紀錄防竄改的 HMAC 金鑰
-  //   LINE_CHANNEL_ID／LINE_CHANNEL_SECRET   LINE Login
+  //   GOOGLE_CLIENT_ID／GOOGLE_CLIENT_SECRET   Google 登入
   //   VAPID_PUBLIC_KEY／VAPID_PRIVATE_JWK／VAPID_SUBJECT   推播
 }

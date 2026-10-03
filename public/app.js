@@ -179,6 +179,15 @@ function bindStepup() {
   };
 }
 
+// Google 標誌（依 Google 品牌規範使用原色 G）
+const GOOGLE_G = '<svg viewBox="0 0 48 48" width="20" height="20" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9.1 3.6l6.8-6.8C35.8 2.4 30.3 0 24 0 14.6 0 6.6 5.4 2.6 13.3l7.9 6.1C12.4 13.7 17.7 9.5 24 9.5z"/><path fill="#4285F4" d="M46.1 24.5c0-1.6-.1-3.1-.4-4.5H24v9h12.4c-.5 2.9-2.2 5.3-4.6 6.9l7.4 5.7c4.3-4 6.9-9.9 6.9-17.1z"/><path fill="#FBBC05" d="M10.5 28.6c-.5-1.4-.8-3-.8-4.6s.3-3.2.8-4.6l-7.9-6.1C1 16.6 0 20.2 0 24s1 7.4 2.6 10.7l7.9-6.1z"/><path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.4-5.7c-2.1 1.4-4.8 2.3-8.5 2.3-6.3 0-11.6-4.2-13.5-9.9l-7.9 6.1C6.6 42.6 14.6 48 24 48z"/></svg>';
+// Google 不允許在 App 內建瀏覽器登入（LINE、Facebook、Instagram）：LINE 可以用 openExternalBrowser=1 直接跳到 Safari／Chrome
+const inAppBrowser = () => (/Line\//i.test(navigator.userAgent) ? 'line' : /FBAN|FBAV|Instagram/i.test(navigator.userAgent) ? 'meta' : '');
+const googleHref = (link) => {
+  const path = `/api/google/start${link ? '?link=1' : ''}`;
+  return inAppBrowser() === 'line' ? `${location.origin}/?openExternalBrowser=1${location.hash || '#/'}` : path;
+};
+
 // ---------- 登入 ----------
 function loginView() {
   const err = new URLSearchParams(location.hash.split('?')[1] || '').get('err');
@@ -188,17 +197,16 @@ function loginView() {
     <div id="sharedEv"></div>
     <section class="card hero">
       <h2>一起練，跑得更遠</h2>
-      <p class="muted" style="margin:0">團練公告、報名接龍和每週課表，都收在這裡。用 LINE 登入就會記得你的組別，報名不用再打名字。</p>
+      <p class="muted" style="margin:0">團練公告、報名接龍和每週課表，都收在這裡。用 Google 登入就會記得你的組別，報名不用再打名字。</p>
       ${org().parent ? `<p class="tiny" style="margin:0;color:rgba(255,255,255,.78)">${esc(org().parent_note || `${org().parent} 支持`)}</p>` : ''}
     </section>
     ${err ? `<div class="notice">${esc(err)}</div>` : ''}
     <section class="card">
-      ${cfg.lineLogin ? `<a class="btn line block" href="/api/line/start">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2C6.5 2 2 5.6 2 10c0 3.9 3.5 7.2 8.2 7.9.3.1.8.2.9.5.1.3.1.7 0 1l-.1.9c-.1.3-.3 1.1 1 .6s7-4.1 9.5-7c1.7-1.9 2.5-3.8 2.5-5.9C24 5.6 19.5 2 12 2z"/></svg>
-        用 LINE 登入</a>
-      <p class="tiny center">只取得你的 LINE 名稱和大頭貼，不會讀取聊天內容，也不會替你發訊息。<br>登入即表示你已閱讀並同意<a href="#/privacy">隱私權政策</a>。</p>` : ''}
-      ${pkSupported() ? `<button class="btn ghost block iconbtn" id="pkLogin" style="justify-content:center">${IC.lock}用通行金鑰登入（Face ID／指紋）</button>` : ''}
-      <details ${cfg.lineLogin ? '' : 'open'}>
+      ${cfg.googleLogin ? `<a class="btn google block" href="${googleHref()}">${GOOGLE_G}<span>${inAppBrowser() === 'line' ? '用瀏覽器開啟並以 Google 登入' : '使用 Google 帳號登入'}</span></a>
+      ${inAppBrowser() === 'line' ? '<p class="tiny center" style="margin:0">Google 不允許在 LINE 裡登入，按上面的按鈕會改用 Safari 或 Chrome 打開這個網站。</p>' : ''}
+      ${inAppBrowser() === 'meta' ? '<p class="notice" style="margin:0">Google 不允許在 Facebook／Instagram 裡登入：請點右上角「⋯」選「在瀏覽器開啟」。</p>' : ''}
+      <p class="tiny center">只取得你的 Google 名稱和大頭貼，不會取得 Email、不會讀取你的信件或雲端資料。<br>登入即表示你已閱讀並同意<a href="#/privacy">隱私權政策</a>。</p>` : ''}
+      <details ${cfg.googleLogin ? '' : 'open'}>
         <summary class="muted" style="cursor:pointer">用邀請碼加入</summary>
         <form id="joinForm" style="margin-top:12px">
           <label>邀請碼<input name="code" required autocomplete="one-time-code" placeholder="LINE 群公告的代碼"></label>
@@ -294,7 +302,7 @@ function privacyView() {
       <h3>一、蒐集目的</h3>
       <p>〇五二 法人或團體對會員之內部管理（團練報名、分組課表、會籍管理）；〇六九 契約、類似契約或其他法律關係事務（活動報名、入場與抽獎）；一三五 資（通）訊服務（通知推播）。</p>
       <h3>二、蒐集的資料</h3>
-      <p>識別類（C001）：姓名、暱稱、LINE 顯示名稱與大頭貼、電話（選填）。<br>
+      <p>識別類（C001）：姓名、暱稱、Google 帳號的顯示名稱與大頭貼（不取得 Email）、電話（選填）。<br>
          活動相關：項目與組別、所屬跑團、加入的分團與分團身分、餐點偏好、報名與報到紀錄、活動問卷的回答、中獎紀錄。<br>
          系統紀錄：登入時間、裝置型號摘要、IP 位址的單向雜湊值（無法還原）。<br>
          個人賽事：你自己加入的賽事名稱、日期與目標成績（用於倒數）。<br>
@@ -992,7 +1000,7 @@ const AUDIT_NAME = {
   'calendar.on': '產生行事曆訂閱', 'calendar.off': '停用行事曆訂閱',
   'passkey.add': '新增通行金鑰', 'passkey.remove': '移除通行金鑰', 'passkey.denied': '通行金鑰驗證失敗', 'mfa.verify': '兩步驟驗證', 'login.new_device': '新裝置登入',
   'settings.security': '修改兩步驟驗證設定', 'audit.verify': '稽核完整性檢查',
-  'line.link': '綁定 LINE', 'team.post': '發布分團公告', 'team.post_delete': '刪除分團公告', 'privacy.show_rank': '排行榜設定', broadcast: '群發通知', 'retention.cleanup': '資料保存期限清理', 'event.invite_denied': '邀請連結無效', 'privacy.share_logs': '訓練紀錄分享設定', 'settings.shortcut': '修改捷徑連結',
+  'google.link': '綁定 Google', 'login.denied': '登入驗證失敗', 'team.post': '發布分團公告', 'team.post_delete': '刪除分團公告', 'privacy.show_rank': '排行榜設定', broadcast: '群發通知', 'retention.cleanup': '資料保存期限清理', 'event.invite_denied': '邀請連結無效', 'privacy.share_logs': '訓練紀錄分享設定', 'settings.shortcut': '修改捷徑連結',
 };
 // 稽核紀錄：一定要選時間區間（預設最近 7 天），再依類型、操作者、對象縮小；一次 50 筆
 const AUDIT_GROUPS = { '': '所有類型', role: '身分變更', membership: '會籍', team: '分團', event: '活動', checkin: '報到', lottery: '抽獎',
@@ -2541,18 +2549,18 @@ async function meView() {
   const sub = await reg?.pushManager?.getSubscription().catch(() => null);
   const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone;
   const welcome = new URLSearchParams(location.hash.split('?')[1] || '').get('welcome');
-  const lineMsg = new URLSearchParams(location.hash.split('?')[1] || '').get('line');
+  const googleMsg = new URLSearchParams(location.hash.split('?')[1] || '').get('google');
   view.innerHTML = `
     ${largeTitle('我的')}
     ${welcome ? '<div class="notice">歡迎加入！先確認你的項目和組別，再到下方「我的分團」加入你在的團。</div>' : ''}
-    ${lineMsg === 'linked' ? '<div class="notice">已綁定 LINE，之後可以直接用 LINE 登入。</div>' : lineMsg === 'taken' ? '<div class="notice">這個 LINE 已經綁定另一個帳號了。如果那個帳號也是你的，請聯絡行政人員合併。</div>' : ''}
-    ${cfg.lineLogin && !me.line ? `<section class="card"><div class="row spread"><div><h3>綁定 LINE</h3><span class="tiny">綁定後可以直接用 LINE 登入，報名名單也會顯示你的 LINE 大頭貼。</span></div>
-      <a class="btn line sm" href="/api/line/start?link=1">綁定</a></div></section>` : ''}
+    ${googleMsg === 'linked' ? '<div class="notice">已綁定 Google，之後可以直接用 Google 登入。</div>' : googleMsg === 'taken' ? '<div class="notice">這個 Google 帳號已經綁定另一個帳號了。如果那個帳號也是你的，請聯絡行政人員合併。</div>' : ''}
+    ${cfg.googleLogin && !me.google ? `<section class="card"><div class="row spread"><div><h3>綁定 Google</h3><span class="tiny">綁定後換手機或清掉瀏覽器資料，也能用 Google 登入回到同一個帳號。</span></div>
+      <a class="btn google sm" href="${googleHref(true)}">${GOOGLE_G}<span>綁定</span></a></div></section>` : ''}
     <section class="card">
       <div class="row">
         ${avatar(me)}
         <div style="flex:1"><b>${esc(me.name)}</b>
-          <div class="tiny">${esc(me.title || me.roleName || ROLE_NAME[me.role] || '團員')}${me.line ? '・LINE 登入' : ''}</div></div>
+          <div class="tiny">${esc(me.title || me.roleName || ROLE_NAME[me.role] || '團員')}${me.google ? '・已綁定 Google' : ''}</div></div>
       </div>
       <form id="mf">
         <div class="grid2">
@@ -2606,7 +2614,7 @@ async function meView() {
     ${installCard('me')}
     <section class="card" id="pkCard">
       <div class="row spread"><h3>通行金鑰</h3>${me.mfa ? `<span class="pill solid">${IC.check}這次已驗證</span>` : ''}</div>
-      <p class="tiny" style="margin:0">用 Face ID、Touch ID 或手機指紋登入，不用密碼也不用 LINE。${['chair', 'director', 'supervisor', 'staff', 'coach'].includes(me.realRole || me.role) ? '幹部建議至少新增一把，協會開啟兩步驟驗證後要用它驗證。' : ''}</p>
+      <p class="tiny" style="margin:0">用 Face ID、Touch ID 或手機指紋登入，不用密碼。${['chair', 'director', 'supervisor', 'staff', 'coach'].includes(me.realRole || me.role) ? '幹部建議至少新增一把，協會開啟兩步驟驗證後要用它驗證。' : ''}</p>
       <div id="pkList" class="roster"></div>
       <div class="row" style="gap:8px">${pkSupported() ? `<button class="btn sm" id="pkAdd">${IC.plus}新增通行金鑰</button>` : '<span class="tiny">這個瀏覽器不支援通行金鑰</span>'}
         <button class="btn ghost sm" data-stepup id="pkTest" hidden>驗證一次</button></div>

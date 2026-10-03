@@ -2,7 +2,7 @@
 // 資安設計對應 ISO/IEC 27001:2022 附錄 A（詳見 docs/SECURITY.md）：
 //   A.5.15／A.5.18 存取控制：最小權限，特權身分只能由理事長指派，不能靠共用代碼取得
 //   A.8.2 特權存取：幹部的工作階段閒置 8 小時、絕對 7 天就失效；身分變更後舊工作階段立即作廢
-//   A.8.5 安全鑑別：LINE OIDC（state＋nonce 驗證）；邀請碼與報到代碼有嘗試次數限制
+//   A.8.5 安全鑑別：Google OIDC（state＋nonce、JWKS 驗章）、通行金鑰；邀請碼與報到代碼有嘗試次數限制
 //   A.8.15 日誌：特權操作寫入 audit_log，監事可查
 //   A.5.34 個資：最小蒐集、電話遮罩、IP 只存雜湊、本人可匯出與刪除
 // 工作階段權杖放 HttpOnly cookie，D1 只存 SHA-256；寫入類 API 只接受同源 JSON（擋 CSRF）。
@@ -141,8 +141,8 @@ async function noteDevice(env, req, member, how) {
     }
   } catch (e) { console.error('noteDevice', e); }
 }
-// LINE 大頭貼只接受 LINE 自己的圖床
-const safeAvatar = (u) => (/^https:\/\/(profile|obs)\.line-scdn\.net\//.test(u || '') ? u.slice(0, 300) : null);
+// 大頭貼只接受 Google 自己的圖床（舊的 LINE 圖床網址照樣顯示）
+const safeAvatar = (u) => (/^https:\/\/lh\d\.googleusercontent\.com\//.test(u || '') ? u.slice(0, 300) : null);
 
 // 角色：參考人民團體的組織分層。chair 理事長｜director 理事｜supervisor 監事｜staff 行政人員｜coach 教練｜member 團員
 export const ROLES = { chair: '理事長', director: '理事', supervisor: '監事', staff: '行政人員', coach: '教練', member: '團員' };
@@ -168,7 +168,7 @@ const isColor = (c) => /^#[0-9a-f]{6}$/i.test(c || '');
 const lineGroupUrl = (u) => (/^https:\/\/(line\.me|lin\.ee|liff\.line\.me)\/[^\s<>"']{1,250}$/.test(u || '') ? u : '');
 const pub = (m) => ({
   id: m.id, name: m.name, dist: m.dist, grp: m.grp, role: norm(m.role), roleName: ROLES[norm(m.role)],
-  title: m.title || null, avatar: m.avatar || null, line: !!m.line_id,
+  title: m.title || null, avatar: m.avatar || null, google: !!m.google_sub,
   nickname: m.nickname || '', club: m.club || '', meal_pref: m.meal_pref || '', phone: m.phone || '',
   membership: m.membership || 'none', membershipName: MEMBERSHIP[m.membership || 'none'],
   member_type: m.member_type || null, member_no: m.member_no || null, paid_until: m.paid_until || null,
@@ -192,70 +192,99 @@ const allMemberIds = async (env, exceptId) =>
   (await env.DB.prepare('SELECT id FROM members' + (exceptId ? ' WHERE id != ?' : '')).bind(...(exceptId ? [exceptId] : [])).all())
     .results.map((r) => r.id);
 
-// ---- LINE 登入（OpenID Connect 授權碼流程）----
-// 需要 secrets：LINE_CHANNEL_ID、LINE_CHANNEL_SECRET；LINE Developers 的 Callback URL 填 https://網域/api/line/callback
-const LINE_STATE = '__Host-cil_oauth';
-const redirectUri = (url) => `${url.origin}/api/line/callback`;
+// ---- Google 登入（OpenID Connect 授權碼流程）----
+// 需要 secrets：GOOGLE_CLIENT_ID、GOOGLE_CLIENT_SECRET
+// Google Cloud 的「已授權的重新導向 URI」填 https://網域/api/google/callback
+// 範圍只要 openid profile（名稱與大頭貼），不要 Email；資料庫只存 Google 的 sub
+const OAUTH_STATE = '__Host-cil_oauth';
+const googleRedirect = (url) => `${url.origin}/api/google/callback`;
+const GOOGLE_ISS = ['https://accounts.google.com', 'accounts.google.com'];
 
-// link=1：已經登入的人把 LINE 綁到目前帳號（例如先用邀請碼加入，之後改用 LINE 登入），不會另外開新帳號
-function lineStart(env, url, current) {
-  if (!env.LINE_CHANNEL_ID || !env.LINE_CHANNEL_SECRET) return fail(503, '尚未設定 LINE 登入');
+// link=1：已經登入的人把 Google 綁到目前帳號（例如先用邀請碼加入），不會另外開新帳號
+function googleStart(env, url, current) {
+  if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET) return fail(503, '尚未設定 Google 登入');
   const state = rid(12), nonce = rid(12), link = url.searchParams.get('link') === '1' && current ? '.L' : '';
-  const auth = new URL('https://access.line.me/oauth2/v2.1/authorize');
+  const auth = new URL('https://accounts.google.com/o/oauth2/v2/auth');
   auth.searchParams.set('response_type', 'code');
-  auth.searchParams.set('client_id', env.LINE_CHANNEL_ID);
-  auth.searchParams.set('redirect_uri', redirectUri(url));
+  auth.searchParams.set('client_id', env.GOOGLE_CLIENT_ID);
+  auth.searchParams.set('redirect_uri', googleRedirect(url));
+  auth.searchParams.set('scope', 'openid profile');
   auth.searchParams.set('state', state);
-  auth.searchParams.set('scope', 'profile openid');
   auth.searchParams.set('nonce', nonce);
+  auth.searchParams.set('prompt', 'select_account');
   return new Response(null, { status: 302, headers: {
     location: auth.toString(),
     // state 與 nonce 一起綁在發起登入的瀏覽器上，callback 時兩個都要對得上
-    'set-cookie': `${LINE_STATE}=${state}.${nonce}${link}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=600`,
+    'set-cookie': `${OAUTH_STATE}=${state}.${nonce}${link}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=600`,
   } });
 }
 
-async function lineCallback(req, env, url) {
-  const clear = `${LINE_STATE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`;
+// 驗證 Google 的 ID Token：用 Google 公開金鑰（JWKS）驗 RS256 簽章，再檢查發行者、對象、期限與 nonce
+let googleKeys = { at: 0, keys: [] };
+async function verifyGoogleIdToken(env, idToken, nonce) {
+  const [h, p, sig] = String(idToken).split('.');
+  if (!h || !p || !sig) throw new Error('ID Token 格式錯誤');
+  const dec = (x) => JSON.parse(new TextDecoder().decode(WebAuthn.unb64u(x)));
+  const header = dec(h), claims = dec(p);
+  if (header.alg !== 'RS256') throw new Error('簽章演算法不正確');
+  if (Date.now() - googleKeys.at > 3600e3 || !googleKeys.keys.some((k) => k.kid === header.kid)) {
+    googleKeys = { at: Date.now(), keys: (await (await fetch('https://www.googleapis.com/oauth2/v3/certs')).json()).keys || [] };
+  }
+  const jwk = googleKeys.keys.find((k) => k.kid === header.kid);
+  if (!jwk) throw new Error('找不到簽章金鑰');
+  const key = await crypto.subtle.importKey('jwk', { kty: 'RSA', n: jwk.n, e: jwk.e, alg: 'RS256' }, { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['verify']);
+  if (!(await crypto.subtle.verify('RSASSA-PKCS1-v1_5', key, WebAuthn.unb64u(sig), new TextEncoder().encode(`${h}.${p}`)))) throw new Error('簽章不正確');
+  const now = Date.now() / 1000;
+  if (!GOOGLE_ISS.includes(claims.iss)) throw new Error('發行者不正確');
+  if (claims.aud !== env.GOOGLE_CLIENT_ID) throw new Error('對象不正確');
+  if (!(claims.exp > now - 60) || (claims.iat && claims.iat > now + 300)) throw new Error('已過期');
+  if (claims.nonce !== nonce) throw new Error('nonce 不正確');
+  if (!claims.sub) throw new Error('缺少帳號識別碼');
+  return claims;
+}
+
+async function googleCallback(req, env, url) {
+  const clear = `${OAUTH_STATE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`;
   const back = (msg) => new Response(null, { status: 302, headers: { location: `/#/?err=${encodeURIComponent(msg)}`, 'set-cookie': clear } });
-  const [want, nonce, linkFlag] = ((req.headers.get('cookie') || '').match(new RegExp(`${LINE_STATE}=([\\w]+\\.[\\w]+(?:\\.L)?)`))?.[1] || '').split('.');
-  // 使用者在 LINE 授權頁按了取消
-  if (url.searchParams.get('error')) return back(url.searchParams.get('error') === 'access_denied' ? '你取消了 LINE 登入' : 'LINE 登入失敗，請再試一次');
+  const [want, nonce, linkFlag] = ((req.headers.get('cookie') || '').match(new RegExp(`${OAUTH_STATE}=([\\w]+\\.[\\w]+(?:\\.L)?)`))?.[1] || '').split('.');
+  // 使用者在 Google 授權頁按了取消
+  if (url.searchParams.get('error')) return back(url.searchParams.get('error') === 'access_denied' ? '你取消了 Google 登入' : 'Google 登入失敗，請再試一次');
   const code = url.searchParams.get('code'), state = url.searchParams.get('state');
   if (!code || !state || !want || state !== want) return back('登入逾時，請再試一次');
-  const form = new URLSearchParams({ grant_type: 'authorization_code', code, redirect_uri: redirectUri(url), client_id: env.LINE_CHANNEL_ID, client_secret: env.LINE_CHANNEL_SECRET });
-  const tok = await (await fetch('https://api.line.me/oauth2/v2.1/token', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: form })).json();
-  if (!tok.access_token || !tok.id_token) return back('LINE 登入失敗');
-  // 驗證 ID Token：簽章、發行者、對象、期限與 nonce 都交給 LINE 的驗證端點檢查
-  const vf = new URLSearchParams({ id_token: tok.id_token, client_id: env.LINE_CHANNEL_ID, nonce });
-  const idt = await (await fetch('https://api.line.me/oauth2/v2.1/verify', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: vf })).json();
-  if (!idt.sub || idt.nonce !== nonce) return back('LINE 登入驗證失敗');
-  const prof = await (await fetch('https://api.line.me/v2/profile', { headers: { authorization: `Bearer ${tok.access_token}` } })).json();
-  if (!prof.userId || prof.userId !== idt.sub) return back('LINE 登入驗證失敗');
-  const pic = safeAvatar(prof.pictureUrl);
-  let m = await env.DB.prepare('SELECT id, name, role FROM members WHERE line_id = ?').bind(prof.userId).first();
-  // 綁定模式：把這個 LINE 接到目前登入的帳號
+  let claims;
+  try {
+    const form = new URLSearchParams({ grant_type: 'authorization_code', code, redirect_uri: googleRedirect(url), client_id: env.GOOGLE_CLIENT_ID, client_secret: env.GOOGLE_CLIENT_SECRET });
+    const tok = await (await fetch('https://oauth2.googleapis.com/token', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: form })).json();
+    if (!tok.id_token) return back('Google 登入失敗');
+    claims = await verifyGoogleIdToken(env, tok.id_token, nonce);
+  } catch (e) {
+    await audit(env, req, null, 'login.denied', null, null, `Google：${str(e.message, 60)}`);
+    return back('Google 登入驗證失敗');
+  }
+  const pic = safeAvatar(claims.picture), displayName = str(claims.name || claims.given_name, 40) || '跑者';
+  let m = await env.DB.prepare('SELECT id, name, role FROM members WHERE google_sub = ?').bind(claims.sub).first();
+  // 綁定模式：把這個 Google 帳號接到目前登入的帳號
   if (linkFlag === 'L') {
     const cur = await currentMember(req, env);
     const toMe = (q) => new Response(null, { status: 302, headers: { location: `/#/me?${q}`, 'set-cookie': clear } });
-    if (!cur) return back('請先登入再綁定 LINE');
-    if (m && m.id !== cur.id) return toMe('line=taken');
-    await env.DB.prepare('UPDATE members SET line_id = ?, avatar = COALESCE(?, avatar) WHERE id = ?').bind(prof.userId, pic, cur.id).run();
-    await audit(env, req, cur, 'line.link', 'member', cur.id, '綁定 LINE');
-    return toMe('line=linked');
+    if (!cur) return back('請先登入再綁定 Google');
+    if (m && m.id !== cur.id) return toMe('google=taken');
+    await env.DB.prepare('UPDATE members SET google_sub = ?, avatar = COALESCE(?, avatar) WHERE id = ?').bind(claims.sub, pic, cur.id).run();
+    await audit(env, req, cur, 'google.link', 'member', cur.id, '綁定 Google');
+    return toMe('google=linked');
   }
   let isNew = false;
   if (m) {
-    await env.DB.prepare('UPDATE members SET avatar = ? WHERE id = ?').bind(pic, m.id).run();
+    if (pic) await env.DB.prepare('UPDATE members SET avatar = ? WHERE id = ?').bind(pic, m.id).run();
   } else {
     isNew = true;
     const id = rid(8);
-    await env.DB.prepare("INSERT INTO members (id, name, dist, grp, role, line_id, avatar, consent_at, consent_version) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), ?)")
-      .bind(id, str(prof.displayName, 40) || '跑者', 'fm', 'D', 'member', prof.userId, pic, (await getSettings(env)).privacy.version).run();
-    m = { id, name: str(prof.displayName, 40), role: 'member' };
+    await env.DB.prepare("INSERT INTO members (id, name, dist, grp, role, google_sub, avatar, consent_at, consent_version) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), ?)")
+      .bind(id, displayName, 'fm', 'D', 'member', claims.sub, pic, (await getSettings(env)).privacy.version).run();
+    m = { id, name: displayName, role: 'member' };
   }
-  await audit(env, req, m, isNew ? 'account.create' : 'login', 'member', m.id, 'LINE');
-  env.ctx?.waitUntil(noteDevice({ ...env, defer: (p) => env.ctx.waitUntil(p) }, req, m, ' LINE '));
+  await audit(env, req, m, isNew ? 'account.create' : 'login', 'member', m.id, 'Google');
+  env.ctx?.waitUntil(noteDevice({ ...env, defer: (p) => env.ctx.waitUntil(p) }, req, m, ' Google '));
   return new Response(null, { status: 302, headers: [
     ['location', isNew ? '/#/me?welcome=1' : '/#/'],
     ['set-cookie', await startSession(env, m, req)],
@@ -645,7 +674,7 @@ async function api(req, env, path, method) {
   }
 
   if (path === '/api/me' && method === 'GET')
-    return json({ member: member ? pub(member) : null, vapid: env.VAPID_PUBLIC_KEY || null, lineLogin: !!(env.LINE_CHANNEL_ID && env.LINE_CHANNEL_SECRET),
+    return json({ member: member ? pub(member) : null, vapid: env.VAPID_PUBLIC_KEY || null, googleLogin: !!(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET),
       ...(await (async () => { const st = await getSettings(env);
         return { settings: st, privacyVersion: st.privacy.version, needConsent: !!member && member.consent_version !== st.privacy.version }; })()),
       race: await countdownTarget(env, member),
@@ -985,7 +1014,7 @@ async function api(req, env, path, method) {
     const q = (sql) => env.DB.prepare(sql).bind(member.id).all().then((r) => r.results);
     const data = {
       exported_at: new Date().toISOString(),
-      profile: (({ s_seen, s_role, s_created, line_id, cal_token_hash, ...rest }) => ({ ...rest, line_linked: !!line_id, calendar_feed: !!cal_token_hash }))(member),
+      profile: (({ s_seen, s_role, s_created, s_mfa, s_th, line_id, google_sub, cal_token_hash, ...rest }) => ({ ...rest, google_linked: !!google_sub, calendar_feed: !!cal_token_hash }))(member),
       signups: await q('SELECT event_id, name, grp, dist, note, status, answers, paid, attended_at, created_at FROM signups WHERE member_id = ?'),
       teams: await q('SELECT team_id, role, title, status, created_at FROM team_members WHERE member_id = ?'),
       tickets: await q('SELECT event_id, code, guests, meal, table_no, checked_in_at FROM tickets WHERE member_id = ?'),
@@ -2045,9 +2074,9 @@ export default {
     const path = decodeURIComponent(url.pathname);
     if (!path.startsWith('/api/')) return env.ASSETS.fetch(req);
     env.ctx = ctx;
-    // LINE 登入是瀏覽器導向（GET、不是 JSON），走在下面的 CSRF 檢查之前
-    if (path === '/api/line/start' && req.method === 'GET') return lineStart(env, url, url.searchParams.get('link') === '1' ? await currentMember(req, env) : null);
-    if (path === '/api/line/callback' && req.method === 'GET') return lineCallback(req, env, url);
+    // Google 登入是瀏覽器導向（GET、不是 JSON），走在下面的 CSRF 檢查之前
+    if (path === '/api/google/start' && req.method === 'GET') return googleStart(env, url, url.searchParams.get('link') === '1' ? await currentMember(req, env) : null);
+    if (path === '/api/google/callback' && req.method === 'GET') return googleCallback(req, env, url);
     // 開發用：手動觸發排程，可指定時間 ?at=2026-10-03T12:00:00Z（只有 DEV_LOGIN=1 的本機有效）
     if (path === '/api/dev/cron' && env.DEV_LOGIN === '1' && ['localhost', '127.0.0.1'].includes(url.hostname)) {
       env.defer = (p) => ctx.waitUntil(Promise.resolve(p).catch(() => {}));

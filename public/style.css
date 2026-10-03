@@ -670,3 +670,9 @@ h3 svg.ic{width:18px;height:18px}
 }
 .updbar{width:max-content;max-width:calc(100vw - 24px)}
 .updbar span{white-space:nowrap}
+/* Google 登入按鈕（依 Google 品牌規範：白底、原色 G、深灰字） */
+.btn.google{background:#fff;color:#1F1F1F;border:1px solid #747775;display:flex;align-items:center;justify-content:center;gap:10px;font-weight:600;box-shadow:none}
+.btn.google svg{flex:none}
+.btn.google.sm{display:inline-flex;gap:8px}
+:root[data-theme="dark"] .btn.google{background:#131314;color:#E3E3E3;border-color:#8E918F}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .btn.google{background:#131314;color:#E3E3E3;border-color:#8E918F}}
