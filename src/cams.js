@@ -8,6 +8,7 @@
 //   每支鏡頭向來源抓取的間隔由這裡保證（至少 60 秒）；影像只在 Cache API（約 60 秒）與記憶體（最多 10 分鐘）暫存，不寫入 D1、KV 或 R2。
 //   整個功能由「功能開關」的 features.cams 控制，預設關閉（staging 實測 Cache API、出口 IP 與解析 CPU 時間之後才開）。
 import * as Mock from './cams-mock.js';
+import { xfetch } from './budget.js';
 
 const UA = 'cil-run camera relay (+https://cil-run.anselliu7.workers.dev)';
 // 來源登錄表：清單網址、解析、主機白名單、顯名。主機白名單跟資安有關（避免變成開放代理），寫在程式碼裡
@@ -37,7 +38,12 @@ const MAX_LIST = 4 * 1024 * 1024;
 
 // 測試模式（CAM_MOCK=1 而且 DEV_LOGIN=1）：清單與畫面都用假資料，不連外
 const mocked = (env) => env.CAM_MOCK === '1' && env.DEV_LOGIN === '1';
-const camFetch = (env, url, init) => (mocked(env) ? Promise.resolve(Mock.fetchMock(url)) : fetch(url, init));
+// 對外連線一律算進執行額度（測試的假來源也照算，計數才和正式環境一樣）
+const camFetch = (env, url, init) => {
+  if (!mocked(env)) return xfetch(env, url, init);
+  try { env.budget?.take('fetch'); } catch (e) { return Promise.reject(e); }
+  return Promise.resolve(Mock.fetchMock(url));
+};
 export const mockControl = (q) => Mock.control(q);
 
 // FNV-1a：清單欄位有沒有變（不是資安用途）

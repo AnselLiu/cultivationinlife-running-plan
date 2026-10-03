@@ -14,6 +14,8 @@ import { BADGES, earned, weeksOf } from '../public/badges.js';
 import { CATS, isCat, MUTABLE } from '../public/notif-cats.js';
 import { tpNow, shiftDays, daysBetween, evStart, signupEnd, signupState, STATE_TEXT, tpText, SIGNUP_DEFAULTS, windowError, isStamp } from '../public/signup-window.js';
 import * as Cams from './cams.js';
+import { WorkerEntrypoint } from 'cloudflare:workers';
+import { Budget, invocationEnv, logBudget, settled, strictViolations, xfetch, planOf } from './budget.js';
 
 const COOKIE = '__Host-cil_sess';
 // 工作階段期限：一般跑友長期使用；幹部看得到別人的資料，期限短很多
@@ -138,16 +140,18 @@ async function hmac(env, text) {
   return [...new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(text)))].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 const auditFields = (r) => [r.id, r.at, r.actor_id, r.actor_name, r.actor_role, r.action, r.target_type, r.target_id, r.detail, r.ip_hash].map((v) => v ?? '').join('\u001f');
+// auditStmt 只產生 statement（HMAC 照算），讓呼叫端可以和其他寫入放進同一個 DB.batch（同一個交易）
+async function auditStmt(env, req, actor, action, targetType, targetId, detail) {
+  const row = { id: rid(10), at: new Date().toISOString().replace('T', ' ').slice(0, 19), actor_id: actor?.id || null,
+    actor_name: actor?.name || (req ? null : '系統排程'), actor_role: actor ? norm(actor.real_role || actor.role) : null, action,
+    target_type: targetType || null, target_id: targetId || null, detail: str(detail, 300) || null, ip_hash: await ipHash(req, env) };
+  row.mac = await hmac(env, auditFields(row));
+  return env.DB.prepare(`INSERT INTO audit_log (id, at, actor_id, actor_name, actor_role, action, target_type, target_id, detail, ip_hash, mac)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .bind(row.id, row.at, row.actor_id, row.actor_name, row.actor_role, row.action, row.target_type, row.target_id, row.detail, row.ip_hash, row.mac);
+}
 async function audit(env, req, actor, action, targetType, targetId, detail) {
-  try {
-    const row = { id: rid(10), at: new Date().toISOString().replace('T', ' ').slice(0, 19), actor_id: actor?.id || null,
-      actor_name: actor?.name || (req ? null : '系統排程'), actor_role: actor ? norm(actor.real_role || actor.role) : null, action,
-      target_type: targetType || null, target_id: targetId || null, detail: str(detail, 300) || null, ip_hash: await ipHash(req, env) };
-    row.mac = await hmac(env, auditFields(row));
-    await env.DB.prepare(`INSERT INTO audit_log (id, at, actor_id, actor_name, actor_role, action, target_type, target_id, detail, ip_hash, mac)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .bind(row.id, row.at, row.actor_id, row.actor_name, row.actor_role, row.action, row.target_type, row.target_id, row.detail, row.ip_hash, row.mac).run();
-  } catch (e) { console.error('audit', e); }
+  try { await (await auditStmt(env, req, actor, action, targetType, targetId, detail)).run(); } catch (e) { console.error('audit', e); }
 }
 
 // 新裝置登入：只記「裝置類型・瀏覽器」的雜湊；第一次以外的新組合會通知本人
@@ -287,7 +291,7 @@ async function verifyGoogleIdToken(env, idToken, nonce) {
   const header = dec(h), claims = dec(p);
   if (header.alg !== 'RS256') throw new Error('簽章演算法不正確');
   if (Date.now() - googleKeys.at > 3600e3 || !googleKeys.keys.some((k) => k.kid === header.kid)) {
-    googleKeys = { at: Date.now(), keys: (await (await fetch('https://www.googleapis.com/oauth2/v3/certs')).json()).keys || [] };
+    googleKeys = { at: Date.now(), keys: (await (await xfetch(env, 'https://www.googleapis.com/oauth2/v3/certs')).json()).keys || [] };
   }
   const jwk = googleKeys.keys.find((k) => k.kid === header.kid);
   if (!jwk) throw new Error('找不到簽章金鑰');
@@ -313,7 +317,7 @@ async function googleCallback(req, env, url) {
   let claims;
   try {
     const form = new URLSearchParams({ grant_type: 'authorization_code', code, redirect_uri: googleRedirect(url), client_id: env.GOOGLE_CLIENT_ID, client_secret: env.GOOGLE_CLIENT_SECRET });
-    const tok = await (await fetch('https://oauth2.googleapis.com/token', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: form })).json();
+    const tok = await (await xfetch(env, 'https://oauth2.googleapis.com/token', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: form })).json();
     if (!tok.id_token) return back('Google 登入失敗');
     claims = await verifyGoogleIdToken(env, tok.id_token, nonce);
   } catch (e) {
@@ -345,7 +349,7 @@ async function googleCallback(req, env, url) {
     m = { id, name: displayName, role: 'member' };
   }
   await audit(env, req, m, isNew ? 'account.create' : 'login', 'member', m.id, 'Google');
-  env.ctx?.waitUntil(noteDevice({ ...env, defer: (p) => env.ctx.waitUntil(p) }, req, m, ' Google '));
+  env.defer(noteDevice(env, req, m, ' Google '));   // env 是這次執行專用的（不要用 { ...env } 複製，綁定會不見）
   return new Response(null, { status: 302, headers: [
     ['location', isNew ? '/#/me?welcome=1' : '/#/'],
     ['set-cookie', await startSession(env, m, req)],
@@ -389,7 +393,7 @@ async function postCheck(env, raw) {
   const x = addr.replace(/[<>&'"]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', "'": '&apos;', '"': '&quot;' })[c]);
   let text = '';
   try {
-    const r = await fetch(POST_WS, { method: 'POST', signal: AbortSignal.timeout(6000),
+    const r = await xfetch(env, POST_WS, { method: 'POST', signal: AbortSignal.timeout(6000),
       headers: { 'content-type': 'text/xml; charset=utf-8', SOAPAction: '"http://tempuri.org/GetZipAddress"' },
       body: `<?xml version="1.0" encoding="utf-8"?><soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/"><soap:Body><GetZipAddress xmlns="http://tempuri.org/"><addrStr>${x}</addrStr></GetZipAddress></soap:Body></soap:Envelope>` });
     if (!r.ok) return { ok: false, unavailable: true };
@@ -840,7 +844,7 @@ async function getWeather(env, lat, lng) {
   const [la, lo] = k.split(',');
   const fc = `https://api.open-meteo.com/v1/forecast?latitude=${la}&longitude=${lo}&hourly=temperature_2m,apparent_temperature,relative_humidity_2m,precipitation_probability,precipitation,weather_code,wind_speed_10m,uv_index&daily=sunrise,sunset,temperature_2m_max,temperature_2m_min,precipitation_probability_max,uv_index_max,weather_code&timezone=Asia%2FTaipei&forecast_days=7&wind_speed_unit=ms`;
   const aq = `https://air-quality-api.open-meteo.com/v1/air-quality?latitude=${la}&longitude=${lo}&hourly=pm2_5,us_aqi&timezone=Asia%2FTaipei&forecast_days=5`;
-  const [a, b] = await Promise.all([fetch(fc).then((r) => (r.ok ? r.json() : null)).catch(() => null), fetch(aq).then((r) => (r.ok ? r.json() : null)).catch(() => null)]);
+  const [a, b] = await Promise.all([xfetch(env, fc).then((r) => (r.ok ? r.json() : null)).catch(() => null), xfetch(env, aq).then((r) => (r.ok ? r.json() : null)).catch(() => null)]);
   if (!a?.hourly) return null;
   const body = JSON.stringify({ at: new Date().toISOString(), hourly: a.hourly, daily: a.daily, air: b?.hourly ? { time: b.hourly.time, pm2_5: b.hourly.pm2_5, us_aqi: b.hourly.us_aqi } : null });
   const put = cache.put(key, new Response(body, { headers: { 'content-type': 'application/json', 'cache-control': 'public, max-age=1800' } }));
@@ -1017,9 +1021,11 @@ async function api(req, env, path, method) {
     { const su = await needStepUp(); if (su) return su; }
     if (!backupStore(env) || !env.BACKUP_KEY) return fail(400, '備份還沒設定');
     if (await limited(env, `backup:${member.id}`, 3, 3600)) return fail(429, '一小時最多手動備份 3 次');
+    // 一次執行最多 50 個子請求：手動備份約 42 個（每張表一句＋KV＋稽核）；runBackup 開始前先確認額度，不夠就請對方稍後再按
     const r = await runBackup(env, `${today()}-manual-${Date.now().toString(36)}`);
-    await audit(env, req, member, 'backup.manual', 'system', null, `${r.tables} 張表 ${r.rows} 筆`);
-    return json(r);
+    if (!r.done) return fail(503, '這次請求的執行額度不夠，請稍後再按一次');
+    await audit(env, req, member, 'backup.manual', 'system', null, `${r.result.tables} 張表 ${r.result.rows} 筆`);
+    return json(r.result);
   }
   // ---- 練跑地圖 ----
   const SPOT_KINDS = ['track', 'river', 'park', 'trail', 'road', 'other'];
@@ -1330,7 +1336,7 @@ async function api(req, env, path, method) {
     if (await limited(env, `holiday:${member.id}`, 10, 3600)) return fail(429, '匯入太頻繁，請稍後再試');
     const rows = [];
     for (let page = 0; page < 20; page++) {
-      const r = await fetch(`https://data.ntpc.gov.tw/api/datasets/308DCD75-6434-45BC-A95F-584DA4FED251/json?page=${page}&size=1000`, { headers: { accept: 'application/json' }, cf: { cacheTtl: 3600 } });
+      const r = await xfetch(env, `https://data.ntpc.gov.tw/api/datasets/308DCD75-6434-45BC-A95F-584DA4FED251/json?page=${page}&size=1000`, { headers: { accept: 'application/json' }, cf: { cacheTtl: 3600 } });
       if (!r.ok) return fail(502, `新北市資料開放平台暫時無法連線（${r.status}），請稍後再試`);
       const list = await r.json().catch(() => null);
       if (!Array.isArray(list)) return fail(502, '新北市資料開放平台回傳的格式不正確');
@@ -3647,26 +3653,56 @@ async function api(req, env, path, method) {
 
 // ---- 排程工作（wrangler.jsonc 的 cron：每小時整點）----
 // 時間一律用台北時間判斷；每項工作都有防重複的標記，重跑也不會重複通知
+// 免費方案一次執行只有 50 個子請求（見 src/budget.js），所以：
+//   1. 每小時先用一句 SQL（CRON_PROBE）看哪些工作有事要做，安靜的整點只花 1 句
+//   2. 有事的工作依優先順序跑，共用一份預算；每處理一項（一場活動、一位會員）之前先確認額度，不夠就停，下個整點接著做
+//   3. 每日、每季的工作是兩段式：開始時先佔用，做完才標成完成；中途被終止的話，下個整點會重跑（最多 3 次，之後寫稽核 cron.gave_up）
+//   4. 時間門檻是「到了以後都可以補做」（hour >= H），錯過的整點在同一天後面的整點補上
+//   5. 每日備份（own）開自己的執行（ctx.exports.Jobs），不和其他工作擠同一份額度
 const taipei = (d = new Date()) => new Date(d.getTime() + 8 * 3600e3);   // 只拿來讀年月日時，不當成真的時區物件
 const tpDate = (d) => taipei(d).toISOString().slice(0, 10);
-async function onceOn(env, job, key) {
-  // 同一個 key（例如日期、季別）只執行一次
-  const r = await env.DB.prepare('SELECT last_run FROM job_runs WHERE job = ?').bind(job).first();
-  if (r?.last_run === key) return false;
-  await env.DB.prepare('INSERT INTO job_runs (job, last_run) VALUES (?, ?) ON CONFLICT(job) DO UPDATE SET last_run = excluded.last_run').bind(job, key).run();
-  return true;
+
+// 佔用：已完成、別人正在跑（15 分鐘內）、或已經失敗 3 次，都回 null
+//   claim_at 是 NULL（因為額度停下或失敗後釋放）也當作可以接著做
+const CLAIM = `INSERT INTO job_runs (job, last_run, claim_key, claim_at, attempts) VALUES (?1, '', ?2, datetime('now'), 1)
+  ON CONFLICT(job) DO UPDATE SET attempts = CASE WHEN job_runs.claim_key IS ?2 THEN job_runs.attempts + 1 ELSE 1 END,
+    claim_key = ?2, claim_at = datetime('now'), last_error = NULL
+  WHERE job_runs.last_run IS NOT ?2 AND (job_runs.claim_key IS NOT ?2
+    OR ((job_runs.claim_at IS NULL OR job_runs.claim_at < datetime('now', '-15 minutes')) AND job_runs.attempts < 3))
+  RETURNING attempts`;
+async function claim(env, job, key) {
+  const r = await env.DB.prepare(CLAIM).bind(job, key).first();
+  if (!r) return null;
+  env.claimed = { job, key, attempts: r.attempts };
+  // 測試用（/api/dev/cron?fail=backup，只有 DEV_LOGIN=1 的本機）：佔用之後丟錯，用來測重跑
+  if (env.failAfterClaim && env.failAfterClaim === env.jobName) throw new Error('測試：佔用之後失敗');
+  return r;
 }
+// 完成標記：要和收尾的寫入（例如稽核）放在同一個 DB.batch，才是同一個交易
+const doneStmt = (env, job, key) => env.DB.prepare("UPDATE job_runs SET last_run = ?2, done_at = datetime('now'), claim_key = NULL, last_error = NULL WHERE job = ?1").bind(job, key);
+// 因為額度停下：不算失敗，把次數退回去、釋放佔用，讓下個整點接著做
+const yieldStmt = (env, job) => env.DB.prepare('UPDATE job_runs SET attempts = MAX(0, attempts - 1), claim_at = NULL WHERE job = ?1').bind(job);
+// 失敗：記下錯誤並釋放佔用（確定沒有人在跑了，下個整點就能重跑，不用等 15 分鐘）
+const failStmt = (env, job, msg) => env.DB.prepare('UPDATE job_runs SET last_error = ?2, claim_at = NULL WHERE job = ?1').bind(job, String(msg).slice(0, 200));
+const yieldTo = async (env, job, name, result = 'deferred') => { env.budget.stop(name); await yieldStmt(env, job).run(); return { done: false, result }; };
+// 額度夠不夠處理下一項；不夠就記下「因額度停下」
+const fits = (env, n, name) => { if (env.budget.room(n)) return true; env.budget.stop(name); return false; };
+// notify() 一次用掉的子請求（C1 的版本：通知中心每位收件人一句、關閉分類查詢與推播名單每 90 人一句、推播另外佔用剩下的額度）
+const notifyCost = (n) => (n ? n + 2 * Math.ceil(n / 90) + 1 : 0);
+
 const signedIds = async (env, eid) => (await env.DB.prepare("SELECT member_id FROM signups WHERE event_id = ? AND status = 'in' AND member_id IS NOT NULL").bind(eid).all()).results.map((r) => r.member_id);
 
-// 活動提醒：前一晚 20:00 提醒明天的活動；集合前 1–2 小時再提醒一次
+// 活動提醒：前一晚 20:00 起提醒明天的活動（之後的整點補做）；集合前 1–2 小時再提醒一次
 async function remindEvents(env, now) {
   const hour = taipei(now).getUTCHours(), today0 = tpDate(now), tomorrow = tpDate(new Date(now.getTime() + 864e5));
   let sent = 0;
-  if (hour === 20) {
+  if (hour >= 20) {
     const evs = (await env.DB.prepare(`SELECT id, title, date, gather_time, place, kind FROM events
-      WHERE date = ? AND status = 'open' AND kind != 'survey' AND remind_day_at IS NULL`).bind(tomorrow).all()).results;
+      WHERE date = ? AND status = 'open' AND kind != 'survey' AND remind_day_at IS NULL LIMIT 100`).bind(tomorrow).all()).results;
     for (const ev of evs) {
+      if (!fits(env, 2, 'events')) return { done: false, result: sent };
       const ids = await signedIds(env, ev.id);
+      if (!fits(env, 1 + notifyCost(ids.length), 'events')) return { done: false, result: sent };
       await env.DB.prepare("UPDATE events SET remind_day_at = datetime('now') WHERE id = ?").bind(ev.id).run();
       if (!ids.length) continue;
       await notify(env, ids, 'signup', { kind: 'event', ref: `e:${ev.id}`, title: `明天：${ev.title}`, body: `${ev.gather_time ? `${ev.gather_time} 集合` : '明天'}${ev.place ? `・${ev.place}` : ''}${ev.kind === 'party' ? '・記得帶入場券 QR Code' : ''}`, url: `/#/e/${ev.id}`, tag: `day-${ev.id}` });
@@ -3676,11 +3712,13 @@ async function remindEvents(env, now) {
   // 集合時間落在 (現在 + 60 分, 現在 + 120 分]
   const nowMin = taipei(now).getUTCHours() * 60 + taipei(now).getUTCMinutes();
   const evs = (await env.DB.prepare(`SELECT id, title, gather_time, place, kind FROM events
-    WHERE date = ? AND status = 'open' AND kind != 'survey' AND gather_time != '' AND gather_time IS NOT NULL AND remind_hour_at IS NULL`).bind(today0).all()).results;
+    WHERE date = ? AND status = 'open' AND kind != 'survey' AND gather_time != '' AND gather_time IS NOT NULL AND remind_hour_at IS NULL LIMIT 100`).bind(today0).all()).results;
   for (const ev of evs) {
     const [h, m] = ev.gather_time.split(':').map(Number), diff = h * 60 + m - nowMin;
     if (!(diff > 60 && diff <= 120)) continue;
+    if (!fits(env, 2, 'events')) return { done: false, result: sent };
     const ids = await signedIds(env, ev.id);
+    if (!fits(env, 1 + notifyCost(ids.length), 'events')) return { done: false, result: sent };
     await env.DB.prepare("UPDATE events SET remind_hour_at = datetime('now') WHERE id = ?").bind(ev.id).run();
     if (!ids.length) continue;
     // 集合前提醒 1 小時就過期，不會隔天才收到
@@ -3688,10 +3726,10 @@ async function remindEvents(env, now) {
       ttl: 3600, urgency: 'high' });
     sent += ids.length;
   }
-  return sent;
+  return { done: true, result: sent };
 }
 
-// 會費到期：到期前 30 天、7 天、到期當天各提醒本人一次（同一個到期日的同一階段只提醒一次）
+// 會費到期：到期前 30 天、7 天、到期當天各提醒本人一次（同一個到期日的同一階段只提醒一次；renew_notice 就是游標）
 async function remindRenewals(env, now) {
   const until = tpDate(new Date(now.getTime() + 30 * 864e5)), today0 = tpDate(now);
   const rows = (await env.DB.prepare(`SELECT id, paid_until, renew_notice FROM members WHERE membership = 'active' AND paid_until IS NOT NULL
@@ -3701,65 +3739,68 @@ async function remindRenewals(env, now) {
     const days = Math.round((Date.parse(`${r.paid_until}T00:00:00Z`) - Date.parse(`${today0}T00:00:00Z`)) / 864e5);
     const stage = days <= 0 ? 0 : days <= 7 ? 7 : 30, key = `${r.paid_until}:${stage}`;
     if (r.renew_notice === key) continue;
+    if (!fits(env, notifyCost(1) + 1, 'renewals')) return { done: false, result: n };
     await notify(env, [r.id], 'membership', { kind: 'system', title: stage === 0 ? '會費今天到期' : `會費 ${days} 天後到期`, body: `你的協會會費繳至 ${r.paid_until}，續繳後會籍卡就會更新`, url: '/#/me/card' });
     await env.DB.prepare('UPDATE members SET renew_notice = ? WHERE id = ?').bind(key, r.id).run();
     n++;
   }
-  return n;
+  return { done: true, result: n };
 }
 
-// 壞天氣提醒：前一晚 20:00，明天有指定地點的活動，集合時間預報「不建議」、大雨或空氣不佳，通知報名的人與主辦幹部
+// 壞天氣提醒：前一晚 20:00 起，明天有指定地點的活動，集合時間預報「不建議」、大雨或空氣不佳，通知報名的人與主辦幹部
+//   先查天氣與名單、確認額度夠，才標記 wx_alert_at 並通知（額度不夠就不標記，下個整點重來）
 async function weatherAlerts(env, now) {
-  if (taipei(now).getUTCHours() !== 20) return 0;
   const tomorrow = tpDate(new Date(now.getTime() + 864e5));
   const evs = (await env.DB.prepare(`SELECT e.id, e.title, e.gather_time, e.team_id, e.created_by, s.name AS spot, s.lat, s.lng FROM events e JOIN spots s ON s.id = e.spot_id
-    WHERE e.date = ? AND e.status = 'open' AND e.kind != 'survey' AND e.wx_alert_at IS NULL`).bind(tomorrow).all()).results;
+    WHERE e.date = ? AND e.status = 'open' AND e.kind != 'survey' AND e.wx_alert_at IS NULL LIMIT 50`).bind(tomorrow).all()).results;
   let sent = 0;
+  const mark = (id) => env.DB.prepare("UPDATE events SET wx_alert_at = datetime('now') WHERE id = ?").bind(id).run();
   for (const ev of evs) {
-    await env.DB.prepare("UPDATE events SET wx_alert_at = datetime('now') WHERE id = ?").bind(ev.id).run();
+    if (!fits(env, 5, 'weather')) return { done: false, result: sent };   // 天氣 2（快取命中就 0）＋名單 1＋幹部 1＋標記 1
     const w = await getWeather(env, ev.lat, ev.lng);
-    if (!w) continue;
+    if (!w) { await mark(ev.id); continue; }
     const hh = /^\d{2}:\d{2}$/.test(ev.gather_time || '') ? ev.gather_time.slice(0, 2) : '07';
     const x = hourOf(JSON.parse(w.body), `${tomorrow}T${hh}:00`);
-    if (!x || !(x.advice.level === 'poor' || (x.rain >= 70 && x.mm >= 2) || x.aqi >= 101)) continue;
+    if (!x || !(x.advice.level === 'poor' || (x.rain >= 70 && x.mm >= 2) || x.aqi >= 101)) { await mark(ev.id); continue; }
     const why = x.advice.why.join('；');
     const ids = await signedIds(env, ev.id);
+    const mgr = x.advice.level === 'poor' ? await eventManagers(env, ev) : [];
+    if (!fits(env, 1 + notifyCost(ids.length) + notifyCost(mgr.length), 'weather')) return { done: false, result: sent };
+    await mark(ev.id);
     // 鎖定畫面用同一個 day- tag 取代同一場的「明天」提醒，通知中心兩筆都保留
     if (ids.length) await notify(env, ids, 'signup', { kind: 'event', ref: `e:${ev.id}`, title: `明天${x.advice.level === 'poor' ? '天氣不佳' : '天氣提醒'}：${ev.title}`, body: `${hh}:00 ${ev.spot}：${x.text}，體感 ${Math.round(x.feel)}°。${why}。有異動幹部會再通知。`, url: `/#/e/${ev.id}`, tag: `day-${ev.id}`, renotify: true });
-    if (x.advice.level === 'poor') {
-      const mgr = await eventManagers(env, ev);
-      if (mgr.length) await notify(env, mgr, 'todo', { kind: 'event', ref: `wx:${ev.id}`, title: `要不要調整：${ev.title}`, body: `明天 ${hh}:00 預報不建議跑步（${why}）。可以在活動頁「發布異動」通知大家。`, url: `/#/e/${ev.id}`, tag: `wxm-${ev.id}` });
-    }
+    if (mgr.length) await notify(env, mgr, 'todo', { kind: 'event', ref: `wx:${ev.id}`, title: `要不要調整：${ev.title}`, body: `明天 ${hh}:00 預報不建議跑步（${why}）。可以在活動頁「發布異動」通知大家。`, url: `/#/e/${ev.id}`, tag: `wxm-${ev.id}` });
     sent += ids.length;
   }
-  return sent;
+  return { done: true, result: sent };
 }
 
 // 跑完接續：團練結束 15 分鐘後，提醒有報名的人記錄今天的訓練（帶入課表），記完可以直接拍照分享
 async function runFollowups(env, now) {
   const today0 = tpDate(now), t = taipei(now), nowMin = t.getUTCHours() * 60 + t.getUTCMinutes();
   const evs = (await env.DB.prepare(`SELECT id, title, gather_time, end_time FROM events WHERE date = ? AND status = 'open' AND kind IN ('track', 'core', 'long', 'race', 'other')
-    AND followup_at IS NULL AND gather_time IS NOT NULL AND gather_time != ''`).bind(today0).all()).results;
+    AND followup_at IS NULL AND gather_time IS NOT NULL AND gather_time != '' LIMIT 100`).bind(today0).all()).results;
   let sent = 0;
   for (const ev of evs) {
     const [gh, gm] = ev.gather_time.split(':').map(Number);
     const end = /^\d{2}:\d{2}$/.test(ev.end_time || '') && ev.end_time > ev.gather_time ? ev.end_time.split(':').map(Number).reduce((h, m) => h * 60 + m) : gh * 60 + gm + 120;
     if (nowMin < end + 15) continue;
-    await env.DB.prepare("UPDATE events SET followup_at = datetime('now') WHERE id = ?").bind(ev.id).run();
+    if (!fits(env, 2, 'followups')) return { done: false, result: sent };
     const ids = await signedIds(env, ev.id);
+    if (!fits(env, 1 + notifyCost(ids.length), 'followups')) return { done: false, result: sent };
+    await env.DB.prepare("UPDATE events SET followup_at = datetime('now') WHERE id = ?").bind(ev.id).run();
     if (!ids.length) continue;
     await notify(env, ids, 'training', { kind: 'event', ref: `e:${ev.id}`, title: '跑完了嗎？', body: `記錄今天「${ev.title}」的訓練，再拍張照分享`, url: `/#/log?event=${ev.id}`, tag: `fu-${ev.id}` });
     sent += ids.length;
   }
-  return sent;
+  return { done: true, result: sent };
 }
 
-// 每月 1 號 09:00：上個月的里程挑戰總結（個人里程與徽章、分團平均第一名），只通知上個月有紀錄的人
+// 每月 1 號 09:00 起：上個月的里程挑戰總結（個人里程與徽章、分團平均第一名），只通知上個月有紀錄的人
+const prevMonthOf = (t) => new Date(Date.UTC(t.getUTCFullYear(), t.getUTCMonth() - 1, 1)).toISOString().slice(0, 7);
 async function monthSummary(env, now) {
-  const t = taipei(now);
-  if (t.getUTCDate() !== 1 || t.getUTCHours() !== 9) return 0;
-  const prev = new Date(Date.UTC(t.getUTCFullYear(), t.getUTCMonth() - 1, 1)).toISOString().slice(0, 7);
-  if (!(await onceOn(env, 'month_summary', prev))) return 0;
+  const prev = prevMonthOf(taipei(now));
+  if (!(await claim(env, 'month_summary', prev))) return { done: true, result: 0 };
   const logs = (await env.DB.prepare("SELECT member_id, date, km FROM training_logs WHERE date BETWEEN ? AND ? AND status != 'skip'").bind(`${prev}-01`, `${prev}-31`).all()).results;
   const by = {};
   for (const l of logs) (by[l.member_id] ||= []).push(l);
@@ -3767,112 +3808,130 @@ async function monthSummary(env, now) {
     JOIN team_members tm ON tm.team_id = t.id AND tm.status = 'active' LEFT JOIN training_logs l ON l.member_id = tm.member_id AND l.date BETWEEN ? AND ? AND l.status != 'skip'
     WHERE t.private = 0 GROUP BY t.id`).bind(`${prev}-01`, `${prev}-31`).all()).results.filter((x) => x.members).sort((a, b) => b.km / b.members - a.km / a.members);
   const champ = teams[0] && teams[0].km > 0 ? `分團平均第一：${teams[0].name}（每人 ${(teams[0].km / teams[0].members).toFixed(1)} 公里）` : '';
+  const list0 = Object.entries(by);
+  // 每人一則、沒有個別標記：額度不夠就整批留到下個整點（不會只送一半又重送）
+  if (!fits(env, list0.length * notifyCost(1) + 1, 'monthSummary')) return yieldTo(env, 'month_summary', 'monthSummary');
   let n = 0;
-  for (const [mid, list] of Object.entries(by)) {
+  for (const [mid, list] of list0) {
     const km = list.reduce((s0, l) => s0 + (l.km || 0), 0), stat = { km, runs: list.length, weeks: weeksOf(prev, list.map((l) => l.date)) };
     const got = earned(stat).map((id) => BADGES.find((b) => b.id === id).name);
     await notify(env, [mid], 'training', { kind: 'system', title: `${Number(prev.slice(5))} 月跑了 ${km.toFixed(1)} 公里`, body: `${list.length} 次訓練${got.length ? `，獲得徽章：${got.join('、')}` : ''}。${champ}`, url: `/#/challenge?m=${prev}`,
       push: { title: `${Number(prev.slice(5))} 月訓練總結`, body: '點開看本月里程與徽章' } });
     n++;
   }
-  return n;
+  await doneStmt(env, 'month_summary', prev).run();
+  return { done: true, result: n };
 }
 
 // 備份存放：有綁 R2（BACKUP）就存 R2，否則存 Workers KV（BACKUP_KV）；兩邊格式一樣
 const backupStore = (env) => (env.BACKUP ? {
   put: (k, v, meta) => env.BACKUP.put(k, v, { customMetadata: meta }),
   list: async () => (await env.BACKUP.list({ prefix: 'daily/', include: ['customMetadata'] })).objects.map((o) => ({ key: o.key, size: o.size, at: o.uploaded, ...o.customMetadata })),
+  get: async (k) => (await env.BACKUP.get(k))?.arrayBuffer(),
   del: (k) => env.BACKUP.delete(k), kind: 'R2',
 } : env.BACKUP_KV ? {
   put: (k, v, meta) => env.BACKUP_KV.put(k, v, { metadata: { ...meta, size: v.length, at: new Date().toISOString() } }),
   list: async () => (await env.BACKUP_KV.list({ prefix: 'daily/' })).keys.map((o) => ({ key: o.name, ...o.metadata })),
+  get: (k) => env.BACKUP_KV.get(k, 'arrayBuffer'),
   del: (k) => env.BACKUP_KV.delete(k), kind: 'KV',
 } : null);
-// 每天 03:00：資料庫加密備份（保留 35 天）。格式：CILB1＋IV＋AES-GCM(gzip(JSON))，還原見 tools/restore-backup.mjs
+const backupKey = (env, use) => crypto.subtle.importKey('raw', WebAuthn.unb64u(env.BACKUP_KEY.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')), 'AES-GCM', false, [use]);
+const BACKUP_AAD = new TextEncoder().encode('cil-backup-v1');
+// 不備份的表：暫存（工作階段、限流、通行金鑰挑戰、migration 紀錄）與遙測（前端效能與錯誤，保存 90 天；不影響還原，而且是備份 CPU 的大宗）
+const BACKUP_SKIP = new Set(['sessions', 'rate_limits', 'webauthn_challenges', 'd1_migrations',
+  'client_metrics', 'client_errors',
+  'push_queue', 'budget_log']);
+const BACKUP_FILTER = { cams: 'WHERE manual = 1' };   // 同步來的鏡頭清單可以重新抓，只備份幹部手動新增的連結
+// 每天 03:00 起：資料庫加密備份（保留 35 天）。格式：CILB1＋IV＋AES-GCM(gzip(JSON))，還原見 tools/restore-backup.mjs
 async function dailyBackup(env, now) {
-  if (!backupStore(env) || !env.BACKUP_KEY || taipei(now).getUTCHours() !== 3 || !(await onceOn(env, 'backup', tpDate(now)))) return null;
-  return runBackup(env, tpDate(now));
+  if (!backupStore(env) || !env.BACKUP_KEY) return { done: true, result: null };
+  const label = tpDate(now);
+  if (!(await claim(env, 'backup', label))) return { done: true, result: null };
+  const r = await runBackup(env, label, { finish: [doneStmt(env, 'backup', label)] });
+  if (!r.done) await yieldStmt(env, 'backup').run();
+  return r;
 }
-async function runBackup(env, label) {
-  const skip = ['sessions', 'rate_limits', 'webauthn_challenges', 'd1_migrations'];
-  const tables = (await env.DB.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%'").all()).results.map((r) => r.name).filter((n) => !skip.includes(n));
+// 子請求：sqlite_master 1、一張表一句（約 30）、KV 2–3、收尾 1＋finish；一張表只查一次（不分頁，也避開 OFFSET 讓讀取列數隨資料量平方成長）
+async function runBackup(env, label, { finish = [] } = {}) {
+  const tables = (await env.DB.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%'").all())
+    .results.map((r) => r.name).filter((n) => !BACKUP_SKIP.has(n) && /^\w+$/.test(n));
+  if (!env.budget.room(tables.length + 6 + finish.length)) { env.budget.stop('backup:tables'); return { done: false, result: 'deferred' }; }
+  const res = await env.DB.batch(tables.map((t) => env.DB.prepare(`SELECT * FROM "${t}" ${BACKUP_FILTER[t] || ''}`)));
   const data = { format: 'cil-backup', version: 1, at: new Date().toISOString(), tables: {} };
   let rows = 0;
-  for (const tb of tables) {
-    const out = [];
-    for (let off = 0; ; off += 1000) {
-      const r = (await env.DB.prepare(`SELECT * FROM "${tb.replace(/"/g, '')}" LIMIT 1000 OFFSET ${off}`).all()).results;
-      out.push(...r);
-      if (r.length < 1000) break;
-    }
-    data.tables[tb] = out; rows += out.length;
-  }
+  tables.forEach((t, i) => { data.tables[t] = res[i].results; rows += res[i].results.length; });
   const gz = await new Response(new Blob([JSON.stringify(data)]).stream().pipeThrough(new CompressionStream('gzip'))).arrayBuffer();
-  const key = await crypto.subtle.importKey('raw', WebAuthn.unb64u(env.BACKUP_KEY.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')), 'AES-GCM', false, ['encrypt']);
   const iv = crypto.getRandomValues(new Uint8Array(12));
-  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: new TextEncoder().encode('cil-backup-v1') }, key, gz));
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: BACKUP_AAD }, await backupKey(env, 'encrypt'), gz));
   const blob = new Uint8Array(5 + 12 + ct.length);
   blob.set(new TextEncoder().encode('CILB1'), 0); blob.set(iv, 5); blob.set(ct, 17);
   const store = backupStore(env);
   await store.put(`daily/${label}.bin`, blob, { tables: String(tables.length), rows: String(rows) });
   const cut = `daily/${tpDate(new Date(Date.now() - 35 * 864e5))}`;
-  for (const o of await store.list()) if (o.key < cut) await store.del(o.key);
-  await audit(env, null, null, 'backup.daily', 'system', label, `${tables.length} 張表 ${rows} 筆，${blob.length} bytes`);
-  return { label, tables: tables.length, rows, bytes: blob.length };
+  // 過期的一次最多刪 3 份（一般每天 0–1 份），控制子請求數
+  for (const o of (await store.list()).filter((x) => x.key < cut).slice(0, 3)) await store.del(o.key);
+  await env.DB.batch([...finish, await auditStmt(env, null, null, 'backup.daily', 'system', label, `${tables.length} 張表 ${rows} 筆，${blob.length} bytes`)]);
+  return { done: true, result: { label, tables: tables.length, rows, bytes: blob.length } };
 }
 
-// 每季第一天 09:00：提醒理事長與監事檢視幹部名單與權限（ISO 27001 A.5.18）
+// 每季第一天 09:00 起：提醒理事長與監事檢視幹部名單與權限（ISO 27001 A.5.18）
+const quarterOf = (t) => `${t.getUTCFullYear()}Q${Math.floor(t.getUTCMonth() / 3) + 1}`;
 async function quarterlyReview(env, now) {
-  const t = taipei(now);
-  if (t.getUTCDate() !== 1 || ![0, 3, 6, 9].includes(t.getUTCMonth()) || t.getUTCHours() !== 9) return 0;
-  if (!(await onceOn(env, 'quarterly_review', `${t.getUTCFullYear()}Q${t.getUTCMonth() / 3 + 1}`))) return 0;
+  const q = quarterOf(taipei(now));
+  if (!(await claim(env, 'quarterly_review', q))) return { done: true, result: 0 };
   const ids = (await env.DB.prepare("SELECT id FROM members WHERE role IN ('chair', 'supervisor')").all()).results.map((r) => r.id);
   const n = (await env.DB.prepare("SELECT COUNT(*) AS n FROM members WHERE role != 'member'").first()).n;
   const leads = (await env.DB.prepare("SELECT COUNT(*) AS n FROM team_members WHERE role IN ('lead', 'officer') AND status = 'active'").first()).n;
+  if (!fits(env, notifyCost(ids.length) + 2, 'review')) return yieldTo(env, 'quarterly_review', 'review');
   // 理事長與監事不能關這一則的推播
-  const q = `${t.getUTCFullYear()}Q${t.getUTCMonth() / 3 + 1}`;
   await notify(env, ids, 'todo', { kind: 'system', title: '每季權限檢視', body: `目前協會幹部 ${n} 位、分團團長與幹部 ${leads} 位。請確認卸任的人已移除權限。`, url: '/#/admin?tab=roles', ref: `review:${q}` }, { force: true });
-  await audit(env, null, null, 'review.reminder', 'system', null, `幹部 ${n}、分團幹部 ${leads}`);
-  return ids.length;
+  await env.DB.batch([doneStmt(env, 'quarterly_review', q), await auditStmt(env, null, null, 'review.reminder', 'system', null, `幹部 ${n}、分團幹部 ${leads}`)]);
+  return { done: true, result: ids.length };
 }
 
-// 每天 03:00：清掉過期資料；活動個資依後台設定的保存年限清除（沒設定就不動）
+// 每天 03:00 起：清掉過期資料；活動個資依後台設定的保存年限清除（沒設定就不動）
+//   子請求：佔用 1、設定 1、清理一個 batch 8–13 句、收尾 2
 async function retention(env, now) {
-  const t = taipei(now);
-  if (t.getUTCHours() !== 3 || !(await onceOn(env, 'retention', tpDate(now)))) return null;
+  const t = taipei(now), label = tpDate(now);
+  if (!(await claim(env, 'retention', label))) return { done: true, result: null };
   const org = (await getSettings(env)).org || {};
-  const out = {};
-  const run = async (k, sql, ...args) => { out[k] = (await env.DB.prepare(sql).bind(...args).run()).meta.changes; };
-  await run('sessions', "DELETE FROM sessions WHERE expires_at < datetime('now')");
-  await run('rate_limits', "DELETE FROM rate_limits WHERE window_end < datetime('now')");
-  await run('notifications', "DELETE FROM notifications WHERE created_at < datetime('now', '-180 days')");
+  const keys = [], stmts = [];
+  const add = (k, sql, ...args) => { keys.push(k); stmts.push(env.DB.prepare(sql).bind(...args)); };
+  add('sessions', "DELETE FROM sessions WHERE expires_at < datetime('now')");
+  add('rate_limits', "DELETE FROM rate_limits WHERE window_end < datetime('now')");
+  add('notifications', "DELETE FROM notifications WHERE created_at < datetime('now', '-180 days')");
   // 幹部待辦含其他會員的暱稱，真正的待處理狀態在來源資料表，60 天就清掉
-  await run('notif_todo', "DELETE FROM notifications WHERE category = 'todo' AND created_at < datetime('now', '-60 days')");
-  await run('client_metrics', "DELETE FROM client_metrics WHERE day < date('now', '-90 days')");
-  await run('client_errors', "DELETE FROM client_errors WHERE day < date('now', '-90 days')");
-  await run('spot_reports', "DELETE FROM spot_reports WHERE created_at < datetime('now', '-90 days')");
+  add('notif_todo', "DELETE FROM notifications WHERE category = 'todo' AND created_at < datetime('now', '-60 days')");
+  add('client_metrics', "DELETE FROM client_metrics WHERE day < date('now', '-90 days')");
+  add('client_errors', "DELETE FROM client_errors WHERE day < date('now', '-90 days')");
+  add('spot_reports', "DELETE FROM spot_reports WHERE created_at < datetime('now', '-90 days')");
   const auditYears = Math.max(1, Math.min(Number(org.audit_years) || 3, 10));
-  await run('audit', `DELETE FROM audit_log WHERE at < datetime('now', '-${auditYears} years')`);
+  add('audit', `DELETE FROM audit_log WHERE at < datetime('now', '-${auditYears} years')`);
   const evYears = Math.max(0, Math.min(Number(org.event_data_years) || 0, 20));
   if (evYears) {
-    const cut = `${t.getUTCFullYear() - evYears}${tpDate(now).slice(4)}`;
+    const cut = `${t.getUTCFullYear() - evYears}${label.slice(4)}`;
     const old = `SELECT id FROM events WHERE date < ?`;
-    await run('signups', `DELETE FROM signups WHERE event_id IN (${old})`, cut);
-    await run('tickets', `DELETE FROM tickets WHERE event_id IN (${old})`, cut);
-    await run('invites', `DELETE FROM event_invites WHERE event_id IN (${old})`, cut);
-    await run('draws', `UPDATE draws SET name = '已清除', member_id = NULL WHERE member_id IS NOT NULL AND event_id IN (${old})`, cut);
+    add('signups', `DELETE FROM signups WHERE event_id IN (${old})`, cut);
+    add('tickets', `DELETE FROM tickets WHERE event_id IN (${old})`, cut);
+    add('invites', `DELETE FROM event_invites WHERE event_id IN (${old})`, cut);
+    add('draws', `UPDATE draws SET name = '已清除', member_id = NULL WHERE member_id IS NOT NULL AND event_id IN (${old})`, cut);
   }
   const logYears = Math.max(0, Math.min(Number(org.log_years) || 0, 20));
-  if (logYears) await run('training_logs', `DELETE FROM training_logs WHERE date < date('now', '-${logYears} years')`);
-  await audit(env, null, null, 'retention.cleanup', 'system', null, Object.entries(out).map(([k, v]) => `${k} ${v}`).join('、'));
-  return out;
+  if (logYears) add('training_logs', `DELETE FROM training_logs WHERE date < date('now', '-${logYears} years')`);
+  if (!fits(env, stmts.length + 2, 'retention')) return yieldTo(env, 'retention', 'retention');
+  const res = await env.DB.batch(stmts);
+  const out = Object.fromEntries(keys.map((k, i) => [k, res[i].meta.changes]));
+  await env.DB.batch([doneStmt(env, 'retention', label), await auditStmt(env, null, null, 'retention.cleanup', 'system', null, Object.entries(out).map(([k, v]) => `${k} ${v}`).join('、'))]);
+  return { done: true, result: out };
 }
 
-// 每天 21:00：疲勞提醒（只通知本人，不通知教練）
+// 每天 21:00 起：疲勞提醒（只通知本人，不通知教練）
 //   最近 7 天有 3 次以上 RPE ≥ 8，或最近 7 天里程超過前三週平均的 1.3 倍（而且超過 20 公里）
+//   members.fatigue_notified 就是游標：額度不夠停下時，下個整點不會重複通知已經通知過的人
 async function fatigueCheck(env, now) {
-  if (taipei(now).getUTCHours() !== 21 || !(await onceOn(env, 'fatigue', tpDate(now)))) return 0;
-  const d7 = tpDate(new Date(now.getTime() - 6 * 864e5)), d28 = tpDate(new Date(now.getTime() - 27 * 864e5)), today0 = tpDate(now);
+  const today0 = tpDate(now);
+  if (!(await claim(env, 'fatigue', today0))) return { done: true, result: 0 };
+  const d7 = tpDate(new Date(now.getTime() - 6 * 864e5)), d28 = tpDate(new Date(now.getTime() - 27 * 864e5));
   const rows = (await env.DB.prepare(`SELECT member_id,
       SUM(CASE WHEN date >= ?1 AND rpe >= 8 THEN 1 ELSE 0 END) AS hard,
       SUM(CASE WHEN date >= ?1 THEN COALESCE(km, 0) ELSE 0 END) AS km7,
@@ -3882,6 +3941,7 @@ async function fatigueCheck(env, now) {
   for (const r of rows) {
     const jump = r.km7 > 20 && r.km21 > 0 && r.km7 > (r.km21 / 3) * 1.3;
     if (!(r.hard >= 3 || jump)) continue;
+    if (!fits(env, 2 + notifyCost(1) + 1, 'fatigue')) return yieldTo(env, 'fatigue', 'fatigue', n);
     const m = await env.DB.prepare('SELECT fatigue_notified FROM members WHERE id = ?').bind(r.member_id).first();
     if (m?.fatigue_notified && Date.parse(today0) - Date.parse(m.fatigue_notified) < 7 * 864e5) continue;
     // 鎖定畫面不放 RPE 與公里數
@@ -3891,22 +3951,24 @@ async function fatigueCheck(env, now) {
     await env.DB.prepare('UPDATE members SET fatigue_notified = ? WHERE id = ?').bind(today0, r.member_id).run();
     n += 1;
   }
-  return n;
+  await doneStmt(env, 'fatigue', today0).run();
+  return { done: true, result: n };
 }
 
-// 每天台北 09:00：把前一天（UTC）的稽核 HMAC 串成摘要鏈；有人刪掉或改掉紀錄，重算就對不上
+// 每天台北 09:00 起：把前一天（UTC）的稽核 HMAC 串成摘要鏈；有人刪掉或改掉紀錄，重算就對不上（audit_digests 本身防止重複）
+const utcYesterday = (now) => new Date(now.getTime() - 864e5).toISOString().slice(0, 10);
 async function auditDigest(env, now) {
-  if (!env.AUDIT_KEY || taipei(now).getUTCHours() !== 9) return null;
-  const day = new Date(now.getTime() - 864e5).toISOString().slice(0, 10);
-  if (await env.DB.prepare('SELECT 1 FROM audit_digests WHERE day = ?').bind(day).first()) return null;
+  if (!env.AUDIT_KEY) return { done: true, result: null };
+  const day = utcYesterday(now);
+  if (await env.DB.prepare('SELECT 1 FROM audit_digests WHERE day = ?').bind(day).first()) return { done: true, result: null };
   const prev = (await env.DB.prepare('SELECT digest FROM audit_digests WHERE day < ? ORDER BY day DESC LIMIT 1').bind(day).first())?.digest || '';
   const rows = (await env.DB.prepare('SELECT mac FROM audit_log WHERE at >= ? AND at < ? AND mac IS NOT NULL ORDER BY at, id').bind(day, `${day} 24`).all()).results;
   const digest = await hmac(env, `${prev}|${rows.map((x) => x.mac).join('|')}`);
   await env.DB.prepare('INSERT INTO audit_digests (day, rows, digest) VALUES (?, ?, ?)').bind(day, rows.length, digest).run();
-  return { day, rows: rows.length };
+  return { done: true, result: { day, rows: rows.length } };
 }
 
-// 開放報名推播：到了 signup_start、還沒推過的活動（每小時，最晚 59 分鐘）
+// 開放報名推播：到了 signup_start、還沒推過的活動（每小時，最晚 59 分鐘；open_notified_at 就是游標）
 async function signupOpen(env, now) {
   const evs = (await env.DB.prepare(`SELECT id, title, date, gather_time, place, kind, capacity, team_id, visibility, created_by, signup_start, signup_open, status, deadline
     FROM events WHERE open_notified_at IS NULL AND signup_start IS NOT NULL AND signup_start <= ? AND status = 'open' AND date >= ? LIMIT 50`)
@@ -3914,36 +3976,46 @@ async function signupOpen(env, now) {
   let sent = 0;
   for (const ev of evs) {
     // 看得到這場、還沒報名的人（邀請制＝受邀名單、分團活動＝該分團、其他＝全體）；
-    // 每個分支只綁自己用到的參數（D1 參數數量不符會直接丟錯），名單查好了才標記已推，查詢失敗下一輪會重試
+    // 每個分支只綁自己用到的參數（D1 參數數量不符會直接丟錯），名單查好了、額度也夠才標記已推，查詢失敗下一輪會重試
     const team = ev.visibility !== 'invite' && ev.team_id;
     const base = ev.visibility === 'invite' ? 'SELECT member_id AS id FROM event_invites WHERE event_id = ?1'
       : team ? "SELECT member_id AS id FROM team_members WHERE team_id = ?2 AND status = 'active'" : 'SELECT id FROM members';
     const q = env.DB.prepare(`${base} EXCEPT SELECT member_id FROM signups WHERE event_id = ?1 AND status != 'cancel'`);
+    if (ev.signup_open && !fits(env, 1, 'signupOpen')) return { done: false, result: sent };
     const ids = ev.signup_open ? (await (team ? q.bind(ev.id, ev.team_id) : q.bind(ev.id)).all()).results.map((r) => r.id).filter((x) => x && x !== ev.created_by) : [];
+    if (!fits(env, 1 + notifyCost(ids.length), 'signupOpen')) return { done: false, result: sent };
     const c = await env.DB.prepare("UPDATE events SET open_notified_at = datetime('now') WHERE id = ? AND open_notified_at IS NULL").bind(ev.id).run();
     if (!c.meta.changes || !ev.signup_open) continue;
     if (ids.length) await notify(env, ids, 'event', { kind: 'event', ref: `e:${ev.id}`, tag: `open-${ev.id}`, url: `/#/e/${ev.id}`,
       title: `開放報名：${ev.title}`, body: `${whenText(ev)}${ev.capacity ? `・名額 ${ev.capacity}` : ''}` });
     sent += ids.length;
   }
-  return sent;
+  return { done: true, result: sent };
 }
-// 待審核：20:00 提醒主辦；活動結束 15 分鐘後（或活動取消）待審核失效
+// 待審核：20:00 起提醒主辦（一天一次）；活動結束 15 分鐘後（或活動取消）待審核失效（signups.status 就是游標）
 async function signupReviews(env, now) {
   let n = 0;
-  if (taipei(now).getUTCHours() === 20 && await onceOn(env, 'signup_review_digest', tpDate(now))) {
+  if (taipei(now).getUTCHours() >= 20 && await claim(env, 'signup_review_digest', tpDate(now))) {
     const evs = (await env.DB.prepare(`SELECT e.id, e.title, e.date, e.team_id, e.created_by, COUNT(*) AS n FROM signups s JOIN events e ON e.id = s.event_id
       WHERE s.status = 'pending' AND e.status = 'open' AND e.date >= ? GROUP BY e.id LIMIT 100`).bind(tpDate(now)).all()).results;
+    // 每場一則、沒有個別標記：先算好名單與額度，不夠就整批留到下個整點（不會只送一半又重送）
+    const plan = [];
     for (const ev of evs) {
-      const to = await eventManagers(env, ev);
+      if (!fits(env, 2, 'signupReviews')) return yieldTo(env, 'signup_review_digest', 'signupReviews', 0);
+      plan.push([ev, await eventManagers(env, ev)]);
+    }
+    if (!fits(env, plan.reduce((s0, [, to]) => s0 + notifyCost(to.length), 0) + 1, 'signupReviews')) return yieldTo(env, 'signup_review_digest', 'signupReviews', 0);
+    for (const [ev, to] of plan) {
       if (to.length) await notify(env, to, 'todo', { kind: 'event', ref: `sr:${ev.id}`, tag: `review-${ev.id}`, url: `/#/e/${ev.id}/stats?f=pending`,
         title: `還有 ${ev.n} 筆待審核：${ev.title}`, body: `活動 ${tpDay(ev.date)}，請在活動開始前處理` });
       n += to.length;
     }
+    await doneStmt(env, 'signup_review_digest', tpDate(now)).run();
   }
   // 逾期失效：結束時間（或集合＋120 分）＋15 分；取消的活動直接失效、不另外通知（已收到取消通知）
   const nowTp = tpNow(now.getTime());
-  const evs = (await env.DB.prepare(`SELECT e.id, e.title, e.date, e.gather_time, e.end_time, e.status FROM events e
+  const evs = (await env.DB.prepare(`SELECT e.id, e.title, e.date, e.gather_time, e.end_time, e.status,
+      (SELECT COUNT(*) FROM signups s WHERE s.event_id = e.id AND s.status = 'pending') AS pn FROM events e
     WHERE (e.date <= ? OR e.status = 'cancelled') AND EXISTS (SELECT 1 FROM signups s WHERE s.event_id = e.id AND s.status = 'pending') LIMIT 100`)
     .bind(tpDate(now)).all()).results;
   for (const ev of evs) {
@@ -3951,6 +4023,7 @@ async function signupReviews(env, now) {
     const endHm = /^\d{2}:\d{2}$/.test(ev.end_time || '') && ev.end_time > g ? ev.end_time : null;
     const until = endHm ? shiftDays(`${ev.date}T${endHm}`, 15 / 1440) : shiftDays(`${ev.date}T${g}`, 135 / 1440);
     if (ev.status !== 'cancelled' && nowTp < until) continue;
+    if (!fits(env, 3 + notifyCost(ev.pn), 'signupReviews')) return { done: false, result: n };
     // RETURNING 只拿真的被這一句改到的人；兩句之間被核准或撤回的不會收到「已失效」
     const ids = (await env.DB.prepare("UPDATE signups SET status = 'cancel', review_note = ?, reg_consent_at = NULL WHERE event_id = ? AND status = 'pending' RETURNING member_id")
       .bind('主辦未處理，申請已失效', ev.id).all()).results.map((r) => r.member_id);
@@ -3959,89 +4032,267 @@ async function signupReviews(env, now) {
     await audit(env, null, null, 'signup.expire', 'event', ev.id, `${ids.length} 筆`);
     await settleTodo(env, `sr:${ev.id}`);
   }
-  return n;
+  return { done: true, result: n };
 }
 
-// 附近即時影像：每天同步一次鏡頭清單（台北 04:00 水利署與水利處、05:00 公路局；錯過整點就在下一個整點補跑）
+// 附近即時影像：每天同步一次鏡頭清單（台北 04:00 起水利署與水利處、05:00 起公路局；錯過整點就在下一個整點補跑）
 //   功能開關（features.cams）關閉時完全不跑；只同步開啟的來源；失敗或筆數驟減時不寫入、不停用，隔天再試
 //   每次排程最多同步一個來源（公路局 XML 約 1.7 MB，解析很吃 CPU，不跟別的來源擠在同一次執行）
-//   開始前先把來源標成「同步中」：如果執行被強制中斷（超過 CPU 時間上限，接不到例外），管理後台看得到
+//   開始前先佔用（job_runs 的 cams.<來源>）並把來源標成「同步中」：執行被強制中斷時，管理後台看得到，下個整點也會重跑（最多 3 次）
+const camsDue = (t, s) => Object.entries(Cams.SOURCES).filter(([k, S]) => S.list && s.cams_on.includes(k) && t.h >= S.hour && open(s, `cams.${k}`, t.date)).map(([k]) => k);
 async function syncCams(env, now) {
-  if (!Cams.featureOn((await env.DB.prepare("SELECT value FROM settings WHERE key = 'features'").first())?.value)) return null;
-  const h = taipei(now).getUTCHours();
-  const on = new Set((await env.DB.prepare('SELECT source FROM cam_sources WHERE enabled = 1').all()).results.map((r) => r.source));
-  for (const [k, S] of Object.entries(Cams.SOURCES)) {
-    if (!S.list || !on.has(k) || h < S.hour || !(await onceOn(env, `cams.${k}`, tpDate(now)))) continue;
+  const s = env.probe || await cronProbe(env, now);
+  if (!Cams.featureOn(s.features)) return { done: true, result: null };
+  const day = tpDate(now);
+  for (const k of camsDue(tparts(now), s)) {
+    if (!fits(env, 9, 'cams')) return { done: false, result: 'deferred' };
+    if (!(await claim(env, `cams.${k}`, day))) continue;
     let r;
     try { r = await Cams.syncSource(env, k); } catch (e) {
       const msg = String(e?.message || e).slice(0, 120);
       await Cams.markFailed(env, k, msg);
       r = { error: msg };
     }
-    return { [k]: r.error ? `error: ${r.error}` : r.count };
+    // 同步失敗（來源連不上、筆數驟減）也算今天做過了，隔天再試（管理後台看得到錯誤）
+    await doneStmt(env, `cams.${k}`, day).run();
+    return { done: true, result: { [k]: r.error ? `error: ${r.error}` : r.count } };
+  }
+  return { done: true, result: null };
+}
+
+// ---- 排程分派 ----
+const hhmm = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+const tparts = (now) => {
+  const t = taipei(now);
+  return { h: t.getUTCHours(), d: t.getUTCDate(), m: t.getUTCMonth(), date: tpDate(now), prev: prevMonthOf(t), q: quarterOf(t) };
+};
+// 每小時一句：哪些工作有事要做（job_runs 的狀態、功能開關、各工作的資料上有沒有待處理的列）
+const CRON_PROBE = `SELECT
+  (SELECT json_group_object(job, json_array(last_run, claim_key, claim_at, attempts)) FROM job_runs) AS jobs,
+  (SELECT value FROM settings WHERE key = 'features') AS features,
+  (SELECT json_group_array(source) FROM cam_sources WHERE enabled = 1) AS cams_on,
+  EXISTS (SELECT 1 FROM events WHERE date = ?1 AND status = 'open' AND kind != 'survey' AND gather_time > '' AND remind_hour_at IS NULL AND gather_time > ?6 AND gather_time <= ?2) AS ev_hour,
+  EXISTS (SELECT 1 FROM events WHERE date = ?3 AND status = 'open' AND kind != 'survey' AND remind_day_at IS NULL) AS ev_day,
+  EXISTS (SELECT 1 FROM events WHERE date = ?3 AND status = 'open' AND kind != 'survey' AND spot_id IS NOT NULL AND wx_alert_at IS NULL) AS ev_wx,
+  EXISTS (SELECT 1 FROM events WHERE date = ?1 AND status = 'open' AND kind IN ('track','core','long','race','other') AND followup_at IS NULL AND gather_time > '') AS fu,
+  EXISTS (SELECT 1 FROM members WHERE membership = 'active' AND paid_until BETWEEN ?1 AND ?4
+          AND renew_notice IS NOT (paid_until || ':' || CASE WHEN julianday(paid_until) - julianday(?1) <= 0 THEN 0
+                                   WHEN julianday(paid_until) - julianday(?1) <= 7 THEN 7 ELSE 30 END)) AS rn,
+  EXISTS (SELECT 1 FROM events WHERE open_notified_at IS NULL AND signup_start IS NOT NULL AND signup_start <= ?5 AND status = 'open' AND date >= ?1) AS so,
+  EXISTS (SELECT 1 FROM signups WHERE status = 'pending') AS sr,
+  EXISTS (SELECT 1 FROM signups s JOIN events e ON e.id = s.event_id WHERE s.status = 'pending' AND (e.date <= ?1 OR e.status = 'cancelled')) AS sr_exp,
+  EXISTS (SELECT 1 FROM audit_digests WHERE day = ?7) AS ad`;
+async function cronProbe(env, now) {
+  const t = taipei(now), nowMin = t.getUTCHours() * 60 + t.getUTCMinutes(), today0 = tpDate(now);
+  const r = await env.DB.prepare(CRON_PROBE).bind(today0, hhmm(Math.min(nowMin + 120, 1439)), tpDate(new Date(now.getTime() + 864e5)),
+    tpDate(new Date(now.getTime() + 30 * 864e5)), tpNow(now.getTime()), hhmm(Math.min(nowMin + 60, 1439)), utcYesterday(now)).first();
+  const parse = (v, d) => { try { return JSON.parse(v || '') ?? d; } catch { return d; } };
+  return { ...r, jobs: parse(r.jobs, {}), cams_on: parse(r.cams_on, []) };
+}
+// 這個 key 還有沒有事要做：還沒完成，也沒有別人正在跑（15 分鐘內），也還沒放棄（失敗 3 次）
+//   claim_at 是資料庫的 datetime('now')（真實時間），所以跟 Date.now() 比
+function open(s, job, key) {
+  const [last, ck, at, attempts] = s.jobs[job] || [];
+  if (last === key) return false;
+  if (ck !== key) return true;
+  if (attempts >= 3) return false;
+  return !at || Date.parse(`${at.replace(' ', 'T')}Z`) < Date.now() - 15 * 60e3;
+}
+// cost＝這項工作在「有事可做」時最多用多少子請求；min＝開始至少要有多少（每處理一項之前工作自己會再確認）；
+// own＝一定要開自己的執行；idle＝沒事做時 /api/dev/cron 回傳的值（維持舊的回傳格式）
+const JOBS = {
+  backup:        { prio: 10, own: true, cost: 40, idle: null, due: (t, s, env) => t.h >= 3 && !!backupStore(env) && !!env.BACKUP_KEY && open(s, 'backup', t.date), run: dailyBackup },
+  events:        { prio: 20, cost: 12, min: 4, idle: 0, due: (t, s) => !!s.ev_hour || (t.h >= 20 && !!s.ev_day), run: remindEvents },
+  signupOpen:    { prio: 21, cost: 12, min: 4, idle: 0, due: (t, s) => !!s.so, run: signupOpen },
+  followups:     { prio: 22, cost: 12, min: 4, idle: 0, due: (t, s) => !!s.fu, run: runFollowups },
+  weather:       { prio: 23, cost: 20, min: 6, idle: 0, due: (t, s) => t.h >= 20 && !!s.ev_wx, run: weatherAlerts },
+  signupReviews: { prio: 24, cost: 12, min: 4, idle: 0, due: (t, s) => !!s.sr_exp || (t.h >= 20 && !!s.sr && open(s, 'signup_review_digest', t.date)), run: signupReviews },
+  renewals:      { prio: 30, cost: 10, min: 4, idle: 0, due: (t, s) => !!s.rn, run: remindRenewals },
+  retention:     { prio: 40, cost: 16, idle: null, due: (t, s) => t.h >= 3 && open(s, 'retention', t.date), run: retention },
+  auditDigest:   { prio: 41, cost: 6, idle: null, due: (t, s, env) => t.h >= 9 && !!env.AUDIT_KEY && !s.ad, run: auditDigest },
+  monthSummary:  { prio: 42, cost: 12, idle: 0, due: (t, s) => t.d === 1 && t.h >= 9 && open(s, 'month_summary', t.prev), run: monthSummary },
+  review:        { prio: 43, cost: 10, idle: 0, due: (t, s) => t.d === 1 && t.m % 3 === 0 && t.h >= 9 && open(s, 'quarterly_review', t.q), run: quarterlyReview },
+  fatigue:       { prio: 44, cost: 12, min: 6, idle: 0, due: (t, s) => t.h >= 21 && open(s, 'fatigue', t.date), run: fatigueCheck },
+  cams:          { prio: 50, cost: 9, idle: null, due: (t, s) => Cams.featureOn(s.features) && t.h >= 4 && camsDue(t, s).length > 0, run: syncCams },
+};
+const JOB_ORDER = Object.keys(JOBS).sort((a, b) => JOBS[a].prio - JOBS[b].prio);
+
+// 跑一項工作：例外不往外丟，記到 job_runs.last_error；佔用後連續失敗 3 次寫稽核 cron.gave_up（管理後台會用紅字顯示）
+async function runJob(e, name, now, ctx) {
+  e.claimed = null; e.jobName = name;
+  try { return await JOBS[name].run(e, now, ctx); } catch (err) {
+    const msg = String(err?.message || err).slice(0, 200), c = e.claimed;
+    console.error('cron', name, err);
+    try {
+      const stmts = [c ? failStmt(e, c.job, msg)
+        : e.DB.prepare("INSERT INTO job_runs (job, last_run, last_error) VALUES (?1, '', ?2) ON CONFLICT(job) DO UPDATE SET last_error = excluded.last_error").bind(name, msg)];
+      if (c && c.attempts >= 3) stmts.push(await auditStmt(e, null, null, 'cron.gave_up', 'system', c.job, `${c.job}｜${c.key}｜${msg}`));
+      await e.DB.batch(stmts);
+    } catch (x) { console.error('cron fail', name, x); }
+    return { done: false, result: `error: ${msg}` };
+  } finally { e.claimed = null; e.jobName = null; }
+}
+const snap = (b) => ({ d1: b.d1, kv: b.kv, fetch: b.fetch, rpc: b.rpc, sub: b.sub });
+const delta = (a, b) => ({ kind: 'inline', d1: b.d1 - a.d1, kv: b.kv - a.kv, fetch: b.fetch - a.fetch, rpc: b.rpc - a.rpc, sub: b.sub - a.sub });
+
+// 每小時：1 句看哪些工作有事要做 → 依優先順序執行
+//   own 的工作（每日備份）用 ctx.exports.Jobs 開自己的執行；子執行回報的用量，父執行保守地加回自己的預算
+//     （假設呼叫自己和父執行共用額度，就算真的共用也不會超過）；沒有 ctx.exports 就在父執行裡直接跑
+//   JOB_DISPATCH=self：每項工作都開自己的執行（staging 確認呼叫自己會拿到新的額度之後才開，只改設定）
+//   inline（預設）：在父執行裡直接跑，開始前先確認額度，不夠就留到下個整點
+async function cronTick(e, now, ctx, opt = {}) {
+  const t = tparts(now), s = await cronProbe(e, now);
+  e.probe = s;
+  const res = {}, jobs = {};
+  const self = opt.dispatch === 'self' || e.JOB_DISPATCH === 'self';
+  const exp = ctx?.exports?.Jobs;
+  for (const name of JOB_ORDER) {
+    const J = JOBS[name];
+    res[name] = J.idle;
+    if (opt.skip?.has(name)) continue;
+    let due = false;
+    try { due = J.due(t, s, e); } catch (err) { console.error('cron due', name, err); }
+    if (!due) continue;
+    if ((J.own || self) && exp) {
+      if (!self && !e.budget.room(J.cost + 1)) { e.budget.stop(name); res[name] = 'deferred'; continue; }
+      try {
+        e.budget.take('rpc');
+        const r = await exp.run({ job: name, at: now.getTime(), inherit: self ? 0 : e.budget.sub, ...(opt.fail ? { fail: opt.fail } : {}) });
+        if (!self) e.budget.absorb(r.used);
+        res[name] = r.result ?? (r.done ? J.idle : 'deferred');
+        jobs[name] = r.budget;
+      } catch (err) { console.error('cron rpc', name, err); res[name] = `error: ${String(err?.message || err).slice(0, 120)}`; }
+      continue;
+    }
+    if (!e.budget.room(J.min ?? J.cost)) { e.budget.stop(name); res[name] = 'deferred'; continue; }
+    const before = snap(e.budget);
+    const r = await runJob(e, name, now, ctx);
+    res[name] = r.result ?? (r.done ? J.idle : 'deferred');
+    jobs[name] = delta(before, e.budget);
+  }
+  return { res, jobs };
+}
+
+// 排程工作的獨立執行入口（只給內部呼叫）
+//   資安（ISO 27001 A.8.3／A.8.20）：具名的 WorkerEntrypoint 從網際網路連不到，HTTP 只會進到 default.fetch；
+//   只有同一支 Worker 的 ctx.exports（或同帳號裡有人另外設定 service binding）叫得到。
+//   參數白名單：job 必須在 JOBS 裡、時間只能在現在前後 3 小時內（DEV_LOGIN=1 的本機測試可以模擬其他時間）；回傳值只有筆數與用量，不含個資與 secrets
+export class Jobs extends WorkerEntrypoint {
+  async run({ job, at, inherit = 0, fail } = {}) {
+    const ok = typeof job === 'string' && Object.hasOwn(JOBS, job);
+    const t = Number(at);
+    if (!ok || !Number.isFinite(t) || (Math.abs(Date.now() - t) > 3 * 3600e3 && this.env.DEV_LOGIN !== '1')) throw new Error('bad job');
+    const b = new Budget(this.env, { kind: 'job', name: job, inherit: this.env.JOB_DISPATCH === 'self' ? 0 : inherit });
+    const e = invocationEnv(this.env, this.ctx, b);
+    if (fail && this.env.DEV_LOGIN === '1') e.failAfterClaim = String(fail);
+    try {
+      const r = await runJob(e, job, new Date(t), this.ctx);
+      await settled(e);   // defer 裡的工作（例如推播）也算進這次的用量
+      return { done: !!r.done, result: r.result ?? null, used: b.sub - b.inherit, budget: b.summary() };
+    } finally { logBudget(b); }
+  }
+}
+
+// 路由樣板（給執行額度紀錄用）：路徑裡像 id 的片段（6 個字元以上而且含數字或底線）一律換成 :id，紀錄裡不會出現個資或 token
+const routeName = (path) => path.split('/').map((p) => (p.length >= 6 && /[\d_]/.test(p) ? ':id' : p)).join('/').slice(0, 80);
+const LOCAL = ['localhost', '127.0.0.1'];
+
+// 開發用路由（只有 .dev.vars 設 DEV_LOGIN=1 而且在 localhost 才有效，正式環境不會有這個設定）
+async function devRoute(req, env, ctx, url, path) {
+  const q = url.searchParams;
+  // 手動觸發排程，可指定時間 ?at=2026-10-03T12:00:00Z；&dispatch=self 強制走 ctx.exports.Jobs；&fail=backup 備份在佔用之後丟錯；&skip=backup 略過某些工作
+  if (path === '/api/dev/cron') {
+    const b = new Budget(env, { kind: 'cron', name: 'dev' }), e = invocationEnv(env, ctx, b);
+    const opt = { dispatch: q.get('dispatch') === 'self' ? 'self' : null, fail: str(q.get('fail'), 20) || null, skip: new Set((q.get('skip') || '').split(',').filter(Boolean)) };
+    if (opt.fail) e.failAfterClaim = opt.fail;
+    const { res, jobs } = await cronTick(e, q.get('at') ? new Date(q.get('at')) : new Date(), ctx, opt);
+    await settled(e);
+    logBudget(b);
+    return json({ ...res, _budget: { root: b.summary(), jobs } });
+  }
+  // 嚴格模式的違規紀錄（BUDGET_STRICT=1）：?clear=1 清空
+  if (path === '/api/dev/budget-violations') {
+    const list = strictViolations.slice();
+    if (q.get('clear') === '1') strictViolations.length = 0;
+    return json({ list });
+  }
+  // 排程工作的狀態（測試重跑與放棄用）
+  if (path === '/api/dev/jobs') return json({ jobs: (await env.DB.prepare('SELECT * FROM job_runs ORDER BY job').all()).results });
+  // 備份能不能解回來：在 Worker 裡解密、解壓縮指定（或最新）的備份，回傳每張表的筆數，和現在的筆數對照
+  if (path === '/api/dev/backup-check') {
+    const store = backupStore(env);
+    if (!store || !env.BACKUP_KEY) return fail(400, '備份還沒設定');
+    const list = await store.list(), label = q.get('label');
+    const o = label ? list.find((x) => x.key === `daily/${label}.bin`) : list.sort((a, b) => String(b.at).localeCompare(String(a.at)))[0];
+    if (!o) return fail(404, '沒有這份備份');
+    const buf = new Uint8Array(await store.get(o.key));
+    if (new TextDecoder().decode(buf.subarray(0, 5)) !== 'CILB1') return fail(500, '格式不對');
+    const gz = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: buf.subarray(5, 17), additionalData: BACKUP_AAD }, await backupKey(env, 'decrypt'), buf.subarray(17));
+    const data = JSON.parse(await new Response(new Blob([gz]).stream().pipeThrough(new DecompressionStream('gzip'))).text());
+    const names = Object.keys(data.tables).filter((n) => /^\w+$/.test(n));
+    const cnt = await env.DB.batch(names.map((n) => env.DB.prepare(`SELECT COUNT(*) AS n FROM "${n}" ${BACKUP_FILTER[n] || ''}`)));
+    return json({ key: o.key, format: data.format, version: data.version, at: data.at,
+      counts: Object.fromEntries(names.map((n) => [n, data.tables[n].length])), now: Object.fromEntries(names.map((n, i) => [n, cnt[i].results[0].n])) });
+  }
+  // 測試用：附近即時影像的假來源狀態（只有 CAM_MOCK=1）
+  if (path === '/api/dev/cams-mock' && env.CAM_MOCK === '1') return json(Cams.mockControl(q));
+  // 開發用登入
+  if (path === '/api/dev/login' && req.method === 'GET') {
+    const m = await env.DB.prepare('SELECT * FROM members WHERE id = ?').bind(str(q.get('id'), 32)).first();
+    if (!m) return fail(404, '找不到這個帳號');
+    return new Response(null, { status: 302, headers: { location: '/#/', 'set-cookie': await startSession(env, m, req, { mfa: q.get('mfa') === '1' }) } });
   }
   return null;
 }
 
-async function scheduled(env, now = new Date()) {
-  const res = {};
-  for (const [k, fn] of [['events', remindEvents], ['weather', weatherAlerts], ['followups', runFollowups], ['renewals', remindRenewals], ['monthSummary', monthSummary],
-    ['review', quarterlyReview], ['retention', retention], ['fatigue', fatigueCheck], ['auditDigest', auditDigest], ['backup', dailyBackup],
-    ['signupOpen', signupOpen], ['signupReviews', signupReviews], ['cams', syncCams]]) {
-    try { res[k] = await fn(env, now); } catch (e) { console.error('cron', k, e); res[k] = `error: ${e.message}`; }
+async function handle(req, env, ctx, url, path) {
+  // Google 登入是瀏覽器導向（GET、不是 JSON），走在下面的 CSRF 檢查之前
+  if (path === '/api/google/start' && req.method === 'GET') return googleStart(env, url, url.searchParams.get('link') === '1' ? await currentMember(req, env) : null);
+  if (path === '/api/google/callback' && req.method === 'GET') return googleCallback(req, env, url);
+  if (path.startsWith('/api/dev/') && env.DEV_LOGIN === '1' && LOCAL.includes(url.hostname)) {
+    const r = await devRoute(req, env, ctx, url, path);
+    if (r) return r;
   }
-  return res;
+  // 擋 CSRF：寫入類請求只收同源的 JSON
+  if (req.method !== 'GET') {
+    const origin = req.headers.get('origin');
+    if (origin && origin !== url.origin) return fail(403, '來源不正確');
+    if (req.headers.get('sec-fetch-site') === 'cross-site') return fail(403, '來源不正確');
+    if ((req.headers.get('content-type') || '').split(';')[0].trim().toLowerCase() !== 'application/json' && req.method !== 'DELETE') return fail(415, '請用 JSON');
+  }
+  try {
+    const t0 = Date.now();
+    const res = await api(req, env, path, req.method);
+    // 伺服器處理時間（主要是等資料庫）：開發工具看得到，前端也用它分辨慢在網路還是伺服器
+    try { res.headers.set('server-timing', `app;dur=${Date.now() - t0}`); } catch {}
+    return res;
+  } catch (e) {
+    console.error('api', path, e);
+    return fail(500, '伺服器錯誤');
+  }
 }
 
 export default {
   async scheduled(event, env, ctx) {
-    env.defer = (p) => ctx.waitUntil(Promise.resolve(p).catch((e) => console.error('defer', e)));
-    env.pushBudget = {};
-    ctx.waitUntil(scheduled(env, new Date(event.scheduledTime)).then((r) => console.log('cron', JSON.stringify(r))));
+    const b = new Budget(env, { kind: 'cron', name: 'hourly' }), e = invocationEnv(env, ctx, b);
+    ctx.waitUntil(cronTick(e, new Date(event.scheduledTime), ctx)
+      .then((r) => console.log('cron', JSON.stringify(r.res)), (err) => console.error('cron', err))
+      .then(() => settled(e)).finally(() => logBudget(b)));
   },
   async fetch(req, env, ctx) {
     const url = new URL(req.url);
     const path = decodeURIComponent(url.pathname);
     if (!path.startsWith('/api/')) return env.ASSETS.fetch(req);
     // 資安金鑰沒設定就不提供 API（避免用預設值雜湊 IP、稽核紀錄沒有簽章）
-    if ((!env.HASH_SALT || !env.AUDIT_KEY) && !['localhost', '127.0.0.1'].includes(url.hostname)) return new Response(JSON.stringify({ error: '系統設定不完整，請聯絡管理員' }), { status: 503, headers: { 'content-type': 'application/json' } });
-    env.ctx = ctx;
-    // Google 登入是瀏覽器導向（GET、不是 JSON），走在下面的 CSRF 檢查之前
-    if (path === '/api/google/start' && req.method === 'GET') return googleStart(env, url, url.searchParams.get('link') === '1' ? await currentMember(req, env) : null);
-    if (path === '/api/google/callback' && req.method === 'GET') return googleCallback(req, env, url);
-    // 開發用：手動觸發排程，可指定時間 ?at=2026-10-03T12:00:00Z（只有 DEV_LOGIN=1 的本機有效）
-    if (path === '/api/dev/cron' && env.DEV_LOGIN === '1' && ['localhost', '127.0.0.1'].includes(url.hostname)) {
-      env.defer = (p) => ctx.waitUntil(Promise.resolve(p).catch(() => {}));
-      env.pushBudget = {};
-      return json(await scheduled(env, url.searchParams.get('at') ? new Date(url.searchParams.get('at')) : new Date()));
+    if ((!env.HASH_SALT || !env.AUDIT_KEY) && !LOCAL.includes(url.hostname)) return new Response(JSON.stringify({ error: '系統設定不完整，請聯絡管理員' }), { status: 503, headers: { 'content-type': 'application/json' } });
+    // 每次請求一個 env（綁定包裝成會計數的版本、這次請求專用的 ctx 與 defer），不改共用的 env
+    const b = new Budget(env, { kind: 'request', name: `${req.method} ${routeName(path)}` }), e = invocationEnv(env, ctx, b);
+    let res;
+    try { res = await handle(req, e, ctx, url, path); } finally { ctx.waitUntil(settled(e).then(() => logBudget(b))); }
+    // 測試用：回應帶這次請求到目前為止用掉的額度（只有 DEV_LOGIN=1 的本機）
+    if (env.DEV_LOGIN === '1' && LOCAL.includes(url.hostname)) {
+      try { const x = b.summary(); res.headers.set('x-budget', `d1=${x.d1};kv=${x.kv};fetch=${x.fetch};rpc=${x.rpc};sub=${x.sub}`); } catch {}
     }
-    // 測試用：附近即時影像的假來源狀態（只有 CAM_MOCK=1、DEV_LOGIN=1 的本機有效）
-    if (path === '/api/dev/cams-mock' && env.CAM_MOCK === '1' && env.DEV_LOGIN === '1' && ['localhost', '127.0.0.1'].includes(url.hostname)) return json(Cams.mockControl(url.searchParams));
-    // 開發用登入：只有 .dev.vars 設 DEV_LOGIN=1 而且在 localhost 才有效，正式環境不會有這個設定
-    if (path === '/api/dev/login' && req.method === 'GET' && env.DEV_LOGIN === '1' && ['localhost', '127.0.0.1'].includes(url.hostname)) {
-      const m = await env.DB.prepare('SELECT * FROM members WHERE id = ?').bind(str(url.searchParams.get('id'), 32)).first();
-      if (!m) return fail(404, '找不到這個帳號');
-      return new Response(null, { status: 302, headers: { location: '/#/', 'set-cookie': await startSession(env, m, req, { mfa: url.searchParams.get('mfa') === '1' }) } });
-    }
-    env.ctx = ctx;
-    env.defer = (p) => ctx.waitUntil(Promise.resolve(p).catch((e) => console.error('defer', e)));
-    env.pushBudget = {};
-    // 擋 CSRF：寫入類請求只收同源的 JSON
-    if (req.method !== 'GET') {
-      const origin = req.headers.get('origin');
-      if (origin && origin !== url.origin) return fail(403, '來源不正確');
-      if (req.headers.get('sec-fetch-site') === 'cross-site') return fail(403, '來源不正確');
-      if ((req.headers.get('content-type') || '').split(';')[0].trim().toLowerCase() !== 'application/json' && req.method !== 'DELETE') return fail(415, '請用 JSON');
-    }
-    try {
-      const t0 = Date.now();
-      const res = await api(req, env, path, req.method);
-      // 伺服器處理時間（主要是等資料庫）：開發工具看得到，前端也用它分辨慢在網路還是伺服器
-      try { res.headers.set('server-timing', `app;dur=${Date.now() - t0}`); } catch {}
-      return res;
-    } catch (e) {
-      console.error('api', path, e);
-      return fail(500, '伺服器錯誤');
-    }
+    return res;
   },
 };

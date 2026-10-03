@@ -29,6 +29,10 @@
   "placement": { "mode": "smart" },
   // 每日加密備份：先存在 Workers KV；在 Cloudflare 後台啟用 R2 後，改綁 R2（"r2_buckets": [{ "binding": "BACKUP", "bucket_name": "cil-run-backup" }]）就會自動改存 R2
   "kv_namespaces": [{ "binding": "BACKUP_KV", "id": "8f91539529ab4d4faca88306d6e3ebf8" }],
+  // 執行額度（src/budget.js）：PLAN＝free（每次執行 50 個子請求、CPU 10 ms）或 paid；沒設定或寫錯一律當 free
+  //   JOB_DISPATCH＝inline（排程工作在同一次執行裡依優先順序跑，只有每日備份開自己的執行）或 self（每項工作都開自己的執行；
+  //   要等 staging 驗證過「呼叫自己會拿到新的額度」才切換，只改這裡）。具名環境不會繼承 vars，staging 要再寫一次
+  "vars": { "PLAN": "free", "JOB_DISPATCH": "inline" },
   // 測試環境：npm run deploy:staging → https://cil-run-staging.anselliu7.workers.dev（獨立資料庫，不影響正式站；不跑排程）
   "env": {
     "staging": {
@@ -37,7 +41,8 @@
         { "binding": "DB", "database_name": "cil-run-staging", "database_id": "08b71fd7-6681-4363-a670-558e3edf8e97", "migrations_dir": "migrations" }
       ],
       "triggers": { "crons": [] },
-      "kv_namespaces": [{ "binding": "BACKUP_KV", "id": "f13b4414508140418e8fb9547d897aba" }]
+      "kv_namespaces": [{ "binding": "BACKUP_KV", "id": "f13b4414508140418e8fb9547d897aba" }],
+      "vars": { "PLAN": "free", "JOB_DISPATCH": "inline" }
     }
   }
   // 設定值全部用 secrets（npx wrangler secret put 名稱 --name cil-run），不寫在這裡：

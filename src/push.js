@@ -34,6 +34,7 @@ async function encrypt(sub, payload) {
   return concat(salt, rs, new Uint8Array([asPub.length]), asPub, cipher);
 }
 
+// 對外連線的額度由 push() 先一次佔用（env.budget.take('fetch', n)），這裡不再重複計算
 async function sendOne(env, sub, msg, { ttl = 86400, urgency = 'normal' } = {}) {
   const res = await fetch(sub.endpoint, {
     method: 'POST',
@@ -61,8 +62,8 @@ export const unsubscribe = (env, memberId, endpoint) =>
   env.DB.prepare('DELETE FROM push_subs WHERE endpoint = ? AND member_id = ?').bind(endpoint, memberId).run();
 
 // 送給指定成員；payload 的 id 是收件人自己那一列通知的 id（隨機值，不是會員 id）
-// 裝置數超過上限（低於 Workers 每次呼叫的 subrequest 上限）就截掉，回傳 dropped 讓呼叫端寫稽核
-// 上限以一次請求為單位：env.pushBudget 由入口每次請求重設，同一請求裡的多次推播共用
+// 裝置數超過上限就截掉，回傳 dropped 讓呼叫端寫稽核
+// 上限以一次執行為單位：這次執行剩下的子請求額度（env.budget，見 src/budget.js），同一次執行裡的多次推播共用
 export async function push(env, memberIds, msg, { rowIds, ttl = 86400, urgency = 'normal' } = {}) {
   if (!env.VAPID_PRIVATE_JWK || !env.VAPID_PUBLIC_KEY) return { sent: 0, dropped: 0 };
   const ids = [...new Set(memberIds || [])].filter(Boolean);
@@ -72,11 +73,10 @@ export async function push(env, memberIds, msg, { rowIds, ttl = 86400, urgency =
     const part = ids.slice(i, i + 90), q = part.map(() => '?').join(',');
     subs.push(...(await env.DB.prepare(`SELECT endpoint, p256dh, auth, member_id FROM push_subs WHERE member_id IN (${q})`).bind(...part).all()).results);
   }
-  const max = Math.max(50, Number(env.PUSH_MAX_DEVICES) || 900), budget = env.pushBudget;
-  // 讀剩餘額度和扣掉額度在同一段同步程式裡，同時進行的推播不會重複使用
-  if (budget && budget.left == null) budget.left = max;
-  const cap = budget ? Math.min(max, budget.left) : max, devices = subs.length;
-  if (budget) budget.left -= Math.min(devices, cap);
+  const max = Math.max(50, Number(env.PUSH_MAX_DEVICES) || 900);
+  // 讀剩餘額度和佔用額度在同一段同步程式裡，同時進行的推播不會重複使用；留 2 個給 404／410 的清理與稽核
+  const cap = Math.min(max, env.budget ? Math.max(0, env.budget.left() - 2) : max), devices = subs.length;
+  env.budget?.take('fetch', Math.min(devices, cap));
   let dropped = 0;
   if (devices > cap) {
     dropped = devices - cap; subs = subs.slice(0, cap);

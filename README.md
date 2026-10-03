@@ -80,6 +80,8 @@ openssl rand -base64 32 | npx wrangler secret put RACE_KEY   # 賽事報名資�
 npm run deploy
 ```
 
+執行額度：`wrangler.jsonc` 的 `vars` 設 `PLAN`（`free`＝Workers 免費方案，每次執行 50 個子請求、CPU 10 ms；`paid`＝付費方案）與 `JOB_DISPATCH`（`inline`＝排程工作在同一次執行裡依優先順序跑，只有每日備份開自己的執行；`self`＝每項工作都開自己的執行，要先在 staging 驗證過才切換）。沒設定一律當免費方案。用量偏高、因額度停下或超過計數時，Workers Logs 會有一行 `{"t":"budget",…}`。
+
 ### Google 登入
 
 已設定完成（2026-10-03）：Google Cloud 專案 `cultivation-in-life-run`、OAuth 用戶端「cil-run web」（網頁應用程式，正式站與測試環境兩個重新導向 URI），同意畫面已發布為「實際運作中」，隱私權政策連結 `https://cil-run.anselliu7.workers.dev/privacy`。

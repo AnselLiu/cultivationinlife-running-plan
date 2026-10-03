@@ -6,6 +6,7 @@
 //            node tools/restore-backup.mjs backup.bin --sql      → backup.sql（INSERT OR REPLACE，可指定 --table 名稱只還原一張表）
 //      金鑰預設讀 ~/.config/cil-run/backup-key（測試環境 --staging 讀 backup-key-staging），也可以用 BACKUP_KEY 環境變數
 //   3. 匯入（先在測試環境試）：npx wrangler d1 execute cil-run-staging --env staging --remote --file backup.sql
+// 還原後到管理後台把附近即時影像的來源同步一次（備份只有幹部手動新增的鏡頭連結）；遙測表（client_metrics、client_errors）不在備份裡
 // 金鑰跟 Cloudflare 上的 BACKUP_KEY 是同一把；請另外存一份在密碼管理器，不要放進 git 或貼到聊天裡
 import { readFileSync, writeFileSync } from 'node:fs';
 import { gunzipSync } from 'node:zlib';

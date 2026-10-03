@@ -14,6 +14,9 @@ async function as(id) {
   return cookies[id];
 }
 async function call(who, path, { method = 'GET', body } = {}) {
+  // 排程測試會跳日期：每換一天，每日備份就到期並用掉那個整點大部分的額度（其他工作延到下個整點）。
+  // 這裡測的是各工作本身的邏輯，所以略過備份；備份與執行額度在 budget.test.mjs 測
+  if (path.startsWith('/dev/cron') && !/[?&]skip=/.test(path)) path += `${path.includes('?') ? '&' : '?'}skip=backup`;
   const headers = { origin: BASE };
   if (who) headers.cookie = await as(who);
   if (method !== 'GET') headers['content-type'] = 'application/json';

@@ -9,7 +9,8 @@ rmSync(STATE, { recursive: true, force: true });
 sh(`npx wrangler d1 migrations apply cil-run --local --persist-to ${STATE}`);
 sh(`npx wrangler d1 execute cil-run --local --persist-to ${STATE} --file tests/seed.sql`);
 
-const vars = { DEV_LOGIN: '1', POST_MOCK: '1', CAM_MOCK: '1', JOIN_CODE: 'test-join', CHAIR_CODE: 'test-chair', HASH_SALT: 'test-salt', AUDIT_KEY: 'test-audit-key',
+// PLAN＝free、BUDGET_STRICT＝1：每次執行超過免費方案的 50 個子請求就丟錯並記下（/api/dev/budget-violations）
+const vars = { DEV_LOGIN: '1', POST_MOCK: '1', CAM_MOCK: '1', PLAN: 'free', BUDGET_STRICT: '1', JOB_DISPATCH: 'inline', JOIN_CODE: 'test-join', CHAIR_CODE: 'test-chair', HASH_SALT: 'test-salt', AUDIT_KEY: 'test-audit-key',
   GOOGLE_CLIENT_ID: 'test-client.apps.googleusercontent.com', GOOGLE_CLIENT_SECRET: 'test-google-secret',
   RACE_KEY: 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8', BACKUP_KEY: 'HyAhIiMkJSYnKCkqKywtLi8wMTIzNDU2Nzg5Ojs8PT4' };
 const dev = spawn('npx', ['wrangler', 'dev', '--port', String(PORT), '--inspector-port', '0', '--persist-to', STATE, ...Object.entries(vars).flatMap(([k, v]) => ['--var', `${k}:${v}`])],
@@ -26,5 +27,5 @@ for (let i = 0; ; i++) {
   if (i > 120) { console.error(log); stop(); process.exit(1); }
   await new Promise((r) => setTimeout(r, 500));
 }
-const t = spawn(process.execPath, ['--test', '--test-concurrency=1', 'tests/hours.test.mjs', 'tests/sql-limits.test.mjs', 'tests/signup-window.test.mjs', 'tests/api.test.mjs', 'tests/passkey.test.mjs'], { stdio: 'inherit', env: { ...process.env, BASE: base } });
+const t = spawn(process.execPath, ['--test', '--test-concurrency=1', 'tests/hours.test.mjs', 'tests/sql-limits.test.mjs', 'tests/signup-window.test.mjs', 'tests/api.test.mjs', 'tests/passkey.test.mjs', 'tests/budget.test.mjs'], { stdio: 'inherit', env: { ...process.env, BASE: base } });
 t.on('exit', (code) => { stop(); process.exit(code ?? 1); });
