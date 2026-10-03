@@ -1957,7 +1957,7 @@ export default {
 "跑步，記錄中": "Run, recording",
 "跑者": "Runner",
 "距離": "Distance",
-"距離、時間和路線放進照片，分享到 IG": "Put your distance, time and route on a photo for IG",
+"距離、時間和路線放進照片，分享到 IG": "Your stats and route on a photo for IG",
 "距離、時間和路線會放進照片。": "with your distance, time and route on it.",
 "距離（km）": "Distance (km)",
 "距離（公里）": "Distance (km)",
