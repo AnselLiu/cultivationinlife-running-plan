@@ -4,6 +4,7 @@ import * as Party from './party.js';
 import { qrSVG, canScan, scan } from './qr.js';
 import * as S from './studio.js';
 import * as Run from './run.js';
+import * as Guide from './guide.js';
 
 // 對外公開的乾淨網址（Google 同意畫面等會連到這裡）：/privacy → #/privacy
 if (location.pathname === '/privacy' && !location.hash) history.replaceState(null, '', '/#/privacy');
@@ -178,7 +179,7 @@ const mfaBanner = () => (me?.mfaPending ? `<section class="card mfabar"><div><b>
 function bindStepup() {
   for (const b of document.querySelectorAll('[data-stepup]')) b.onclick = async () => {
     try { await passkey('stepup'); toast('驗證完成'); me = null; render(); }
-    catch (e) { if (/還沒有通行金鑰/.test(e.message)) { toast('先新增通行金鑰'); location.hash = '#/me'; } else if (e.message !== '已取消') toast(e.message); }
+    catch (e) { if (/還沒有通行金鑰/.test(e.message)) { toast('先新增通行金鑰'); location.hash = '#/me/security'; } else if (e.message !== '已取消') toast(e.message); }
   };
 }
 
@@ -247,7 +248,7 @@ function loginView() {
   const f = $('#joinForm');
   if (!f) return;
   const sync = () => {
-    f.grp.innerHTML = Object.entries(P.groups(f.dist.value)).map(([g, v]) => `<option value="${g}">${g}　SUB ${v[0]}</option>`).join('');
+    f.grp.innerHTML = Object.entries(P.groups(f.dist.value)).map(([g, v]) => `<option value="${g}">${g} 組・${v[0]}</option>`).join('');
     f.grp.value = f.dist.value === 'hm' ? 'C' : 'D';
   };
   f.dist.onchange = sync; sync();
@@ -262,10 +263,19 @@ function loginView() {
 
 
 // 依功能開關顯示或隱藏分頁
+// 下方分頁列：管理員可以改名稱，每個人可以選只顯示圖示
+const TAB_DEFAULT = { home: '團練', plan: '課表', run: '跑步', studio: '拍照', me: '我的' };
+const iconsOnly = { get() { try { return localStorage.getItem('cil-tab-icons') === '1'; } catch { return false; } }, set(v) { try { v ? localStorage.setItem('cil-tab-icons', '1') : localStorage.removeItem('cil-tab-icons'); } catch {} } };
+function applyTabs() {
+  const names = { ...TAB_DEFAULT, ...(cfg.settings?.tabs || {}) };
+  for (const el of document.querySelectorAll('.tabs .tl')) { el.textContent = names[el.dataset.tl] || el.textContent; el.closest('a').setAttribute('aria-label', names[el.dataset.tl]); }
+  document.body.classList.toggle('iconsonly', iconsOnly.get());
+}
 function applyFeatures() {
-  const s = document.querySelector('.tabs a[data-tab="/studio"]'), c = document.querySelector('.tabs a[data-tab="/coach"]');
+  applyTabs();
+  const s = document.querySelector('.tabs a[data-tab="/studio"]'), r = document.querySelector('.tabs a[data-tab="/run"]');
   if (s) s.hidden = !feat('studio');
-  if (c) c.hidden = !feat('coach');
+  if (r) r.hidden = !feat('gps');
 }
 
 // 倒數：自己的主要賽事 → 最近的自己的賽事 → 協會預設
@@ -356,21 +366,22 @@ function privacyView() {
          個人賽事：你自己加入的賽事名稱、日期與目標成績（用於倒數）。<br>
          訓練紀錄：你照課表記錄的日期、距離、時間、心率、自覺強度、感覺與備註；預設只有你看得到，你打開分享後，教練與分團幹部只看得到完成率、里程與平均強度，看不到備註。<br>
          照片：拍照分享的照片在你的手機上合成，不會上傳到我們的伺服器。<br>
-         <b>我們不蒐集</b>身分證字號、地址、生日；協會入會申請另以協會的 Google 表單辦理。</p>
+         賽事報名資料（選填）：只有你需要幹部代為報名馬拉松等賽事時才填，包含中英文姓名、身分證字號或護照號碼、生日、性別、電話、Email、地址、緊急聯絡人與衣服尺寸；<b>加密後保存</b>，只有你自己看得到完整內容。<br>
+         協會入會申請另以協會的 Google 表單辦理。</p>
       <h3>三、利用期間、地區、對象與方式</h3>
       <p>期間：${esc(PRIVACY.retention)}。<br>
          地區：台灣，以及雲端服務（Cloudflare）的資料中心所在地。<br>
-         對象：依職務最小權限開放給協會幹部；分團團長與幹部可以看自己分團的名冊（不含電話）與該分團活動的報名及問卷結果；電話完整號碼只有行政人員看得到。不提供給第三方行銷使用。<br>
+         對象：依職務最小權限開放給協會幹部；分團團長與幹部可以看自己分團的名冊（不含電話）與該分團活動的報名及問卷結果；電話完整號碼只有行政人員看得到。賽事報名資料只在你報名「代為團體報名」的活動並勾選同意後，提供給該活動的主辦幹部，用來向賽事主辦單位送出團體報名，每次下載都留有稽核紀錄。不提供給第三方行銷使用。<br>
          方式：以電子方式處理，全程加密傳輸。</p>
       <h3>四、您的權利</h3>
       <p>您可以隨時行使個人資料保護法第 3 條的權利：</p>
       <ul>
-        <li>查詢、閱覽、製給複本：「我的 → 下載我的資料」</li>
-        <li>補充或更正：「我的」頁面直接修改</li>
-        <li>停止蒐集、處理、利用及刪除：「我的 → 刪除帳號」</li>
+        <li>查詢、閱覽、製給複本：「我的 → 隱私 → 下載我的資料」</li>
+        <li>補充或更正：「我的 → 個人資料」直接修改</li>
+        <li>停止蒐集、處理、利用及刪除：「我的 → 隱私 → 刪除帳號」</li>
       </ul>
       <h3>五、不提供資料的影響</h3>
-      <p>姓名與組別是報名與排課表的必要資料；不提供就無法報名活動。其他欄位都是選填，不影響使用。</p>
+      <p>姓名與組別是報名與排課表的必要資料；不提供就無法報名活動。賽事報名資料只在報名「代為團體報名」的活動時需要，不填不影響其他功能。其他欄位都是選填。</p>
       <h3>六、安全措施</h3>
       <p>存取控制依職務分級、特權操作留有稽核紀錄、登入權杖只存雜湊值，並設有嘗試次數限制。詳見專案的資訊安全設計說明。</p>
       <h3>七、聯絡方式</h3>
@@ -402,7 +413,7 @@ async function listView() {
       <button role="tab" data-tf="" aria-selected="${!pick}">全部</button>
       <button role="tab" data-tf="assoc" aria-selected="${pick === 'assoc'}">全協會</button>
       ${mine.map((t) => `<button role="tab" data-tf="${esc(t.id)}" aria-selected="${pick === t.id}" style="--tc:${esc(t.color)}">${t.icon ? `<img class="ticon xs" src="${esc(t.icon)}" alt="">` : '<i></i>'}${esc(t.name)}</button>`).join('')}
-    </div>` : `<a class="card tight lit" href="#/teams"><div class="row spread"><span><b>加入你的分團</b><span class="tiny" style="display:block">耕跑團、耕跑青年、小耕跑…加入後只看自己團的活動</span></span><span class="tiny">›</span></div></a>`;
+    </div>` : '';
   // 第二次打開以後才提示安裝，不要一進來就打擾
   let visits = 0;
   try {
@@ -430,6 +441,7 @@ async function listView() {
   bindInstall();
   bindStepup();
   flushLogQueue();
+  if (!me.mfaPending) Guide.maybeStart();   // 第一次登入：使用說明導覽
 }
 // 今天：我這組今天的課表、今天報名的活動、一鍵記錄（打開 App 第一眼就知道今天要做什麼）
 async function todayCard(events) {
@@ -490,13 +502,13 @@ function eventCard(e) {
     <div class="ev">
       <span class="cal"><u>${d2(e.date).getMonth() + 1}月</u><b class="num">${e.date.slice(8)}</b><span>週${WD[d2(e.date).getDay()]}</span></span>
       <span class="body">
-        <span class="row" style="gap:6px"><span class="pill ${e.kind}">${KIND_NAME[e.kind] || '活動'}</span>${teamTag(teamOf(e.team_id))}${e.visibility === 'invite' ? `<span class="pill lock">${IC.lock}邀請制</span>` : ''}
-          ${e.mine === 'in' ? '<span class="pill solid">已報名</span>' : e.mine === 'wait' ? '<span class="pill wait">候補</span>' : ''}</span>
+        <span class="pills"><span class="pill ${e.kind}">${KIND_NAME[e.kind] || '活動'}</span>${teamTag(teamOf(e.team_id))}${e.visibility === 'invite' ? `<span class="pill lock">${IC.lock}邀請制</span>` : ''}</span>
         <span class="t">${esc(e.title)}</span>
-        <span class="tiny">${e.gather_time ? `${e.gather_time}　` : ''}${esc(e.place || '')}</span>
+        <span class="tiny">${e.gather_time ? `${e.gather_time}　` : ''}${esc(e.place || '')}${(e.options || []).some((o) => o.price) ? `　${money(Math.min(...e.options.filter((o) => o.price).map((o) => o.price)))} 起` : e.fee ? `　${money(e.fee)}` : ''}</span>
         ${e.capacity ? `<span class="bar"><i style="width:${pct}%"></i></span>` : ''}
       </span>
-      <span style="display:grid;justify-items:end;gap:4px">${avatarStack(e.peek || [], e.signed)}${e.signed ? `<span class="tiny num">${e.signed}${e.capacity ? `/${e.capacity}` : ' 人'}</span>` : ''}</span>
+      <span class="evright">${e.mine === 'in' ? `<span class="mine">${IC.check}已報名</span>` : e.mine === 'wait' ? '<span class="mine wait">候補中</span>' : ''}
+        ${e.signed ? `${avatarStack(e.peek || [], e.signed)}<span class="tiny num">${e.signed}${e.capacity ? `/${e.capacity}` : ' 人'}</span>` : ''}</span>
     </div>
   </a>`;
 }
@@ -526,7 +538,7 @@ async function eventView(id) {
   const inviteOnly = ev.visibility === 'invite';
   const admin = ev.manage;
   const survey = ev.kind === 'survey', qs = ev.questions || [];
-  const useForm = ev.kind === 'party' || qs.length > 0;
+  const useForm = ev.kind === 'party' || qs.length > 0 || (ev.options || []).length > 0 || !!ev.group_reg;
   const ins = ev.signups.filter((s) => s.status === 'in');
   const waits = ev.signups.filter((s) => s.status === 'wait');
   const mine = ev.signups.find((s) => s.member_id === me.id);
@@ -546,10 +558,14 @@ async function eventView(id) {
       </div>
       <h2>${esc(ev.title)}</h2>
       <p class="muted" style="margin:0">${ev.gather_time ? `${ev.gather_time} 集合` : ''}${ev.end_time ? `－${ev.end_time}` : ''}${ev.place ? `　${esc(ev.place)}` : ''}${ev.lead ? `　帶團：${esc(ev.lead)}` : ''}</p>
+      ${(ev.options || []).length ? `<div class="pricechips">${ev.options.map((o) => `<span><b>${esc(o.name)}</b>${o.price ? `<span class="num">${money(o.price)}</span>` : ''}</span>`).join('')}</div>`
+        : ev.fee ? `<div class="pricechips"><span><b>費用</b><span class="num">${money(ev.fee)}</span></span></div>` : ''}
+      ${ev.group_reg ? '<p class="tiny" style="margin:0;color:rgba(255,255,255,.85)">由幹部代為團體報名</p>' : ''}
       ${ev.note ? `<p class="muted" style="margin:0;white-space:pre-wrap">${esc(ev.note)}</p>` : ''}
       ${ev.link_url ? `<a class="btn block" style="background:#fff;color:#1C4698" href="${esc(ev.link_url)}" target="_blank" rel="noopener">${esc(ev.link_label || '前往登記')} ${IC.external}</a>` : ''}
       ${inviteOnly && !admin ? '' : `<div class="row sharebar">
         <button class="btn sm glassbtn" id="shareEv"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V3.5M7.5 8 12 3.5 16.5 8M5 12.5v6A2.5 2.5 0 0 0 7.5 21h9a2.5 2.5 0 0 0 2.5-2.5v-6"/></svg>分享</button>
+        <a class="btn sm glassbtn" id="shareLine" href="#" rel="noopener">分享到 LINE</a>
         <button class="btn sm glassbtn" id="copyLink">${inviteOnly ? '複製邀請連結' : '複製報名連結'}</button>
         ${admin ? `<a class="btn sm glassbtn" href="#/e/${ev.id}/stats">統計 ›</a>` : ''}
       </div>`}
@@ -577,7 +593,6 @@ async function eventView(id) {
       ${party && (ev.fee || ev.guest_max || ev.meal_options) ? `<p class="tiny">${ev.fee ? `費用 ${ev.fee} 元　` : ''}${ev.guest_max ? `可攜伴 ${ev.guest_max} 位　` : ''}${ev.meal_options ? `餐點：${esc(ev.meal_options)}` : ''}</p>` : ''}
       ${mine?.status === 'wait' ? '<p class="notice" style="margin:0">你在候補名單，有人取消會自動遞補並通知你。</p>' : ''}
       ${mine && mine.status !== 'cancel' && (ev.fee || ev.myAttended) ? `<div class="row" style="gap:6px">${ev.fee ? `<span class="pill ${ev.myPaid === 'paid' ? 'solid' : ev.myPaid === 'unpaid' ? 'wait' : ''}">費用 ${ev.fee} 元・${PAID_NAME[ev.myPaid] || '未繳'}</span>` : ''}${ev.myAttended ? `<span class="pill solid">${IC.check}已出席</span>` : ''}</div>` : ''}
-      ${!party && !survey && !mine && !closed ? `<p class="tiny">會用你的基本資料報名：${esc(me.name)}${me.nickname ? `（${esc(me.nickname)}）` : ''}・${me.dist === 'hm' ? '半馬' : '全馬'} ${esc(me.grp)} 組。要改去「我的」。</p>` : ''}
       <div class="roster">
         ${ins.map((s) => `<div class="r">${avatar(s)}<span>${esc(s.name)}${s.note ? ` <span class="tiny">${esc(s.note)}</span>` : ''}</span><span class="pill">${esc(s.grp)}</span></div>`).join('')
           || '<p class="muted" style="margin:0">還沒有人報名，當第一個吧。</p>'}
@@ -595,6 +610,7 @@ async function eventView(id) {
         <a class="btn sm" href="#/e/${ev.id}/stats">報名統計${qs.length ? '與問卷' : ''}</a>
         <a class="btn ghost sm" href="#/edit/${ev.id}">編輯</a>
         <a class="btn ghost sm" href="#/new?from=${ev.id}">複製成新活動</a>
+        ${ev.group_reg ? `<a class="btn sm" href="/api/events/${ev.id}/registrations.csv" download>下載團體報名資料</a>` : ''}
         <button class="btn danger sm" id="del">刪除</button>
       </div>
       ${party || survey ? '' : `<details id="attendWrap" ${ev.attendToken ? 'open' : ''}><summary class="tiny" style="cursor:pointer">現場報到 QR（團員自己掃）</summary>
@@ -634,6 +650,15 @@ async function eventView(id) {
   });
   $('#shareEv')?.addEventListener('click', () => (shareUrl() ? shareEvent(ev, shareUrl()) : toast('先在下方「邀請連結」開啟，才能分享')));
   $('#copyLink')?.addEventListener('click', () => (shareUrl() ? copy(shareUrl()) : toast('先在下方「邀請連結」開啟，才能分享')));
+  // 分享到 LINE：帶活動摘要（時間、地點、價格）與報名連結，點了直接到報名頁，報名人數自動統計
+  $('#shareLine')?.addEventListener('click', (e) => {
+    e.preventDefault();
+    if (!shareUrl()) return toast('先在下方「邀請連結」開啟，才能分享');
+    const price = (ev.options || []).length ? ev.options.map((o) => `${o.name}${o.price ? ` ${money(o.price)}` : ''}`).join('／') : ev.fee ? money(ev.fee) : '';
+    const text = [`【${KIND_NAME[ev.kind] || '活動'}】${ev.title}`, `${dstr(ev.date)}${ev.gather_time ? ` ${ev.gather_time}` : ''}${ev.place ? `・${ev.place}` : ''}`,
+      price ? `費用：${price}` : '', ev.deadline ? `報名截止：${ev.deadline.replace('T', ' ')}` : '', `${ev.kind === 'survey' ? '填寫' : '報名'}：${shareUrl()}`].filter(Boolean).join('\n');
+    open(`https://line.me/R/share?text=${encodeURIComponent(text)}`, '_blank', 'noopener');
+  });
   if (inviteOnly && admin) bindInviteCard(ev);
 
   $('#signup')?.addEventListener('click', async () => {
@@ -653,8 +678,10 @@ async function eventView(id) {
       const answers = readQuestionFields(f, qs);
       const miss = qs.find((q) => q.required && (Array.isArray(answers[q.id]) ? !answers[q.id].length : !answers[q.id]));
       if (miss) return toast(`請回答「${miss.label}」`);
+      if (ev.group_reg && ev.regProfile !== 'ok') { location.hash = '#/me/reg'; return toast('請先填好賽事報名資料'); }
       const r = await api(`/events/${id}/signup`, { method: 'POST', body: {
         name: me.name, grp: me.grp, dist: me.dist, note: f.note?.value || '', answers,
+        option: f.querySelector('[name=option]:checked')?.value || null, reg_consent: !!f.reg_consent?.checked,
         guests: Number(f.guests?.value || 0), meal: f.meal?.value || '' } });
       toast(r.status === 'wait' ? '人數已滿，已排入候補' : survey ? '已送出，謝謝你的回覆' : party ? '報名完成，入場券在上方' : '報名完成'); render();
     } catch (err) { toast(err.message); }
@@ -738,6 +765,9 @@ async function announceText(ev) {
   const L = [`【${KIND_NAME[ev.kind] || '活動'}】${/\d{1,2}\/\d{1,2}/.test(ev.title) ? '' : `${dstr(ev.date)} `}${ev.title}`];
   L.push(`時間：${dstr(ev.date)}${ev.gather_time ? ` ${ev.gather_time}${ev.end_time ? `–${ev.end_time}` : ''} 集合` : ''}`);
   if (ev.place) L.push(`地點：${ev.place}`);
+  if ((ev.options || []).length) L.push(`組別與費用：${ev.options.map((o) => `${o.name}${o.price ? ` ${money(o.price)}` : ''}`).join('／')}`);
+  else if (ev.fee) L.push(`費用：${money(ev.fee)}`);
+  if (ev.deadline) L.push(`報名截止：${ev.deadline.replace('T', ' ')}`);
   if (ev.lead) L.push(`帶團：${ev.lead}`);
   if (ev.week_no) {
     const info = await P.weekInfo(ev.week_no);
@@ -745,7 +775,7 @@ async function announceText(ev) {
     for (const r of await P.dayByGroup(ev.week_no, 'fm', dayPattern(ev.date))) L.push(`${r.grp}：${r.text}${r.hint ? `　${r.hint}` : ''}`);
     const hm = await P.dayByGroup(ev.week_no, 'hm', dayPattern(ev.date));
     if (hm.length) { L.push('', '【半馬組】'); for (const r of hm) L.push(`${r.grp}：${r.text}${r.hint ? `　${r.hint}` : ''}`); }
-    if (info?.src?.startsWith('推估')) L.push('', '（本週課表為系統依去年同期推估，實際以教練公告為準）');
+    if (info?.src?.startsWith('推估')) L.push('', '（本週課表教練還沒公告，先參考去年同期）');
   } else if (ev.plan_text) { L.push('', ev.plan_text); }
   if (ev.note) L.push('', ev.note);
   if (ev.link_url) L.push('', `${ev.link_label || '登記'}：${ev.link_url}`);
@@ -915,7 +945,7 @@ function memberFilterForm(id, { membership = true } = {}) {
     <div class="grid3">
       ${membership ? `<select name="membership" aria-label="會籍"><option value="">所有會籍</option>${Object.entries(MEMBERSHIP_NAME).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select>` : ''}
       <select name="role" aria-label="身分"><option value="">所有身分</option><option value="officers">所有幹部</option>${Object.entries(ROLE_NAME).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select>
-      <select name="team" aria-label="分團"><option value="">所有分團</option>${teams().map((t) => `<option value="${esc(t.id)}">${esc(t.name)}</option>`).join('')}</select>
+      <select name="team" aria-label="分團"><option value="">所有分團</option><option value="none">未設定主團</option>${teams().map((t) => `<option value="${esc(t.id)}">${esc(t.name)}</option>`).join('')}</select>
     </div>
     <button class="btn sm">查詢</button>
   </form>`;
@@ -950,16 +980,35 @@ async function membersPanel(meta) {
     <section class="card"><div class="row" style="gap:6px">${chips}</div>
       <p class="tiny" style="margin:0">跑友只要加入就能報名團練；協會會員要另外申請與繳費，兩者分開管理。</p></section>
     ${meta.counts.applied ? `<section class="card"><h3>待審核入會（${meta.counts.applied}）</h3><div class="roster" id="appliedList"></div></section>` : ''}
-    <section class="card"><h3>查詢跑友</h3>${memberFilterForm('mf2')}<div class="roster" id="mlist"></div></section>`;
+    <section class="card"><h3>查詢跑友</h3>${memberFilterForm('mf2')}<div class="roster" id="mlist"></div></section>
+    <div class="bulkbar" id="bulkBar" hidden><span>已選 <b id="bulkN">0</b> 人</span>
+      <select id="bulkTeam" aria-label="設定主團">${['<option value="">清除主團</option>', ...teams().filter((t) => !t.self_managed || teamAllow(t.id, 'approve')).map((t) => `<option value="${esc(t.id)}">${esc(t.name)}</option>`)].join('')}</select>
+      <button class="btn sm" id="bulkApply">設為主團</button></div>`;
 }
-const memberRow = (m) => `<div class="r">
-    ${avatar(m)}
+const memberRow = (m) => `<div class="r mrow">
+    <label class="pick"><input type="checkbox" data-pick="${m.id}" aria-label="選取 ${esc(m.name)}"><i>${IC.check}</i></label>
     <span><b>${esc(m.name)}</b>${m.nickname ? ` <span class="tiny">${esc(m.nickname)}</span>` : ''}
       <span class="tiny" style="display:block">${esc(m.club || '未填跑團')}・${m.roleName}${(m.teams || []).filter((x) => x.s === 'active').map((x) => `・${esc(teamOf(x.t)?.name || x.t)}`).join('')}${m.member_no ? `・編號 ${esc(m.member_no)}` : ''}${m.paid_until ? `・繳費至 ${esc(m.paid_until)}` : ''}</span></span>
-    <button class="btn ghost sm" data-ms="${m.id}">${MEMBERSHIP_NAME[m.membership]}</button>
+    <span class="mact"><select data-main="${m.id}" aria-label="${esc(m.name)} 的主團" class="mainsel" ${teamOf(m.main_team)?.self_managed && !teamAllow(m.main_team, 'approve') ? 'disabled title="由該團幹部處理"' : ''}>${['<option value="">未設定主團</option>', ...teams().filter((t) => !t.self_managed || teamAllow(t.id, 'approve') || t.id === m.main_team).map((t) => `<option value="${esc(t.id)}" ${m.main_team === t.id ? 'selected' : ''}>${esc(t.name)}</option>`)].join('')}</select>
+      <button class="btn ghost sm" data-ms="${m.id}">${MEMBERSHIP_NAME[m.membership]}</button></span>
   </div>`;
 function bindMembers() {
-  const bind = () => { for (const b of document.querySelectorAll('[data-ms]')) b.onclick = () => membershipDialog(b.dataset.ms); };
+  const setMain = async (ids, team) => {
+    try { const r = await api('/members/main-team', { method: 'POST', body: { member_ids: ids, team_id: team || null } }); toast(`已設定 ${r.count} 人的主團`); }
+    catch (e) { toast(e.message); }
+  };
+  const syncBulk = () => { const n = document.querySelectorAll('[data-pick]:checked').length; $('#bulkBar').hidden = !n; $('#bulkN').textContent = n; };
+  const bind = () => {
+    for (const b of document.querySelectorAll('[data-ms]')) b.onclick = () => membershipDialog(b.dataset.ms);
+    for (const sel of document.querySelectorAll('[data-main]')) sel.onchange = () => setMain([sel.dataset.main], sel.value);
+    for (const c of document.querySelectorAll('[data-pick]')) c.onchange = syncBulk;
+  };
+  $('#bulkApply').onclick = async () => {
+    const ids = [...document.querySelectorAll('[data-pick]:checked')].map((c) => c.dataset.pick);
+    await setMain(ids, $('#bulkTeam').value);
+    for (const id of ids) { const sel = document.querySelector(`[data-main="${id}"]`); if (sel) sel.value = $('#bulkTeam').value; }
+    for (const c of document.querySelectorAll('[data-pick]:checked')) c.checked = false; syncBulk();
+  };
   bindMemberSearch($('#mf2'), $('#mlist'), memberRow, bind);
   if ($('#appliedList')) bindMemberSearch(document.createElement('form'), $('#appliedList'), memberRow, bind)({ membership: 'applied' });
 }
@@ -1041,11 +1090,12 @@ const AUDIT_NAME = {
   'lottery.undo': '取消中獎', 'event.create': '建立活動', 'event.delete': '刪除活動', 'plan.publish': '發布課表', 'plan.delete': '刪除課表',
   'layout.update': '修改座位圖', 'account.create': '建立帳號', login: '登入', 'join.denied': '邀請碼錯誤', 'bootstrap.chair': '初始理事長',
   'bootstrap.denied': '初始設定被拒', 'privacy.export': '下載個資', 'privacy.delete': '刪除帳號', 'privacy.consent': '同意隱私權政策',
-  'settings.org': '修改協會資訊', 'settings.features': '修改功能開關', 'settings.docs': '修改協會文件', 'settings.privacy': '修改隱私權政策',
+  'settings.org': '修改協會資訊', 'settings.tabs': '修改分頁列名稱', 'settings.features': '修改功能開關', 'settings.docs': '修改協會文件', 'settings.privacy': '修改隱私權政策',
   'settings.club_race': '修改預設倒數', 'settings.race_presets': '修改常用賽事清單', 'event.update': '編輯活動', 'event.export': '匯出報名名單',
   'team.create': '新增分團', 'team.update': '修改分團', 'team.delete': '刪除分團', 'team.join': '加入分團', 'team.leave': '退出分團',
-  'team.approve': '通過入團', 'team.reject': '婉拒入團', 'team.remove': '移出分團', 'team.role': '變更分團身分', 'team.add': '加進分團', 'team.icon': '更新分團圖示', 'event.invite': '邀請參加活動', 'event.uninvite': '移出受邀名單', 'event.invite_link': '設定邀請連結',
+  'team.approve': '通過入團', 'team.reject': '婉拒入團', 'team.remove': '移出分團', 'team.role': '變更分團身分', 'team.add': '加進分團', 'team.icon': '更新分團圖示', 'team.main': '設定主團', 'event.invite': '邀請參加活動', 'event.uninvite': '移出受邀名單', 'event.invite_link': '設定邀請連結',
   'event.invite_accept': '用邀請連結加入', 'review.reminder': '每季權限檢視提醒', 'event.payment': '更新繳費狀態', 'event.attend_token': '設定現場報到', 'event.bulk': '整批匯入',
+  'privacy.race_profile': '更新賽事報名資料', 'privacy.race_profile_delete': '刪除賽事報名資料', 'event.reg_export': '下載團體報名資料',
   'calendar.on': '產生行事曆訂閱', 'calendar.off': '停用行事曆訂閱',
   'passkey.add': '新增通行金鑰', 'passkey.remove': '移除通行金鑰', 'passkey.denied': '通行金鑰驗證失敗', 'mfa.verify': '兩步驟驗證', 'login.new_device': '新裝置登入',
   'settings.security': '修改兩步驟驗證設定', 'audit.verify': '稽核完整性檢查',
@@ -1116,12 +1166,11 @@ function adminTeamsPanel() {
       <h3>分團</h3>
       <p class="tiny" style="margin:0">每個分團有自己的團長、幹部與 LINE 群組。團長由理事長在分團頁指派，團長再指派分團幹部。</p>
       <div class="roster">${teams().map((t) => `<a class="r" href="#/t/${esc(t.id)}">${teamIcon(t, 'av')}
-        <span><b>${esc(t.name)}</b><span class="tiny" style="display:block">${t.count} 人・${POLICY_NAME[t.join_policy]}${t.private ? '・私密' : ''}${t.line_url ? '・已設 LINE 群組' : ''}</span></span><span class="tiny">›</span></a>`).join('')}</div>
+        <span><b>${esc(t.name)}</b><span class="tiny" style="display:block">${t.count} 人${t.private ? '・私密' : ''}${t.line_url ? '・已設 LINE 群組' : ''}</span></span><span class="tiny">›</span></a>`).join('')}</div>
     </section>
     ${allow('settings') ? `<section class="card"><h3>新增分團</h3>
       <form id="newTeam">
         <div class="grid2"><label>名稱<input name="name" maxlength="20" required placeholder="例如 耕跑週末團"></label><label>顏色<input type="color" name="color" value="#1C4698"></label></div>
-        <label>加入方式<select name="join_policy">${Object.entries(POLICY_NAME).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select></label>
         <button class="btn sm">新增</button>
       </form></section>` : ''}
     <section class="card"><h3>分團權限</h3>
@@ -1135,7 +1184,7 @@ function bindAdminTeams() {
   $('#newTeam')?.addEventListener('submit', async (e) => {
     e.preventDefault();
     const f = e.target;
-    try { const { id } = await api('/teams', { method: 'POST', body: { name: f.name.value, color: f.color.value, join_policy: f.join_policy.value } });
+    try { const { id } = await api('/teams', { method: 'POST', body: { name: f.name.value, color: f.color.value, join_policy: 'approve' } });
       await refreshMe(); toast('已新增'); location.hash = `#/t/${id}`; } catch (err) { toast(err.message); }
   });
 }
@@ -1164,6 +1213,7 @@ const FEATURE_NAME = { gps: '跑步記錄（計時＋GPS）', studio: '拍照分
 function settingsPanel() {
   const o = org(), f = cfg.settings?.features || {}, docs = cfg.settings?.docs || [], pv = cfg.settings?.privacy || {};
   return `
+  <h3 class="sgt">協會</h3>
   <section class="card">
     <h3>協會資訊</h3>
     <form id="orgForm">
@@ -1190,13 +1240,13 @@ function settingsPanel() {
       <button class="btn sm">儲存協會資訊</button>
     </form>
   </section>
-
-  ${(me.realRole || me.role) === 'chair' ? `<section class="card">
-    <h3>幹部兩步驟驗證</h3>
-    <label class="switch"><span>幹部要用通行金鑰驗證才能使用管理功能<span class="tiny" style="display:block">理事、監事、行政人員、教練都適用；一般跑友不受影響</span></span>
-      <input type="checkbox" id="mfaToggle" ${cfg.requireMfa ? 'checked' : ''}><i></i></label>
-    <p class="tiny" style="margin:0">開啟前請先在「我的 → 通行金鑰」新增並驗證一次，也請其他幹部先新增，否則他們會暫時只能用一般跑友的功能。</p>
-  </section>` : ''}
+  <section class="card">
+    <div class="row spread"><h3>協會文件</h3><button class="btn ghost sm" id="addDoc">＋ 新增</button></div>
+    <p class="tiny" style="margin:0">章程、組織說明、會費說明等，跑友在「我的 → 協會」看得到。連結要是 https:// 開頭。</p>
+    <div id="docRows" class="docedit">${docs.map(docRow).join('')}</div>
+    <button class="btn sm" id="saveDocs">儲存文件清單</button>
+  </section>
+  <h3 class="sgt">功能與畫面</h3>
   <section class="card">
     <h3>功能開關</h3>
     <form id="featForm" class="toggles">
@@ -1205,24 +1255,12 @@ function settingsPanel() {
     </form>
     <p class="tiny" style="margin:0">關掉後，跑友的畫面上就看不到這個功能；已存的資料不會刪除。</p>
   </section>
-
   <section class="card">
-    <div class="row spread"><h3>協會文件</h3><button class="btn ghost sm" id="addDoc">＋ 新增</button></div>
-    <p class="tiny" style="margin:0">章程、組織說明、會費說明等，跑友在「我的 → 協會資訊」看得到。連結要是 https:// 開頭。</p>
-    <div id="docRows" class="docedit">${docs.map(docRow).join('')}</div>
-    <button class="btn sm" id="saveDocs">儲存文件清單</button>
+    <h3>分頁列名稱</h3>
+    <form id="tabsForm" class="grid3">${Object.entries(TAB_DEFAULT).map(([k, v]) => `<label>${v}<input name="${k}" maxlength="4" placeholder="${v}" value="${esc(cfg.settings?.tabs?.[k] || '')}"></label>`).join('')}
+      <button class="btn sm" style="grid-column:1/-1">儲存名稱</button></form>
+    <p class="tiny" style="margin:0">每個最多 4 個字，留空就用預設。每個人也可以在「我的 → 通知與裝置」選擇只顯示圖示。</p>
   </section>
-
-  <section class="card">
-    <h3>隱私權政策</h3>
-    <p class="tiny" style="margin:0">目前版本：${esc(pv.version || '')}。留空就使用系統預設的個資法第 8 條告知內容。<b>內容一改就會自動升版，所有人下次開啟都要重新同意。</b></p>
-    <form id="pvForm">
-      <textarea name="body" style="min-height:240px" placeholder="## 一、蒐集目的&#10;…&#10;&#10;- 清單項目">${esc(pv.body || '')}</textarea>
-      <p class="tiny" style="margin:0">格式：「## 」開頭是標題、「- 」開頭是清單、空一行分段。</p>
-      <div class="row"><button class="btn sm">儲存並升版</button><a class="btn ghost sm" href="#/privacy">預覽</a></div>
-    </form>
-  </section>
-
   <section class="card">
     <h3>倒數與捷徑</h3>
     <form id="clubRace2" class="grid2">
@@ -1237,6 +1275,22 @@ function settingsPanel() {
     <form id="scForm2" class="row" style="gap:8px">
       <input name="url" placeholder="Apple 健康捷徑 iCloud 連結" aria-label="Apple 健康捷徑 iCloud 連結" value="${esc(cfg.shortcut || '')}" style="flex:1;min-width:200px">
       <button class="btn ghost sm">儲存捷徑</button>
+    </form>
+  </section>
+  <h3 class="sgt">安全與隱私</h3>
+  ${(me.realRole || me.role) === 'chair' ? `<section class="card">
+    <h3>幹部兩步驟驗證</h3>
+    <label class="switch"><span>幹部要用通行金鑰驗證才能使用管理功能<span class="tiny" style="display:block">理事、監事、行政人員、教練都適用；一般跑友不受影響</span></span>
+      <input type="checkbox" id="mfaToggle" ${cfg.requireMfa ? 'checked' : ''}><i></i></label>
+    <p class="tiny" style="margin:0">開啟前請先在「我的 → 帳號與安全」新增通行金鑰並驗證一次，也請其他幹部先新增，否則他們會暫時只能用一般跑友的功能。</p>
+  </section>` : ''}
+  <section class="card">
+    <h3>隱私權政策</h3>
+    <p class="tiny" style="margin:0">目前版本：${esc(pv.version || '')}。留空就使用系統預設的個資法第 8 條告知內容。<b>內容一改就會自動升版，所有人下次開啟都要重新同意。</b></p>
+    <form id="pvForm">
+      <textarea name="body" style="min-height:240px" placeholder="## 一、蒐集目的&#10;…&#10;&#10;- 清單項目">${esc(pv.body || '')}</textarea>
+      <p class="tiny" style="margin:0">格式：「## 」開頭是標題、「- 」開頭是清單、空一行分段。</p>
+      <div class="row"><button class="btn sm">儲存並升版</button><a class="btn ghost sm" href="#/privacy">預覽</a></div>
     </form>
   </section>`;
 }
@@ -1256,6 +1310,8 @@ function bindSettings() {
     try { await api('/settings/security', { method: 'POST', body: { require_mfa: e.target.checked } }); await reload(e.target.checked ? '已開啟幹部兩步驟驗證' : '已關閉幹部兩步驟驗證'); }
     catch (err) { e.target.checked = !e.target.checked; toast(err.message); }
   });
+  $('#tabsForm').onsubmit = (e) => { e.preventDefault(); const f = e.target;
+    save('tabs', Object.fromEntries(Object.keys(TAB_DEFAULT).map((k) => [k, f[k].value.trim()])), '已儲存分頁列名稱'); };
   $('#featForm').onsubmit = (e) => { e.preventDefault(); const f = e.target, body = {};
     for (const k of Object.keys(FEATURE_NAME)) body[k] = f[k].checked;
     save('features', body, '已儲存功能開關'); };
@@ -1386,9 +1442,13 @@ function signupForm(ev, mine) {
   const party = ev.kind === 'party', survey = ev.kind === 'survey';
   const meals = party ? (ev.meal_options || '').split(',').map((s) => s.trim()).filter(Boolean) : [];
   return `<form id="pform" class="signup">
-    ${!survey ? `<p class="tiny" style="margin:0">以 ${esc(me.name)}${me.nickname ? `（${esc(me.nickname)}）` : ''}・${me.dist === 'hm' ? '半馬' : '全馬'} ${esc(me.grp)} 組報名，資料來自「我的」。</p>` : ''}
+    ${!survey ? `<p class="tiny" style="margin:0">以 ${esc(me.name)}${me.nickname ? `（${esc(me.nickname)}）` : ''}・${me.dist === 'hm' ? '半馬' : '全馬'} ${esc(me.grp)} 組報名，<a href="#/me/profile">修改個人資料</a></p>` : ''}
     ${party && ev.guest_max ? `<label>攜伴人數<select name="guests">${Array.from({ length: ev.guest_max + 1 }, (_, i) => `<option value="${i}">${i ? `${i} 位` : '不帶'}</option>`).join('')}</select></label>` : ''}
     ${meals.length ? `<label>餐點<select name="meal">${meals.map((m) => `<option ${m === me.meal_pref ? 'selected' : ''}>${esc(m)}</option>`).join('')}</select></label>` : ''}
+    ${(ev.options || []).length ? `<fieldset class="qset"><legend>報名組別 <span class="req">必填</span></legend><div class="chips">${ev.options.map((o) => `<label class="chip"><input type="radio" name="option" value="${esc(o.name)}" ${ev.myOption === o.name ? 'checked' : ''} required><span>${esc(o.name)}${o.price ? `<small class="num">　${money(o.price)}</small>` : ''}</span></label>`).join('')}</div></fieldset>` : ''}
+    ${ev.group_reg ? (ev.regProfile === 'ok'
+      ? `<label class="inline consent"><input type="checkbox" name="reg_consent" ${ev.myRegConsent ? 'checked' : ''} required> 同意把我的賽事報名資料（含身分證字號）提供給主辦幹部，只用於這場的團體報名</label>`
+      : `<p class="notice" style="margin:0">這場由幹部代為團體報名，需要你的報名資料（姓名、身分證字號、生日、緊急聯絡人等）。填一次之後每場都能用。<a href="#/me/reg">去填寫 ›</a></p>`) : ''}
     ${questionFields(ev.questions || [], ev.myAnswers || {})}
     ${survey ? '' : `<label>備註（選填）<input name="note" maxlength="40" placeholder="${party ? '素食、座位需求…' : '晚到、只跑前半段…'}"></label>`}
     <button class="btn block">${survey ? (mine ? '更新回覆' : '送出回覆') : mine ? '更新報名' : '我要報名'}</button>
@@ -1469,17 +1529,17 @@ function installCard(where) {
   if (isStandalone()) return '';
   try { if (where === 'home' && localStorage.getItem('cil-install-dismiss')) return ''; } catch {}
   const ios = isIOS();
-  return `<section class="card installcard">
-    <div class="row spread"><h3 class="row" style="gap:10px"><img src="/icons/icon-192.png" alt="" width="32" height="32" style="border-radius:8px">把耕跑團加到主畫面</h3>
-      ${where === 'home' ? '<button class="btn ghost sm" id="installX" aria-label="不再顯示">不用了</button>' : ''}</div>
-    <p class="tiny" style="margin:0">像 App 一樣從主畫面打開，才收得到團練通知，入場券離線也能出示。</p>
-    ${ios ? `<ol class="steps">
+  return `<section class="card tight installcard">
+    <div class="instrow"><img src="/icons/icon-192.png" alt="" width="40" height="40">
+      <span><b>把耕跑團加到主畫面</b><span class="tiny">才收得到團練通知，入場券沒網路也能出示</span></span>
+      ${where === 'home' ? '<button class="iconx" id="installX" aria-label="不再顯示">' + ic('<path d="M7 7l10 10M17 7 7 17"/>') + '</button>' : ''}</div>
+    ${ios ? `<details ${where === 'me' ? 'open' : ''}><summary class="tiny">怎麼加？三個步驟</summary><ol class="steps">
         <li>點 Safari 下方的分享按鈕 ${SHARE_IC}</li>
         <li>往下滑，選「加入主畫面」${ADD_IC}</li>
-        <li>按右上角「新增」，之後從主畫面的耕跑團圖示打開</li></ol>
-        <p class="tiny" style="margin:0">要用 Safari 開啟這個網站才有「加入主畫面」；在 LINE 裡打開的話，先點右下角選單「用預設瀏覽器開啟」。</p>`
-      : `<button class="btn block" data-install ${installEvt ? '' : 'hidden'}>安裝 App</button>
-         <p class="tiny" style="margin:0" ${installEvt ? 'hidden' : ''} data-install-hint>如果沒有看到安裝按鈕：點瀏覽器右上角選單，選「安裝應用程式」或「加到主畫面」。</p>`}
+        <li>按「新增」，之後從主畫面的耕跑團圖示打開</li></ol>
+        <p class="tiny" style="margin:0">在 LINE 裡打開的話，先點右下角選單選「用預設瀏覽器開啟」。</p></details>`
+      : `<button class="btn sm block" data-install ${installEvt ? '' : 'hidden'}>安裝 App</button>
+         <p class="tiny" style="margin:0" ${installEvt ? 'hidden' : ''}>點瀏覽器右上角選單，選「安裝應用程式」或「加到主畫面」。</p>`}
   </section>`;
 }
 function bindInstall() {
@@ -1920,7 +1980,7 @@ async function planView(n) {
           <button class="btn ghost sm" id="next" ${week === 21 ? 'disabled' : ''} aria-label="下一週">›</button>
         </div>
       </div>
-      ${posts.length ? '' : info?.src?.startsWith('推估') ? '<p class="notice" style="margin:0">這週教練還沒發課表，內容是照 2025 臺北馬同一階段推估的，實際以教練公告為準。</p>' : ''}
+      ${posts.length ? '' : info?.src?.startsWith('推估') ? '<p class="notice" style="margin:0">這週的課表教練還沒公告，先參考去年同期。</p>' : ''}
       ${canPublishPlan() ? '<a class="btn ghost sm" href="#/plan/new">發布這週課表</a>' : ''}
     </section>
     ${posts.map((po) => `<section class="card">
@@ -1930,14 +1990,14 @@ async function planView(n) {
       ${allow('plan') || (po.team_id && teamAllow(po.team_id, 'appoint')) ? `<button class="btn danger sm" data-delplan="${po.id}">刪除</button>` : ''}
     </section>`).join('')}
     ${days && started ? `<section class="card logsum">
-      <div class="ring" style="--p:${pct}" role="img" aria-label="本週完成 ${pct}%"><b class="num">${pct}<small>%</small></b></div>
-      <div class="lsum">
-        <h3>本週訓練紀錄</h3>
-        <div class="lstats"><span><b class="num">${doneN}</b>/${planned.length} 完成</span><span><b class="num">${km.toFixed(1)}</b> km</span>${avgRpe ? `<span>RPE <b class="num">${avgRpe.toFixed(1)}</b></span>` : ''}</div>
-        <div class="row" style="gap:8px">${feat('gps') ? `<a class="btn sm iconbtn" href="#/run">${IC.runner}開始跑步</a>` : ''}<a class="btn ghost sm" href="#/log?extra=1">${IC.plus}自主加練</a><a class="btn ghost sm" href="#/report">報表 ›</a>
-          ${allow('plan') || teams().some((t) => teamAllow(t.id, 'roster')) ? '<a class="btn ghost sm" href="#/logs/team">團員訓練 ›</a>' : ''}</div>
-        <p class="tiny" style="margin:0">${me.share_logs ? '教練與分團幹部看得到你的完成率與里程（看不到備註）。' : '紀錄只有你自己看得到；想讓教練看到，到「我的 → 隱私與帳號」打開分享。'}</p>
+      <div class="lsumtop">
+        <div class="ring" style="--p:${pct}" role="img" aria-label="本週完成 ${pct}%"><b class="num">${pct}<small>%</small></b></div>
+        <div class="lsum"><span class="tiny">本週訓練</span>
+          <div class="lstats"><span><b class="num">${doneN}</b>/${planned.length} 堂</span><span><b class="num">${km.toFixed(1)}</b> km</span>${avgRpe ? `<span>RPE <b class="num">${avgRpe.toFixed(1)}</b></span>` : ''}</div>
+          ${allow('plan') || teams().some((t) => teamAllow(t.id, 'roster')) ? '<a class="tiny" href="#/logs/team">看團員的訓練 ›</a>' : ''}</div>
       </div>
+      <div class="lsumact">${feat('gps') ? `<a class="btn iconbtn" href="#/run">${IC.runner}開始跑步</a>` : ''}<a class="btn ghost iconbtn" href="#/log?extra=1">${IC.plus}自主加練</a><a class="btn ghost" href="#/report">報表</a></div>
+      <p class="tiny" style="margin:0">${me.share_logs ? '教練與分團幹部看得到你的完成率與里程，看不到備註。' : '紀錄只有你看得到；想讓教練看到，到「我的 → 隱私」打開分享。'}</p>
     </section>` : ''}
     <div class="days">${days ? days.map((d, i) => {
       const L = logOf(d), top = L.find((l) => l.status === 'done') || L.find((l) => l.status === 'partial') || L[0];
@@ -1950,7 +2010,11 @@ async function planView(n) {
           : canLog ? `<a class="logbtn" href="#/log?w=${week}&i=${i}" aria-label="記錄${esc(d.d)}">記錄</a>` : ''}
       </div>`; }).join('') : '<div class="card"><p class="muted">這週沒有課表資料。</p></div>'}</div>
     ${extras.length ? `<section class="card"><h3>自主加練</h3><div class="roster">${extras.map((l) => `<a class="r" href="#/log?id=${l.id}"><span class="av">＋</span>
-      <span>${esc(dstr(l.date))}${l.km ? `・${l.km} km` : ''}${l.seconds ? `・${S.fmtDuration(l.seconds)}` : ''}<span class="tiny" style="display:block">${esc(l.note || '')}</span></span><span class="tiny">›</span></a>`).join('')}</div></section>` : ''}`;
+      <span>${esc(dstr(l.date))}${l.km ? `・${l.km} km` : ''}${l.seconds ? `・${S.fmtDuration(l.seconds)}` : ''}<span class="tiny" style="display:block">${esc(l.note || '')}</span></span><span class="tiny">›</span></a>`).join('')}</div></section>` : ''}
+    <section class="setgroup"><h3 class="sgt">工具</h3><div class="card setcard">
+      ${feat('coach') ? `<a class="setrow" href="/coach.html"><span class="sic">${IC.runner}</span><span class="st"><b>課表教練</b><span class="tiny">逐週課表、配速換算、年齡分級、補給試算</span></span><span class="chev" aria-hidden="true"></span></a>` : ''}
+      <a class="setrow" href="#/report"><span class="sic">${MI.report}</span><span class="st"><b>訓練報表</b><span class="tiny">週里程、完成率、個人最佳</span></span><span class="chev" aria-hidden="true"></span></a>
+    </div><p class="tiny center">課表來源：耕跑團記事本</p></section>`;
   for (const b of document.querySelectorAll('[data-delplan]')) b.onclick = async () => {
     if (!confirm('確定刪除這則課表？')) return;
     await api(`/plans/${b.dataset.delplan}`, { method: 'DELETE' }); toast('已刪除'); render();
@@ -2371,7 +2435,7 @@ async function todayGoal() {
 function runBar() {
   let bar = document.getElementById('runbar');
   const onRun = location.hash.split('?')[0] === '#/run';
-  if (!Run.active() || onRun) { bar?.remove(); return; }
+  if (!me || !Run.active() || onRun) { bar?.remove(); return; }
   if (!bar) {
     bar = document.createElement('a'); bar.id = 'runbar'; bar.className = 'runbar'; bar.href = '#/run';
     document.body.append(bar);
@@ -2381,20 +2445,6 @@ function runBar() {
 }
 setInterval(runBar, 1000);
 
-// ---------- 課表教練（原本的 GitHub Pages 頁面）----------
-function coachView() {
-  view.innerHTML = `
-    ${largeTitle('教練')}
-    <section class="card hero">
-      <h2>課表教練</h2>
-      <p class="muted" style="margin:0">回答幾個選擇題，產生整季逐週課表、配速換算、年齡分級與比賽補給試算。</p>
-      <a class="btn ghost block" href="/coach.html" style="background:#fff;color:#1C4698;border:0">開啟課表教練</a>
-    </section>
-    <section class="card">
-      <h3>課表來源</h3>
-      <p class="muted" style="margin:0">耕跑團記事本：2026 台北馬 W2–W8 是教練發布的原文；W9 以後依 2025 同期推估，實際以教練每週公告為準。</p>
-    </section>`;
-}
 
 // ---------- 幹部：新增／編輯活動 ----------
 async function formView(id) {
@@ -2441,6 +2491,13 @@ async function formView(id) {
       <label>報名截止（選填）<input type="datetime-local" name="deadline" value="${esc(d.deadline || '')}"></label>
 
       <fieldset class="group">
+        <legend>組別與價格</legend>
+        <p class="tiny" style="margin:0">例如 全馬 1200、半馬 1000、10K 800。有設定的話，報名時要選一組，統計頁會算好應收金額。</p>
+        <div id="optRows" class="qedit">${(d.options || []).map(optRow).join('')}</div>
+        <button type="button" class="btn ghost sm" id="addOpt">${IC.plus}新增一組</button>
+        <label class="switch"><span>由幹部代為團體報名<span class="tiny" style="display:block">報名的人要先填好賽事報名資料並同意提供，幹部再下載整理送出</span></span><input type="checkbox" name="group_reg" ${d.group_reg ? 'checked' : ''}><i></i></label>
+      </fieldset>
+      <fieldset class="group">
         <legend>報名問卷</legend>
         <p class="tiny" style="margin:0">想知道大家的尺寸、交通方式、要不要參加慶功宴…都可以加題目。報名時一起填，統計頁會自動算好。</p>
         <div id="qRows" class="qedit">${(d.questions || []).map(qRow).join('')}</div>
@@ -2481,6 +2538,9 @@ async function formView(id) {
   for (const r of f.querySelectorAll('[name=visibility]')) r.onchange = visHint;
   visHint();
   const bindQ = () => { for (const b of f.querySelectorAll('[data-rmq]')) b.onclick = () => b.closest('.qrow').remove(); };
+  const bindO = () => { for (const b of f.querySelectorAll('[data-rmo]')) b.onclick = () => b.closest('.optrow').remove(); };
+  bindO();
+  $('#addOpt').onclick = () => { $('#optRows').insertAdjacentHTML('beforeend', optRow()); bindO(); $('#optRows').lastElementChild.querySelector('input').focus(); };
   bindQ();
   for (const b of f.querySelectorAll('[data-addq]')) b.onclick = () => {
     if (f.querySelectorAll('.qrow').length >= 12) return toast('最多 12 題');
@@ -2502,7 +2562,8 @@ async function formView(id) {
       place: f.place.value, lead: f.lead.value, note: f.note.value, plan_text: f.plan_text.value,
       link_url: f.link_url.value, link_label: f.link_label.value, deadline: f.deadline.value,
       week_no: num(f.week_no), capacity: num(f.capacity), fee: num(f.fee), guest_max: num(f.guest_max), meal_options: f.meal_options.value,
-      signup_open: f.signup_open.checked, questions, visibility: f.visibility.value, notify: f.notify ? f.notify.checked : undefined, copy_from: from || undefined,
+      signup_open: f.signup_open.checked, questions, visibility: f.visibility.value, group_reg: f.group_reg.checked,
+      options: [...f.querySelectorAll('.optrow')].map((r) => ({ name: r.querySelector('[data-k=name]').value.trim(), price: Number(r.querySelector('[data-k=price]').value) || 0 })).filter((o) => o.name), notify: f.notify ? f.notify.checked : undefined, copy_from: from || undefined,
     };
     try {
       if (id) { await api(`/events/${id}`, { method: 'PUT', body }); location.hash = `#/e/${id}`; }
@@ -2511,6 +2572,8 @@ async function formView(id) {
     } catch (err) { toast(err.message); }
   };
 }
+const optRow = (o = {}) => `<div class="optrow"><input data-k="name" maxlength="20" placeholder="組別，例如 全馬" aria-label="組別名稱" value="${esc(o.name || '')}">
+  <input data-k="price" type="number" min="0" max="100000" inputmode="numeric" placeholder="價格" aria-label="價格（元）" value="${o.price ?? ''}"><button type="button" class="btn danger sm" data-rmo>移除</button></div>`;
 const nextYear = (date) => { const [y, m, dd] = date.split('-'); return `${Number(y) + 1}-${m}-${dd}`; };
 const Q_TYPE_NAME = { single: '單選', multi: '複選', text: '簡答' };
 const qRow = (q = {}) => `<div class="qrow" data-type="${q.type || 'single'}" data-id="${esc(q.id || '')}">
@@ -2522,6 +2585,7 @@ const qRow = (q = {}) => `<div class="qrow" data-type="${q.type || 'single'}" da
 </div>`;
 
 // ---------- 活動統計與問卷結果 ----------
+const money = (n) => `NT$${Number(n || 0).toLocaleString('zh-TW')}`;
 const PAID_NAME = { unpaid: '未繳', paid: '已繳', waived: '免繳', refunded: '已退費' };
 const bars = (entries, total) => {
   const max = Math.max(1, ...entries.map(([, n]) => n));
@@ -2540,11 +2604,16 @@ async function statsView(id) {
     <section class="kpis">${kpi.map(([k, v]) => `<div class="card kpi"><span class="tiny">${k}</span><b class="num">${v}</b></div>`).join('')}</section>
     ${st.capacity ? `<section class="card"><div class="row spread"><h3>名額</h3><span class="tiny num">${t.in}/${st.capacity}</span></div>
       <span class="bar big"><i style="width:${Math.min(100, Math.round(t.in / st.capacity * 100))}%"></i></span></section>` : ''}
-    ${money ? `<section class="card"><div class="row spread"><h3>繳費</h3><span class="tiny">每人 ${nf(st.fee)} 元（攜伴另計）</span></div>
+    ${money ? `<section class="card"><div class="row spread"><h3>繳費</h3><span class="tiny">${st.options.length ? '依報名組別計價' : `每人 ${nf(st.fee)} 元`}（攜伴另計）</span></div>
       <div class="lstats"><span>已收 <b class="num">${nf(money.collected)}</b> / ${nf(money.expected)} 元</span>
         ${Object.entries(PAID_NAME).map(([k, v]) => `<span>${v} <b class="num">${money.counts[k] || 0}</b></span>`).join('')}</div>
       <span class="bar big"><i style="width:${money.expected ? Math.round(money.collected / money.expected * 100) : 0}%"></i></span></section>` : ''}
+    ${st.groupReg ? `<section class="card"><div class="row spread"><h3>團體報名資料</h3><span class="tiny">${st.regReady}/${t.in} 人已同意提供</span></div>
+      <span class="bar big"><i style="width:${t.in ? Math.round(st.regReady / t.in * 100) : 0}%"></i></span>
+      <a class="btn sm" href="/api/events/${id}/registrations.csv" download>下載團體報名資料（含身分證字號）</a>
+      <p class="tiny" style="margin:0">只包含已同意提供的人。檔案含身分證字號等個資，送出報名後請立刻刪除，下載紀錄會寫進稽核。</p></section>` : ''}
     <div class="statgrid">
+      ${st.byOption ? `<section class="card"><h3>報名組別</h3>${bars(Object.entries(st.byOption), t.in)}</section>` : ''}
       <section class="card"><h3>各分團</h3>${bars(st.byTeam.map((x) => [x.k, x.n]).sort((a, b) => b[1] - a[1]), t.in)}
         <p class="tiny" style="margin:0">同時在兩個分團的人，兩邊都會算到。</p></section>
       ${st.byMeal ? `<section class="card"><h3>餐點</h3>${bars(Object.entries(st.byMeal), t.in)}</section>` : ''}
@@ -2562,7 +2631,7 @@ async function statsView(id) {
       <input id="pq" placeholder="搜尋姓名" aria-label="搜尋名單" autocomplete="off">
       <div class="roster" id="plist">${st.people.map((x) => `<div class="r prow" data-name="${esc(`${x.name} ${x.nickname || ''}`)}">
         <label class="attend" title="出席"><input type="checkbox" data-att="${esc(x.member_id)}" ${x.attended ? 'checked' : ''} ${st.kind === 'party' ? 'disabled' : ''}><i>${IC.check}</i></label>
-        <span><b>${esc(x.name)}</b>${x.nickname ? ` <span class="tiny">${esc(x.nickname)}</span>` : ''}<span class="tiny" style="display:block">${x.status === 'wait' ? '候補・' : ''}${x.guests ? `攜伴 ${x.guests}・` : ''}${esc(x.paid_note || '')}</span></span>
+        <span><b>${esc(x.name)}</b>${x.nickname ? ` <span class="tiny">${esc(x.nickname)}</span>` : ''}<span class="tiny" style="display:block">${x.option ? `${esc(x.option)}・` : ''}${st.groupReg ? (x.regOk ? '報名資料 OK・' : '報名資料未提供・') : ''}${x.status === 'wait' ? '候補・' : ''}${x.guests ? `攜伴 ${x.guests}・` : ''}${esc(x.paid_note || '')}</span></span>
         ${money ? `<select data-pay="${esc(x.member_id)}" aria-label="繳費狀態" class="paysel ${x.paid}">${Object.entries(PAID_NAME).map(([k, v]) => `<option value="${k}" ${x.paid === k ? 'selected' : ''}>${v}</option>`).join('')}</select>` : '<span></span>'}
       </div>`).join('')}</div>
       <p class="tiny" style="margin:0">左邊勾選是點名出席${st.kind === 'party' ? '（春酒以入場券報到為準）' : ''}${money ? '；右邊切換繳費狀態，只做紀錄，不串金流' : ''}。</p>
@@ -2590,11 +2659,11 @@ async function teamsView() {
   await refreshMe();
   const list = teams();
   view.innerHTML = `
-    ${largeTitle('分團', `${esc(org().short || org().name || '耕跑團')}底下的跑團，可以同時加入好幾個`)}
+    ${largeTitle('分團', '主團由管理員設定；想加入其他分團，申請後由該團幹部核准')}
     <div class="teamgrid">${list.map((t) => `<a class="card lit teamcard" href="#/t/${esc(t.id)}" style="--tc:${esc(t.color)}">
       <span class="dot" aria-hidden="true"></span>
-      <span class="row spread"><span class="row" style="gap:10px">${teamIcon(t, 'md')}<b>${esc(t.name)}</b></span>${t.my_status === 'active' ? `<span class="pill solid">${esc(t.my_title || TEAM_ROLE_NAME[t.my_role])}</span>` : t.my_status === 'pending' ? '<span class="pill wait">審核中</span>' : t.private ? '<span class="pill">私密</span>' : ''}</span>
-      <span class="tiny">${esc(t.intro || POLICY_NAME[t.join_policy])}</span>
+      <span class="row spread"><span class="row" style="gap:10px">${teamIcon(t, 'md')}<b>${esc(t.name)}</b></span>${t.id === me.main_team ? '<span class="pill solid">我的主團</span>' : t.my_status === 'active' ? `<span class="pill solid">${esc(t.my_title || TEAM_ROLE_NAME[t.my_role])}</span>` : t.my_status === 'pending' ? '<span class="pill wait">申請中</span>' : t.private ? '<span class="pill">私密</span>' : ''}</span>
+      ${t.intro ? `<span class="tiny">${esc(t.intro)}</span>` : ''}
       <span class="row spread"><span class="tiny num">${t.count} 人</span><span class="tiny">${t.leaders.filter((l) => l.role === 'lead').map((l) => `團長 ${esc(l.nickname || l.name)}`).join('、')}</span></span>
     </a>`).join('') || `<div class="card">${emptyState('runner', '還沒有分團')}</div>`}</div>
     ${allow('settings') ? '<a class="tiny center" href="#/admin?tab=teams" style="padding:6px">管理分團 ›</a>' : ''}`;
@@ -2616,10 +2685,11 @@ async function teamView(tid, q = '') {
       <div class="leaders">${t.leaders.map((l) => `<span class="ldr">${avatar(l)}<span><b>${esc(l.nickname || l.name)}</b><span class="tiny">${esc(l.title || TEAM_ROLE_NAME[l.role])}</span></span></span>`).join('')}</div>
       <div class="row">
         ${inTeam ? (t.line_url ? `<a class="btn line sm" href="${esc(t.line_url)}" target="_blank" rel="noopener">加入 LINE 群組</a>` : '')
-          : t.my_status === 'pending' ? '<span class="pill wait">已申請，等團長或幹部審核</span>'
-          : `<button class="btn sm" id="joinTeam" style="background:#fff;color:${esc(t.color)}">${t.join_policy === 'approve' ? '申請加入' : '加入分團'}</button>`}
-        ${(inTeam || t.my_status === 'pending') && t.my_role !== 'lead' ? `<button class="btn sm glassbtn" id="leaveTeam">${inTeam ? '退出' : '取消申請'}</button>` : ''}
+          : t.my_status === 'pending' ? '<span class="pill" style="background:rgba(255,255,255,.2);color:#fff">已申請，等幹部核准</span>'
+          : `<button class="btn sm" id="joinTeam" style="background:#fff;color:${esc(t.color)}">申請加入</button>`}
+        ${(inTeam && t.id !== me.main_team && t.my_role !== 'lead') || t.my_status === 'pending' ? `<button class="btn sm glassbtn" id="leaveTeam">${inTeam ? '退出' : '取消申請'}</button>` : ''}
       </div>
+      ${t.self_managed ? `<p class="tiny" style="margin:0">${esc(t.name)}的成員由${esc(t.name)}的團長與幹部處理。</p>` : ''}
     </section>
 
     <div class="section-h"><h2>分團活動</h2>${teamAllow(tid, 'event') ? `<a class="btn ghost sm" href="#/new?team=${esc(tid)}">＋ 新增</a>` : ''}</div>
@@ -2636,9 +2706,9 @@ async function teamView(tid, q = '') {
           <span class="tiny">正方形圖，會自動縮成小圖。生圖指令見 docs/team-icons-prompt.md。</span></div>
         <label>介紹<textarea name="intro" maxlength="300" placeholder="練什麼、什麼時候練、適合誰">${esc(t.intro)}</textarea></label>
         <label>LINE 群組邀請連結<input name="line_url" type="url" value="${esc(t.line_url)}" placeholder="https://line.me/ti/g/…"></label>
-        ${allow('settings') ? `<div class="grid2"><label>加入方式<select name="join_policy">${Object.entries(POLICY_NAME).map(([k, v]) => `<option value="${k}" ${t.join_policy === k ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
-          <label>排序<input name="sort" type="number" min="0" max="99" value="${t.sort}"></label></div>
-          <label class="switch"><span>私密分團（活動與 LINE 連結只給團員看）</span><input type="checkbox" name="private" ${t.private ? 'checked' : ''}><i></i></label>` : ''}
+        ${allow('settings') ? `<label>排序<input name="sort" type="number" min="0" max="99" value="${t.sort}"></label>
+          <label class="switch"><span>私密分團（活動與 LINE 連結只給團員看）</span><input type="checkbox" name="private" ${t.private ? 'checked' : ''}><i></i></label>
+          <label class="switch"><span>只由本團幹部管理成員<span class="tiny" style="display:block">例如公司團：協會幹部不能代為加入、核准或設成主團</span></span><input type="checkbox" name="self_managed" ${t.self_managed ? 'checked' : ''}><i></i></label>` : ''}
         <div class="row"><button class="btn sm">儲存</button>${allow('settings') ? '<button type="button" class="btn danger sm" id="delTeam">刪除分團</button>' : ''}</div>
       </form>
       ${allow('settings') ? '' : '<p class="tiny" style="margin:0">名稱、顏色與加入方式由行政人員設定。</p>'}
@@ -2657,18 +2727,17 @@ async function teamView(tid, q = '') {
   loadBoard(t); if (inTeam || manage) loadBoardRank(tid, 'week');
 
   $('#joinTeam')?.addEventListener('click', async () => {
-    try { const r = await api(`/teams/${tid}/join`, { method: 'POST' }); toast(r.status === 'pending' ? '已送出申請' : `歡迎加入${t.name}`); teamView(tid); }
-    catch (e) { toast(e.message); }
+    try { await api(`/teams/${tid}/join`, { method: 'POST' }); toast('已送出申請，等幹部核准'); teamView(tid); } catch (e) { toast(e.message); }
   });
   $('#leaveTeam')?.addEventListener('click', async () => {
     if (!confirm(`確定${inTeam ? '退出' : '取消申請'}${t.name}？`)) return;
-    try { await api(`/teams/${tid}/leave`, { method: 'POST' }); toast('已退出'); teamView(tid); } catch (e) { toast(e.message); }
+    try { await api(`/teams/${tid}/leave`, { method: 'POST' }); toast(inTeam ? '已退出' : '已取消申請'); teamView(tid); } catch (e) { toast(e.message); }
   });
   $('#teamEdit')?.addEventListener('submit', async (e) => {
     e.preventDefault();
     const f = e.target;
     const body = { intro: f.intro.value, line_url: f.line_url.value.trim(),
-      ...(f.name ? { name: f.name.value, color: f.color.value, join_policy: f.join_policy.value, private: f.private.checked, sort: Number(f.sort.value) || 0 } : {}) };
+      ...(f.name ? { name: f.name.value, color: f.color.value, join_policy: 'approve', private: f.private.checked, self_managed: f.self_managed.checked, sort: Number(f.sort.value) || 0 } : {}) };
     try { await api(`/teams/${tid}`, { method: 'PUT', body }); toast('已儲存'); teamView(tid); } catch (err) { toast(err.message); }
   });
   $('#iconIn')?.addEventListener('change', async (e) => {
@@ -2730,7 +2799,7 @@ async function loadBoardRank(tid, period) {
     const r = await api(`/teams/${tid}/leaderboard?period=${period}`);
     box.innerHTML = r.rows.map((x, i) => `<div class="r rank"><span class="no num">${i + 1}</span>${avatar(x)}<span>${esc(x.nickname || x.name)}<span class="tiny" style="display:block">${x.n} 次</span></span><b class="num">${x.km} km</b></div>`).join('')
       || '<p class="muted" style="margin:0">還沒有人上榜</p>';
-    $('#lbHint').textContent = r.me ? '你有出現在排行榜上，可以在「我的 → 隱私與帳號」關掉。' : '排行榜只顯示自己同意上榜的人；想參加到「我的 → 隱私與帳號」打開。';
+    $('#lbHint').textContent = r.me ? '你有出現在排行榜上，可以在「我的 → 隱私」關掉。' : '排行榜只顯示自己同意上榜的人；想參加到「我的 → 隱私」打開。';
   } catch (e) { box.innerHTML = `<p class="muted" style="margin:0">${esc(e.message)}</p>`; }
 }
 function teamRosterCard(t, r, q) {
@@ -2786,75 +2855,220 @@ function bindTeamRoster(t, r, q) {
 }
 
 // ---------- 我的 ----------
-async function meView() {
-  // LINE 內建瀏覽器等不支援 Service Worker 的環境，ready 永遠不會完成：最多等 1.5 秒
-  const reg = await Promise.race([navigator.serviceWorker?.ready.catch(() => null), new Promise((r) => setTimeout(() => r(null), 1500))]);
-  const sub = await reg?.pushManager?.getSubscription().catch(() => null);
-  const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone;
+// ---------- 我的：像 iPhone 設定一樣分組，每一列點進去是一頁 ----------
+const ME_SECTIONS = {
+  profile: '個人資料', races: '我的賽事與倒數', reg: '賽事報名資料', teams: '主團與分團', notify: '通知與裝置',
+  security: '帳號與安全', privacy: '隱私', assoc: '協會',
+};
+const row = (href, icon, title, sub = '', badge = '') => `<a class="setrow" href="${href}"><span class="sic">${icon}</span><span class="st"><b>${title}</b>${sub ? `<span class="tiny">${sub}</span>` : ''}</span>${badge}<span class="chev" aria-hidden="true"></span></a>`;
+const btnRow = (id, icon, title, sub = '') => `<button class="setrow" id="${id}"><span class="sic">${icon}</span><span class="st"><b>${title}</b>${sub ? `<span class="tiny">${sub}</span>` : ''}</span><span class="chev" aria-hidden="true"></span></button>`;
+const group = (title, rows) => (rows.filter(Boolean).length ? `<section class="setgroup">${title ? `<h3 class="sgt">${title}</h3>` : ''}<div class="card setcard">${rows.filter(Boolean).join('')}</div></section>` : '');
+const subTitle = (title, sub = '') => `<a class="backlink" href="#/me">‹ 我的</a>${largeTitle(title, sub)}`;
+const MI = {
+  person: IC.runner, report: ic('<path d="M4 20V10M10 20V4M16 20v-8M22 20H2"/>'), flag: ic('<path d="M5.5 21V4M5.5 4.5h11l-2 3.7 2 3.8h-11"/>'),
+  idcard: ic('<rect x="3" y="5" width="18" height="14" rx="3"/><circle cx="9" cy="11" r="2.2"/><path d="M5.8 16c.6-1.6 1.8-2.4 3.2-2.4s2.6.8 3.2 2.4M14.5 10h4M14.5 13.5h3"/>'),
+  ticket: ic('<path d="M3 8a2 2 0 0 0 2-2h14a2 2 0 0 0 2 2v2a2 2 0 0 0 0 4v2a2 2 0 0 0-2 2H5a2 2 0 0 0-2-2v-2a2 2 0 0 0 0-4Z"/><path d="M14 6v12" stroke-dasharray="2 2.5"/>'),
+  team: ic('<circle cx="8" cy="9" r="3"/><circle cx="16.5" cy="9.5" r="2.5"/><path d="M2.8 19c.5-3 2.6-4.6 5.2-4.6s4.7 1.6 5.2 4.6M14 14.6c2.6-.4 5 .9 5.7 4.4"/>'),
+  bell: ic('<path d="M6.4 9.6a5.6 5.6 0 0 1 11.2 0c0 4 1.4 5.4 1.4 5.4H5s1.4-1.4 1.4-5.4Z"/><path d="M10.2 18.4a2 2 0 0 0 3.6 0"/>'), phone: ic('<rect x="7" y="2.8" width="10" height="18.4" rx="2.6"/><path d="M11 18h2"/>'), cal: IC.calendar,
+  shield: ic('<path d="M12 3 5 6v5.5c0 4.4 3 8 7 9.5 4-1.5 7-5.1 7-9.5V6Z"/><path d="M9 12l2 2 4-4"/>'), lock: IC.lock,
+  eye: ic('<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z"/><circle cx="12" cy="12" r="3"/>'),
+  building: ic('<path d="M4 21V5a1 1 0 0 1 1-1h9a1 1 0 0 1 1 1v16M15 9h4a1 1 0 0 1 1 1v11M3 21h18M8 8h3M8 12h3M8 16h3"/>'),
+  admin: IC.gear, roster: ic('<path d="M8 6h12M8 12h12M8 18h12"/><circle cx="4" cy="6" r="1"/><circle cx="4" cy="12" r="1"/><circle cx="4" cy="18" r="1"/>'),
+  plan: IC.calendar, help: ic('<circle cx="12" cy="12" r="9"/><path d="M9.6 9.3a2.5 2.5 0 0 1 4.8.9c0 1.7-2.4 2.2-2.4 3.8M12 17.2v.1"/>'),
+  out: ic('<path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3M10 16l4-4-4-4M14 12H4"/>'),
+};
+async function meView(section) {
   const welcome = new URLSearchParams(location.hash.split('?')[1] || '').get('welcome');
   const googleMsg = new URLSearchParams(location.hash.split('?')[1] || '').get('google');
+  if (googleMsg) section = 'security';
+  if (!section) return meHome(welcome);
+  if (!ME_SECTIONS[section]) { location.hash = '#/me'; return; }
+  return ({ profile: meProfile, races: meRaces, reg: meReg, teams: meTeams, notify: meNotify, security: meSecurity, privacy: mePrivacy, assoc: meAssoc })[section](googleMsg);
+}
+async function meHome(welcome) {
+  const main = teamOf(me.main_team);
+  const staff = allow('members') || allow('roles') || allow('settings') || allow('roster') || canPublishPlan();
+  const regRow = await api('/me/race-profile').catch(() => null);
   view.innerHTML = `
     ${largeTitle('我的')}
-    ${welcome ? '<div class="notice">歡迎加入！先確認你的項目和組別，再到下方「我的分團」加入你在的團。</div>' : ''}
-    ${googleMsg === 'linked' ? '<div class="notice">已綁定 Google，之後可以直接用 Google 登入。</div>' : googleMsg === 'taken' ? '<div class="notice">這個 Google 帳號已經綁定另一個帳號了。如果那個帳號也是你的，請聯絡行政人員合併。</div>' : ''}
-    ${cfg.googleLogin && !me.google ? `<section class="card"><div class="row spread"><div><h3>綁定 Google</h3><span class="tiny">綁定後換手機或清掉瀏覽器資料，也能用 Google 登入回到同一個帳號。</span></div>
-      <a class="btn google sm" href="${googleHref(true)}">${GOOGLE_G}<span>綁定</span></a></div></section>` : ''}
+    ${welcome ? '<div class="notice">歡迎加入！先到「個人資料」確認項目和組別；主團會由管理員設定。</div>' : ''}
+    ${mfaBanner()}
+    <a class="card mecard" href="#/me/profile">
+      ${avatar(me)}
+      <span class="mi"><b>${esc(me.name)}</b>${me.nickname ? ` <span class="tiny">${esc(me.nickname)}</span>` : ''}
+        <span class="tiny" style="display:block">${esc(me.title || me.roleName || ROLE_NAME[me.role] || '團員')}・${me.dist === 'hm' ? '半馬' : '全馬'} ${esc(me.grp)} 組</span></span>
+      ${main ? `<span class="pill team" style="--tc:${esc(main.color)}">${teamIcon(main, 'xs')}${esc(main.name)}</span>` : '<span class="pill">主團未設定</span>'}
+    </a>
+    ${group('我的跑步', [
+      row('#/report', MI.report, '訓練報表', '週里程、完成率、個人最佳'),
+      row('#/me/races', MI.flag, '我的賽事與倒數', '右上角倒數哪一場'),
+      row('#/me/reg', MI.idcard, '賽事報名資料', '幹部代為團體報名時使用', regRow?.complete ? '<span class="pill solid">已填好</span>' : regRow?.profile ? '<span class="pill wait">未填完</span>' : ''),
+      row('#/tickets', MI.ticket, '我的入場券與中獎紀錄'),
+    ])}
+    ${group('分團', [row('#/me/teams', MI.team, '主團與分團', main ? `主團：${esc(main.name)}` : '主團由管理員設定')])}
+    ${group('設定', [
+      row('#/me/notify', MI.bell, '通知與裝置', '推播、加到主畫面、行事曆、分頁列'),
+      row('#/me/security', MI.shield, '帳號與安全', `${me.google ? 'Google 已綁定' : '綁定 Google'}、通行金鑰、登出`),
+      row('#/me/privacy', MI.eye, '隱私', '分享給教練、排行榜、下載或刪除資料'),
+    ])}
+    ${group('協會', [row('#/me/assoc', MI.building, esc(org().name || '台灣耕跑團協會'), `${esc(me.membershipName || '跑友')}・入會、章程與文件`)])}
+    ${staff ? group('幹部專區', [
+      (allow('members') || allow('roles') || allow('settings')) ? row('#/admin', MI.admin, '管理後台', '總覽、會員、權限、分團、系統設定') : '',
+      allow('roster') ? row('#/roster', MI.roster, '團員名冊') : '',
+      canPublishPlan() ? row('#/plan/new', MI.plan, '發布課表', allow('plan') ? '教練' : '分團團長') : '',
+    ]) : ''}
+    ${group('', [btnRow('openGuide', MI.help, '使用說明', '一分鐘帶你看過每個功能')])}`;
+  bindStepup();
+  $('#openGuide').onclick = () => Guide.start();
+}
+function meProfile() {
+  view.innerHTML = `${subTitle('個人資料', '報名時會直接帶入，不用每次重填')}
     <section class="card">
-      <div class="row">
-        ${avatar(me)}
-        <div style="flex:1"><b>${esc(me.name)}</b>
-          <div class="tiny">${esc(me.title || me.roleName || ROLE_NAME[me.role] || '團員')}${me.google ? '・已綁定 Google' : ''}</div></div>
-      </div>
+      <div class="row">${avatar(me)}<div style="flex:1"><b>${esc(me.name)}</b><div class="tiny">${esc(me.title || me.roleName || ROLE_NAME[me.role] || '團員')}</div></div></div>
       <form id="mf">
-        <div class="grid2">
-          <label>姓名<input name="name" value="${esc(me.name)}" maxlength="20"></label>
-          <label>暱稱<input name="nickname" value="${esc(me.nickname || '')}" maxlength="20" placeholder="團裡怎麼叫你"></label>
-        </div>
-        <div class="grid2">
-          <label>項目<select name="dist"><option value="fm" ${me.dist === 'fm' ? 'selected' : ''}>全馬</option><option value="hm" ${me.dist === 'hm' ? 'selected' : ''}>半馬</option></select></label>
-          <label>組別<select name="grp"></select></label>
-        </div>
-        <label>所屬跑團<input name="club" list="clubs" value="${esc(me.club || '')}" maxlength="30" placeholder="耕跑團">
-          <datalist id="clubs">${Party.CLUBS.map((c) => `<option value="${esc(c)}">`).join('')}</datalist></label>
-        <div class="grid2">
-          <label>餐點偏好<select name="meal_pref">
-            <option value="" ${!me.meal_pref ? 'selected' : ''}>未指定</option>
-            <option ${me.meal_pref === '葷食' ? 'selected' : ''}>葷食</option>
-            <option ${me.meal_pref === '素食' ? 'selected' : ''}>素食</option></select></label>
-          <label>電話（選填）<input name="phone" value="${esc(me.phone || '')}" maxlength="20" inputmode="tel" placeholder="餐會聯絡用"></label>
-        </div>
+        <div class="grid2"><label>姓名<input name="name" value="${esc(me.name)}" maxlength="20"></label>
+          <label>暱稱<input name="nickname" value="${esc(me.nickname || '')}" maxlength="20" placeholder="團裡怎麼叫你"></label></div>
+        <div class="grid2"><label>項目<select name="dist"><option value="fm" ${me.dist === 'fm' ? 'selected' : ''}>全馬</option><option value="hm" ${me.dist === 'hm' ? 'selected' : ''}>半馬</option></select></label>
+          <label>組別<select name="grp"></select></label></div>
+        <div class="field"><span class="flabel">所屬跑團</span><span class="fvalue">${esc(teamOf(me.main_team)?.name || '等待管理員設定')}</span><span class="tiny">跟著主團，由管理員設定</span></div>
+        <div class="grid2"><label>餐點偏好<select name="meal_pref"><option value="" ${!me.meal_pref ? 'selected' : ''}>未指定</option>
+            <option ${me.meal_pref === '葷食' ? 'selected' : ''}>葷食</option><option ${me.meal_pref === '素食' ? 'selected' : ''}>素食</option></select></label>
+          <label>電話（選填）<input name="phone" value="${esc(me.phone || '')}" maxlength="20" inputmode="tel" placeholder="餐會聯絡用"></label></div>
         <button class="btn block">儲存</button>
       </form>
-      <p class="tiny">填好之後，報名任何活動都會直接帶入這些資料，不用再填一次。</p>
-    </section>
-
-    <section class="card">
-      <div class="row spread"><h3>我的分團</h3><a class="tiny" href="#/teams">全部分團 ›</a></div>
-      <div class="teamrow">${teams().map((t) => `<a class="teamchip ${t.my_status || ''}" href="#/t/${esc(t.id)}" style="--tc:${esc(t.color)}">
-        ${t.icon ? `<img class="ticon xs" src="${esc(t.icon)}" alt="">` : '<i aria-hidden="true"></i>'}<span>${esc(t.name)}</span>
-        <span class="tiny">${t.my_status === 'active' ? esc(t.my_title || TEAM_ROLE_NAME[t.my_role]) : t.my_status === 'pending' ? '審核中' : '加入'}</span></a>`).join('')}</div>
-      <p class="tiny" style="margin:0">加入後，首頁可以只看自己分團的活動，分團發布活動時也會通知你。</p>
-    </section>
-
-    <section class="card" id="racesCard">
-      <div class="row spread"><h3>我的賽事</h3><span class="tiny">標題列會倒數主要賽事</span></div>
-      <div id="raceList" class="roster"></div>
+    </section>`;
+  const f = $('#mf');
+  const sync = () => {
+    f.grp.innerHTML = Object.entries(P.groups(f.dist.value)).map(([g, v]) => `<option value="${g}">${g} 組・${v[0]}</option>`).join('');
+    f.grp.value = Object.keys(P.groups(f.dist.value)).includes(me.grp) ? me.grp : (f.dist.value === 'hm' ? 'C' : 'D');
+  };
+  f.dist.onchange = sync; sync();
+  f.onsubmit = async (e) => {
+    e.preventDefault();
+    try { me = (await api('/me', { method: 'PUT', body: { name: f.name.value, dist: f.dist.value, grp: f.grp.value, nickname: f.nickname.value, meal_pref: f.meal_pref.value, phone: f.phone.value } })).member; toast('已儲存'); }
+    catch (err) { toast(err.message); }
+  };
+}
+async function meRaces() {
+  view.innerHTML = `${subTitle('我的賽事與倒數', '右上角倒數主要賽事；點右上角倒數也能直接換')}
+    <section class="card"><div id="raceList" class="roster"></div></section>
+    <section class="card"><h3>加一場比賽</h3>
       <form id="raceForm">
-        <div class="grid2">
-          <label>賽事名稱<input name="name" maxlength="30" placeholder="2026 臺北馬拉松" required></label>
-          <label>日期<input type="date" name="date" required></label>
-        </div>
-        <div class="grid2">
-          <label>距離<select name="dist"><option>全馬</option><option>半馬</option><option>10K</option><option>5K</option><option>超馬</option><option>其他</option></select></label>
-          <label>目標成績<input name="goal" maxlength="10" placeholder="3:39:59"></label>
-        </div>
-        <button class="btn ghost block">加入賽事</button>
-      </form>
+        <div class="grid2"><label>賽事名稱<input name="name" maxlength="30" placeholder="2026 臺北馬拉松" required></label><label>日期<input type="date" name="date" required></label></div>
+        <div class="grid2"><label>距離<select name="dist"><option>全馬</option><option>半馬</option><option>10K</option><option>5K</option><option>超馬</option><option>其他</option></select></label>
+          <label>目標成績<input name="goal" maxlength="10" placeholder="3:39:59"></label></div>
+        <button class="btn block">加入賽事</button>
+      </form></section>
+    <button class="btn ghost block" id="pickCd">從常用賽事挑，或改成協會預設／不顯示</button>`;
+  const refreshCfg = async () => { const r = await api('/me'); me = r.member; cfg = r; paintCountdown(); };
+  const load = async () => {
+    const { races } = await api('/races');
+    if (!$('#raceList')) return;
+    $('#raceList').innerHTML = races.map((r) => {
+      const d = Math.round((new Date(`${r.date}T00:00:00`) - new Date().setHours(0, 0, 0, 0)) / 864e5);
+      return `<div class="r"><span class="av num" style="font-size:11px">${d >= 0 ? d : IC.check}</span>
+        <span><b>${esc(r.name)}</b>${r.is_primary ? ' <span class="pill solid">倒數中</span>' : ''}
+          <span class="tiny" style="display:block">${esc(r.date)}・${esc(r.dist || '')}${r.goal ? `・目標 ${esc(r.goal)}` : ''}${d >= 0 ? `・還有 ${d} 天` : '・已完賽'}</span></span>
+        <span class="row" style="gap:6px">${r.is_primary ? '' : `<button class="btn ghost sm" data-prim="${r.id}">倒數這場</button>`}<button class="btn danger sm" data-delrace="${r.id}" aria-label="刪除">刪除</button></span></div>`;
+    }).join('') || '<p class="tiny" style="margin:0">還沒有賽事，加一場吧。</p>';
+    for (const b of document.querySelectorAll('[data-prim]')) b.onclick = async () => { await api(`/races/${b.dataset.prim}/primary`, { method: 'POST' }); await api('/me/countdown', { method: 'POST', body: { mode: 'mine' } }); await load(); await refreshCfg(); toast('右上角改成倒數這場'); };
+    for (const b of document.querySelectorAll('[data-delrace]')) b.onclick = async () => { if (!confirm('刪除這場賽事？')) return; await api(`/races/${b.dataset.delrace}`, { method: 'DELETE' }); await load(); await refreshCfg(); };
+  };
+  load();
+  $('#raceForm').onsubmit = async (e) => { e.preventDefault(); const f = e.target;
+    try { await api('/races', { method: 'POST', body: { name: f.name.value, date: f.date.value, dist: f.dist.value, goal: f.goal.value } }); f.reset(); await load(); await refreshCfg(); toast('已加入賽事'); } catch (err) { toast(err.message); } };
+  $('#pickCd').onclick = () => countdownPicker();
+}
+// 賽事報名資料：加密保存，只有自己看得到；報名「代為團體報名」的活動並同意後，那場的主辦幹部才能下載
+async function meReg() {
+  const d = await api('/me/race-profile');
+  const p = d.profile || {}, F = d.fields;
+  const lt = (k, label) => `<span class="lt">${label || F[k].label}${F[k].req ? '<span class="req">必填</span>' : ''}</span>`;
+  const input = (k, type = 'text', extra = '', label = '') => `<label>${lt(k, label)}<input name="${k}" type="${type}" maxlength="${F[k].max}" value="${esc(p[k] || '')}" ${extra}></label>`;
+  const select = (k, opts) => `<label>${lt(k)}<select name="${k}"><option value="">請選擇</option>${opts.map((g) => `<option ${p[k] === g ? 'selected' : ''}>${g}</option>`).join('')}</select></label>`;
+  view.innerHTML = `${subTitle('賽事報名資料', '填一次，之後幹部代為團體報名都用這份')}
+    <section class="card notice-card"><b>${IC.lock} 這份資料怎麼保護</b>
+      <ul class="steps"><li>加密後才存進資料庫，只有你自己看得到完整內容</li>
+        <li>只有在你報名「由幹部代為團體報名」的活動、並勾選同意時，那一場的主辦幹部才能下載</li>
+        <li>每次下載都會留下稽核紀錄；你可以隨時修改或刪除</li></ul></section>
+    <form id="regForm" class="card regform">
+      <div class="grid2">${input('name_zh')}${input('name_en', 'text', 'autocapitalize="characters" placeholder="WANG DA-MING"')}</div>
+      <label>${lt('id_no')}<span class="idwrap"><input name="id_no" maxlength="${F.id_no.max}" value="${esc(p.id_no || '')}" autocomplete="off" autocapitalize="characters" spellcheck="false" type="password"><button type="button" class="btn ghost sm" id="idShow">顯示</button></span></label>
+      <div class="grid2">${input('birthday', 'date')}${select('gender', ['男', '女', '其他'])}</div>
+      <div class="grid2">${input('phone', 'tel', 'inputmode="tel" autocomplete="tel"')}${select('shirt', ['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL'])}</div>
+      ${input('email', 'email', 'autocomplete="email"')}
+      ${input('address', 'text', 'autocomplete="street-address"')}
+      <fieldset class="group"><legend>緊急聯絡人</legend>
+        <div class="grid2">${input('emergency_name', 'text', '', '姓名')}${input('emergency_phone', 'tel', 'inputmode="tel"', '電話')}</div>
+        ${input('emergency_rel', 'text', 'placeholder="配偶、父母…"', '關係')}</fieldset>
+      ${input('note', 'text', 'placeholder="外籍、身障組、其他需求"')}
+      <button class="btn block">儲存</button>
+      ${d.profile ? '<button type="button" class="btn danger block" id="regDel">刪除我的賽事報名資料</button>' : ''}
+      ${d.updated_at ? `<p class="tiny center" style="margin:0">上次更新：${ago(d.updated_at)}</p>` : ''}
+    </form>`;
+  $('#idShow').onclick = () => { const i = $('#regForm').id_no; i.type = i.type === 'password' ? 'text' : 'password'; $('#idShow').textContent = i.type === 'password' ? '顯示' : '隱藏'; };
+  $('#regForm').onsubmit = async (e) => {
+    e.preventDefault();
+    const body = Object.fromEntries([...new FormData(e.target)].map(([k, v]) => [k, String(v).trim()]));
+    try { const r = await api('/me/race-profile', { method: 'PUT', body }); toast(r.complete ? '已儲存，可以報名代為團體報名的活動了' : '已儲存，還有必填欄位沒填'); meReg(); } catch (err) { toast(err.message); }
+  };
+  $('#regDel')?.addEventListener('click', async () => {
+    if (!confirm('刪除後，已經同意提供的活動也會一併撤回。確定刪除？')) return;
+    await api('/me/race-profile', { method: 'DELETE' }); toast('已刪除'); meReg();
+  });
+}
+function meTeams() {
+  const main = teamOf(me.main_team), led = teams().filter((t) => t.id !== me.main_team && (t.my_status === 'active' || t.my_status === 'pending'));
+  view.innerHTML = `${subTitle('主團與分團', '主團由管理員設定；想加入其他分團，申請後由該團幹部核准')}
+    <section class="card">
+      <h3>主團</h3>
+      ${main ? `<a class="teamchip active" href="#/t/${esc(main.id)}" style="--tc:${esc(main.color)}">${teamIcon(main, 'xs')}<span>${esc(main.name)}</span><span class="tiny">主團</span></a>`
+        : '<p class="notice" style="margin:0">管理員還沒幫你設定主團，設定好之後就會收到分團的活動與公告。</p>'}
+      ${led.length ? `<h3>其他分團</h3><div class="teamrow">${led.map((t) => `<a class="teamchip ${t.my_status}" href="#/t/${esc(t.id)}" style="--tc:${esc(t.color)}">${teamIcon(t, 'xs')}<span>${esc(t.name)}</span><span class="tiny">${t.my_status === 'pending' ? '申請中' : esc(t.my_title || TEAM_ROLE_NAME[t.my_role])}</span></a>`).join('')}</div>` : ''}
     </section>
-    ${allow('settings') ? '<a class="card" href="#/admin"><div class="row spread"><h3>系統設定</h3><span class="tiny">協會資訊・功能開關・文件・隱私權政策 ›</span></div></a>' : ''}
-
-    ${mfaBanner()}
+    <a class="btn ghost block" href="#/teams">看全部分團</a>`;
+}
+async function meNotify() {
+  const reg = await Promise.race([navigator.serviceWorker?.ready.catch(() => null), new Promise((r) => setTimeout(() => r(null), 1500))]);
+  const sub = await reg?.pushManager?.getSubscription().catch(() => null);
+  view.innerHTML = `${subTitle('通知與裝置')}
+    <section class="card">
+      <h3>推播通知</h3>
+      ${cfg.vapid ? `<p class="muted" style="margin:0">新團練、候補遞補、教練回饋都會通知你。${isStandalone() ? '' : '在 iPhone 上要先「加到主畫面」，再從主畫面打開才收得到。'}</p>
+        <div class="row"><button class="btn sm" id="pushBtn">${sub ? '關閉通知' : '開啟通知'}</button>${sub ? '<button class="btn ghost sm" id="pushTest">發測試通知</button>' : ''}</div>`
+        : '<p class="muted" style="margin:0">推播功能尚未啟用。</p>'}
+    </section>
     ${installCard('me')}
+    <section class="card" id="calCard">
+      <div class="row spread"><h3>訂閱到手機行事曆</h3>${cfg.calendarOn ? '<span class="pill solid">已開啟</span>' : ''}</div>
+      <p class="tiny" style="margin:0">報名的團練與活動會自動出現在 iPhone、Google 行事曆，取消報名也會跟著消失。訂閱網址等同你的個人鑰匙，不要分享給別人。</p>
+      <div id="calBox" class="row" style="gap:8px">${cfg.calendarOn ? '<button class="btn ghost sm" id="calNew">重新產生網址</button><button class="btn ghost sm" id="calOff">停用</button>' : '<button class="btn sm" id="calNew">產生訂閱網址</button>'}</div>
+    </section>
+    <section class="card"><h3>顯示</h3>
+      <label class="switch"><span>分頁列只顯示圖示<span class="tiny" style="display:block">隱藏下方圖示底下的文字</span></span><input type="checkbox" id="iconsOnly" ${iconsOnly.get() ? 'checked' : ''}><i></i></label></section>`;
+  $('#pushBtn')?.addEventListener('click', () => togglePush(sub));
+  $('#pushTest')?.addEventListener('click', async () => { try { await api('/push/test', { method: 'POST' }); toast('已送出測試通知'); } catch (e) { toast(e.message); } });
+  bindInstall();
+  $('#iconsOnly').onchange = (e) => { iconsOnly.set(e.target.checked); applyTabs(); };
+  $('#calNew').onclick = async () => {
+    if (cfg.calendarOn && !confirm('重新產生後，已經訂閱的舊網址會失效，要在行事曆重新訂閱。確定？')) return;
+    try {
+      const { url } = await api('/me/calendar', { method: 'POST' });
+      cfg.calendarOn = true;
+      $('#calBox').outerHTML = `<div style="display:grid;gap:8px"><a class="btn block" href="${esc(url.replace(/^https:/, 'webcal:'))}">加到 iPhone／Mac 行事曆</a>
+        <div class="row" style="gap:8px"><input readonly value="${esc(url)}" aria-label="行事曆訂閱網址" style="flex:1;font-size:13px" onfocus="this.select()"><button class="btn ghost sm" id="calCopy">複製</button></div>
+        <p class="tiny" style="margin:0">Google 行事曆：電腦版左側「其他日曆 → 透過網址新增」，貼上這個網址。這個網址只會顯示這一次。</p></div>`;
+      $('#calCopy').onclick = () => copy(url);
+    } catch (e) { toast(e.message); }
+  };
+  $('#calOff')?.addEventListener('click', async () => { await api('/me/calendar', { method: 'DELETE' }); cfg.calendarOn = false; toast('已停用行事曆訂閱'); meNotify(); });
+}
+async function meSecurity(googleMsg) {
+  view.innerHTML = `${subTitle('帳號與安全')}
+    ${googleMsg === 'linked' ? '<div class="notice">已綁定 Google，之後可以直接用 Google 登入。</div>' : googleMsg === 'taken' ? '<div class="notice">這個 Google 帳號已經綁定另一個帳號了。如果那個帳號也是你的，請聯絡行政人員合併。</div>' : ''}
+    ${mfaBanner()}
+    ${cfg.googleLogin ? `<section class="card"><div class="row spread"><div><h3>Google 帳號</h3><span class="tiny">${me.google ? '已綁定，可以用 Google 登入' : '綁定後換手機或清掉瀏覽器資料，也能用 Google 回到同一個帳號'}</span></div>
+      ${me.google ? '<span class="pill solid">已綁定</span>' : `<a class="btn google sm" href="${googleHref(true)}">${GOOGLE_G}<span>綁定</span></a>`}</div></section>` : ''}
     <section class="card" id="pkCard">
       <div class="row spread"><h3>通行金鑰</h3>${me.mfa ? `<span class="pill solid">${IC.check}這次已驗證</span>` : ''}</div>
       <p class="tiny" style="margin:0">用 Face ID、Touch ID 或手機指紋登入，不用密碼。${['chair', 'director', 'supervisor', 'staff', 'coach'].includes(me.realRole || me.role) ? '幹部建議至少新增一把，協會開啟兩步驟驗證後要用它驗證。' : ''}</p>
@@ -2862,188 +3076,65 @@ async function meView() {
       <div class="row" style="gap:8px">${pkSupported() ? `<button class="btn sm" id="pkAdd">${IC.plus}新增通行金鑰</button>` : '<span class="tiny">這個瀏覽器不支援通行金鑰</span>'}
         <button class="btn ghost sm" data-stepup id="pkTest" hidden>驗證一次</button></div>
     </section>
-    <a class="card" href="#/report"><div class="row spread"><h3>訓練報表</h3><span class="tiny">週里程、完成率、強度趨勢、個人最佳 ›</span></div></a>
-    <a class="card" href="#/tickets"><div class="row spread"><h3>我的入場券</h3><span class="tiny">春酒等活動的入場 QR Code ›</span></div></a>
-    <section class="card" id="calCard">
-      <div class="row spread"><h3>訂閱到手機行事曆</h3>${cfg.calendarOn ? '<span class="pill solid">已開啟</span>' : ''}</div>
-      <p class="tiny" style="margin:0">報名的團練與活動會自動出現在 iPhone、Google 行事曆，取消報名也會跟著消失。訂閱網址等同你的個人鑰匙，不要分享給別人。</p>
-      <div id="calBox" class="row" style="gap:8px">${cfg.calendarOn
-        ? '<button class="btn ghost sm" id="calNew">重新產生網址</button><button class="btn ghost sm" id="calOff">停用</button>'
-        : '<button class="btn sm" id="calNew">產生訂閱網址</button>'}</div>
-    </section>
-    <section class="card">
-      <h3>通知</h3>
-      ${cfg.vapid
-        ? `<p class="muted" style="margin:0">新團練公告、候補遞補都會通知你。${standalone ? '' : '在 iPhone 上要先用「分享 → 加到主畫面」，再從主畫面打開才收得到。'}</p>
-           <div class="row"><button class="btn sm" id="pushBtn">${sub ? '關閉通知' : '開啟通知'}</button>
-           ${sub ? '<button class="btn ghost sm" id="pushTest">發測試通知</button>' : ''}</div>`
-        : '<p class="muted" style="margin:0">還沒設定推播金鑰，通知功能尚未啟用。</p>'}
-    </section>
-
-    ${(allow('members') || allow('roles')) ? '<a class="card" href="#/admin"><div class="row spread"><h3>管理後台</h3><span class="tiny">會員・身分・分團・稽核 ›</span></div></a>' : ''}
-    ${allow('roster') ? `<a class="card" href="#/roster"><div class="row spread"><h3>團員名冊</h3><span class="tiny">${allow('roles') ? '可指派幹部角色' : '查看'} ›</span></div></a>` : ''}
-    ${canPublishPlan() ? `<a class="card" href="#/plan/new"><div class="row spread"><h3>發布課表</h3><span class="tiny">${allow('plan') ? '教練' : '分團團長'} ›</span></div></a>` : ''}
-    ${me.role !== 'member' ? '' : `<details class="card tight">
-      <summary class="tiny" style="cursor:pointer">系統初始設定（只限第一位理事長）</summary>
+    ${me.role !== 'member' ? '' : `<details class="card tight"><summary class="tiny">系統初始設定（只限第一位理事長）</summary>
       <p class="tiny">幹部身分一律由理事長在後台指派。這裡只用在系統剛建立、還沒有理事長的時候。</p>
-      <form id="af" class="row" style="gap:8px">
-        <input name="code" placeholder="初始設定碼" aria-label="初始設定碼" style="flex:1;min-width:140px" autocomplete="off">
-        <button class="btn sm">設定</button>
-      </form>
-    </details>`}
-
-    <section class="card">
-      <div class="row spread"><h3>${esc(org().name || '台灣耕跑團協會')}</h3>
-        <span class="pill ${me.membership === 'active' ? 'solid' : me.membership === 'applied' ? 'wait' : ''}">${esc(me.membershipName || '跑友')}</span></div>
-      ${me.membership === 'active'
-        ? `<p class="muted" style="margin:0">${esc(me.member_type || '會員')}${me.member_no ? `・編號 ${esc(me.member_no)}` : ''}${me.paid_until ? `・會費繳至 ${esc(me.paid_until)}` : ''}</p>`
-        : `<p class="muted" style="margin:0">跑友可以報名所有團練；想加入協會的話，先填官方表單（含身分證字號等資料，不存在這個網站），再按下方按鈕通知行政人員。</p>
-           ${org().join_form ? `<a class="btn ghost block" href="${esc(org().join_form)}" target="_blank" rel="noopener">開啟入會表單</a>` : ''}
-           ${me.membership === 'applied' ? '<p class="notice" style="margin:0">已送出申請，等行政人員確認。</p>' : '<button class="btn block" id="applyBtn">我已填表，送出申請</button>'}`}
-    </section>
-    ${(cfg.settings?.docs || []).length || org().contact || org().parent ? `<section class="card">
-      <h3>協會資訊</h3>
-      ${org().parent ? `<p class="tiny" style="margin:0">所屬企業：${org().parent_url ? `<a href="${esc(org().parent_url)}" target="_blank" rel="noopener">${esc(org().parent)} ${IC.external}</a>` : esc(org().parent)}${org().parent_note ? `・${esc(org().parent_note)}` : ''}</p>` : ''}
-      ${org().contact ? `<p class="tiny" style="margin:0">聯絡方式：${esc(org().contact)}</p>` : ''}
-      <div class="doclist">${(cfg.settings?.docs || []).map((d) => `<a class="docrow" href="${esc(d.url)}" target="_blank" rel="noopener">
-        <span class="docic">${IC.doc}</span><span><b>${esc(d.title)}</b>${d.note ? `<span class="tiny" style="display:block">${esc(d.note)}</span>` : ''}</span><span class="tiny">${IC.external}</span></a>`).join('')}</div>
-    </section>` : ''}
-    <section class="card" id="myPrizes"></section>
-
-    <section class="card">
-      <h3>隱私與帳號</h3>
-      <p class="tiny" style="margin:0">我們只存姓名、暱稱、組別、跑團、分團、餐點偏好、報名與訓練紀錄；電話只有行政人員看得到完整號碼。你可以隨時下載或刪除自己的資料。</p>
-      <label class="switch"><span>把訓練完成率與里程分享給教練與分團幹部<span class="tiny" style="display:block">備註永遠只有你看得到</span></span><input type="checkbox" id="shareLogs" ${me.share_logs ? 'checked' : ''}><i></i></label>
-      <label class="switch"><span>出現在分團里程排行榜<span class="tiny" style="display:block">只有同分團的人看得到你的名字與里程</span></span><input type="checkbox" id="showRank" ${me.show_rank ? 'checked' : ''}><i></i></label>
-      <div class="row">
-        <a class="btn ghost sm" href="#/privacy">隱私權政策</a>
-        <a class="btn ghost sm" href="/api/me/export" download>下載我的資料</a>
-        <button class="btn ghost sm" id="logoutAll">登出所有裝置</button>
-        <button class="btn danger sm" id="delAcct">刪除帳號</button>
-      </div>
-    </section>
-    <button class="btn ghost block" id="logout">登出</button>
-    <p class="tiny center">課表來源：耕跑團記事本。W9 以後為系統推估，以教練公告為準。</p>`;
-
-  const f = $('#mf');
-  const sync = () => {
-    f.grp.innerHTML = Object.entries(P.groups(f.dist.value)).map(([g, v]) => `<option value="${g}">${g}　SUB ${v[0]}</option>`).join('');
-    f.grp.value = Object.keys(P.groups(f.dist.value)).includes(me.grp) ? me.grp : (f.dist.value === 'hm' ? 'C' : 'D');
-  };
-  f.dist.onchange = sync; sync();
-  f.onsubmit = async (e) => {
-    e.preventDefault();
-    try {
-      me = (await api('/me', { method: 'PUT', body: {
-        name: f.name.value, dist: f.dist.value, grp: f.grp.value,
-        nickname: f.nickname.value, club: f.club.value, meal_pref: f.meal_pref.value, phone: f.phone.value } })).member;
-      toast('已儲存');
-    }
-    catch (err) { toast(err.message); }
-  };
-  $('#af')?.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    try { me = (await api('/me/admin', { method: 'POST', body: { code: e.target.code.value } })).member; toast('已設定為理事長'); render(); }
-    catch (err) { toast(err.message); }
-  });
-  const refreshCfg = async () => { const r = await api('/me'); me = r.member; cfg = r; paintCountdown(); };
-  const loadRaces = async () => {
-    if (!$('#raceList')) return;   // 已經換到別的頁面
-    const { races } = await api('/races');
-    if (!$('#raceList')) return;
-    $('#raceList').innerHTML = races.map((r) => {
-      const d = Math.round((new Date(`${r.date}T00:00:00`) - new Date().setHours(0, 0, 0, 0)) / 864e5);
-      return `<div class="r"><span class="av num" style="font-size:11px">${d >= 0 ? d : IC.check}</span>
-        <span><b>${esc(r.name)}</b>${r.is_primary ? ' <span class="pill solid">主要</span>' : ''}
-          <span class="tiny" style="display:block">${esc(r.date)}・${esc(r.dist || '')}${r.goal ? `・目標 ${esc(r.goal)}` : ''}${d >= 0 ? `・還有 ${d} 天` : '・已完賽'}</span></span>
-        <span class="row" style="gap:6px">${r.is_primary ? '' : `<button class="btn ghost sm" data-prim="${r.id}">設為主要</button>`}<button class="btn danger sm" data-delrace="${r.id}" aria-label="刪除">刪除</button></span></div>`;
-    }).join('') || '<p class="tiny" style="margin:0">還沒有賽事，加一場吧。</p>';
-    for (const b of document.querySelectorAll('[data-prim]')) b.onclick = async () => { await api(`/races/${b.dataset.prim}/primary`, { method: 'POST' }); await loadRaces(); await refreshCfg(); toast('已設為主要賽事'); };
-    for (const b of document.querySelectorAll('[data-delrace]')) b.onclick = async () => { if (!confirm('刪除這場賽事？')) return; await api(`/races/${b.dataset.delrace}`, { method: 'DELETE' }); await loadRaces(); await refreshCfg(); };
-  };
-  loadRaces();
-  $('#raceForm').onsubmit = async (e) => {
-    e.preventDefault(); const f = e.target;
-    try { await api('/races', { method: 'POST', body: { name: f.name.value, date: f.date.value, dist: f.dist.value, goal: f.goal.value } });
-      f.reset(); await loadRaces(); await refreshCfg(); toast('已加入賽事'); } catch (err) { toast(err.message); }
-  };
-  $('#clubRace')?.addEventListener('submit', async (e) => {
-    e.preventDefault(); const f = e.target;
-    try { await api('/settings/club-race', { method: 'POST', body: { name: f.name.value, date: f.date.value } }); await refreshCfg(); toast('已更新協會預設倒數'); }
-    catch (err) { toast(err.message); }
-  });
-  $('#applyBtn')?.addEventListener('click', async () => {
-    try { me = (await api('/me/apply', { method: 'POST' })).member; toast('已送出申請'); render(); } catch (e) { toast(e.message); }
-  });
-  api('/my/prizes').then(({ prizes }) => {
-    const box = $('#myPrizes');
-    if (!box) return;
-    box.innerHTML = prizes.length
-      ? `<h3>我的中獎紀錄</h3>${prizes.map((p) => `<div class="r"><span class="docic">${IC.gift}</span>
-          <span><b>${esc(p.prize)}</b>${p.stage ? ` <span class="tiny">${esc(p.stage)}</span>` : ''}
-            <span class="tiny" style="display:block">${esc(p.title)}${p.sponsor ? `・${esc(p.sponsor)}` : ''}</span></span>
-          <span class="pill ${p.claimed_at ? 'solid' : 'wait'}">${p.claimed_at ? '已領獎' : '待領獎'}</span></div>`).join('')}`
-      : '';
-    box.hidden = !prizes.length;
-  }).catch(() => {});
-  $('#logoutAll').onclick = async () => {
-    if (!confirm('要登出所有裝置嗎？包含這一台。')) return;
-    await api('/logout', { method: 'POST', body: { all: true } }); clearDeviceData(); me = null; location.hash = '#/'; render();
-  };
-  $('#delAcct').onclick = async () => {
-    if (!confirm('刪除後無法復原：報名、入場券與通知都會刪除，中獎紀錄會匿名保留給協會對帳。確定刪除？')) return;
-    try { await api('/me', { method: 'DELETE' }); clearDeviceData(); me = null; toast('帳號已刪除'); location.hash = '#/'; render(); }
-    catch (e) { toast(e.message); }
-  };
-  $('#logout').onclick = async () => { await api('/logout', { method: 'POST' }); clearDeviceData(); me = null; location.hash = '#/'; render(); };
-  $('#pushBtn')?.addEventListener('click', () => togglePush(sub));
-  bindInstall();
+      <form id="af" class="row" style="gap:8px"><input name="code" placeholder="初始設定碼" aria-label="初始設定碼" style="flex:1;min-width:140px" autocomplete="off"><button class="btn sm">設定</button></form></details>`}
+    ${group('', [btnRow('logout', MI.out, '登出'), btnRow('logoutAll', MI.lock, '登出所有裝置', '手機掉了或懷疑被別人登入時')])}`;
   bindStepup();
   const loadPk = async () => {
     const { passkeys } = await api('/passkeys');
+    if (!$('#pkList')) return;
     $('#pkList').innerHTML = passkeys.map((p) => `<div class="r">${IC.lock}<span>${esc(p.name || '通行金鑰')}<span class="tiny" style="display:block">新增於 ${esc(p.created_at.slice(0, 10))}${p.last_used_at ? `・上次使用 ${ago(p.last_used_at)}` : ''}</span></span>
       <button class="btn ghost sm" data-pkdel="${esc(p.id)}">移除</button></div>`).join('');
     $('#pkTest').hidden = !passkeys.length || me.mfa;
-    for (const b of document.querySelectorAll('[data-pkdel]')) b.onclick = async () => {
-      if (!confirm('移除這把通行金鑰？之後這台裝置就不能用它登入。')) return;
-      await api(`/passkeys/${encodeURIComponent(b.dataset.pkdel)}`, { method: 'DELETE' }); toast('已移除'); loadPk();
-    };
+    for (const b of document.querySelectorAll('[data-pkdel]')) b.onclick = async () => { if (!confirm('移除這把通行金鑰？之後這台裝置就不能用它登入。')) return; await api(`/passkeys/${encodeURIComponent(b.dataset.pkdel)}`, { method: 'DELETE' }); toast('已移除'); loadPk(); };
   };
   loadPk().catch(() => {});
   $('#pkAdd')?.addEventListener('click', async () => {
-    try {
-      await passkey('register');
-      toast('已新增通行金鑰');
-      // 新增後馬上用它驗證一次：確認可以用，也讓這次登入通過兩步驟
-      try { await passkey('stepup'); me = null; render(); return; } catch {}
-      loadPk();
-    } catch (e) { if (e.message !== '已取消') toast(e.message); }
+    try { await passkey('register'); toast('已新增通行金鑰'); try { await passkey('stepup'); me = null; render(); return; } catch {} loadPk(); }
+    catch (e) { if (e.message !== '已取消') toast(e.message); }
   });
-  // 行事曆訂閱：每次產生都是新網址，舊的立即失效
-  $('#calNew').onclick = async () => {
-    if (cfg.calendarOn && !confirm('重新產生後，已經訂閱的舊網址會失效，要在行事曆重新訂閱。確定？')) return;
-    try {
-      const { url } = await api('/me/calendar', { method: 'POST' });
-      cfg.calendarOn = true;
-      const webcal = url.replace(/^https:/, 'webcal:');
-      $('#calBox').outerHTML = `<div style="display:grid;gap:8px"><a class="btn block" href="${esc(webcal)}">加到 iPhone／Mac 行事曆</a>
-        <div class="row" style="gap:8px"><input readonly value="${esc(url)}" aria-label="行事曆訂閱網址" style="flex:1;font-size:13px" onfocus="this.select()"><button class="btn ghost sm" id="calCopy">複製</button></div>
-        <p class="tiny" style="margin:0">Google 行事曆：電腦版左側「其他日曆 → 透過網址新增」，貼上這個網址。這個網址只會顯示這一次。</p></div>`;
-      $('#calCopy').onclick = () => copy(url);
-    } catch (e) { toast(e.message); }
-  };
-  $('#calOff')?.addEventListener('click', async () => { await api('/me/calendar', { method: 'DELETE' }); cfg.calendarOn = false; toast('已停用行事曆訂閱'); meView(); });
-  $('#showRank').onchange = async (e) => {
-    try { await api('/me/show-rank', { method: 'POST', body: { on: e.target.checked } }); me.show_rank = e.target.checked; toast(e.target.checked ? '已加入排行榜' : '已退出排行榜'); }
-    catch (err) { e.target.checked = !e.target.checked; toast(err.message); }
-  };
-  $('#shareLogs').onchange = async (e) => {
-    try { await api('/me/share-logs', { method: 'POST', body: { share: e.target.checked } }); me.share_logs = e.target.checked; toast(e.target.checked ? '已分享給教練' : '已停止分享'); }
-    catch (err) { e.target.checked = !e.target.checked; toast(err.message); }
-  };
-  $('#pushTest')?.addEventListener('click', async () => {
-    try { await api('/push/test', { method: 'POST' }); toast('已送出測試通知'); } catch (e) { toast(e.message); }
+  $('#af')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    try { me = (await api('/me/admin', { method: 'POST', body: { code: e.target.code.value } })).member; toast('已設定為理事長'); render(); } catch (err) { toast(err.message); }
   });
+  $('#logout').onclick = async () => { await api('/logout', { method: 'POST' }); clearDeviceData(); me = null; location.hash = '#/'; render(); };
+  $('#logoutAll').onclick = async () => { if (!confirm('要登出所有裝置嗎？包含這一台。')) return; await api('/logout', { method: 'POST', body: { all: true } }); clearDeviceData(); me = null; location.hash = '#/'; render(); };
+}
+function mePrivacy() {
+  view.innerHTML = `${subTitle('隱私')}
+    <section class="card">
+      <label class="switch"><span>把訓練完成率與里程分享給教練與分團幹部<span class="tiny" style="display:block">備註永遠只有你看得到</span></span><input type="checkbox" id="shareLogs" ${me.share_logs ? 'checked' : ''}><i></i></label>
+      <label class="switch"><span>出現在分團里程排行榜<span class="tiny" style="display:block">只有同分團的人看得到你的名字與里程</span></span><input type="checkbox" id="showRank" ${me.show_rank ? 'checked' : ''}><i></i></label>
+    </section>
+    <section class="card"><h3>我們存了什麼</h3>
+      <p class="tiny" style="margin:0">姓名、暱稱、組別、主團、餐點偏好、報名與訓練紀錄；賽事報名資料加密保存；電話只有行政人員看得到完整號碼。</p>
+      <div class="row"><a class="btn ghost sm" href="#/privacy">隱私權政策</a><a class="btn ghost sm" href="/api/me/export" download>下載我的資料</a></div></section>
+    <section class="card"><h3>刪除帳號</h3><p class="tiny" style="margin:0">報名、入場券、通知與訓練紀錄都會刪除，中獎紀錄只留獎項給協會對帳。</p>
+      <button class="btn danger block" id="delAcct">刪除我的帳號</button></section>`;
+  $('#showRank').onchange = async (e) => { try { await api('/me/show-rank', { method: 'POST', body: { on: e.target.checked } }); me.show_rank = e.target.checked; toast(e.target.checked ? '已加入排行榜' : '已退出排行榜'); } catch (err) { e.target.checked = !e.target.checked; toast(err.message); } };
+  $('#shareLogs').onchange = async (e) => { try { await api('/me/share-logs', { method: 'POST', body: { share: e.target.checked } }); me.share_logs = e.target.checked; toast(e.target.checked ? '已分享給教練' : '已停止分享'); } catch (err) { e.target.checked = !e.target.checked; toast(err.message); } };
+  $('#delAcct').onclick = async () => {
+    if (!confirm('刪除後無法復原。確定刪除帳號？')) return;
+    try { await api('/me', { method: 'DELETE' }); clearDeviceData(); me = null; toast('帳號已刪除'); location.hash = '#/'; render(); } catch (e) { toast(e.message); }
+  };
+}
+function meAssoc() {
+  view.innerHTML = `${subTitle(esc(org().name || '台灣耕跑團協會'))}
+    <section class="card">
+      <div class="row spread"><h3>會籍</h3><span class="pill ${me.membership === 'active' ? 'solid' : me.membership === 'applied' ? 'wait' : ''}">${esc(me.membershipName || '跑友')}</span></div>
+      ${me.membership === 'active'
+        ? `<p class="muted" style="margin:0">${esc(me.member_type || '會員')}${me.member_no ? `・編號 ${esc(me.member_no)}` : ''}${me.paid_until ? `・會費繳至 ${esc(me.paid_until)}` : ''}</p>`
+        : `<p class="muted" style="margin:0">跑友可以報名所有團練；想加入協會，先填官方入會表單，再按下方按鈕通知行政人員。</p>
+           ${org().join_form ? `<a class="btn ghost block" href="${esc(org().join_form)}" target="_blank" rel="noopener">開啟入會表單 ${IC.external}</a>` : ''}
+           ${me.membership === 'applied' ? '<p class="notice" style="margin:0">已送出申請，等行政人員確認。</p>' : '<button class="btn block" id="applyBtn">我已填表，送出申請</button>'}`}
+    </section>
+    ${(cfg.settings?.docs || []).length || org().contact || org().parent ? `<section class="card"><h3>協會資訊</h3>
+      ${org().parent ? `<p class="tiny" style="margin:0">所屬企業：${org().parent_url ? `<a href="${esc(org().parent_url)}" target="_blank" rel="noopener">${esc(org().parent)} ${IC.external}</a>` : esc(org().parent)}${org().parent_note ? `・${esc(org().parent_note)}` : ''}</p>` : ''}
+      ${org().contact ? `<p class="tiny" style="margin:0">聯絡方式：${esc(org().contact)}</p>` : ''}
+      <div class="doclist">${(cfg.settings?.docs || []).map((d) => `<a class="docrow" href="${esc(d.url)}" target="_blank" rel="noopener"><span class="docic">${IC.doc}</span><span><b>${esc(d.title)}</b>${d.note ? `<span class="tiny" style="display:block">${esc(d.note)}</span>` : ''}</span><span class="tiny">${IC.external}</span></a>`).join('')}</div>
+    </section>` : ''}`;
+  $('#applyBtn')?.addEventListener('click', async () => { try { me = (await api('/me/apply', { method: 'POST' })).member; toast('已送出申請'); meAssoc(); } catch (e) { toast(e.message); } });
 }
 
 async function togglePush(sub) {
@@ -3087,6 +3178,7 @@ async function renderOnce() {
   }
   paintCountdown();
   applyFeatures();
+  $('#bell').hidden = !me;
   if (hash === '/privacy') { if (!me) { try { const r = await api('/me'); me = r.member; cfg = r; } catch {} } return privacyView(); }
   if (!me) return loginView();
   if (cfg.needConsent) {
@@ -3110,13 +3202,15 @@ async function route(hash) {
   try {
     if (hash === '/') return await listView();
     if (hash === '/past') return await pastView();
-    if (hash === '/coach') return coachView();
+    if (hash === '/coach') { location.replace('#/plan'); return; }
     if (hash === '/studio') return feat('studio') ? await studioView() : (view.innerHTML = `<div class="card">${emptyState('runner', '這個功能目前沒有開放')}</div>`);
     if (hash === '/notifications') return await notificationsView();
     if (hash === '/roster') return await rosterView();
     if (hash === '/admin') return await adminView();
     if (hash === '/plan/new') return planNewView();
     if (hash === '/me') return await meView();
+    const mesec = hash.match(/^\/me\/(\w+)$/);
+    if (mesec) return await meView(mesec[1]);
     if (hash === '/teams') return await teamsView();
     if (hash === '/tickets') return await ticketsView();
     if (hash === '/log') return await logView();

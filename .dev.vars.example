@@ -3,3 +3,5 @@ JOIN_CODE="run2026"
 CHAIR_CODE="chair-bootstrap-2026"
 # IP 雜湊用的鹽，正式環境請設一組長亂數
 HASH_SALT="dev-salt"
+# 賽事報名資料的 AES-GCM 金鑰（32 bytes base64）：openssl rand -base64 32
+RACE_KEY=""

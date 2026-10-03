@@ -556,7 +556,6 @@ fieldset.group legend{font-size:13px;font-weight:700;color:var(--ink-2);padding:
 .day .logbtn.skip{background:color-mix(in srgb,var(--ink) 12%,transparent);color:var(--ink-2);font-size:18px;padding:0}
 .day.logged.done{box-shadow:inset 3px 0 0 #34C759, var(--shadow-s)}
 .day .logline{display:block;margin-top:4px;font-size:12.5px;font-weight:650;color:var(--ink-2)}
-.logsum{grid-template-columns:auto 1fr;align-items:center;gap:16px}
 .ring{--p:0;position:relative;width:92px;height:92px;display:grid;place-items:center}
 .ring::before{content:"";position:absolute;inset:0;border-radius:50%;
   background:conic-gradient(#34C759 calc(var(--p)*1%), color-mix(in srgb,var(--ink) 10%,transparent) 0);
@@ -726,3 +725,144 @@ button.countdown small{font-size:12px;font-weight:600;color:var(--accent)}
 .cdopt span:first-child{display:grid;gap:2px}
 .cdopt.on{border-color:var(--accent);background:var(--accent-soft)}
 .cdopt .num{font-weight:700;color:var(--accent)}
+
+/* 會員名單：選取、主團 */
+.r.mrow{grid-template-columns:28px 1fr auto;align-items:center}
+.r.mrow .av{display:none}
+.pick{display:grid;place-items:center;cursor:pointer}
+.pick input{position:absolute;opacity:0;width:1px;height:1px}
+.pick i{display:grid;place-items:center;width:22px;height:22px;border-radius:7px;border:1.5px solid var(--stroke);color:transparent}
+.pick input:checked + i{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+.pick input:focus-visible + i{outline:2.5px solid color-mix(in srgb,var(--accent) 65%,transparent);outline-offset:2px}
+.pick svg.ic{width:14px;height:14px;stroke-width:2.8}
+.mact{display:grid;gap:6px;justify-items:end}
+.mainsel{width:auto;max-width:120px;padding:6px 10px;font-size:13px;border-radius:999px}
+.bulkbar{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(env(safe-area-inset-bottom,0px) + 92px);z-index:56;display:flex;align-items:center;gap:10px;
+  padding:8px 8px 8px 16px;border-radius:999px;background:var(--glass-hi);-webkit-backdrop-filter:var(--blur);backdrop-filter:var(--blur);box-shadow:var(--shadow-l);white-space:nowrap}
+.bulkbar select{width:auto;padding:6px 10px;font-size:14px;border-radius:999px}
+@media (min-width:1024px){.bulkbar{bottom:24px}}
+
+/* ---- 第二輪打磨 ---- */
+/* 捲動後中間出現頁名時，倒數淡出，不會跟標題疊在一起 */
+.countdown{transition:opacity .2s}
+.top.titled .countdown{opacity:0;pointer-events:none}
+.bell[hidden],#countdown[hidden]{display:none}
+/* 展開／收合：統一用細線箭頭，取代瀏覽器預設三角形 */
+details > summary{list-style:none;cursor:pointer;display:flex;align-items:center;gap:8px}
+details > summary::-webkit-details-marker{display:none}
+details > summary::after{content:"";width:7px;height:7px;flex:none;border-right:1.8px solid currentColor;border-bottom:1.8px solid currentColor;transform:rotate(-45deg) translateY(-1px);opacity:.6;transition:transform .2s var(--tap)}
+details[open] > summary::after{transform:rotate(45deg) translateY(-2px)}
+details.card > summary::after{margin-left:auto}
+/* 安裝提示：一行，步驟收起來 */
+.installcard{gap:8px}
+.instrow{display:grid;grid-template-columns:40px 1fr auto;gap:12px;align-items:center}
+.instrow img{border-radius:10px;box-shadow:var(--shadow-s)}
+.instrow > span{display:grid;gap:1px}
+.iconx{appearance:none;border:0;background:color-mix(in srgb,var(--ink) 7%,transparent);color:var(--ink-2);width:30px;height:30px;border-radius:50%;display:grid;place-items:center;cursor:pointer}
+.iconx svg.ic{width:16px;height:16px}
+/* 活動卡：標籤一行、右邊放報名狀態與人數 */
+.pills{display:flex;gap:6px;flex-wrap:nowrap;overflow:hidden;-webkit-mask-image:linear-gradient(90deg,#000 88%,transparent)}
+.pills .pill{flex:none}
+.evright{display:grid;justify-items:end;align-content:center;gap:4px;min-width:56px}
+.mine{display:inline-flex;align-items:center;gap:3px;font-size:12px;font-weight:700;color:#1E9E4F}
+.mine svg.ic{width:13px;height:13px;stroke-width:2.6}
+.mine.wait{color:var(--warn)}
+/* 本週訓練：圓環＋數字一行，按鈕一排 */
+.logsum{display:grid;gap:14px}
+.lsumtop{display:grid;grid-template-columns:auto 1fr;gap:16px;align-items:center}
+.lsumact{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.lsumact .btn:first-child:nth-last-child(3){grid-column:1/-1}
+.lsumact .btn{justify-content:center;padding:11px 10px;font-size:15px}
+/* 分頁列只顯示圖示 */
+body.iconsonly .tabs .tl{display:none}
+body.iconsonly .tabs a .ic{margin:4px 0}
+/* 唯讀欄位 */
+.field{display:grid;gap:3px}
+.flabel{font-size:13px;color:var(--ink-2);font-weight:500}
+.fvalue{padding:11px 13px;border-radius:var(--r-m);background:color-mix(in srgb,var(--ink) 5%,transparent);font-size:16px;font-weight:600}
+
+/* ---- 使用說明導覽（參照潛圖）：畫面變暗、聚光挖空、玻璃說明框，步驟之間平滑移動 ---- */
+.guide{position:fixed;inset:0;z-index:90;--g-dim:rgba(5,14,30,.62);--g-acc:#2F80ED;--g-ease:cubic-bezier(.22,.9,.24,1);--g-move:.46s}
+:root[data-theme="dark"] .guide{--g-dim:rgba(1,6,14,.72);--g-acc:#FDF36D}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .guide{--g-dim:rgba(1,6,14,.72);--g-acc:#FDF36D}}
+.guide[hidden]{display:none}
+.g-block{position:absolute;inset:0}
+.g-spot{position:absolute;left:0;top:0;width:0;height:0;pointer-events:none;border-radius:24px;
+  box-shadow:inset 0 0 0 1.5px rgba(255,255,255,.8),0 0 0 5px color-mix(in srgb,var(--g-acc) 22%,transparent),0 0 28px 6px color-mix(in srgb,var(--g-acc) 30%,transparent),0 0 0 200vmax var(--g-dim);
+  transition:transform var(--g-move) var(--g-ease),width var(--g-move) var(--g-ease),height var(--g-move) var(--g-ease),border-radius var(--g-move) var(--g-ease)}
+.g-spot.off{box-shadow:0 0 0 200vmax var(--g-dim)}
+.g-ring{position:absolute;left:0;top:0;pointer-events:none;border:2px solid var(--g-acc);opacity:0;
+  transition:opacity .25s,transform var(--g-move) var(--g-ease),width var(--g-move) var(--g-ease),height var(--g-move) var(--g-ease)}
+.g-ring.on{opacity:1;animation:gPulse 1.8s ease-in-out .5s infinite}
+@keyframes gPulse{0%,100%{box-shadow:0 0 0 0 color-mix(in srgb,var(--g-acc) 45%,transparent)}50%{box-shadow:0 0 0 8px transparent}}
+.g-tip{position:absolute;left:0;top:0;width:min(360px,calc(100vw - 24px));padding:14px 16px 16px 18px;border-radius:26px;color:var(--ink);
+  background:color-mix(in srgb,var(--glass-hi) 94%,transparent);-webkit-backdrop-filter:var(--blur);backdrop-filter:var(--blur);box-shadow:var(--shadow-l),inset 0 1px 0 var(--rim);
+  transition:transform var(--g-move) var(--g-ease);outline:none}
+.g-tip.center{width:min(400px,calc(100vw - 32px));padding:18px 22px 20px;text-align:center}
+.guide.in .g-tip{animation:gIn .42s var(--g-ease)}
+.guide.busy .g-tip{opacity:.6}
+@keyframes gIn{from{opacity:0;scale:.96}}
+.g-caret{position:absolute;display:none;width:18px;height:9px;background:inherit}
+.g-tip[data-side="below"] .g-caret{display:block;top:-9px;clip-path:polygon(50% 0,100% 100%,0 100%)}
+.g-tip[data-side="above"] .g-caret{display:block;bottom:-9px;clip-path:polygon(0 0,100% 0,50% 100%)}
+.g-tip[data-side="right"] .g-caret{display:block;left:-9px;width:9px;height:18px;clip-path:polygon(100% 0,100% 100%,0 50%)}
+.g-tip[data-side="left"] .g-caret{display:block;right:-9px;width:9px;height:18px;clip-path:polygon(0 0,100% 50%,0 100%)}
+.g-head{display:flex;align-items:center;gap:10px;margin:0 -6px 10px 0;min-height:34px}
+.g-tip.center .g-head{margin-bottom:0}
+.g-ic{flex:none;display:grid;place-items:center;width:34px;height:34px;border-radius:11px;color:var(--accent);background:var(--accent-soft)}
+.g-ic:empty{display:none}
+.g-ic svg.ic{width:19px;height:19px}
+.g-count{font-size:12px;font-weight:600;color:var(--ink-3);letter-spacing:.06em}
+.g-skip{margin-left:auto;border:0;background:none;color:var(--ink-2);font:600 14px/1 inherit;padding:0 12px;min-height:34px;border-radius:999px;cursor:pointer}
+.g-skip:hover{background:color-mix(in srgb,var(--ink) 6%,transparent)}
+.g-hero:empty{display:none}
+.g-hero{display:flex;justify-content:center;margin:4px 0 16px}
+.g-app img{display:block;border-radius:20px;box-shadow:0 0 0 1px rgba(255,255,255,.2),0 12px 32px rgba(11,27,51,.35)}
+.g-badge{display:grid;place-items:center;width:64px;height:64px;border-radius:20px;color:var(--accent);background:var(--accent-soft)}
+.g-badge svg.ic{width:30px;height:30px}
+.g-live.swap{animation:gSwap .34s var(--g-ease)}
+@keyframes gSwap{from{opacity:0;transform:translateY(4px)}}
+.g-live h2{margin:0 0 6px;font-size:19px;line-height:1.3;letter-spacing:.02em}
+.g-tip.center .g-live h2{font-size:23px;margin-bottom:8px}
+.g-body p{margin:0;font-size:15px;line-height:1.55;color:var(--ink-2)}
+.g-note{display:flex;gap:8px;align-items:flex-start;text-align:left;margin:12px 0 0;padding:10px 12px;border-radius:var(--r-m);background:var(--accent-soft);font-size:14px}
+.g-note svg.ic{flex:none;width:18px;height:18px;color:var(--accent);margin-top:2px}
+.g-foot{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:14px}
+.g-tip.center .g-foot{justify-content:center;flex-direction:column}
+.g-dots{display:flex;gap:5px}
+.g-dots i{width:6px;height:6px;border-radius:3px;background:color-mix(in srgb,var(--ink) 18%,transparent);transition:width .3s var(--g-ease),background .3s}
+.g-dots i.on{width:18px;background:var(--accent)}
+.g-nav{display:flex;gap:8px}
+.g-nav [hidden]{display:none}
+.linkcard{appearance:none;border:0;text-align:left;font:inherit;color:inherit;cursor:pointer;width:100%}
+html.guiding .runbar,html.guiding .updbar{display:none}
+
+/* ---------- 我的：iPhone 設定式分組清單 ---------- */
+.setgroup{display:grid;gap:8px}
+.sgt{margin:10px 6px 0;font-size:13px;font-weight:650;letter-spacing:.04em;color:var(--ink-3)}
+.setcard{padding:4px 0;gap:0}
+.setrow{display:grid;grid-template-columns:34px 1fr auto auto;align-items:center;gap:12px;min-height:58px;padding:9px 16px;
+  color:var(--ink);background:none;border:0;width:100%;text-align:left;font:inherit;cursor:pointer;position:relative;transition:background .18s}
+.setrow+.setrow::after{content:"";position:absolute;top:0;left:62px;right:0;height:1px;background:var(--stroke)}
+.setrow:active{background:var(--accent-soft)}
+@media (hover:hover){.setrow:hover{background:color-mix(in srgb,var(--accent) 5%,transparent)}}
+.setcard .setrow:first-child{border-radius:var(--r-xl) var(--r-xl) 0 0}.setcard .setrow:last-child{border-radius:0 0 var(--r-xl) var(--r-xl)}
+.setcard .setrow:only-child{border-radius:var(--r-xl)}
+.sic{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;background:var(--accent);color:var(--on-accent);box-shadow:inset 0 1px 0 rgba(255,255,255,.25)}
+.sic svg.ic{width:20px;height:20px}
+.st{display:grid;gap:1px;min-width:0}.st b{font-weight:600;font-size:16px}.st .tiny{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chev{width:8px;height:8px;border-right:2px solid var(--ink-3);border-top:2px solid var(--ink-3);transform:rotate(45deg);opacity:.6;margin-right:4px}
+#logout .sic,#logoutAll .sic{background:color-mix(in srgb,var(--race) 14%,transparent);color:var(--race)}
+#logout b,#logoutAll b{color:var(--race)}
+.mecard{display:grid!important;grid-template-columns:auto 1fr auto;align-items:center;gap:14px}
+.mecard .av{width:56px;height:56px;font-size:22px}
+.mecard .mi b{font-size:20px;font-weight:700}
+.backlink{display:inline-block;font-size:16px;font-weight:600;margin:4px 0 -6px;padding:6px 0}
+.idwrap{display:flex;gap:8px;align-items:center}.idwrap input{flex:1}
+.notice-card{background:color-mix(in srgb,var(--accent) 8%,var(--glass))}
+.notice-card b{display:flex;gap:8px;align-items:center}
+.regform{gap:14px}
+.lt{display:flex;align-items:center;justify-content:flex-start;gap:6px;flex-wrap:wrap}
+label.chip{background:none;padding:0;box-shadow:none;border-radius:999px}
+.chip span small{font-size:13px;opacity:.75;font-weight:500}
+.lsumact .btn{justify-content:center}

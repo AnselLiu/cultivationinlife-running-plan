@@ -40,9 +40,10 @@ ISO 27001 驗證的對象是**組織的資訊安全管理制度（ISMS）**，�
 | **A.8.16** | 新裝置登入提醒 | 登入時記錄「裝置類型・瀏覽器」的雜湊；出現沒用過的組合就通知本人並寫稽核 | `noteDevice()` |
 | **A.8.29／A.8.31** | 測試與環境分離 | 自動化測試涵蓋權限矩陣、私密與邀請制可見範圍、CSRF、問卷驗證、CSV 公式注入、訓練紀錄分享、通行金鑰偽造、稽核簽章；GitHub Actions 每次變更都跑，通過才部署。測試環境（cil-run-staging）用獨立資料庫與獨立金鑰，正式資料不進測試環境 | `tests/`、`.github/workflows/ci.yml` |
 | **A.5.34** | 跑步 GPS 軌跡 | 跑步記錄的 GPS 軌跡只存在本人手機（localStorage），伺服器只收到本人按「存到訓練紀錄」時的距離與時間；定位權限只開放給本站（Permissions-Policy `geolocation=(self)`），只在記錄中才取用 | `public/run.js` |
+| **A.5.34／A.8.24** | 賽事報名資料（身分證字號等） | 只為「幹部代為團體報名賽事」蒐集，選填。整份用 `RACE_KEY` 以 AES-GCM（每次隨機 IV）加密後存 `member_private`，資料庫看不到明文；本人可看、可改、可刪。主辦幹部只有在本人報名該活動並逐場勾選同意後才能下載，監事唯讀不能下載，每次下載寫稽核（`event.reg_export`）。本人刪除資料或帳號時，所有同意一併撤回 | `/api/me/race-profile`、`/api/events/<id>/registrations.csv` |
 | **A.8.10** | 資訊刪除 | 刪除帳號是實際刪除（資料表 `ON DELETE CASCADE`），不是軟刪除 | `DELETE /api/me` |
-| **A.8.9** | 組態管理 | 所有秘密（Google 登入金鑰、推播私鑰、邀請碼、初始設定碼、雜湊鹽、稽核金鑰）都放 Cloudflare secrets，不進 git；`.dev.vars` 列在 `.gitignore` | `wrangler.jsonc` 註解 |
-| **A.8.32** | 變更管理 | 資料庫結構變更一律用編號遷移檔（`migrations/`），可追溯、可重複套用 | `migrations/0001`–`0013` |
+| **A.8.9** | 組態管理 | 所有秘密（Google 登入金鑰、推播私鑰、邀請碼、初始設定碼、雜湊鹽、稽核金鑰、賽事報名資料加密金鑰）都放 Cloudflare secrets，不進 git；`.dev.vars` 列在 `.gitignore` | `wrangler.jsonc` 註解 |
+| **A.8.32** | 變更管理 | 資料庫結構變更一律用編號遷移檔（`migrations/`），可追溯、可重複套用 | `migrations/0001`–`0025` |
 
 ## 組織面待辦（系統做不到，需要協會決定）
 

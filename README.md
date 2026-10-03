@@ -47,11 +47,13 @@
 
 **跑友 ≠ 協會會員**：任何人用邀請碼或 Google 登入都是跑友，可以報名團練；協會會籍（`membership`：跑友／申請中／會員／到期）另外由行政人員在後台管理，含會員類別、編號、入會日期與繳費年限。入會申請仍走官方 Google 表單，網站只記狀態。
 
-職稱（例如「副理事長」「活動組長」）另外用 `title` 欄位顯示，不影響權限。三組邀請碼分別對應理事長、幹部與團員：`CHAIR_CODE`、`ADMIN_CODE`、`JOIN_CODE`。
+職稱（例如「副理事長」「活動組長」）另外用 `title` 欄位顯示，不影響權限。邀請碼 `JOIN_CODE` 只能成為跑友；`CHAIR_CODE` 只在系統還沒有理事長時有效一次，之後所有幹部身分都由理事長在後台指派，沒有共用的幹部碼。
 
-**身分與安全**：工作階段權杖放 HttpOnly cookie，資料庫只存 SHA-256；寫入類 API 只收同源 JSON 請求（擋 CSRF）；LINE 登入用 state cookie 防 CSRF。
+**身分與安全**：工作階段權杖放 HttpOnly cookie，資料庫只存 SHA-256；寫入類 API 只收同源 JSON 請求（擋 CSRF）；Google 登入用 state＋nonce cookie 防 CSRF 與重放，並以 Google 公鑰驗證 ID Token。
 
-**個資**：網站只存姓名、組別、Google 顯示名稱與大頭貼網址（不存 Email）、報名紀錄。協會入會申請（含身分證字號、地址）仍走官方 Google 表單，網站只放連結。
+**個資**：網站只存姓名、組別、Google 顯示名稱與大頭貼網址（不存 Email）、報名紀錄。協會入會申請仍走官方 Google 表單，網站只放連結。
+
+**賽事報名資料**（代為團體報名馬拉松用，選填）：身分證字號、生日、地址、緊急聯絡人等，用 `RACE_KEY` 以 AES-GCM 加密後存在 `member_private`，只有本人看得到完整內容；本人報名「代為團體報名」的活動並勾選同意後，該活動的主辦幹部才能下載 CSV，每次下載都寫稽核。本人刪除資料時，已給的同意一併撤回。`RACE_KEY` 遺失就無法解密，只能請大家重填。
 
 ## 本機開發
 
@@ -67,8 +69,10 @@ npm run dev                        # http://localhost:8790
 ```bash
 npx wrangler d1 create cil-run          # 把回傳的 database_id 貼進 wrangler.jsonc
 npx wrangler secret put JOIN_CODE       # 團員邀請碼
-npx wrangler secret put ADMIN_CODE      # 幹部碼（行政人員）
-npx wrangler secret put CHAIR_CODE      # 理事長碼（之後由理事長在名冊指派其他角色）
+npx wrangler secret put CHAIR_CODE      # 初始理事長碼（只在還沒有理事長時有效一次）
+npx wrangler secret put HASH_SALT       # IP 雜湊用的鹽（長亂數）
+npx wrangler secret put AUDIT_KEY       # 稽核簽章金鑰（長亂數）
+openssl rand -base64 32 | npx wrangler secret put RACE_KEY   # 賽事報名資料加密金鑰（不要顯示、不要換）
 npm run deploy
 ```
 

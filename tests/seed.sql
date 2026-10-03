@@ -8,7 +8,11 @@ INSERT OR REPLACE INTO members (id, name, nickname, dist, grp, role, membership,
   ('t_runner', '測試跑友',   '跑友',   'hm', 'C', 'member',     'none',   datetime('now'), '2026-10-03.1'),
   ('t_other',  '路人跑友',   '路人',   'fm', 'E', 'member',     'none',   datetime('now'), '2026-10-03.1');
 INSERT OR REPLACE INTO team_members (team_id, member_id, role, status) VALUES
+  ('geng', 't_coach', 'officer', 'active'),
   ('youth', 't_lead', 'lead', 'active'),
   ('youth', 't_runner', 'member', 'active'),
   ('main', 't_other', 'member', 'active');
 UPDATE settings SET value = json_set(value, '$.version', '2026-10-03.1') WHERE key = 'privacy';
+UPDATE members SET main_team = 'main', club = '耕跑團' WHERE id IN ('t_other', 't_chair', 't_staff', 't_super');
+UPDATE members SET main_team = 'youth', club = '耕跑青年' WHERE id IN ('t_runner', 't_lead');
+UPDATE members SET main_team = 'geng', club = '耕建築' WHERE id = 't_coach';

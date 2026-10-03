@@ -73,7 +73,9 @@ test('分團：團長可建自己分團的活動、不能建全協會活動；�
 });
 
 test('私密分團的活動，非團員看不到', async () => {
-  const ev = await call('t_chair', '/events', { method: 'POST', body: { kind: 'core', title: '核心課', date: plus(4), team_id: 'core', notify: false } });
+  const team = await call('t_chair', '/teams', { method: 'POST', body: { name: '私密測試團', private: true } });
+  await call('t_chair', `/teams/${team.json.id}`, { method: 'PUT', body: { name: '私密測試團', private: true } });
+  const ev = await call('t_chair', '/events', { method: 'POST', body: { kind: 'core', title: '私密課', date: plus(4), team_id: team.json.id, notify: false } });
   assert.equal((await call('t_other', `/events/${ev.json.id}`)).status, 404);
   assert.ok(!(await call('t_other', '/events')).json.events.some((e) => e.id === ev.json.id));
   assert.equal((await call(null, `/public/e/${ev.json.id}`)).status, 404);
@@ -199,4 +201,51 @@ test('GPS 跑步記錄可以存成訓練紀錄（來源 gps）', async () => {
   assert.equal(r.status, 200);
   const l = (await call('t_runner', `/logs?from=${today}&to=${today}`)).json.logs.find((x) => x.id === r.json.id);
   assert.equal(l.source, 'gps');
+});
+
+test('分團：申請加入要該團幹部核准、不能自己退出主團；耕建築只由耕建築幹部處理；所屬跑團跟著主團', async () => {
+  assert.equal((await call('t_other', '/teams/youth/join', { method: 'POST' })).json.status, 'pending');
+  assert.equal((await call('t_staff', '/teams/youth/members', { method: 'POST', body: { member_id: 't_other', action: 'approve' } })).status, 200, '一般分團協會幹部也能核准');
+  assert.equal((await call('t_other', '/teams/youth/leave', { method: 'POST' })).status, 200, '不是主團可以退出');
+  assert.equal((await call('t_super', '/members/main-team', { method: 'POST', body: { member_ids: ['t_other'], team_id: 'youth' } })).status, 403, '監事唯讀');
+  const r = await call('t_staff', '/members/main-team', { method: 'POST', body: { member_ids: ['t_other', 't_lead'], team_id: 'kids' } });
+  assert.equal(r.json.count, 2);
+  const me = (await call('t_other', '/me')).json;
+  assert.equal(me.member.main_team, 'kids');
+  assert.equal(me.member.club, '小耕跑', '所屬跑團跟著主團');
+  assert.equal((await call('t_other', '/teams/kids/leave', { method: 'POST' })).status, 403, '主團不能自己退');
+  assert.equal((await call('t_lead', '/me')).json.teams.find((t) => t.id === 'youth').my_role, 'lead', '團長的分團保留');
+  // 耕建築：協會幹部不能設主團、不能代為核准；耕建築幹部可以
+  assert.equal((await call('t_staff', '/members/main-team', { method: 'POST', body: { member_ids: ['t_other'], team_id: 'geng' } })).status, 403);
+  await call('t_runner', '/teams/geng/join', { method: 'POST' });
+  assert.equal((await call('t_chair', '/teams/geng/members', { method: 'POST', body: { member_id: 't_runner', action: 'approve' } })).status, 403);
+  await call('t_chair', '/teams/geng/members', { method: 'POST', body: { member_id: 't_coach', action: 'add', role: 'lead' } }).then((x) => assert.equal(x.status, 403, '協會幹部不能直接加人'));
+  assert.ok((await call('t_staff', '/members?team=none')).json.members.every((m) => !m.main_team));
+});
+
+test('代為團體報名：要先填好賽事報名資料並同意；組別價格；只有主辦幹部能下載，資料加密保存', async () => {
+  const profile = { name_zh: '測試跑友', name_en: 'TEST RUNNER', id_no: 'a123456789', birthday: '1990-01-01', gender: '男', phone: '0912345678',
+    email: 'runner@example.com', address: '台北市測試路 1 號', emergency_name: '家人', emergency_phone: '0922000000', emergency_rel: '配偶', shirt: 'M' };
+  const ev = await call('t_chair', '/events', { method: 'POST', body: { kind: 'other', title: '臺北馬團體報名', date: plus(40), notify: false, group_reg: true,
+    options: [{ name: '全馬', price: 1650 }, { name: '半馬', price: 1350 }] } });
+  const id = ev.json.id;
+  assert.equal((await call('t_runner', `/events/${id}/signup`, { method: 'POST', body: { option: '全馬', reg_consent: true } })).status, 400, '還沒填賽事報名資料');
+  assert.equal((await call('t_runner', '/me/race-profile', { method: 'PUT', body: { ...profile, id_no: 'not-an-id!' } })).status, 400);
+  const put = await call('t_runner', '/me/race-profile', { method: 'PUT', body: profile });
+  assert.equal(put.json.complete, true);
+  assert.equal((await call('t_runner', '/me/race-profile')).json.profile.id_no, 'A123456789', '本人看得到完整內容');
+  assert.equal((await call('t_runner', `/events/${id}/signup`, { method: 'POST', body: { reg_consent: true } })).status, 400, '有組別要選');
+  assert.equal((await call('t_runner', `/events/${id}/signup`, { method: 'POST', body: { option: '全馬' } })).status, 400, '沒勾同意');
+  assert.equal((await call('t_runner', `/events/${id}/signup`, { method: 'POST', body: { option: '全馬', reg_consent: true } })).status, 200);
+  const st = (await call('t_chair', `/events/${id}/stats`)).json;
+  assert.equal(st.byOption['全馬'], 1);
+  assert.equal((await call('t_runner', `/events/${id}/registrations.csv`)).status, 403, '跑友不能下載');
+  assert.equal((await call('t_super', `/events/${id}/registrations.csv`)).status, 403, '監事唯讀');
+  const csv = await call('t_chair', `/events/${id}/registrations.csv`);
+  assert.equal(csv.status, 200);
+  assert.ok(csv.text.includes('A123456789') && csv.text.includes('全馬'));
+  // 刪除後，已同意的也一起撤回
+  await call('t_runner', '/me/race-profile', { method: 'DELETE' });
+  assert.ok(!(await call('t_chair', `/events/${id}/registrations.csv`)).text.includes('A123456789'));
+  assert.equal((await call('t_runner', '/me/race-profile')).json.profile, null);
 });
