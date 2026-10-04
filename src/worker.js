@@ -3067,12 +3067,15 @@ const api = (async function api(req, env, path, method) {
     return json({ ok: true });
   }
   // 教練看某位團員的紀錄（本人要有打開分享；不含備註）；以及教練留言
+  // 教練視角（團員分享的訓練、留回饋）：只有課表教練（plan）與該分團的團長、幹部（teamOwn），對齊分享同意書的「教練與分團幹部」；
+  //   協會層級的名冊權限（理事、行政、監事）不算，監事唯讀也不能留回饋
+  const coachOf = (tid) => can(member, 'plan') || teamOwn(tid, 'roster');
   const canCoach = async (mid) => {
     const m = await env.DB.prepare('SELECT id, name, nickname, share_logs, dist, grp, plan_cycle FROM members WHERE id = ?').bind(mid).first();
     if (!m || !m.share_logs) return null;
     if (can(member, 'plan')) return m;
     const shared = (await env.DB.prepare("SELECT team_id FROM team_members WHERE member_id = ? AND status = 'active'").bind(mid).all()).results;
-    return shared.some((t) => teamCan(t.team_id, 'roster')) ? m : null;
+    return shared.some((t) => coachOf(t.team_id)) ? m : null;
   };
   const mlm = path.match(/^\/api\/logs\/member\/([\w-]{1,32})$/);
   if (mlm && method === 'GET') {
@@ -3102,6 +3105,7 @@ const api = (async function api(req, env, path, method) {
     }
     if (method === 'POST') {
       if (own) return fail(400, '留言是給教練用的');
+      if (READONLY[norm(member.role)]) return fail(403, '監事不能留訓練回饋');
       const text = str((await body()).body, 500);
       if (!text) return fail(400, '請輸入留言');
       if (await limited(env, `comment:${member.id}`, 60, 3600)) return fail(429, '留言太頻繁');
@@ -3124,7 +3128,7 @@ const api = (async function api(req, env, path, method) {
   if (path === '/api/logs/team' && method === 'GET') {
     const g = need(); if (g) return g;
     const u = new URL(req.url), team = str(u.searchParams.get('team'), 16);
-    if (!(can(member, 'plan') || (team && teamCan(team, 'roster')))) return fail(403, '只有教練與分團幹部可以看團員訓練');
+    if (!(can(member, 'plan') || (team && coachOf(team)))) return fail(403, '只有教練與分團幹部可以看團員訓練');
     const r = rangeOf(u, 31, 6);
     if (!r) return fail(400, '查詢區間最長 31 天');
     const rows = (await env.DB.prepare(

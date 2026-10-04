@@ -1,7 +1,7 @@
 // 耕跑團 PWA — report.js：從 app.js 拆出來、用到才載入的畫面（第一次開 App 不用下載）
 import * as P from './plan.js';
 import * as S from './studio.js';
-import { $, allow, api, avatar, barChart, bindComments, coachPrefs, dayLabel, dstr, emptyState, esc, feat, FEEL, fixText, group, largeTitle, LOG_STATUS_NAME, me, row, teamAllow, teams, view, ymd } from './app.js';
+import { $, allow, api, avatar, barChart, bindComments, coachPrefs, coachTeam, dayLabel, dstr, emptyState, esc, feat, FEEL, fixText, group, largeTitle, LOG_STATUS_NAME, me, row, teams, view, ymd } from './app.js';
 
 // ---------- 訓練報表：週里程、完成率、強度趨勢、個人最佳 ----------
 // 圖表一律用 SVG 自己畫（不載外部套件），寬度跟著容器縮放
@@ -100,7 +100,7 @@ async function memberLogsView(mid) {
 // 教練與分團幹部：有開分享的團員，一週的完成次數與里程
 async function logsTeamView(week, team) {
   week ||= P.currentWeek();
-  const lead = teams().filter((t) => teamAllow(t.id, 'roster'));
+  const lead = teams().filter((t) => coachTeam(t.id));
   if (!allow('plan') && !team) team = lead[0]?.id || '';
   const s = P.weekStart(week), e = new Date(s.getTime() + 6 * 864e5);
   const r = await api(`/logs/team?from=${ymd(s)}&to=${ymd(e)}${team ? `&team=${team}` : ''}`);

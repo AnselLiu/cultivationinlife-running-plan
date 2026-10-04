@@ -129,6 +129,29 @@ test('訓練紀錄：不能記未來、查詢有上限、教練要本人分享�
   assert.ok((await call('t_runner', `/logs?from=${today}&to=${today}`)).json.logs.some((l) => l.id === r.json.id), '別人刪不掉我的紀錄');
 });
 
+test('團員訓練只給教練與分團幹部：監事、理事、行政看不到也不能留回饋', async () => {
+  const r = await call('t_runner', '/logs', { method: 'POST', body: { date: today, status: 'done', km: 8, rpe: 5 } });
+  assert.equal(r.status, 200);
+  await call('t_runner', '/me/share-logs', { method: 'POST', body: { share: true } });
+  for (const who of ['t_super', 't_staff']) {
+    assert.equal((await call(who, '/logs/member/t_runner')).status, 403, `${who} 不是教練或分團幹部`);
+    assert.equal((await call(who, `/logs/team?team=youth&from=${today}&to=${today}`)).status, 403, `${who} 看不到分團訓練摘要`);
+    assert.equal((await call(who, `/logs/${r.json.id}/comments`, { method: 'POST', body: { body: '加油' } })).status, 403, `${who} 不能留回饋`);
+  }
+  // 分團團長、課表教練照常
+  assert.equal((await call('t_lead', '/logs/member/t_runner')).status, 200);
+  assert.equal((await call('t_lead', `/logs/team?team=youth&from=${today}&to=${today}`)).status, 200);
+  assert.equal((await call('t_coach', `/logs/${r.json.id}/comments`, { method: 'POST', body: { body: '節奏很穩' } })).status, 200);
+  // 監事兼分團幹部：看得到自己帶的團員，但監事唯讀，不能留回饋
+  assert.equal((await call('t_chair', '/teams/youth/members', { method: 'POST', body: { member_id: 't_super', action: 'add', role: 'officer' } })).status, 200);
+  try {
+    assert.equal((await call('t_super', '/logs/member/t_runner')).status, 200);
+    assert.equal((await call('t_super', `/logs/${r.json.id}/comments`, { method: 'POST', body: { body: '加油' } })).status, 403);
+  } finally {
+    await call('t_chair', '/teams/youth/members', { method: 'POST', body: { member_id: 't_super', action: 'remove' } });
+  }
+});
+
 test('排程：活動提醒不重複；每季檢視只發一次', async () => {
   const ev = await call('t_chair', '/events', { method: 'POST', body: { kind: 'track', title: '提醒測試', date: '2027-03-10', gather_time: '19:00', notify: false } });
   await call('t_runner', `/events/${ev.json.id}/signup`, { method: 'POST', body: {} });

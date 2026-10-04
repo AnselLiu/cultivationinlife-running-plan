@@ -795,7 +795,9 @@ function applyFeatures() {
   paintTabs();
 }
 // 側邊欄的次要項目：拍照分享只在 GPS 開時放這裡（關掉 GPS 時拍照已經是主要分頁）；幹部項目各自檢查權限，一列都沒有就整區不顯示
-const canTeamLogs = () => allow('plan') || anyTeamAllow('roster');
+// 團員訓練：課表教練，或分團團長、幹部（協會層級的名冊權限不算，對齊分享同意書的「教練與分團幹部」）
+const coachTeam = (tid) => teamOf(tid)?.my_status === 'active' && !!TEAM_PERMS[teamOf(tid).my_role]?.includes('roster');
+const canTeamLogs = () => allow('plan') || teams().some((t) => coachTeam(t.id));
 function applyNav() {
   document.querySelector('.navmore a[data-nav="/studio"]').hidden = !(feat('studio') && feat('gps'));
   const ok = { admin: allow('members') || allow('roles') || allow('settings'), roster: allow('roster'), logs: !!me && canTeamLogs(), publish: !!me && canPublishPlan() };
@@ -2636,7 +2638,7 @@ async function planView(n) {
         <div class="ring" style="--p:${wc.pct}" role="img" aria-label="本週完成 ${wc.pct}%"><b class="num">${wc.pct}<small>%</small></b></div>
         <div class="lsum"><span class="tiny">本週訓練</span>
           <div class="lstats"><span><b class="num">${wc.full}</b>/${wc.req} 堂</span>${wc.extra ? `<span>+${wc.extra} 加練</span>` : ''}<span><b class="num">${km.toFixed(1)}</b> km</span>${avgRpe ? `<span>RPE <b class="num">${avgRpe.toFixed(1)}</b></span>` : ''}</div>
-          ${allow('plan') || teams().some((t) => teamAllow(t.id, 'roster')) ? '<a class="tiny" href="#/logs/team">看團員的訓練 ›</a>' : ''}</div>
+          ${canTeamLogs() ? '<a class="tiny" href="#/logs/team">看團員的訓練 ›</a>' : ''}</div>
       </div>
       <div class="lsumact">${feat('gps') ? `<a class="btn iconbtn" href="#/run">${IC.runner}開始跑步</a>` : ''}<a class="btn ghost iconbtn" href="#/log?extra=1">${IC.plus}自主加練</a><a class="btn ghost" href="#/report">報表</a></div>
       <p class="tiny" style="margin:0">${me.share_logs ? '教練與分團幹部看得到你的完成率與里程，看不到備註。' : '紀錄只有你看得到；想讓教練看到，到「我的 → 隱私」打開分享。'}</p>
@@ -3968,4 +3970,4 @@ addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvt 
 addEventListener('appinstalled', () => { installEvt = null; try { localStorage.setItem('cil-installed', '1'); } catch {} document.querySelectorAll('.installcard').forEach((c) => c.remove()); });
 
 // 拆出去的模組（admin.js、photo.js…）從這裡拿共用的工具與狀態
-export { legacyData, removeLegacy, addrField, bindAddrField, latest, $, cfg, downloadAuthed, scanSheet, FEEL, IC, KIND_NAME, LOG_ICON, LOG_STATUS_NAME, MI, PAID_NAME, ROLE_NAME, TAB_DEFAULT, TEAM_PERMS, TEAM_ROLE_NAME, ago, allow, api, applyFeatures, avatar, barChart, bars, bindComments, bindStepup, btnRow, choose, coachPrefs, copy, countdownPicker, dayLabel, dstr, emptyState, esc, eventCard, feat, fixText, group, ic, largeTitle, me, mfaBanner, money, myCycle, nrow, org, pad2, paintCountdown, passkey, planSeg, queueLog, raceTarget, refreshMe, render, route, row, setCoachPrefs, squareIcon, startKey, studio, subTitle, teamAllow, teamIcon, teamOf, teams, toast, rich, keep, names, view, ymd, askReason, isOffline, nowTp, signupDefaults, submitLabel, camLazy, openSheet, apiAll };
+export { legacyData, removeLegacy, addrField, bindAddrField, latest, $, cfg, downloadAuthed, scanSheet, FEEL, IC, KIND_NAME, LOG_ICON, LOG_STATUS_NAME, MI, PAID_NAME, ROLE_NAME, TAB_DEFAULT, TEAM_PERMS, coachTeam, TEAM_ROLE_NAME, ago, allow, api, applyFeatures, avatar, barChart, bars, bindComments, bindStepup, btnRow, choose, coachPrefs, copy, countdownPicker, dayLabel, dstr, emptyState, esc, eventCard, feat, fixText, group, ic, largeTitle, me, mfaBanner, money, myCycle, nrow, org, pad2, paintCountdown, passkey, planSeg, queueLog, raceTarget, refreshMe, render, route, row, setCoachPrefs, squareIcon, startKey, studio, subTitle, teamAllow, teamIcon, teamOf, teams, toast, rich, keep, names, view, ymd, askReason, isOffline, nowTp, signupDefaults, submitLabel, camLazy, openSheet, apiAll };
