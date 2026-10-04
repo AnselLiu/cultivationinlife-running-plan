@@ -90,6 +90,10 @@ const PERMANENT = (st) => st === 404 || st === 410 || (st >= 400 && st < 500 && 
 //   過期或試滿 3 次的刪掉，筆數放在 dropped，由呼叫端寫稽核 push.dropped
 // 推播佇列裡過期、或試滿 3 次而且租約已過的列：刪掉，回傳筆數（VAPID 沒設定時也要清，不然通知內容會一直留在 D1）
 export const PUSH_EXPIRED = `DELETE FROM push_queue WHERE expires_at <= datetime('now') OR (attempts >= 3 AND (lease_until IS NULL OR lease_until < datetime('now'))) RETURNING id`;
+// 推播佇列的送出順序：帳號安全（新裝置登入、登出所有裝置、通行金鑰變更）一律最先，不會排在大量活動異動後面（活動異動的 TTL 較短，
+//   只看 urgency 與過期時間的話，安全提醒之後 12 小時內排進來的活動異動都會先送）；其次 urgency high，再依過期時間、排入順序，時效短的不會被大量廣播擠到過期
+//   payload 的 cat 由 pushPayload 寫入（worker.js）
+export const PUSH_ORDER = "json_extract(payload, '$.cat') = 'security' DESC, urgency = 'high' DESC, expires_at, id";
 export async function drainPush(env, { max = Infinity } = {}) {
   const out = { leased: 0, sent: 0, failed: 0, dropped: 0 };
   if (!vapidOn(env)) {
@@ -99,11 +103,11 @@ export async function drainPush(env, { max = Infinity } = {}) {
   }
   const plan = planOf(env), n = Math.min(max, plan.pushPerHop, (env.budget ? env.budget.left() : Infinity) - 6);
   if (!(n >= 1)) return out;
-  // 有時效的先送：urgency high（集合前提醒、帳號安全）優先，再依過期時間、排入順序；大量廣播排在前面時，時效短的不會被擠到過期
+  // 送出順序見 PUSH_ORDER：帳號安全最先，再來是 urgency high（集合前提醒、活動異動），再依過期時間、排入順序
   //   收件人那一列通知的主人必須還是這台裝置的主人（裝置換人登入、重新訂閱之後，前一個人還沒送的推播不會送到新主人的裝置）
   const rows = (await env.DB.prepare(`UPDATE push_queue SET lease_until = datetime('now', '+120 seconds'), attempts = attempts + 1
     WHERE id IN (SELECT id FROM push_queue WHERE (lease_until IS NULL OR lease_until < datetime('now'))
-                 AND expires_at > datetime('now') AND attempts < 3 ORDER BY urgency = 'high' DESC, expires_at, id LIMIT ?1)
+                 AND expires_at > datetime('now') AND attempts < 3 ORDER BY ${PUSH_ORDER} LIMIT ?1)
     RETURNING id, endpoint, notif_id, payload, urgency, attempts,
       CAST(strftime('%s', expires_at) AS INTEGER) - CAST(strftime('%s', 'now') AS INTEGER) AS ttl`).bind(Math.floor(n)).all()).results;
   out.leased = rows.length;
