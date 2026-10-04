@@ -3,8 +3,8 @@
 import { spawn, spawnSync, execSync } from 'node:child_process';
 import { rmSync } from 'node:fs';
 
-// 先跑不需要伺服器的單元測試（課表引擎、課表教練計算、舊版資料搬移、共用裝置換人、還原備份重做刪除與隱私撤回）；失敗就不用啟動伺服器
-const UNIT = ['tests/plan.test.mjs', 'tests/coachcalc.test.mjs', 'tests/migrate.test.mjs', 'tests/device.test.mjs', 'tests/restore.test.mjs'];
+// 先跑不需要伺服器的單元測試（課表引擎、課表教練計算、舊版資料搬移、共用裝置換人、還原備份重做刪除與隱私撤回、跑步記錄）；失敗就不用啟動伺服器
+const UNIT = ['tests/plan.test.mjs', 'tests/coachcalc.test.mjs', 'tests/migrate.test.mjs', 'tests/device.test.mjs', 'tests/restore.test.mjs', 'tests/run-record.test.mjs'];
 const unit = spawnSync(process.execPath, ['--test', ...UNIT], { stdio: 'inherit', env: { ...process.env, TZ: 'Asia/Taipei' } });
 if (unit.status !== 0) process.exit(unit.status ?? 1);
 
