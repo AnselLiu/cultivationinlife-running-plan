@@ -4,12 +4,12 @@
 //   更新：新版本裝好後先等待，畫面提示「有新版本」，使用者按下才切換（不會在填表單時突然重整）
 //   推播：顯示通知並更新主畫面圖示的未讀數字
 //   分享：從其他 App 分享 GPX／TCX 檔過來，暫存後打開拍照分享
-const CACHE = 'cil-v62';
+const CACHE = 'cil-v63';
 const API_CACHE = 'cil-api';
 const SHARE_CACHE = 'cil-share';
 // 地圖圖磚：看過的與「下載離線地圖」存的都在這裡，最多約 3000 張，先存的先清
 const TILE_CACHE = 'cil-tiles', TILE_HOSTS = ['wmts.nlsc.gov.tw', 'tile.openstreetmap.org'], TILE_MAX = 3000;
-const SHELL = ['/', '/style.css', '/app.js', '/plan.js', '/data/season-2026.json', '/data/zip3.json', '/manifest.webmanifest', '/coach', '/party.js', '/qr.js', '/vendor/qrcode.js', '/studio.js', '/run.js', '/guide.js', '/admin.js', '/photo.js', '/report.js', '/manage.js', '/teams.js', '/pricing.js', '/calendar.js', '/map.js', '/reststops.js', '/weather.js', '/wxrule.js', '/hours.js', '/challenge.js', '/badges.js', '/coachcalc.js', '/coach.js', '/coachpdf.js', '/vendor/leaflet.js', '/vendor/leaflet.css', '/i18n.js', '/i18n-en.js', '/notif-cats.js', '/signup-window.js', '/device.js',
+const SHELL = ['/', '/style.css', '/app.js', '/plan.js', '/data/season-2026.json', '/data/zip3.json', '/manifest.webmanifest', '/coach', '/party.js', '/qr.js', '/vendor/qrcode.js', '/studio.js', '/run.js', '/guide.js', '/admin.js', '/photo.js', '/report.js', '/manage.js', '/teams.js', '/pricing.js', '/calendar.js', '/map.js', '/reststops.js', '/weather.js', '/wxrule.js', '/hours.js', '/challenge.js', '/badges.js', '/coachcalc.js', '/coach.js', '/coachpdf.js', '/vendor/leaflet.js', '/vendor/leaflet.css', '/i18n.js', '/i18n-en.js', '/notif-cats.js', '/signup-window.js', '/device.js', '/event.js', '/me.js',
   '/icons/icon-192.png', '/teams/youth.webp', '/teams/kids.webp', '/teams/core.webp', '/teams/geng.webp'];
 // 斷線時可以用上次資料的 API（都是本人看得到的內容；登出時整個清掉）
 const OFFLINE_API = [/^\/api\/spots$/, /^\/api\/spots\/[\w-]+$/, /^\/api\/spots\/[\w-]+\/rest$/, /^\/api\/routes$/, /^\/api\/routes\/[\w-]+$/, /^\/api\/me$/, /^\/api\/my\/tickets$/, /^\/api\/my\/prizes$/, /^\/api\/my\/pickups$/, /^\/api\/events$/, /^\/api\/events\/[\w-]+$/, /^\/api\/events\/[\w-]+\/seats$/,
