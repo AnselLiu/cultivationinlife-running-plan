@@ -1209,7 +1209,7 @@ function heroCard(e) {
     <h2><span translate="no">${esc(e.title)}</span></h2>
     <p class="muted" style="margin:0">${dstr(e.date)}${e.gather_time ? ` ${e.gather_time} 集合` : ''}${e.place ? `・<span translate="no">${esc(e.place)}</span>` : ''}</p>
     <div class="row spread">
-      <span class="row" style="gap:8px">${avatarStack(e.peek || [], e.signed)}<span class="tiny">${e.signed} 人報名${e.waiting ? `・候補 ${e.waiting}` : ''}${e.capacity ? `／${e.capacity}` : ''}</span></span>
+      <span class="row" style="gap:8px">${avatarStack(e.peek || [], e.signed)}<span class="tiny"><span>報名 ${e.signed}${e.capacity ? ` / ${e.capacity}` : ''} 人</span>${e.waiting ? `<span>・候補 ${e.waiting}</span>` : ''}</span></span>
       ${heroPill(e)}
     </div>
   </a>`;
@@ -1303,7 +1303,6 @@ async function eventView(id) {
         <button class="btn sm glassbtn" id="shareEv"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V3.5M7.5 8 12 3.5 16.5 8M5 12.5v6A2.5 2.5 0 0 0 7.5 21h9a2.5 2.5 0 0 0 2.5-2.5v-6"/></svg>分享</button>
         <a class="btn sm glassbtn" id="shareLine" href="#" rel="noopener">分享到 LINE</a>
         <button class="btn sm glassbtn" id="copyLink">${inviteOnly ? '複製邀請連結' : '複製報名連結'}</button>
-        ${admin ? `<a class="btn sm glassbtn" href="#/e/${ev.id}/stats">統計 ›</a>` : ''}
       </div>`}
     </section>
     ${inviteOnly && admin ? inviteCard(ev) : ''}
@@ -1351,7 +1350,7 @@ async function eventView(id) {
     ${party && ev.checkin ? await partyAdmin(ev) : ''}
 
     ${admin ? `<section class="card">
-      <div class="row spread"><h3>管理</h3><span class="tiny">${ev.team ? `<span translate="no">${esc(ev.team.name)}</span>的活動` : '全協會活動'}</span></div>
+      <div class="row spread"><h3>管理</h3><span class="tiny">${ev.team ? `<span translate="no">${esc(ev.team.name)}</span>的活動` : '全協會的活動'}</span></div>
       <div class="row">
         ${ev.pendingCount > 0 ? `<a class="btn sm" href="#/e/${ev.id}/stats?f=pending">待審核 ${ev.pendingCount} ›</a>` : ''}
         <a class="btn sm" href="#/e/${ev.id}/stats">報名統計${qs.length ? '與問卷' : ''}</a>

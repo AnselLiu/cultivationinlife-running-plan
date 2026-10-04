@@ -84,7 +84,7 @@ h1,h2,h3{margin:0;letter-spacing:0;text-wrap-style:balance}
 p,.tiny,.muted,.notice{text-wrap-style:pretty}   /* 用 longhand，不會蓋掉 white-space:nowrap */
 h1{font-size:34px;line-height:1.2;font-weight:700}
 h2{font-size:22px;line-height:1.27;font-weight:700}
-h3{font-size:17px;line-height:1.3;font-weight:600}
+h3,h2.h3{font-size:17px;line-height:1.3;font-weight:600}   /* h2.h3：標題層級要 h2（不跳級），外觀跟卡片標題一樣 */
 a{color:var(--accent);text-decoration:none}
 button,input,select,textarea{font:inherit;color:inherit;-webkit-tap-highlight-color:transparent}
 :focus-visible{outline:2.5px solid color-mix(in srgb,var(--accent) 65%,transparent);outline-offset:2px;border-radius:10px}
@@ -1450,6 +1450,8 @@ body.fullmap .top .countdown{opacity:0;pointer-events:none}
 @media (min-width:820px){.msheet[data-detent="peek"] #panel > :not(:first-child){opacity:1;pointer-events:auto}}
 .msheet[data-detent="peek"] .spotcard > :not(:first-child){opacity:0;pointer-events:none}
 @media (min-width:820px){.msheet[data-detent="peek"] .spotcard > :not(:first-child){opacity:1;pointer-events:auto}}
+/* 地點卡的動作鈕：每一列平均撐滿，不會剩一顆孤零零在下一行左邊 */
+.spotacts{display:flex;flex-wrap:wrap;gap:8px}.spotacts > .btn{flex:1 1 auto;justify-content:center}
 /* 畫路線工具列：兩列（距離＋取消／完成；手繪、復原、繞回起點），手機上也不會折成三列 */
 .dbar{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"len main" "tools tools";gap:6px 8px;padding:8px 10px}
 .dbar .dlen{grid-area:len;display:flex;align-items:baseline;gap:8px;min-width:0}
@@ -1932,6 +1934,10 @@ details.group[open] > summary{margin-bottom:4px}
 details.group > summary::after{margin-left:auto}
 /* 群組標題：fieldset 的 legend 跟可展開群組的 summary 用同一種字 */
 fieldset.group legend{font-size:15px;font-weight:650;color:var(--ink);padding:0 6px}
+/* legend 不要切進圓角邊框（float 讓它變成一般的格子），標題在框裡，跟旁邊可展開的群組一樣 */
+fieldset.group > legend{float:left;padding:0;margin:0}
+/* 還沒有任何一列的組別、問卷：空的容器不要多佔一段間距 */
+.qedit:empty{display:none}
 /* 群組裡的「新增」小按鈕依內容寬度靠左 */
 :is(fieldset,details).group > .btn.sm{justify-self:start;align-self:start}
 details.group > .btn.sm{display:flex;width:fit-content}

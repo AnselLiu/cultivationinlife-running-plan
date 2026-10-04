@@ -437,15 +437,15 @@ async function listPanel() {
         <input id="spotQ" type="search" placeholder="搜尋地點，例如 河濱、田徑場、大安" aria-label="搜尋練跑地點" autocomplete="off" enterkeyhint="search" value="${esc(filt.q)}"></div>
       <div class="chips kindchips" role="group" aria-label="類型" id="kindChips"></div>
     </div>
-    ${pend.length && data.editor ? `<section class="card"><h3>待審核的地點</h3><div class="roster">${pend.map((s) => `<button class="r spotrow" data-open="${esc(s.id)}">${kindTile(s.kind, 'pending')}<span><b><span translate="no">${esc(s.name)}</span></b></span><span class="tiny">審核 ›</span></button>`).join('')}</div></section>` : ''}
+    ${pend.length && data.editor ? `<section class="card"><h2 class="h3">待審核的地點</h2><div class="roster">${pend.map((s) => `<button class="r spotrow" data-open="${esc(s.id)}">${kindTile(s.kind, 'pending')}<span><b><span translate="no">${esc(s.name)}</span></b></span><span class="tiny">審核 ›</span></button>`).join('')}</div></section>` : ''}
     <section class="card spotlist">
-      <div class="row spread"><h3>練跑地點</h3><span class="tiny" id="spotCount"></span></div>
+      <div class="row spread"><h2 class="h3">練跑地點</h2><span class="tiny" id="spotCount"></span></div>
       <div class="row spotopts"><select id="spotCity" aria-label="縣市"><option value="">全部縣市</option></select>
         <button type="button" class="btn ghost sm" id="spotOpen" aria-pressed="${filt.openNow}">現在開放</button>
         <button type="button" class="btn ghost sm iconbtn" id="spotNear" aria-pressed="${filt.near}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 4 3.5 10.6l7 2.9 2.9 7Z"/></svg>離我最近</button></div>
       <div class="roster" id="spotList"></div>
     </section>
-    <section class="card"><div class="row spread"><h3>路線</h3><button class="btn ghost sm iconbtn" id="newRoute">${IC.plus}畫一條</button></div>
+    <section class="card"><div class="row spread"><h2 class="h3">路線</h2><button class="btn ghost sm iconbtn" id="newRoute">${IC.plus}畫一條</button></div>
       ${routes.length ? `<div class="roster">${routes.map((r) => `<button class="r spotrow" data-route="${esc(r.id)}"><span class="av num" style="font-size:11px">${(r.distance / 1000).toFixed(1)}</span><span><b><span translate="no">${esc(r.name)}</span></b><span class="tiny" style="display:block"><span translate="no">${esc(r.author || '')}</span>${r.shared ? '' : '・只有我看得到'}</span></span><i class="chev" aria-hidden="true"></i></button>`).join('')}</div>`
         : '<p class="muted" style="margin:0">還沒有路線。畫一條常跑的路線，分享給大家或拿來開揪跑。</p>'}
     </section>`;
@@ -517,13 +517,13 @@ async function openSpot(id, fly) {
   if (fly) focusOn([s.lat, s.lng], fly === 'pan' ? map.getZoom() : Math.max(map.getZoom(), 15), fly);
   const nav = `https://www.google.com/maps/dir/?api=1&destination=${s.lat},${s.lng}&travelmode=walking`;
   $('#panel').innerHTML = `<section class="card spotcard">
-      <div class="row spread"><div class="row" style="gap:12px;align-items:center">${kindTile(s.kind)}<div><span class="tiny">${KIND[s.kind]}${s.city ? `・${esc(s.city)}` : ''}</span>${s.status === 'pending' ? ' <span class="pill wait">審核中</span>' : ''}<h2 style="margin:2px 0 0"><span translate="no">${esc(s.name)}</span></h2></div></div>
+      <div class="row spread" style="flex-wrap:nowrap;align-items:flex-start"><div class="row" style="gap:12px;align-items:center;flex-wrap:nowrap;min-width:0">${kindTile(s.kind)}<div style="min-width:0"><span class="tiny">${KIND[s.kind]}${s.city ? `・${esc(s.city)}` : ''}</span>${s.status === 'pending' ? ' <span class="pill wait">審核中</span>' : ''}<h2 style="margin:2px 0 0"><span translate="no">${esc(s.name)}</span></h2></div></div>
         <button class="xbtn" id="backList" aria-label="關閉，回地點清單"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7 7 17"/></svg></button></div>
-      <div class="row" style="gap:8px"><a class="btn sm" href="${nav}" target="_blank" rel="noopener">導航 ${IC.external}</a><button class="btn ghost sm" id="offBtn">下載離線地圖</button>${s.status !== 'approved' ? '' : canCreate() ? `<a class="btn ghost sm" href="#/new?spot=${esc(s.id)}">在這裡開揪跑</a>`
+      <div class="spotacts"><a class="btn sm" href="${nav}" target="_blank" rel="noopener">導航 ${IC.external}</a><button class="btn ghost sm" id="offBtn">下載離線地圖</button>${s.status !== 'approved' ? '' : canCreate() ? `<a class="btn ghost sm" href="#/new?spot=${esc(s.id)}">在這裡開揪跑</a>`
         : `<a class="btn ghost sm" href="${lineShare(`我想在「${s.name}」揪跑，有人要一起嗎？ ${location.origin}/#/map?spot=${s.id}`)}" target="_blank" rel="noopener">在 LINE 揪人</a>`}
         ${data.editor || (s.mine && s.status === 'pending') ? '<button class="btn ghost sm" id="editSpot">編輯</button>' : ''}</div>
       ${s.status === 'pending' && d.editor ? '<div class="row" style="gap:8px"><button class="btn sm" id="approve">通過</button><button class="btn danger sm" id="reject">不通過</button></div>' : ''}
-      ${(() => { const o = s.info?.hours ? hoursNow(s.info.hours) : null; return s.info?.hours ? `<p class="ohours"><span class="ostat ${o ? (o.open ? 'on' : 'off') : ''}">${o ? esc(o.label) : '開放時間'}</span><span class="tiny"><span translate="no">${esc(s.info.hours)}</span></span></p>` : ''; })()}
+      ${(() => { const o = s.info?.hours ? hoursNow(s.info.hours) : null; return s.info?.hours ? `<p class="ohours"><span class="ostat ${o ? (o.open ? 'on' : 'off') : ''}">${o ? esc(o.label) : '開放時間'}</span><span class="tiny">${o ? esc(s.info.hours) : `<span translate="no">${esc(s.info.hours)}</span>`}</span></p>` : ''; })()}
       ${camSection(d.editor)}
       ${s.intro ? `<p class="muted" style="margin:0;white-space:pre-wrap"><span translate="no">${esc(s.intro)}</span></p>` : ''}
       ${Object.keys(s.info || {}).length ? `<div class="infochips">${Object.entries(INFO).filter(([k]) => k !== 'hours' && s.info[k]).map(([k, v]) => `<span data-info="${k}"><span class="tiny">${v}</span>${infoVal(s.info[k])}</span>`).join('')}</div>` : ''}
@@ -594,7 +594,7 @@ const dropUrl = (u) => { if (!u) return; URL.revokeObjectURL(u); camUrls = camUr
 // 地點卡裡的段落（功能開關打開時才有）：標題列可以收合；幹部可以加官方直播的外連
 const camSection = (editor) => (camsFeat() ? `<div class="camsec" id="camCard"${editor ? '' : ' hidden'}>
     <div class="row spread"><h3 class="camh"><button type="button" id="camTog" aria-expanded="${!camFold.get()}" aria-controls="camBody">附近即時影像<span class="chev" aria-hidden="true"></span></button></h3>
-      ${editor ? `<button type="button" class="btn ghost sm iconbtn" id="camAdd" hidden>${IC.plus}直播連結</button>` : ''}</div>
+      ${editor ? `<button type="button" class="btn ghost sm iconbtn" id="camAdd" hidden>${IC.plus}${lang === 'en' ? 'Add link' : '直播連結'}</button>` : ''}</div>
     <div id="camBody"${camFold.get() ? ' hidden' : ''}>
       <div id="camAddForm"></div>
       <div id="camBox"><p class="tiny" style="margin:0">載入中…</p></div>

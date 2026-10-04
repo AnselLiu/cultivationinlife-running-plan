@@ -24,7 +24,7 @@ export function strip(w) {
   const cur = hours[0];
   const d0 = w.daily;
   return `<div class="wx">
-    ${cur ? `<div class="wxnow ${cur.advice.level}"><div><b class="num">${Math.round(cur.temp)}°</b><span>${esc(cur.text)}・體感 ${Math.round(cur.feel)}°</span></div>
+    ${cur ? `<div class="wxnow ${cur.advice.level}"><div><b class="num">${Math.round(cur.temp)}°</b><span><span>${esc(cur.text)}</span>・體感 ${Math.round(cur.feel)}°</span></div>
       <div class="wxadv"><span class="pill">${cur.advice.label}</span><span class="tiny">${esc(cur.advice.why.join('；'))}</span></div></div>` : ''}
     <div class="wxhours" role="list" tabindex="0" aria-label="逐時天氣，可以左右捲動">${hours.map((x) => `<div role="listitem" class="${x.advice.level}"><span class="tiny">${hh(x.time)} 時</span><b class="num">${Math.round(x.temp)}°</b><span class="tiny num">${x.rain ?? 0}%</span></div>`).join('')}</div>
     ${d0 ? `<div class="lstats tiny"><span>今天 ${Math.round(d0.temperature_2m_min[0])}–${Math.round(d0.temperature_2m_max[0])}°</span><span>降雨 ${d0.precipitation_probability_max[0] ?? 0}%</span><span>紫外線 ${Math.round(d0.uv_index_max[0] ?? 0)}</span>${cur?.aqi != null ? `<span>AQI ${cur.aqi}</span>` : ''}<span>日出 ${d0.sunrise[0].slice(11)}・日落 ${d0.sunset[0].slice(11)}</span></div>` : ''}
@@ -38,7 +38,7 @@ export function forEvent(w, date, time) {
   if (!x) return '<p class="tiny" style="margin:0">活動前 7 天會顯示場地天氣預報。</p>';
   const di = w.daily.time.indexOf(date);
   const later = [1, 2].map((n) => at(w, `${date}T${String(Number(t) + n).padStart(2, '0')}:00`)).filter(Boolean);
-  return `<div class="wx"><div class="wxnow ${x.advice.level}"><div><b class="num">${Math.round(x.temp)}°</b><span>${t} 時・${esc(x.text)}・體感 ${Math.round(x.feel)}°・降雨 ${x.rain ?? 0}%</span></div>
+  return `<div class="wx"><div class="wxnow ${x.advice.level}"><div><b class="num">${Math.round(x.temp)}°</b><span>${t} 時・<span>${esc(x.text)}</span>・體感 ${Math.round(x.feel)}°・降雨 ${x.rain ?? 0}%</span></div>
       <div class="wxadv"><span class="pill">${x.advice.label}</span><span class="tiny">${esc(x.advice.why.join('；'))}</span></div></div>
     ${later.length ? `<div class="wxhours" role="list" tabindex="0" aria-label="逐時天氣，可以左右捲動">${[x, ...later].map((y) => `<div role="listitem" class="${y.advice.level}"><span class="tiny">${hh(y.time)} 時</span><b class="num">${Math.round(y.temp)}°</b><span class="tiny num">${y.rain ?? 0}%</span></div>`).join('')}</div>` : ''}
     ${di >= 0 ? `<div class="lstats tiny"><span>當天 ${Math.round(w.daily.temperature_2m_min[di])}–${Math.round(w.daily.temperature_2m_max[di])}°</span><span>紫外線 ${Math.round(w.daily.uv_index_max[di] ?? 0)}</span><span>日出 ${w.daily.sunrise[di].slice(11)}</span></div>` : ''}

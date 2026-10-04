@@ -7,7 +7,7 @@
 //   功能開關 features.rest 預設關閉；關閉時這裡什麼都不顯示、也不連線
 import { api, cfg, esc, IC, openSheet, toast } from './app.js';
 import { hoursNow, parseHours } from './hours.js';
-import { t } from './i18n.js';
+import { lang, t } from './i18n.js';
 
 // 線條圖示（跟地點針同一個 24×24、圓頭線條風格）
 const RGLYPH = {
@@ -73,7 +73,7 @@ export const menuHtml = () => (feat() ? `<div class="msep" role="separator"></di
   <button role="menuitem" id="restAdd" hidden>新增休息站</button>` : '');
 // 地圖上方的類型 chip（打開圖層才出現）
 export const barHtml = () => (feat() ? `<div class="restbar" id="restBar" hidden>
-  <div class="restchips" id="restChips" role="group" aria-label="休息站類型">${Object.entries(TYPE).map(([k, v]) => `<button type="button" class="rchip" data-rt="${k}" aria-pressed="false">${rglyph(k)}<span>${v}</span></button>`).join('')}<button type="button" class="rchip" data-rt="open" aria-pressed="false">${rglyph('open')}<span>現在開放</span></button></div>
+  <div class="restchips" id="restChips" role="group" aria-label="休息站類型">${Object.entries(TYPE).map(([k, v]) => `<button type="button" class="rchip" data-rt="${k}" aria-pressed="false">${rglyph(k)}<span>${v}</span></button>`).join('')}<button type="button" class="rchip" data-rt="open" aria-pressed="false">${rglyph('open')}<span>只看開放中</span></button></div>
   <p class="resthint" id="restHint" role="status" hidden>放大地圖看休息站</p></div>` : '');
 
 // ---- 掛到地圖上（map.js 建好地圖後呼叫）----
@@ -248,7 +248,9 @@ function pinClick(s) {
 export const isOpen = () => !!cur;
 export function deselect() { if (!cur) return; cur = null; paint(); }
 const CHEV_L = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 5.5 8 12l6.5 6.5"/></svg>';
-const backTo = (from) => (from ? `<button type="button" class="restback" id="restBack">${CHEV_L}<span>回到</span><span translate="no">「${esc(from.name)}」</span></button>` : '');
+// 地點名稱是原文不翻：引號照語言（中文「」、英文 “”），英文的字序也不同
+const quoted = (name) => (lang === 'en' ? `“${esc(name)}”` : `「${esc(name)}」`);
+const backTo = (from) => (from ? `<button type="button" class="restback" id="restBack">${CHEV_L}<span>回到</span><span translate="no">${lang === 'en' ? '&nbsp;' : ''}${quoted(from.name)}</span></button>` : '');
 function credits(x) {
   const lic = x.license && x.license_url ? `<a href="${esc(x.license_url)}" target="_blank" rel="noopener noreferrer">${esc(x.license)}</a>` : '';
   // 顯名整句連到授權條款（整句一個文字節點，英文介面才翻得完整）；顯名裡沒有提到授權的（臺灣騎跡）在後面加授權連結
@@ -264,7 +266,7 @@ function hoursLine(x) {
   const o = openOf(x.hours), raw = x.hours_raw || (x.hours && !o ? x.hours : '');
   const fallback = x.access === 'customer' ? '依店家營業時間' : x.type === 'shower' && ['center', 'pool'].includes(x.subtype) ? '依場館公告' : '';
   if (!o && !raw && !fallback) return '';
-  return `<p class="ohours"><span class="ostat ${o ? (o.open ? 'on' : 'off') : ''}">${o ? esc(o.label) : raw ? '開放時間' : fallback}</span>${o && x.hours ? `<span class="tiny"><span translate="no">${esc(x.hours)}</span></span>` : ''}${raw ? `<span class="tiny"><span translate="no">${esc(raw)}</span></span>` : ''}</p>`;
+  return `<p class="ohours"><span class="ostat ${o ? (o.open ? 'on' : 'off') : ''}">${o ? esc(o.label) : raw ? '開放時間' : fallback}</span>${o && x.hours ? `<span class="tiny">${esc(x.hours)}</span>` : ''}${raw ? `<span class="tiny"><span translate="no">${esc(raw)}</span></span>` : ''}</p>`;
 }
 export async function openStop(id, opt = {}) {
   if (!ctx) return;
@@ -283,8 +285,10 @@ export async function openStop(id, opt = {}) {
   // 圖層關著也只畫這一處（不改這台裝置的圖層設定；打開圖層要從選單或「在地圖上顯示」）
   paint();
   const me = ctx.myPos();
-  const dist = from ? `<span>從</span><span translate="no">「${esc(from.name)}」</span><span>直線 ${distTxt(hav([from.lat, from.lng], [x.lat, x.lng]))}</span>`
-    : me ? `<span>離我直線 ${distTxt(hav(me, [x.lat, x.lng]))}</span>` : '';
+  const dFrom = from && distTxt(hav([from.lat, from.lng], [x.lat, x.lng])), dMe = me && distTxt(hav(me, [x.lat, x.lng]));
+  const dist = from ? (lang === 'en' ? `<span>${dFrom} from</span> <span translate="no">${quoted(from.name)}</span> <span>(straight line)</span>`
+    : `<span>從</span><span translate="no">${quoted(from.name)}</span><span>直線 ${dFrom}</span>`)
+    : me ? (lang === 'en' ? `<span>${dMe} from me (straight line)</span>` : `<span>離我直線 ${dMe}</span>`) : '';
   const nav = `https://www.google.com/maps/dir/?api=1&destination=${x.lat},${x.lng}&travelmode=walking`;
   const tags = SVC.filter(([b]) => x.svc & b).map(([, t]) => `<span class="pill">${t}</span>`).join('');
   const e = d.edit;
