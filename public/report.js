@@ -1,7 +1,7 @@
 // 耕跑團 PWA — report.js：從 app.js 拆出來、用到才載入的畫面（第一次開 App 不用下載）
 import * as P from './plan.js';
 import * as S from './studio.js';
-import { $, allow, api, avatar, barChart, bindComments, coachPrefs, coachTeam, dayLabel, dstr, emptyState, esc, feat, FEEL, fixText, group, largeTitle, LOG_STATUS_NAME, me, row, teams, view, ymd } from './app.js';
+import { $, allow, api, avatar, barChart, bindComments, coachPrefs, coachTeam, dayLabel, dstr, emptyState, esc, feat, fixText, group, largeTitle, LOG_STATUS_NAME, me, row, teams, view, ymd } from './app.js';
 
 // ---------- 訓練報表：週里程、完成率、強度趨勢、個人最佳 ----------
 // 圖表一律用 SVG 自己畫（不載外部套件），寬度跟著容器縮放
@@ -77,6 +77,7 @@ async function reportView(range = '12w') {
 }
 
 // 教練看單一團員的紀錄並留言（本人要有打開分享）
+//   照分享同意書：每一筆只有完成狀況與里程，強度只有這段期間的平均；時間、配速、心率、每次的強度、感覺與備註伺服器就不給
 async function memberLogsView(mid) {
   const to = ymd(new Date()), from = ymd(new Date(Date.now() - 41 * 864e5));
   const r = await api(`/logs/member/${mid}?from=${from}&to=${to}`);
@@ -84,16 +85,22 @@ async function memberLogsView(mid) {
   // 個人週期的團員：標「個人 W5 週二」，旁邊附協會週次；不會看到他的比賽名稱與日期
   const wk = (l) => (l.personal ? `個人 W${l.cycle_week} ${esc(dayLabel(l.plan_day || ''))}${l.week_no ? `・協會 W${l.week_no}` : ''}`
     : l.week_no ? `W${l.week_no} ${esc(dayLabel(l.plan_day || ''))}` : '');
+  const sm = r.summary || {};
   view.innerHTML = `${largeTitle(m.nickname || m.name, `${m.dist === 'hm' ? '半馬' : '全馬'} ${esc(m.grp)} 組${m.plan_cycle === 'race' ? '・個人週期' : ''}・最近 6 週`)}
+    <section class="kpis">
+      <div class="card kpi"><span class="tiny">訓練次數</span><b class="num">${sm.runs || 0}</b></div>
+      <div class="card kpi"><span class="tiny">總里程</span><b class="num">${Number(sm.km || 0).toFixed(1)}<small> km</small></b></div>
+      <div class="card kpi"><span class="tiny">平均強度（RPE）</span><b class="num">${sm.rpe != null ? Number(sm.rpe).toFixed(1) : '—'}</b></div>
+    </section>
     <section class="card"><div class="roster">${r.logs.map((l) => `<div class="mlog">
       <div class="row spread"><b>${dstr(l.date)}${wk(l) ? ` <span class="tiny">${wk(l)}</span>` : ''}</b>
         <span class="pill ${l.status === 'done' ? 'solid' : l.status === 'skip' ? '' : 'wait'}">${LOG_STATUS_NAME[l.status]}</span></div>
       ${l.plan_text ? `<span class="tiny">課表：<span translate="no">${esc(fixText(l.plan_text))}</span></span>` : ''}
-      <span>${l.km ? `${l.km} km` : ''}${l.seconds ? `・${S.fmtDuration(l.seconds)}` : ''}${l.km && l.seconds ? `・${S.fmtPace(l.km * 1000, l.seconds)}` : ''}${l.hr ? `・心率 ${l.hr}` : ''}${l.rpe ? `・RPE ${l.rpe}` : ''}${l.feel ? `・${FEEL[l.feel]}` : ''}</span>
+      ${l.km ? `<span class="num">${l.km} km</span>` : ''}
       <details data-cm="${l.id}"><summary class="tiny" style="cursor:pointer">回饋${l.comments ? `（${l.comments}）` : ''}</summary><div class="cmts"></div>
         <form class="row cmform" style="gap:8px"><input name="body" maxlength="500" placeholder="給這次訓練一點回饋" style="flex:1"><button class="btn sm">送出</button></form></details>
     </div>`).join('') || '<p class="muted" style="margin:0">這段期間沒有紀錄。</p>'}</div>
-    <p class="tiny" style="margin:0">看不到團員的備註；你的回饋只有本人看得到，送出後會通知他。</p></section>`;
+    <p class="tiny" style="margin:0">依團員的分享設定，你只看得到完成狀況、里程與平均強度；每次的時間、心率、強度、感覺與備註只有本人看得到。你的回饋只有本人看得到，送出後會通知他。</p></section>`;
   bindComments();
 }
 

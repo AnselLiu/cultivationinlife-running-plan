@@ -129,6 +129,42 @@ test('訓練紀錄：不能記未來、查詢有上限、教練要本人分享�
   assert.ok((await call('t_runner', `/logs?from=${today}&to=${today}`)).json.logs.some((l) => l.id === r.json.id), '別人刪不掉我的紀錄');
 });
 
+test('分享給教練的訓練只有同意範圍：完成、里程、平均強度；時間、心率、RPE、感覺、備註只有本人看得到，回饋照常', async () => {
+  const d = plus(-3), q = `?from=${d}&to=${d}`;
+  await call('t_runner', '/me/share-logs', { method: 'POST', body: { share: true } });
+  const a = await call('t_runner', '/logs', { method: 'POST', body: { date: d, status: 'done', km: 12.3, seconds: 3987, hr: 163, rpe: 8, feel: 2, note: '膝蓋有點痛只給自己看' } });
+  const b = await call('t_runner', '/logs', { method: 'POST', body: { date: d, status: 'partial', km: 4, seconds: 1500, hr: 141, rpe: 4, feel: 4 } });
+  assert.equal(a.status, 200); assert.equal(b.status, 200);
+  const HIDDEN = ['seconds', 'hr', 'rpe', 'feel', 'note', 'source', 'cycle_anchor'];
+  for (const who of ['t_coach', 't_lead']) {
+    const seen = await call(who, `/logs/member/t_runner${q}`);
+    assert.equal(seen.status, 200, who);
+    const mine = seen.json.logs.filter((l) => [a.json.id, b.json.id].includes(l.id));
+    assert.equal(mine.length, 2, `${who} 看得到兩筆的完成狀況`);
+    for (const l of mine) for (const k of HIDDEN) assert.ok(!(k in l), `${who} 不該拿到 ${k}`);
+    assert.deepEqual(mine.map((l) => [l.status, l.km]).sort(), [['done', 12.3], ['partial', 4]]);
+    assert.ok(!seen.text.includes('膝蓋') && !seen.text.includes('3987') && !seen.text.includes('163'), `${who} 回應裡沒有備註、時間、心率`);
+    assert.deepEqual(seen.json.summary, { runs: 2, km: 16.3, rpe: 6 }, '只有區間的平均強度');
+    const team = await call(who, `/logs/team${q}${who === 't_lead' ? '&team=youth' : ''}`);
+    const row = team.json.members.find((m) => m.id === 't_runner');
+    assert.equal(row.rpe, 6); assert.equal(row.km, 16.3);
+    for (const k of ['seconds', 'hr', 'feel', 'note']) assert.ok(!(k in row), `團員總表不該有 ${k}`);
+    assert.ok(!team.text.includes('膝蓋'));
+  }
+  // 本人照舊看得到完整資料
+  const own = (await call('t_runner', `/logs${q}`)).json.logs.find((l) => l.id === a.json.id);
+  assert.deepEqual([own.seconds, own.hr, own.rpe, own.feel, own.note], [3987, 163, 8, 2, '膝蓋有點痛只給自己看']);
+  // 教練回饋照常：教練留言、本人讀得到
+  assert.equal((await call('t_coach', `/logs/${a.json.id}/comments`, { method: 'POST', body: { body: '下週減量' } })).status, 200);
+  assert.ok((await call('t_runner', `/logs/${a.json.id}/comments`)).json.comments.some((c) => c.body === '下週減量'));
+  assert.ok((await call('t_coach', `/logs/${a.json.id}/comments`)).json.comments.some((c) => c.body === '下週減量'));
+  // 關掉分享：教練連摘要都看不到
+  await call('t_runner', '/me/share-logs', { method: 'POST', body: { share: false } });
+  assert.equal((await call('t_coach', `/logs/member/t_runner${q}`)).status, 403);
+  assert.ok(!(await call('t_coach', `/logs/team${q}`)).json.members.some((m) => m.id === 't_runner'));
+  await call('t_runner', '/me/share-logs', { method: 'POST', body: { share: true } });
+});
+
 test('訓練紀錄寫入：每天與 10 分鐘的次數限制（離線補傳、修改也算）、最早日期、備註與請求大小；舊版資料搬移一批 150 筆照常上傳', async () => {
   const rate = (q) => fetch(`${BASE}/api/dev/rate?${q}`).then((r) => r.json());
   const post = (body, who = 't_staff') => call(who, '/logs', { method: 'POST', body });

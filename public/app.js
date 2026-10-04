@@ -2696,7 +2696,7 @@ async function planView(n) {
           ${canTeamLogs() ? '<a class="tiny" href="#/logs/team">看團員的訓練 ›</a>' : ''}</div>
       </div>
       <div class="lsumact">${feat('gps') ? `<a class="btn iconbtn" href="#/run">${IC.runner}開始跑步</a>` : ''}<a class="btn ghost iconbtn" href="#/log?extra=1">${IC.plus}自主加練</a><a class="btn ghost" href="#/report">報表</a></div>
-      <p class="tiny" style="margin:0">${me.share_logs ? '教練與分團幹部看得到你的完成率與里程，看不到備註。' : '紀錄只有你看得到；想讓教練看到，到「我的 → 隱私」打開分享。'}</p>
+      <p class="tiny" style="margin:0">${me.share_logs ? '教練與分團幹部看得到你的完成率、里程與平均強度；每次的時間、心率、強度、感覺與備註只有你看得到。' : '紀錄只有你看得到；想讓教練看到，到「我的 → 隱私」打開分享。'}</p>
     </section>` : ''}
     <div class="days${other ? '' : ' ticks'}">${days ? days.map((d, i) => {
       const L = logOf(d), top = L.find((l) => l.status === 'done') || L.find((l) => l.status === 'partial') || L[0];
@@ -3604,7 +3604,7 @@ async function meSecurity(googleMsg) {
 function mePrivacy() {
   view.innerHTML = `${subTitle('隱私')}
     <section class="card">
-      <label class="switch"><span>把訓練完成率與里程分享給教練與分團幹部<span class="tiny" style="display:block">備註永遠只有你看得到</span></span><input type="checkbox" id="shareLogs" ${me.share_logs ? 'checked' : ''}><i></i></label>
+      <label class="switch"><span>把訓練完成率、里程與平均強度分享給教練與分團幹部<span class="tiny" style="display:block">每次的時間、心率、強度、感覺與備註永遠只有你看得到</span></span><input type="checkbox" id="shareLogs" ${me.share_logs ? 'checked' : ''}><i></i></label>
       <label class="switch"><span>出現在分團里程排行榜<span class="tiny" style="display:block">只有同分團的人看得到你的名字與里程</span></span><input type="checkbox" id="showRank" ${me.show_rank ? 'checked' : ''}><i></i></label>
     </section>
     <section class="card"><h3>我們存了什麼</h3>

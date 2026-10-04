@@ -3116,7 +3116,9 @@ const api = (async function api(req, env, path, method) {
     await env.DB.prepare('DELETE FROM training_logs WHERE id = ? AND member_id = ?').bind(mlog[1], member.id).run();
     return json({ ok: true });
   }
-  // 教練看某位團員的紀錄（本人要有打開分享；不含備註）；以及教練留言
+  // 教練看某位團員的紀錄（本人要有打開分享）；以及教練留言
+  //   照分享同意書的字面（「只看得到完成率、里程與平均強度」）：每一筆只給完成狀況、距離與課表位置，
+  //   強度只給區間平均；每一筆的時間（配速）、心率、自覺強度、感覺與備註只有本人看得到（本人的 /api/logs 照舊是完整資料）
   // 教練視角（團員分享的訓練、留回饋）：只有課表教練（plan）與該分團的團長、幹部（teamOwn），對齊分享同意書的「教練與分團幹部」；
   //   協會層級的名冊權限（理事、行政、監事）不算，監事唯讀也不能留回饋
   const coachOf = (tid) => can(member, 'plan') || teamOwn(tid, 'roster');
@@ -3135,11 +3137,15 @@ const api = (async function api(req, env, path, method) {
     const r = rangeOf(new URL(req.url), 62, 6);
     if (!r) return fail(400, '查詢區間最長兩個月');
     const rows = (await env.DB.prepare(
-      `SELECT id, date, week_no, plan_day, cycle_week, (cycle_anchor IS NOT NULL) AS personal, kind, plan_text, status, km, seconds, hr, rpe, feel,
+      `SELECT id, date, week_no, plan_day, cycle_week, (cycle_anchor IS NOT NULL) AS personal, kind, plan_text, status, km,
               (SELECT COUNT(*) FROM log_comments c WHERE c.log_id = training_logs.id) AS comments
        FROM training_logs WHERE member_id = ? AND date BETWEEN ? AND ? ORDER BY date DESC LIMIT 200`).bind(who.id, ...r).all()).results;
+    // 區間合計：完成次數、里程、平均強度（跟 /api/logs/team 同一套算法；只有平均，不給每一筆的 RPE）
+    const sum = await env.DB.prepare(`SELECT SUM(status != 'skip') AS runs, ROUND(SUM(COALESCE(km, 0)), 1) AS km, ROUND(AVG(rpe), 1) AS rpe
+       FROM training_logs WHERE member_id = ? AND date BETWEEN ? AND ?`).bind(who.id, ...r).first();
     // 個人週期只給週次與「個人」標記，不給比賽日與比賽名稱
-    return json({ member: { id: who.id, name: who.name, nickname: who.nickname, dist: who.dist, grp: who.grp, plan_cycle: who.plan_cycle === 'race' ? 'race' : 'club' }, logs: rows, from: r[0], to: r[1] });
+    return json({ member: { id: who.id, name: who.name, nickname: who.nickname, dist: who.dist, grp: who.grp, plan_cycle: who.plan_cycle === 'race' ? 'race' : 'club' }, logs: rows,
+      summary: { runs: sum?.runs || 0, km: sum?.km || 0, rpe: sum?.rpe ?? null }, from: r[0], to: r[1] });
   }
   const mlc = path.match(/^\/api\/logs\/([\w-]{1,32})\/comments$/);
   if (mlc) {
@@ -3174,7 +3180,7 @@ const api = (async function api(req, env, path, method) {
     await audit(env, req, member, 'privacy.share_logs', 'member', member.id, on ? '開啟' : '關閉');
     return json({ ok: true, share: !!on });
   }
-  // 教練與分團幹部：有開分享的團員，在區間內的完成次數與里程（不含備註）
+  // 教練與分團幹部：有開分享的團員，在區間內的完成次數、里程與平均強度（不含每一筆的時間、心率、強度、感覺與備註）
   if (path === '/api/logs/team' && method === 'GET') {
     const g = need(); if (g) return g;
     const u = new URL(req.url), team = str(u.searchParams.get('team'), 16);
