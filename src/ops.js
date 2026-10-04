@@ -118,7 +118,7 @@ export function opsConditions(p, cfg = {}) {
     const u = quotaUsage(o.daily, cfg.quota);
     const ratio = (col) => u.values[col] / u.quota[col];
     const top = QUOTA_COLS.filter(([col]) => u.quota[col] && ratio(col) >= OPS.quotaPct).sort((a, b) => ratio(b[0]) - ratio(a[0]))[0];
-    if (top) out.push({ cond: 'quota', detail: `${top[1]} ${u.pct[top[0]]}%`, text: `今天的${top[2]}用量已到每日額度的 ${u.pct[top[0]]}%。${SEE}` });
+    if (top) out.push({ cond: 'quota', detail: `${top[1]} ${u.pct[top[0]]}%`, text: `今天的 ${top[2]} 用量已到每日額度的 ${u.pct[top[0]]}%。${SEE}` });
   }
   // 3. 排程工作連續因額度停下：同一個名稱今天停下 ≥ 2 次；本來就分段做的（每日備份、推播佇列）不算
   const stops = (Array.isArray(o.stops) ? o.stops : []).filter((n) => typeof n === 'string' && !n.split(':').some((x) => /^(backup|push|drain)/.test(x)));

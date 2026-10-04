@@ -8,6 +8,10 @@ export const PLANS = {
   free: { sub: 50,   d1: 50,   soft: 44,  pushPerHop: 10,  pushKick: 3,  pushDepth: 20, pushConc: 4, holidayPages: 10, backupSeg: 256 * 1024, backupHops: 4 },
   paid: { sub: 1000, d1: 1000, soft: 900, pushPerHop: 200, pushKick: 20, pushDepth: 25, pushConc: 6, holidayPages: 20, backupSeg: 16 * 1024 * 1024, backupHops: 4 },
 };
+// 每日額度（Cloudflare 免費方案，00:00 UTC 重置；數字照官方限制頁：Workers 請求 10 萬、D1 讀取 500 萬列與寫入 10 萬列、KV 讀取 10 萬與寫入／列出／刪除各 1,000）
+//   系統告警（src/ops.js 的 quota 條件）用到 80% 就通知理事長與行政人員；付費方案的每日額度大很多，不做這個告警（daily＝null）
+PLANS.free.daily = { req: 100000, d1Read: 5000000, d1Write: 100000, kvRead: 100000, kvWrite: 1000, kvList: 1000, kvDel: 1000 };
+PLANS.paid.daily = null;
 // backupSeg：每日備份一段（一次執行）最多處理多少 JSON 字元。CPU 跟資料量成正比（M4 上 stringify＋gzip 約 10 ms／MB），
 //   256 KB 約 3 ms，乘 2 換算 Cloudflare 主機還在 10 ms 內；資料多時分好幾段、好幾個整點做完（見 worker.js 的 backupStep）
 // backupHops：JOB_DISPATCH=self（staging 驗證過每次呼叫自己都有自己的額度）時，一個整點最多接著做幾段
@@ -21,6 +25,9 @@ export class Budget {
   constructor(env, { kind = 'request', name = '', inherit = 0 } = {}) {
     this.plan = planOf(env); this.kind = kind; this.name = String(name).slice(0, 80);
     this.d1 = 0; this.rows = 0; this.kv = 0; this.fetch = 0; this.rpc = 0; this.cache = 0;
+    // 每日用量估計（ops_daily）用的計數：D1 寫入的列數、KV／R2 各種操作、推播結果（不算額度，只記下來）
+    this.wrote = 0; this.kvGet = 0; this.kvPut = 0; this.kvList = 0; this.kvDel = 0;
+    this.pushSent = 0; this.pushErr = 0; this.pushGone = 0; this.pushDrop = 0;
     this.inherit = Math.max(0, Number(inherit) || 0);   // 呼叫自己時，父執行已經用掉的（保守算法：假設和父執行共用額度）
     this.sub = this.inherit; this.child = 0;
     this.stopped = []; this.over = false; this.t0 = Date.now();
@@ -35,7 +42,13 @@ export class Budget {
     throw new BudgetExceeded(`執行額度超過上限：${this.kind} ${this.name} sub=${this.sub} d1=${this.d1}`);
   }
   // D1 回報的讀取列數（meta.rows_read；只有 all／run／batch 有 meta，first 沒有）：不算額度，只記下來看哪支 API 讀得多
-  read(res) { const n = Array.isArray(res) ? res.reduce((t, r) => t + (Number(r?.meta?.rows_read) || 0), 0) : Number(res?.meta?.rows_read) || 0; this.rows += n; return res; }
+  read(res) {
+    const sum = (k) => (Array.isArray(res) ? res.reduce((t, r) => t + (Number(r?.meta?.[k]) || 0), 0) : Number(res?.meta?.[k]) || 0);
+    this.rows += sum('rows_read'); this.wrote += sum('rows_written');
+    return res;
+  }
+  // 推播佇列送出一段的結果（drainPush 的 out）
+  pushed(r) { if (!r) return; this.pushSent += r.sent || 0; this.pushErr += r.err || 0; this.pushGone += r.gone || 0; this.pushDrop += r.dropped || 0; }
   // type：d1 | kv | fetch | rpc | cache，全部都加到 sub
   take(type, n = 1) { this[type] += n; this.sub += n; this.check(); }
   // 子執行（呼叫自己）回報的用量：父執行保守地加回自己的預算
@@ -76,8 +89,10 @@ function wrapD1(db, b) {
   };
 }
 // KV（BACKUP_KV）與 R2（BACKUP）：get、put、list、delete 各算 1 個子請求
+//   每日用量估計另外依操作分開記（讀取、寫入、列出、刪除各有自己的每日額度）
+const STORE_OP = { get: 'kvGet', getWithMetadata: 'kvGet', head: 'kvGet', put: 'kvPut', list: 'kvList', delete: 'kvDel' };
 function wrapStore(s, b) {
-  const w = (k) => async (...a) => { b.take('kv'); return s[k](...a); };
+  const w = (k) => async (...a) => { b.take('kv'); b[STORE_OP[k]]++; return s[k](...a); };
   return { get: w('get'), put: w('put'), list: w('list'), delete: w('delete'), getWithMetadata: w('getWithMetadata'), head: w('head') };
 }
 
@@ -119,3 +134,29 @@ export function invocationEnv(env, ctx, budget) {
 export async function settled(e) {
   for (let n = -1; n !== e.pending.length;) { n = e.pending.length; await Promise.allSettled(e.pending.slice()); }
 }
+
+// ---- 每日用量估計（ops_daily，UTC 日）----
+//   每次執行結束把用量加進這個 isolate 的累加器；寫 D1 的時機由 worker.js 的 finishBudget 決定（請求：距離上次寫入 10 分鐘以上；
+//   排程：這個整點有工作跑才寫），一次 1 句、1 列寫入。寫失敗就留在累加器，下次再寫。
+//   這是下限估計：isolate 被回收時最多掉 10 分鐘的計數；電腦上用 wrangler 直接寫 D1 的也不算
+export const USAGE_COLS = ['req', 'd1_q', 'd1_read', 'd1_write', 'kv_read', 'kv_write', 'kv_list', 'kv_del', 'push_sent', 'push_err', 'push_gone', 'push_drop'];
+export const usage = { days: new Map(), last: 0 };   // days：UTC 日 → { 欄位: 數字 }；last：這個 isolate 上次寫入的時間
+export const USAGE_EVERY = 10 * 60e3;
+export function addUsage(b, day = new Date().toISOString().slice(0, 10)) {
+  const v = { req: b.kind === 'request' ? 1 : 0, d1_q: b.d1, d1_read: b.rows, d1_write: b.wrote, kv_read: b.kvGet, kv_write: b.kvPut, kv_list: b.kvList, kv_del: b.kvDel,
+    push_sent: b.pushSent, push_err: b.pushErr, push_gone: b.pushGone, push_drop: b.pushDrop };
+  const cur = usage.days.get(day) || Object.fromEntries(USAGE_COLS.map((k) => [k, 0]));
+  for (const k of USAGE_COLS) cur[k] += Number(v[k]) || 0;
+  usage.days.set(day, cur);
+  while (usage.days.size > 3) usage.days.delete(usage.days.keys().next().value);   // 寫不出去的舊日子最多留 3 天
+}
+// 要寫哪一天（最舊的那一天先寫，換日之後前一天的尾巴不會被新的一天蓋掉）；沒有要寫的回 null
+export function usageDue(now = Date.now(), force = false) {
+  if (!usage.days.size) return null;
+  const [day] = usage.days.keys();
+  const today = new Date(now).toISOString().slice(0, 10);
+  if (!force && day === today && now - usage.last < USAGE_EVERY) return null;
+  return day;
+}
+export const USAGE_SQL = `INSERT INTO ops_daily (day, ${USAGE_COLS.join(', ')}, updated_at) VALUES (?1, ${USAGE_COLS.map((_, i) => `?${i + 2}`).join(', ')}, datetime('now'))
+  ON CONFLICT(day) DO UPDATE SET ${USAGE_COLS.map((k) => `${k} = ${k} + excluded.${k}`).join(', ')}, updated_at = excluded.updated_at`;

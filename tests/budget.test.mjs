@@ -38,7 +38,8 @@ function within(r, msg) {
 
 test('執行額度：台北 03:00 只跑備份（開自己的執行），資料清理延到 04:00', async () => {
   assert.deepEqual(await violations(), [], '前面的測試（api.test 等）都沒有超過執行額度');
-  const r = await cron('at=2028-03-14T19:00:00Z');
+  // 一段放大：api.test 的排程（幹部週報、系統告警的稽核等）讓測試資料庫超過一段（256 KB）；這裡要測的是「開自己的執行、資料清理延後」
+  const r = await cron(`at=2028-03-14T19:00:00Z&seg=${ONE_SEG}`);
   within(r, '03:00');
   assert.ok(r.backup && typeof r.backup === 'object', JSON.stringify(r));
   assert.equal(r.backup.label, '2028-03-15');
@@ -71,7 +72,7 @@ test('執行額度：備份解得回來，格式與筆數都對', async () => {
   assert.ok(d.counts.members >= 5);
   assert.deepEqual(d.counts, d.manifest, '每一段接回來的筆數和目錄一致');
   // 手動備份之後馬上對照：除了稽核紀錄（備份完才寫），每張表的筆數都和現在一樣
-  const bk = await call('t_chair', '/backups', { method: 'POST', body: {} });
+  const bk = await call('t_chair', '/backups', { method: 'POST', body: { seg: ONE_SEG } });   // 一段放大（測試資料庫已超過 256 KB；seg 只有本機測試收）
   assert.equal(bk.status, 200, bk.text);
   assert.equal(bk.json.parts, 1, '資料少時一段做完');
   const sub = Number(/sub=(\d+)/.exec(bk.headers.get('x-budget'))?.[1]);
@@ -592,8 +593,8 @@ test('每日備份：只讀到開始時的最後一筆，備份進行中一直�
   assert.deepEqual(await violations(), []);
 });
 
-test('每日備份：開始超過 24 小時還沒做完，通知理事長與行政人員一次、稽核記一筆', async () => {
-  const notes = async (who) => { const n = (await call(who, '/notifications')).json; return [...(n.pinned || []), ...n.items].filter((x) => x.title === '每日備份還沒做完'); };
+test('每日備份：開始超過 24 小時還沒做完，走系統告警通知理事長與行政人員一次（不再發待辦）、稽核記一筆', async () => {
+  const notes = async (who, title = '系統狀態：每日備份') => { const n = (await call(who, '/notifications')).json; return [...(n.pinned || []), ...n.items].filter((x) => x.title === title); };
   await finishPendingBackup();
   const n0 = (await notes('t_chair')).length;
   assert.equal((await cron('at=2033-03-10T19:00:00Z&seg=4096&skip=retention')).backup, 'deferred');
@@ -605,6 +606,8 @@ test('每日備份：開始超過 24 小時還沒做完，通知理事長與行�
   assert.equal((await notes('t_chair')).length, n0 + 1, '理事長收到通知');
   assert.ok((await notes('t_staff')).length >= 1, '行政人員收到通知');
   assert.equal((await notes('t_runner')).length, 0);
+  assert.equal((await notes('t_chair', '每日備份還沒做完')).length, 0, '不再發幹部待辦');
+  assert.ok((await call(null, '/dev/ops?tday=2033-03-12')).json.alerts.some((a) => a.cond === 'backup'), '記在 ops_alerts（同一天的告警共用去重）');
   await cron('at=2033-03-11T21:00:00Z&seg=4096&skip=retention');
   assert.equal((await notes('t_chair')).length, n0 + 1, '同一份只通知一次');
   const au = (await call('t_chair', `/audit?from=${plus(-1)}&to=${plus(1)}&action=backup.stalled`)).json.items;
@@ -613,4 +616,369 @@ test('每日備份：開始超過 24 小時還沒做完，通知理事長與行�
   const done = await cron(`at=2033-03-11T22:00:00Z&seg=${ONE_SEG}&skip=retention`);
   assert.equal(done.backup?.label, '2033-03-11', JSON.stringify(done.backup));
   assert.deepEqual(await violations(), []);
+});
+
+// ---- 營運三項：推播摘要、幹部週報、系統健康告警（PUSH_MOCK＋嚴格免費方案額度）----
+const EP = (i) => `https://fcm.googleapis.com/fcm/send/b_${String(i).padStart(5, '0')}`;
+const B = (i) => `b_${String(i).padStart(4, '0')}`;
+const KEYS = { p256dh: 'B'.repeat(65), auth: 'a'.repeat(22) };
+const NAMES = ['測試理事長', '測試行政', '測試監事', '測試教練', '測試團長', '測試跑友', '路人跑友', '大量測試'];
+const noNames = (text, msg) => { for (const n of NAMES) assert.ok(!String(text).includes(n), `${msg}：不能有「${n}」`); assert.ok(!/NT\$/.test(text), `${msg}：不能有金額`); };
+const notesOf = async (who, title) => { const n = (await call(who, '/notifications')).json; return [...(n.pinned || []), ...(n.items || [])].filter((x) => (title instanceof RegExp ? title.test(x.title) : x.title === title)); };
+const held = async (like) => (await call(null, `/dev/notes?like=${encodeURIComponent(like)}`)).json.held;
+const rowsOf = async (like) => (await call(null, `/dev/notes?like=${encodeURIComponent(like)}`)).json.rows;   // 所有人的通知列（不受通知中心一頁 30 則限制）
+async function broadcast(title) {
+  await call(null, '/dev/rate?key=broadcast:t_chair&clear=1');
+  const r = await call('t_chair', '/admin/broadcast', { method: 'POST', body: { title, body: '摘要測試內容' } });
+  ok50(r, `群發 ${title}`);
+}
+const SKIP = 'skip=backup,retention,auditDigest,weeklyReport,opsAlerts,monthSummary,review,fatigue,promoteSweep';
+// 推播到某台裝置的訊息（payload 的 text 是「標題｜內文」）
+const toEp = (m, i, re) => m.list.filter((x) => x.endpoint === EP(i) && (!re || re.test(x.text)));
+
+test('推播摘要：通知設定 API（摘要時間 7–22、沒帶的欄位不改、系統狀態不能關、分團週報只有團長能設）', async () => {
+  const put = (who, body) => call(who, '/me/notify-prefs', { method: 'PUT', body });
+  assert.equal((await put('t_runner', { mute: ['event'] })).status, 200);
+  let r = await put('t_runner', { digest: 20 });
+  assert.equal(r.status, 200, r.text);
+  assert.equal(r.json.digest, 20);
+  assert.deepEqual(r.json.mute, ['event'], '只送 digest：mute 不變');
+  assert.equal((await call('t_runner', '/me/notify-prefs')).json.digest, 20);
+  for (const bad of [3, 23, 6.5, '20', true]) assert.equal((await put('t_runner', { digest: bad })).status, 400, `digest=${bad}`);
+  assert.equal((await put('t_runner', { digest: 3 })).json.error, '摘要時間要在 7 點到 22 點之間');
+  r = await put('t_runner', { mute: ['ops', 'security', 'change', 'event'] });
+  assert.deepEqual(r.json.mute, ['event'], '系統狀態、帳號安全、活動異動不能關');
+  assert.equal(r.json.digest, 20, '只送 mute：摘要時間不變');
+  assert.equal(r.json.teamReport, null, '不是團長');
+  assert.equal(r.json.ops, false);
+  assert.equal((await put('t_runner', { teamReport: true })).status, 403);
+  r = await put('t_runner', { digest: null, mute: [] });
+  assert.equal(r.json.digest, null);
+  // 團長：每週一收到分團週報；理事長：系統狀態與幹部週報兩列
+  r = await put('t_lead', { teamReport: true });
+  assert.equal(r.status, 200, r.text);
+  assert.equal(r.json.teamReport, true);
+  assert.equal((await put('t_lead', { teamReport: 'yes' })).status, 400);
+  const c = (await call('t_chair', '/me/notify-prefs')).json;
+  assert.equal(c.ops, true);
+  assert.ok(c.locked.includes('ops') && !c.locked.includes('report'));
+  // 稽核分開記：notif.digest（hour=20／hour=off）、notif.team_report；notif.prefs 的 detail 仍然只有 mute=
+  const au = async (a) => (await call('t_chair', `/audit?from=${plus(-1)}&to=${plus(1)}&action=${a}`)).json.items;
+  const dg = (await au('notif.digest')).filter((x) => x.target_id === 't_runner').map((x) => x.detail);
+  assert.ok(dg.includes('hour=20') && dg.includes('hour=off'), JSON.stringify(dg));
+  assert.ok((await au('notif.team')).some((x) => x.action === 'notif.team_report' && x.target_id === 't_lead' && x.detail === 'on'));   // 稽核查詢的 action 會濾掉底線
+  assert.ok((await au('notif.prefs')).every((x) => /^mute=[\w,]*$/.test(x.detail)), 'notif.prefs 的 detail 只有 mute=（還原工具照樣解析）');
+  assert.deepEqual(await violations(), []);
+});
+
+let openEv = null;   // 有名額上限、之後才開放報名的活動（建立時就要勾通知，排程到時才推「開放報名」）
+test('推播摘要：選摘要的人通知中心立刻有、推播先不排；即時、關掉這一類、沒有訂閱的人照舊', async () => {
+  await call(null, '/dev/seed-bulk?members=300&subs=300');
+  // 選摘要之前先建好（建立時的「新活動」通知就不會延到摘要，摘要的則數才好算）
+  openEv = ok50(await call('t_chair', '/events', { method: 'POST', body: evBody({ title: '摘要即時開放報名', date: plus(12), capacity: 50, signup_start: `${plus(8)}T08:00`, notify: true }) }), '開放報名').id;
+  await call(null, '/dev/seed-bulk?digest=20&dn=10');               // b_0000–b_0009 選每日摘要 20:00
+  await call(null, `/dev/seed-bulk?mute=${B(5)}&cats=announce`);    // b_0005 關掉公告
+  assert.equal((await call(B(9), '/push/unsubscribe', { method: 'POST', body: { endpoint: EP(9) } })).status, 200);   // b_0009 沒有訂閱
+  await drainAllNow();
+  await mock('clear=1');
+  await broadcast('摘要測試公告一');
+  assert.equal(await held('摘要測試公告一'), 8, 'b_0000–b_0008 扣掉關掉公告的 b_0005：8 人延到摘要');
+  const mine = await notesOf(B(1), '摘要測試公告一');
+  assert.equal(mine.length, 1, '通知中心立刻看得到');
+  assert.ok((await call(B(1), '/notifications/count')).json.badge >= 1, 'badge 有加');
+  await drainAllNow();
+  const m = await mock();
+  for (const i of [0, 1, 2, 3, 4, 6, 7, 8]) assert.equal(toEp(m, i).length, 0, `${B(i)} 延到摘要`);
+  assert.equal(toEp(m, 5).length, 0, '關掉公告：不延後也不推');
+  assert.equal(toEp(m, 10).length, 1, '即時的人照推');
+  assert.deepEqual(await violations(), []);
+});
+
+test('推播摘要：帳號安全、集合前提醒、當天取消、明天的活動異動、有名額的開放報名一律即時；5 天後的活動異動延到摘要', async () => {
+  await mock('clear=1');
+  // 帳號安全：成為分團幹部
+  assert.equal((await call('t_chair', '/teams/youth/members', { method: 'POST', body: { member_id: B(1), action: 'add', role: 'officer' } })).status, 200);
+  await call('t_chair', '/teams/youth/members', { method: 'POST', body: { member_id: B(1), action: 'remove' } });
+  // 當天取消、明天的異動、5 天後的異動（b_0001 都有報名）
+  const mk = async (title, date, gather = '07:00') => {
+    const id = ok50(await call('t_chair', '/events', { method: 'POST', body: evBody({ title, date, gather_time: gather }) }), title).id;
+    await rounds('t_chair', `/events/${id}/bulk`, { action: 'signup', names: '大量測試0001' });
+    return id;
+  };
+  const today0 = await mk('摘要即時今天', plus(0), '23:30');
+  ok50(await call('t_chair', `/events/${today0}/notice`, { method: 'POST', body: { type: 'cancel' } }), '當天取消');
+  const tmr = await mk('摘要即時明天', plus(1));
+  ok50(await call('t_chair', `/events/${tmr}/notice`, { method: 'POST', body: { type: 'other', message: '集合點改到停車場' } }), '明天的異動');
+  const later = await mk('摘要延後五天', plus(5));
+  ok50(await call('t_chair', `/events/${later}/notice`, { method: 'POST', body: { type: 'other', message: '集合點改到停車場' } }), '5 天後的異動');
+  assert.equal(await held('活動通知：摘要延後五天'), 1, '5 天後的活動異動延到摘要');
+  assert.equal(await held('活動取消：摘要即時今天'), 0);
+  assert.equal(await held('活動通知：摘要即時明天'), 0);
+  // 集合前提醒：6 天後 07:00 集合，05:30 跑排程
+  const hr = await mk('摘要即時集合', plus(6));
+  const d6 = plus(6), at = new Date(Date.parse(`${d6}T05:30:00+08:00`)).toISOString();
+  within(await cron(`at=${at}&${SKIP}`), '集合前提醒');
+  // 有名額上限的開放報名（先搶先贏）：一律即時
+  const r = await cron(`at=${new Date(Date.parse(`${plus(8)}T08:00:00+08:00`)).toISOString()}&${SKIP}`);
+  within(r, '開放報名');
+  assert.ok(r.signupOpen >= 300, JSON.stringify(r.signupOpen));
+  await drainAllNow();
+  const m = await mock();
+  for (const re of [/^你成為耕跑青年幹部|^耕跑青年：身分更新/, /活動取消：摘要即時今天/, /活動通知：摘要即時明天/, /07:00 集合：摘要即時集合/, /開放報名：摘要即時開放報名/]) {
+    assert.equal(toEp(m, 1, re).length, 1, `${re} 即時推到 b_0001：${JSON.stringify(toEp(m, 1).map((x) => x.text))}`);
+  }
+  assert.equal(toEp(m, 1, /活動通知：摘要延後五天/).length, 0, '5 天後的異動不推（「已幫你報名」沒有活動時間，照樣即時）');
+  assert.equal(toEp(m, 0, /開放報名：摘要即時開放報名/).length, 1, '其他選摘要的人：有名額的開放報名也即時');
+  for (const id of [tmr, later, hr, openEv]) await call('t_chair', `/events/${id}`, { method: 'DELETE' });
+  assert.deepEqual(await violations(), []);
+});
+
+test('推播摘要：20:00 每人一則、只有則數；讀過的不算、全讀過的不送；同一天不會第二則；23:00（超過 3 個整點）不送；切回即時清掉不補推', async () => {
+  // b_0002 在 App 裡讀過了
+  const n2 = await notesOf(B(2), '摘要測試公告一');
+  assert.equal((await call(B(2), '/notifications/read', { method: 'POST', body: { id: n2[0].id } })).status, 200);
+  await drainAllNow();
+  await mock('clear=1');
+  const r = await cron(`at=2036-03-10T12:00:00Z&${SKIP}`);   // 台北 2036-03-10 20:00
+  within(r, '每日摘要');
+  assert.equal(r.digest, 7, JSON.stringify(r.digest));
+  await drainAllNow();
+  let m = await mock();
+  const dg = m.list.filter((x) => x.cat === 'digest');
+  assert.deepEqual(dg.map((x) => x.endpoint).sort(), [0, 1, 3, 4, 6, 7, 8].map(EP).sort(), '每人一則；讀過唯一一則的 b_0002 不送');
+  for (const x of dg) { noNames(x.text, '摘要推播'); assert.ok(x.nr, '點摘要不標已讀'); assert.match(x.text, /^今天的通知摘要｜/); }
+  assert.equal(toEp(m, 1)[0].text, '今天的通知摘要｜活動異動 1、公告 1。點開看全部');
+  assert.equal(await held('摘要測試公告一'), 0, '送出與讀過的都清掉');
+  for (const h of ['12', '13']) assert.equal((await cron(`at=2036-03-10T${h}:30:00Z&${SKIP}`)).digest, 0, `${Number(h) + 8}:30 不會有第二則`);
+  // 隔天：新的公告；b_0003 切回即時（清掉、不補推）；23:00 不送，22:00 送
+  await broadcast('摘要測試公告二');
+  assert.equal(await held('摘要測試公告二'), 8);
+  assert.equal((await call(B(3), '/me/notify-prefs', { method: 'PUT', body: { digest: null } })).json.digest, null);
+  assert.equal(await held('摘要測試公告二'), 7, '切回即時：等待中的清掉');
+  await drainAllNow();
+  await mock('clear=1');
+  assert.equal((await cron(`at=2036-03-11T15:00:00Z&${SKIP}`)).digest, 0, '23:00 已經超過 20 + 3');
+  const r22 = await cron(`at=2036-03-11T14:00:00Z&${SKIP}`);
+  assert.equal(r22.digest, 7, '22:00 還在 3 個整點內');
+  await drainAllNow();
+  m = await mock();
+  assert.equal(toEp(m, 3).length, 0, 'b_0003 切回即時：不補推');
+  assert.equal(m.list.filter((x) => x.cat === 'digest').length, 7);
+  assert.deepEqual(await violations(), []);
+});
+
+test('推播摘要：300 人選摘要、每人 3 則，每次執行都在 50 以內，兩個整點內全部送完', async () => {
+  await call(null, '/dev/seed-bulk?digest=20&dn=300');
+  for (const i of [1, 2, 3]) await broadcast(`摘要大量公告${i}`);
+  assert.equal(await held('摘要大量公告'), 3 * 298, '300 人扣掉關掉公告與沒有訂閱的 2 人');
+  await drainAllNow();
+  await mock('clear=1');
+  const r = await cron(`at=2036-03-12T12:00:00Z&${SKIP}`);
+  within(r, '300 人的摘要');
+  assert.equal(r.digest, 298);
+  assert.equal((await cron(`at=2036-03-12T13:00:00Z&${SKIP}`)).digest, 0, '下一個整點沒有剩');
+  await drainAllNow();
+  const m = await mock();
+  assert.equal(m.list.filter((x) => x.cat === 'digest').length, 298);
+  assert.ok(m.list.filter((x) => x.cat === 'digest').every((x) => x.text === '今天的通知摘要｜公告 3。點開看全部'));
+  assert.equal((await mock('verify=1')).bad, 0, '摘要推播的 id 都是那台裝置主人的通知列');
+  assert.equal(await held('摘要大量公告'), 0);
+  assert.deepEqual(await violations(), []);
+});
+
+// 幹部週報與系統告警要看鎖定畫面：理事長、行政人員、團長各訂閱一台
+const OPS_EP = { t_chair: 'https://fcm.googleapis.com/fcm/send/b_ops_chair', t_staff: 'https://fcm.googleapis.com/fcm/send/b_ops_staff', t_lead: 'https://fcm.googleapis.com/fcm/send/b_ops_lead' };
+const addD = (d, n) => new Date(Date.parse(`${d}T00:00:00Z`) + n * 864e5).toISOString().slice(0, 10);
+const tpAt = (d, hh) => new Date(Date.parse(`${d}T${hh}:00:00+08:00`)).toISOString();
+const TODAY = plus(0), MON = addD(TODAY, -((new Date(`${TODAY}T00:00:00Z`).getUTCDay() + 6) % 7)), NEXT = addD(MON, 7);
+
+test('幹部週報：週一 09:00 產生協會版與每個分團的週報，理事長、行政人員與打開分團週報的團長收到；重跑不重複、08:00 不跑、週二補做', async () => {
+  for (const [who, endpoint] of Object.entries(OPS_EP)) assert.equal((await call(who, '/push/subscribe', { method: 'POST', body: { endpoint, keys: KEYS } })).status, 200);
+  // 上週（這週一到週日）的資料：一場有出席的團練、分享訓練紀錄的 6 人（不分享的 1 人 1000 公里）、20 個假分團
+  await call(null, '/dev/seed-bulk?teams=20');
+  await call(null, `/dev/seed-bulk?share=6&logdate=${TODAY}&ln=6&km=10`);
+  await call(null, `/dev/seed-bulk?logdate=${TODAY}&lfrom=6&ln=1&km=1000`);
+  await call(null, '/dev/seed-bulk?team=bt00&tn=2');   // 分享的人只有 2 位（< 3）：訓練區塊不顯示
+  await call(null, '/dev/seed-bulk?team=bt01&tn=4');   // 4 位：顯示
+  assert.equal((await call('t_chair', '/teams/bt01/members', { method: 'POST', body: { member_id: B(3), action: 'add', role: 'lead' } })).status, 200);
+  const ev = ok50(await call('t_chair', '/events', { method: 'POST', body: evBody({ title: '週報出席測試', date: TODAY }) }), '週報活動').id;
+  await rounds('t_chair', `/events/${ev}/bulk`, { action: 'signup', names: '測試跑友' });   // 代為報名（今天的集合時間可能已經過了）
+  ok50(await call('t_chair', `/events/${ev}/attendance`, { method: 'POST', body: { member_id: 't_runner', present: true } }), '出席');
+  await drainAllNow();
+  await mock('clear=1');
+  const c0 = await rowsOf('上週幹部週報');
+  assert.equal((await cron(`at=${tpAt(NEXT, '08')}&skip=backup,retention,auditDigest`)).weeklyReport, null, '週一 08:00 不跑');
+  const r = await cron(`at=${tpAt(NEXT, '09')}&skip=backup,retention,auditDigest`);
+  within(r, '週報（300 人、25 個分團）');
+  assert.equal(r.weeklyReport?.week, MON, JSON.stringify(r.weeklyReport));
+  assert.ok(r.weeklyReport.scopes >= 26, '協會 1＋每個分團 1');
+  const officers = (await rowsOf('上週幹部週報')) - c0;
+  assert.ok(officers >= 2, `理事長與行政人員各一則：${officers}`);
+  assert.ok((await notesOf('t_chair', '上週幹部週報')).length >= 1 && (await notesOf('t_staff', '上週幹部週報')).length >= 1);
+  assert.equal((await notesOf('t_lead', '上週分團週報：耕跑青年')).length, 1, '打開分團週報的團長收到');
+  assert.equal((await notesOf(B(3), /^上週分團週報/)).length, 0, '沒打開的團長沒有');
+  assert.equal((await notesOf('t_runner', /^上週(幹部|分團)週報/)).length, 0);
+  // 重跑不重複；週二補做下一週的
+  await cron(`at=${tpAt(NEXT, '10')}&skip=backup,retention,auditDigest`);
+  assert.equal(await rowsOf('上週幹部週報'), c0 + officers, '同一週只做一次');
+  const au = (await call('t_chair', `/audit?from=${plus(-1)}&to=${plus(1)}&action=ops.report`)).json.items.filter((x) => x.action === 'ops.report' && x.target_id === MON);
+  assert.equal(au.length, 1, JSON.stringify(au));
+  // 鎖定畫面只有數字
+  await drainAllNow();
+  const m = await mock();
+  const rp = m.list.filter((x) => x.cat === 'report');
+  assert.ok(rp.some((x) => x.endpoint === OPS_EP.t_chair && /^上週幹部週報｜報名 \d+、出席率 (\d+%|—)、新成員 \d+。系統：/.test(x.text)), JSON.stringify(rp.map((x) => x.text)));
+  assert.ok(rp.some((x) => x.endpoint === OPS_EP.t_lead && /^上週分團週報｜報名 \d+、出席率 (\d+%|—)、新團員 \d+$/.test(x.text)), JSON.stringify(rp.map((x) => x.text)));
+  for (const x of rp) noNames(x.text, '週報推播');
+  // 下一週：週一 08:00 不跑、週二 09:00 補做
+  assert.equal((await cron(`at=${tpAt(addD(NEXT, 7), '08')}&skip=backup,retention,auditDigest`)).weeklyReport, null);
+  assert.equal((await cron(`at=${tpAt(addD(NEXT, 8), '09')}&skip=backup,retention,auditDigest`)).weeklyReport?.week, NEXT, '週二補做');
+  await call('t_chair', `/events/${ev}`, { method: 'DELETE' });
+  assert.deepEqual(await violations(), []);
+});
+
+test('幹部週報：權限（理事長全部、行政人員沒有訓練區塊、團長只有自己分團、其他人 403）、只算分享的人、不含名字與金額、查看寫稽核', async () => {
+  const get = (who, q = '') => call(who, `/ops/reports?week=${MON}${q}`);
+  const chair = await get('t_chair', '&scope=assoc');
+  assert.equal(chair.status, 200, chair.text);
+  const d = chair.json.data;
+  assert.equal(d.week, MON);
+  assert.ok(Array.isArray(chair.json.weeks) && chair.json.weeks.length >= 1 && chair.json.weeks.length <= 12, '最近 12 週的清單');
+  assert.ok(d.signups.new >= 1 && d.attendance.in >= 1 && d.attendance.came >= 1, JSON.stringify(d));
+  assert.ok(d.training && d.training.share >= 6, '理事長看得到訓練區塊');
+  assert.ok(d.training.km < 1000, '不分享的人不算');
+  assert.ok(d.health && 'backup' in d.health && 'quota' in d.health && 'alerts' in d.health, '系統健康');
+  noNames(JSON.stringify(chair.json), '週報 JSON');
+  assert.equal((await call('t_chair', `/ops/reports?scope=assoc&brief=1&week=${MON}`)).json.brief.signups, d.signups.new, '總覽小卡只有三個數字');
+  const staff = await get('t_staff', '&scope=assoc');
+  assert.equal(staff.status, 200);
+  assert.ok(!('training' in staff.json.data) && !('trainingHidden' in staff.json.data), '行政人員看不到訓練區塊（欄位不存在）');
+  assert.ok(staff.json.data.health);
+  assert.ok(!('training' in (await get('t_staff', '&scope=team:bt01')).json.data), '行政人員看分團版也沒有訓練區塊');
+  // 團長：只有自己分團的（含訓練完成率）
+  const lead = await get(B(3), '&scope=team:bt01');
+  assert.equal(lead.status, 200, lead.text);
+  assert.ok(lead.json.data.training && lead.json.data.training.share >= 3);
+  assert.ok(!('health' in lead.json.data));
+  assert.equal((await get(B(3))).json.scope, 'team:bt01', '團長沒帶 scope：自己的分團');
+  for (const q of ['&scope=team:youth', '&scope=assoc']) assert.equal((await get(B(3), q)).status, 403, q);
+  // 分享的人少於 3：訓練區塊 null
+  const t0 = (await get('t_chair', '&scope=team:bt00')).json.data;
+  assert.equal(t0.training, null);
+  assert.equal(t0.trainingHidden, true);
+  for (const who of ['t_super', 't_coach', 't_runner', 't_other']) assert.equal((await get(who, '&scope=assoc')).status, 403, who);
+  assert.equal((await get('t_runner')).status, 403, '沒有可以看的週報');
+  assert.equal((await call('t_chair', '/ops/reports?scope=team:bt01&week=2001-01-01')).status, 404, '查不到的週次');
+  assert.equal((await call('t_chair', '/ops/reports?scope=team:bt01&week=nope')).status, 400);
+  const au = (await call('t_chair', `/audit?from=${plus(-1)}&to=${plus(1)}&action=ops.report`)).json.items;   // 稽核查詢的 action 會濾掉底線，用前綴查
+  assert.ok(au.some((x) => x.action === 'ops.report_view' && x.detail === `team:bt01｜${MON}`), JSON.stringify(au.slice(0, 3)));
+  assert.deepEqual(await violations(), []);
+});
+
+test('系統告警：額度到 80% 通知理事長與行政人員各一則（關掉所有可關的分類也照推）；同一天不重發、隔天再發、寫稽核', async () => {
+  const { MUTABLE } = await import('../public/notif-cats.js');
+  assert.equal((await call('t_staff', '/me/notify-prefs', { method: 'PUT', body: { mute: MUTABLE } })).status, 200);
+  await call(null, '/dev/ops?clear=1&day=2036-05-10&usage=d1_read:4100000');
+  await drainAllNow();
+  await mock('clear=1');
+  const T = '系統狀態：每日額度';
+  const c0 = await rowsOf(T);
+  const r = await cron(`at=2036-05-10T04:00:00Z&${SKIP.replace(',opsAlerts', '')}`);
+  within(r, '系統告警');
+  assert.ok(r.opsAlerts >= 1, JSON.stringify(r.opsAlerts));
+  const per = (await rowsOf(T)) - c0;
+  assert.ok(per >= 2, `理事長與行政人員各一則：${per}`);
+  assert.equal((await notesOf('t_chair', T)).length >= 1, true);
+  const st = await notesOf('t_staff', T);
+  assert.match(st[0].body, /今天的 D1 讀取 用量已到每日額度的 82%。請到管理後台「總覽」查看/);
+  assert.equal((await notesOf('t_runner', T)).length, 0);
+  await drainAllNow();
+  const m = await mock();
+  assert.ok(m.list.some((x) => x.endpoint === OPS_EP.t_staff && x.cat === 'ops'), '關掉所有可關的分類也照推');
+  for (const x of m.list.filter((y) => y.cat === 'ops')) noNames(x.text, '告警推播');
+  await cron(`at=2036-05-10T05:00:00Z&${SKIP.replace(',opsAlerts', '')}`);
+  assert.equal(await rowsOf(T), c0 + per, '同一天不重發');
+  await call(null, '/dev/ops?day=2036-05-11&usage=d1_read:4100000');
+  await cron(`at=2036-05-11T04:00:00Z&${SKIP.replace(',opsAlerts', '')}`);
+  assert.equal(await rowsOf(T), c0 + 2 * per, '隔天再發');
+  const au = (await call('t_chair', `/audit?from=${plus(-1)}&to=${plus(1)}&action=ops.alert`)).json.items;
+  assert.ok(au.some((x) => x.target_id === 'quota' && /d1Read 82%/.test(x.detail)), JSON.stringify(au.slice(0, 3)));
+  assert.equal((await call('t_staff', '/me/notify-prefs', { method: 'PUT', body: { mute: [] } })).status, 200);
+  assert.deepEqual(await violations(), []);
+});
+
+test('系統告警：備份 27 小時、排程放棄、前端錯誤暴增、推播失敗、排程連續停下各自發；19 次錯誤、每日備份分段停下不發', async () => {
+  const ALL = SKIP.replace(',opsAlerts', '');
+  const conds = async (day) => (await call(null, `/dev/ops?tday=${day}`)).json.alerts.map((a) => a.cond);
+  const has = async (day, yes, no = []) => { const c = await conds(day); assert.ok(yes.every((x) => c.includes(x)) && !no.some((x) => c.includes(x)), `${day}：${JSON.stringify(c)}`); };
+  await call(null, '/dev/ops?clear=1');
+  // 備份：最後完成 27 小時前（真實時間）
+  await call(null, '/dev/ops?backupDone=-27h');
+  within(await cron(`at=2036-06-01T04:00:00Z&${ALL}`), '備份告警');
+  await has('2036-06-01', ['backup']);
+  await call(null, '/dev/ops?backupDone=-1h');
+  await cron(`at=2036-06-02T03:00:00Z&${ALL}`);
+  await has('2036-06-02', [], ['backup']);
+  // 排程放棄：失敗 3 次、佔用已過期
+  await call(null, '/dev/jobs?stale=ops_test&key=k&attempts=3');
+  within(await cron(`at=2036-06-02T04:00:00Z&${ALL}`), '排程放棄');
+  await has('2036-06-02', ['cron']);
+  await call(null, '/dev/jobs?drop=ops_test');
+  // 前端錯誤：19 次不發；40 次、開啟 100、前 7 天每天 2／100 → 發
+  await call(null, '/dev/ops?tday=2036-06-03&errors=19&opens=20');
+  await cron(`at=2036-06-03T04:00:00Z&${ALL}`);
+  await has('2036-06-03', [], ['errors']);
+  await call(null, '/dev/ops?tday=2036-06-04&errors=40&opens=100&base=2/100');
+  within(await cron(`at=2036-06-04T04:00:00Z&${ALL}`), '前端錯誤');
+  await has('2036-06-04', ['errors'], ['push', 'quota', 'stops', 'backup']);
+  // 推播：失敗 30、送出 50
+  await call(null, '/dev/ops?day=2036-06-05&pushErr=30&pushSent=50');
+  within(await cron(`at=2036-06-05T04:00:00Z&${ALL}`), '推播');
+  await has('2036-06-05', ['push'], ['errors', 'quota']);
+  // 停下：每日備份分段停 5 次不算；活動提醒停 2 次算
+  await call(null, '/dev/ops?day=2036-06-06&stops=backup:sub*5,hourly:backup*3');
+  await cron(`at=2036-06-06T04:00:00Z&${ALL}`);
+  await has('2036-06-06', [], ['stops']);
+  await call(null, '/dev/ops?day=2036-06-07&stops=hourly:events*2');
+  within(await cron(`at=2036-06-07T04:00:00Z&${ALL}`), '停下');
+  await has('2036-06-07', ['stops']);
+  assert.ok((await notesOf('t_chair', '系統狀態：排程工作停下')).length >= 1);
+  assert.deepEqual(await violations(), []);
+});
+
+test('系統告警：管理後台看得到告警、每個條件現在的狀態、今天的用量估計；監事唯讀看得到、團員 403', async () => {
+  await call(null, `/dev/ops?day=${new Date().toISOString().slice(0, 10)}&usage=kv_write:900`);
+  const h = (await call('t_super', '/admin/health')).json;
+  assert.ok(Array.isArray(h.alerts) && Array.isArray(h.conditions));
+  assert.deepEqual(h.conditions.map((c) => c.cond), ['backup', 'quota', 'stops', 'errors', 'push', 'cron']);
+  assert.equal(h.conditions.find((c) => c.cond === 'quota').on, true, 'KV 寫入 90%');
+  assert.equal(h.usage.pct.kv_write, 90);
+  assert.equal(h.usage.quota.d1_read, 5000000);
+  assert.equal((await call('t_runner', '/admin/health')).status, 403);
+  await call(null, '/dev/ops?clear=1');
+});
+
+test('每日用量估計：一般請求的用量累加到 ops_daily；安靜的整點仍然只有 1 句、一般請求在 50 以內', async () => {
+  await call(null, '/dev/ops?flush=1');
+  await new Promise((r) => setTimeout(r, 300));
+  const before = (await call(null, '/dev/ops')).json.daily?.req || 0;
+  for (let i = 0; i < 5; i++) assert.ok(subOf(await call('t_runner', '/me')) <= 50);
+  await call(null, '/dev/ops?flush=1');
+  await new Promise((r) => setTimeout(r, 300));
+  const after = (await call(null, '/dev/ops')).json.daily;
+  assert.ok(after.req >= before + 5, `${before} → ${after.req}`);
+  assert.ok(after.d1_q > 0 && after.d1_read > 0);
+  // 安靜的整點：排程沒有工作跑，不寫用量
+  let r;
+  for (let i = 0; i < 5; i++) { r = await cron('at=2031-01-15T18:00:00Z'); if (r._budget.root.sub === 1) break; }
+  assert.equal(r._budget.root.sub, 1, JSON.stringify(r._budget));
+  assert.deepEqual(await violations(), []);
+});
+
+test('營運三項：清掉測試資料', async () => {
+  for (const [who, endpoint] of Object.entries(OPS_EP)) await call(who, '/push/unsubscribe', { method: 'POST', body: { endpoint } });
+  assert.equal((await call('t_lead', '/me/notify-prefs', { method: 'PUT', body: { teamReport: false } })).status, 200);
+  assert.equal((await call(null, '/dev/seed-bulk?clear=1')).json.ok, true);
+  await drainAllNow();
+  assert.equal((await mock('clear=1')).queue, 0);
 });

@@ -93,7 +93,7 @@ test('系統告警 opsConditions：六個條件的邊界', async () => {
   assert.deepEqual(conds({ daily: { d1_read: 3999999 } }), []);
   assert.deepEqual(conds({ daily: { kv_write: 900 } }, { quota: null }), []);
   const q = opsConditions({ daily: { d1_read: 4150000, kv_write: 810 } }, { quota, nowMs: now })[0];
-  assert.match(q.text, /D1 讀取用量已到每日額度的 83%/);
+  assert.match(q.text, /^今天的 D1 讀取 用量已到每日額度的 83%/);
   // 備份：26 小時；從沒完成過看第一次佔用；沒設定備份不檢查
   assert.deepEqual(conds({ bk: [ago(27), null] }), ['backup']);
   assert.deepEqual(conds({ bk: [ago(25), null] }), []);

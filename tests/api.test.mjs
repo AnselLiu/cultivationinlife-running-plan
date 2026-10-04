@@ -795,12 +795,14 @@ test('個人課表週期：儲存、記錄、去重、修改保留週期、教�
 });
 
 // ---- 通知中心：分類、游標、已讀模型、隱私 ----
-test('通知分類登記表：8 類，chip 只用合法分類；worker 不再用舊的 kind 當分類', async () => {
+test('通知分類登記表：10 類，chip 只用合法分類；worker 不再用舊的 kind 當分類', async () => {
   const { CATS, CHIPS, isCat, MUTABLE } = await import('../public/notif-cats.js');
-  assert.deepEqual(Object.keys(CATS).sort(), ['announce', 'change', 'event', 'membership', 'security', 'signup', 'todo', 'training']);
-  for (const c of Object.values(CATS)) assert.ok(c.zh && c.urgency && c.ttl > 0);
-  for (const c of CHIPS) if (c.q && c.q !== 'unread') assert.ok(c.q.split(',').every(isCat), c.q);
-  assert.ok(!MUTABLE.includes('security') && !MUTABLE.includes('change'));
+  assert.deepEqual(Object.keys(CATS).sort(), ['announce', 'change', 'event', 'membership', 'ops', 'report', 'security', 'signup', 'todo', 'training']);
+  for (const c of Object.values(CATS)) assert.ok(c.zh && c.urgency && c.ttl > 0 && [true, false, 'timed'].includes(c.digest));
+  for (const c of CHIPS) if (c.q && c.q !== 'unread') assert.ok(c.q.split(',').every(isCat) && c.q.split(',').length <= 3, c.q);
+  assert.ok(!MUTABLE.includes('security') && !MUTABLE.includes('change') && !MUTABLE.includes('ops') && MUTABLE.includes('report'));
+  // 一律即時的分類：帳號安全、幹部待辦、系統狀態
+  assert.deepEqual(Object.keys(CATS).filter((k) => CATS[k].digest === false).sort(), ['ops', 'security', 'todo']);
   const { readFileSync } = await import('node:fs');
   const src = readFileSync(new URL('../src/worker.js', import.meta.url), 'utf8');
   const bad = src.split('\n').filter((l) => /notify\(env/.test(l) && /'(system|log|plan|lottery)'/.test(l.replace(/kind: '\w+'/g, '')));

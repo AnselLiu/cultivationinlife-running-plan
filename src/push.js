@@ -60,7 +60,7 @@ async function sendOne(env, sub, payload, { ttl = 86400, urgency = 'normal' } = 
   if (mocked(env)) {
     env.budget?.take('fetch');
     if (pushMock.gone.has(sub.endpoint)) return 410;
-    if (pushMock.list.length < 5000) pushMock.list.push({ endpoint: sub.endpoint, id: JSON.parse(payload).id || null, money: /NT\$/.test(payload) });   // money：測試金額不上鎖定畫面
+    if (pushMock.list.length < 5000) { const m = JSON.parse(payload); pushMock.list.push({ endpoint: sub.endpoint, id: m.id || null, money: /NT\$/.test(payload), cat: m.cat || null, text: `${m.title || ''}｜${m.body || ''}`, nr: !!m.nr }); }   // money：測試金額不上鎖定畫面；text：測試鎖定畫面不含暱稱
     return 201;
   }
   const res = await xfetch(env, sub.endpoint, {
@@ -93,9 +93,10 @@ export const PUSH_EXPIRED = `DELETE FROM push_queue WHERE expires_at <= datetime
 // 推播佇列的送出順序：帳號安全（新裝置登入、登出所有裝置、通行金鑰變更）一律最先，不會排在大量活動異動後面（活動異動的 TTL 較短，
 //   只看 urgency 與過期時間的話，安全提醒之後 12 小時內排進來的活動異動都會先送）；其次 urgency high，再依過期時間、排入順序，時效短的不會被大量廣播擠到過期
 //   payload 的 cat 由 pushPayload 寫入（worker.js）
+const OWNER = -1;   // drainPush 內部：裝置已經換人
 export const PUSH_ORDER = "json_extract(payload, '$.cat') = 'security' DESC, urgency = 'high' DESC, expires_at, id";
 export async function drainPush(env, { max = Infinity } = {}) {
-  const out = { leased: 0, sent: 0, failed: 0, dropped: 0 };
+  const out = { leased: 0, sent: 0, failed: 0, dropped: 0, gone: 0, err: 0 };   // gone：404／410（訂閱失效）；err：5xx、429、網路錯誤、其他 4xx
   if (!vapidOn(env)) {
     // 推播關閉（VAPID 拿掉）：不送，但過期的照樣清掉，通知內容不會一直留在 D1（資料清理也會清）
     if (!env.budget || env.budget.room(1)) out.dropped = (await env.DB.prepare(PUSH_EXPIRED).all()).results.length;
@@ -120,15 +121,17 @@ export async function drainPush(env, { max = Infinity } = {}) {
     const res = await pool(rows, plan.pushConc, async (r) => {
       const sub = keys.get(`${r.endpoint} ${r.notif_id}`);
       if (!sub) return 410;   // 訂閱已經不在了
-      if (r.notif_id && sub.owner !== sub.member_id) return 403;   // 裝置已經換人（或通知已刪）：不送，直接丟掉這一列
+      if (r.notif_id && sub.owner !== sub.member_id) return OWNER;   // 裝置已經換人（或通知已刪）：不送，直接丟掉這一列（不算失敗）
       let msg; try { msg = JSON.parse(r.payload); } catch { return 400; }
       // TTL 是剩下的秒數（從 expires_at 算）
       return sendOne(env, sub, JSON.stringify({ ...msg, id: r.notif_id || undefined }), { ttl: r.ttl, urgency: r.urgency });
     });
     rows.forEach((r, i) => {
       const x = res[i], st = x.ok ? x.v : 0;
+      if (x.ok && st === OWNER) { done.push(r.id); return; }
       if (x.ok && st < 300) { out.sent++; done.push(r.id); return; }
       out.failed++;
+      if (x.ok && (st === 404 || st === 410)) out.gone++; else out.err++;
       if (x.ok && (st === 404 || st === 410) && keys.has(`${r.endpoint} ${r.notif_id}`)) gone.push(r.endpoint);
       if (x.ok && PERMANENT(st)) done.push(r.id);
       else if (r.attempts >= 3) { done.push(r.id); out.dropped++; }   // 暫時性失敗已經試滿 3 次
