@@ -4,11 +4,12 @@
 
 // 狀態：shrink＝直飲臺只剩 1 筆（完整性檢查要擋下）；drop＝直飲臺少 D4、騎跡少「末段補給站」（要停用）；
 //   failPage＝騎跡第幾頁的路線檔回 500（測中斷續跑）；change＝臺北公廁的資料變了（測幹部修正不被覆蓋）；
-//   big＝租借站回應超過 Worker 來源的 64 KB 上限；kill＝排程拿到這個來源後當成被平台強制中斷（測隔天重試）；hits＝每個網址被抓了幾次
-export const state = { shrink: false, drop: false, failPage: 0, change: false, big: false, kill: '', hits: {} };
+//   big＝租借站回應超過 Worker 來源的 64 KB 上限；kill＝排程拿到這個來源後當成被平台強制中斷（測隔天重試）；hits＝每個網址被抓了幾次（金鑰換成 ***）
+//   nokey＝沒有設定環境部的金鑰（第二批來源要跳過、不連線）
+export const state = { shrink: false, drop: false, failPage: 0, change: false, big: false, nokey: false, kill: '', hits: {} };
 export function control(q) {
-  if (q.has('reset')) Object.assign(state, { shrink: false, drop: false, failPage: 0, change: false, big: false, kill: '', hits: {} });
-  for (const k of ['shrink', 'drop', 'change', 'big']) if (q.has(k)) state[k] = q.get(k) === '1';
+  if (q.has('reset')) Object.assign(state, { shrink: false, drop: false, failPage: 0, change: false, big: false, nokey: false, kill: '', hits: {} });
+  for (const k of ['shrink', 'drop', 'change', 'big', 'nokey']) if (q.has(k)) state[k] = q.get(k) === '1';
   if (q.has('kill')) state.kill = /^[a-z]{2,6}$/.test(q.get('kill')) ? q.get('kill') : '';
   if (q.has('failPage')) state.failPage = Number(q.get('failPage')) || 0;
   return { ...state };
@@ -105,10 +106,55 @@ const SAV = [SAV_HEAD,
   sav('測試籃球場', '籃球場', SINGLE, '免費對外開放使用', 25.034, 121.535),
 ].join('\r\n');
 
+// 第二批：環境部開放資料 API（欄位名稱照 data.gov.tw 的欄位說明；值的寫法真實資料沒有實測過，用最常見的「是／否」）
+//   跑點：板橋第二運動場（seed050：25.013897, 121.457759）、苓雅運動園區（seed36：22.62544, 120.33483）、大佳河濱公園（seed07）
+//   遠方（24.30, 121.30）1 公里內沒有跑點：半徑篩選要丟掉
+const cool = (recordid, placename, city, coolingtype, lat, lng, f = {}) => ({ datasetid: f.ds || '涼適點', recordid, coolingtype, stationtype: f.st || '室內', placename, city,
+  district: '測試區', address: `${city}測試路${recordid}號`, phone: '(02)2960-3456', twd97tm2_x: '', twd97tm2_y: '', longitude: String(lng), latitude: String(lat),
+  openinghours: f.hours ?? '08:00-17:00', airconditioning: f.ac ?? '是', restroom: f.wc ?? '否', seats: f.seats ?? '是', waterdispenser: f.water ?? '否', isoutdoor: '否', isaccessible: f.acc ?? '否' });
+const COOL = () => [
+  cool('C1', '新北市板橋區測試公所', '新北市', '公部門', 25.0142, 121.4580, { water: '是', wc: '是', acc: '是' }),
+  cool('C2', '板橋測試公園涼亭', '新北市', '公部門', 25.0135, 121.4572, { wc: '是', st: '戶外', hours: '' }),
+  cool('C3', '全家便利商店板橋二運店', '新北市', '便利商店', 25.0145, 121.4590, { water: '是', hours: '00:00-24:00' }),
+  cool('C4', '臺灣測試銀行板橋分行', '新北市', '金融機構', 25.0130, 121.4590, { water: '是', hours: '09:00-15:30' }),
+  cool('C5', '臺北市中山區測試公所', '臺北市', '公部門', 25.0740, 121.5405, { water: '是', wc: '是' }),     // 臺北市的公有點：不收
+  cool('C6', '萊爾富大直測試店', '臺北市', '便利商店', 25.0730, 121.5410, { wc: '是', hours: '24小時' }),
+  cool('C7', '遠方測試公所', '新竹縣', '公部門', 24.30, 121.30, { water: '是' }),                         // 1 公里內沒有跑點
+  cool('C8', '板橋測試活動中心', '新北市', '公部門', 25.0138, 121.4585),                                // 只有冷氣座位：不收
+  cool('C9', '苓雅測試圖書館', '高雄市', '公部門', 22.6260, 120.3350, { water: '是', hours: '週二至週日 08:30–21:00' }),
+];
+const toiletMo = (number, name, county, lat, lng, f = {}) => ({ county, areacode: '測試區', village: '測試里', number, name, address: f.addr || `${county}測試路${number}號`,
+  administration: f.adm || '測試區公所', latitude: String(lat), longitude: String(lng), grade: f.grade || '特優級', type2: f.kind || '公園', type: f.type || '男廁所',
+  exec: f.exec || '王大明', diaper: f.diaper ?? '0' });
+const MOENV = () => [
+  toiletMo('M1', '板橋測試公園公廁', '新北市', 25.0139, 121.4577),
+  toiletMo('M2', '板橋測試公園公廁', '新北市', 25.01392, 121.45772, { addr: '新北市測試路M1號', type: '無障礙廁所' }),     // 同一處的另一種廁間：合併
+  toiletMo('M3', '台灣中油板橋測試站', '新北市', 25.0150, 121.4560, { kind: '加油站', exec: '台灣中油股份有限公司' }),   // 中油：cpct 已有
+  toiletMo('M4', '板橋測試公廁', '新北市', 25.0125, 121.4560, { grade: '加強級' }),                                   // 沒通過檢查
+  toiletMo('M5', '大佳測試公廁', '臺北市', 25.0745, 121.5395),                                                       // 臺北市：tpt 已有
+  toiletMo('M6', '台塑石油板橋測試站', '新北市', 25.0128, 121.4595, { kind: '加油站' }),
+  toiletMo('M7', '苓雅測試公園公廁', '高雄市', 22.6250, 120.3340, { type: '親子廁所', diaper: '1' }),
+  toiletMo('M8', '遠方測試公廁', '新竹縣', 24.30, 121.30),
+  toiletMo('M9', '全聯板橋測試店', '新北市', 25.0148, 121.4570, { kind: '量販店' }),
+];
+// 環境部 API：金鑰不對回 200＋純文字（真實的寫法）；一頁只給 3 筆，測分頁要依 total 抓完
+const MO_PAGE = 3;
+function moenv(u) {
+  const key = u.searchParams.get('api_key') || '';
+  if (!/^[\w-]{8,64}$/.test(key) || key === 'bad-key-0000') return new Response('api_key 不存在。', { headers: { 'content-type': 'text/html; charset=UTF-8' } });
+  const all = u.pathname.endsWith('/gis_p_82') ? COOL() : u.pathname.endsWith('/fac_p_07') ? MOENV() : null;
+  if (!all) return new Response('not found', { status: 404 });
+  const off = Number(u.searchParams.get('offset')) || 0;
+  return json({ fields: [], resource_id: 'x', __extras: { api_key: key }, include_total: true, total: String(all.length), resource_format: 'object', limit: String(MO_PAGE), offset: String(off),
+    records: all.slice(off, off + MO_PAGE) });
+}
+
 const json = (v) => new Response(typeof v === 'string' ? v : JSON.stringify(v), { headers: { 'content-type': 'application/json' } });
 export function fetchMock(url) {
-  state.hits[url] = (state.hits[url] || 0) + 1;
-  const u = new URL(url), off = Number(u.searchParams.get('offset')) || 0;
+  const u = new URL(url);
+  const hk = u.searchParams.has('api_key') ? url.replace(/api_key=[^&]*/, 'api_key=***') : url;
+  state.hits[hk] = (state.hits[hk] || 0) + 1;
+  const off = Number(u.searchParams.get('offset')) || 0;
   if (u.hostname === 'data.taipei') {
     const rid = u.pathname.split('/').pop();
     if (rid.startsWith('181097e0')) return json(page(twd(), off));
@@ -125,6 +171,7 @@ export function fetchMock(url) {
     if (state.failPage && Math.ceil(i / 10) === state.failPage) return new Response('error', { status: 500 });
     return json(route(i));
   }
+  if (u.hostname === 'data.moenv.gov.tw') return moenv(u);
   if (u.hostname === 'ws.sports.gov.tw') return new Response(SAV, { headers: { 'content-type': 'application/vnd.ms-excel', 'last-modified': 'Sat, 08 Aug 2026 11:32:21 GMT' } });
   return new Response('not found', { status: 404 });
 }

@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
-import { gather, buildSql, localSources, checkSql, checkRows, parseArgs, wranglerArgs } from '../tools/rest-sync.mjs';
+import { gather, buildSql, localSources, checkSql, checkRows, parseArgs, wranglerArgs, seedSpots, spotArgs, parseSpots, keyEnv, coverage } from '../tools/rest-sync.mjs';
 import { control } from '../src/rest-mock.js';
 import { SOURCES } from '../src/rest.js';
 
@@ -15,6 +15,7 @@ function fresh() {
   db.exec('CREATE TABLE members (id TEXT PRIMARY KEY, name TEXT, nickname TEXT);');
   db.exec(mig('0040_rest_stops.sql'));
   db.exec(mig('0041_seed_rest_curated.sql'));
+  db.exec(mig('0050_rest_sources_batch2.sql'));
   return db;
 }
 const run = (db, stmts) => { for (const s of stmts) if (!s.startsWith('--')) db.exec(s); };
@@ -23,7 +24,7 @@ const row = (db, id) => db.prepare('SELECT * FROM rest_stops WHERE id = ?').get(
 const live = (db, k) => db.prepare('SELECT COUNT(*) AS n FROM rest_stops WHERE source = ? AND enabled = 1').get(k).n;
 
 test('只由維護工具同步的來源：大檔與多檔的都在清單上，Worker 排程只留兩個小來源（免費方案）', () => {
-  assert.deepEqual(localSources().sort(), ['cpct', 'sav', 'tbk', 'tprv', 'tpt', 'twd']);
+  assert.deepEqual(localSources().sort(), ['cool', 'cpct', 'moenv', 'sav', 'tbk', 'tprv', 'tpt', 'twd']);
   assert.deepEqual(Object.keys(SOURCES).filter((k) => !SOURCES[k].manual && !SOURCES[k].local).sort(), ['ntrv', 'tpbk']);
 });
 
@@ -39,7 +40,16 @@ test('維護工具的參數：預設只試跑；寫進資料庫一定要指定�
   assert.equal(parseArgs(['--mock']).target, null);
   assert.equal(parseArgs(['--mock', '--apply=local']).target.local, true);
   const src = readFileSync(new URL('../tools/rest-sync.mjs', import.meta.url), 'utf8');
-  assert.ok(!/process\.env\.[A-Z_]*(TOKEN|KEY|SECRET|PASS)/.test(src) && !/\.dev\.vars/.test(src), '不讀金鑰或 .dev.vars');
+  assert.ok(!/process\.env\.[A-Z_]*(TOKEN|KEY|SECRET|PASS)/.test(src) && !/\.dev\.vars/.test(src), '不讀其他金鑰或 .dev.vars');
+  // 金鑰只有第二批的 MOENV_KEY（SOURCES 的 key），只從環境變數讀；沒有設定就回 null
+  assert.deepEqual([...new Set(Object.values(SOURCES).map((S) => S.key).filter(Boolean))], ['MOENV_KEY']);
+  assert.equal(keyEnv('cool', {}), null); assert.equal(keyEnv('twd', { MOENV_KEY: 'x' }), null, '第一批不用金鑰');
+  assert.deepEqual(keyEnv('moenv', { MOENV_KEY: 'abc-12345678', OTHER: 'y' }), { MOENV_KEY: 'abc-12345678' }, '只交出這一個變數');
+  // 寫進資料庫前讀核准的跑點：跟寫入同一個資料庫
+  assert.deepEqual(spotArgs(parseArgs(['--apply', '--env=staging']).target), ['wrangler', 'd1', 'execute', 'cil-run-staging', '--remote', '--env', 'staging', '--json', '--command', "SELECT lat, lng FROM spots WHERE status = 'approved'"]);
+  assert.deepEqual(spotArgs(parseArgs(['--apply', '--env=production']).target).slice(0, 5), ['wrangler', 'd1', 'execute', 'cil-run', '--remote']);
+  assert.deepEqual(parseSpots('[{"results":[{"lat":25.07,"lng":121.54},{"lat":40,"lng":121}],"success":true}]'), [{ lat: 25.07, lng: 121.54 }]);
+  assert.throws(() => parseSpots('[{"results":[]}]'), /讀不到核准的跑點/);
 });
 
 test('D1 限制與寫入前的第二道檢查：指令 100 KB、LIKE／GLOB 樣式 50 bytes、欄位白名單、電話、座標、開放時間', async () => {
@@ -137,4 +147,50 @@ test('運動場館：不收管理人姓名與電話；每個 SQL 指令都在 D1
   // 空清單不產生 SQL；不能同步的來源
   assert.throws(() => buildSql('sav', { rows: [], tag: 'x' }), /清單是空的/);
   assert.throws(() => buildSql('cur', { rows: many, tag: 'x' }), /沒有這個來源/);
+});
+
+test('第二批（Cool map、環境部公廁）：要金鑰、只收跑點 1 公里內、第一次同步才開啟、之後關掉就不寫；SQL 不帶金鑰', async () => {
+  control(new URLSearchParams('reset=1'));
+  const spots = seedSpots();
+  assert.equal(spots.length, 171);
+  // 沒有金鑰：不連線、不產生資料
+  control(new URLSearchParams('nokey=1'));
+  await assert.rejects(gather(env, 'cool', { spots }), /沒有設定金鑰 MOENV_KEY/);
+  assert.deepEqual(Object.keys((await import('../src/rest-mock.js')).state.hits), [], '沒有金鑰時不連線');
+  control(new URLSearchParams('nokey=0'));
+  await assert.rejects(gather({ ...env, MOENV_KEY: 'bad-key-0000' }, 'moenv', { spots }), /金鑰可能無效/);
+  await assert.rejects(gather(env, 'cool'), /跑點清單/, '沒有跑點清單不能篩選');
+  const db = fresh();
+  assert.equal(src(db, 'cool').enabled, 0); assert.equal(src(db, 'moenv').enabled, 0, 'migration 先關著');
+  const key = 'test-key-SECRET-42';
+  for (const k of ['cool', 'moenv']) {
+    const g = await gather({ ...env, MOENV_KEY: key }, k, { spots });
+    const sql = buildSql(k, g);
+    assert.ok(!sql.join('\n').includes(key) && !/api_key/.test(sql.join('\n')), 'SQL 不帶金鑰');
+    run(db, sql);
+    assert.equal(src(db, k).enabled, 1, `${k} 第一次同步成功就開啟`);
+    assert.equal(src(db, k).last_count, g.rows.length);
+  }
+  assert.equal(live(db, 'cool'), 6); assert.equal(live(db, 'moenv'), 4);
+  // 涼適點：公有照收、店家待確認、臺北市公有點與遠方的點不收
+  const names = (k) => db.prepare('SELECT name, type, subtype, access FROM rest_stops WHERE source = ? ORDER BY name').all(k).map((r) => ({ ...r }));
+  const cool = Object.fromEntries(names('cool').map((r) => [r.name, `${r.type}/${r.subtype}/${r.access}`]));
+  assert.equal(cool['新北市板橋區測試公所'], 'water/cool/public');
+  assert.equal(cool['全家便利商店板橋二運店'], 'supply/store/unverified');
+  assert.equal(cool['臺灣測試銀行板橋分行'], 'water/shop/unverified');
+  assert.equal(cool['萊爾富大直測試店'], 'supply/store/unverified', '臺北市的店家照收');
+  for (const n of ['臺北市中山區測試公所', '遠方測試公所', '板橋測試活動中心']) assert.equal(cool[n], undefined, n);
+  const mo = Object.fromEntries(names('moenv').map((r) => [r.name, `${r.subtype}/${r.access}`]));
+  assert.deepEqual(mo, { 全聯板橋測試店: 'store/customer', 台塑石油板橋測試站: 'station/customer', 板橋測試公園公廁: 'public/public', 苓雅測試公園公廁: 'public/public' });
+  assert.ok(!JSON.stringify(db.prepare("SELECT * FROM rest_stops WHERE source IN ('cool', 'moenv')").all()).match(/王大明|2960-3456|測試區公所/), '不存管理單位與電話');
+  // 管理後台關掉之後：不再寫
+  db.exec("UPDATE rest_sources SET enabled = 0 WHERE source = 'cool'");
+  db.exec("DELETE FROM rest_stops WHERE source = 'cool'");
+  const g2 = await gather(env, 'cool', { spots });
+  run(db, buildSql('cool', { ...g2, tag: '{"h":"changed"}' }));
+  assert.equal(src(db, 'cool').enabled, 0); assert.equal(live(db, 'cool'), 0, '關掉的來源不再寫入');
+  // 覆蓋率：這兩個來源讓板橋第二運動場 300 m 內有飲水與廁所
+  const c = coverage(spots, [...g2.rows]);
+  assert.ok(c.water[300] >= 1 && c.toilet[300] >= 1 && c.supply[300] >= 1, JSON.stringify({ w: c.water[300], t: c.toilet[300] }));
+  control(new URLSearchParams('reset=1'));
 });

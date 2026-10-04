@@ -6,6 +6,10 @@
 //     sav  全國運動場館（22849：國民運動中心＋對外開放的游泳池；不收管理人姓名與電話）
 //     tbk  臺灣騎跡補給站（taiwanbike.tw 前端 JSON，依政府網站資料開放宣告使用並顯名；分頁同步）
 //     cur  幹部整理清單（migration 0041）              man  幹部在地圖上新增
+//   第二批（migration 0050；要環境部開放資料平臺的 API 金鑰，環境變數 MOENV_KEY，只有維護工具在電腦上用）：
+//     cool  Cool map 涼適點（177893）：公有的飲水、廁所照收；超商、銀行等店家標「待確認」（建議先詢問）；臺北市的公有點不收（直飲臺、臺北公廁已有）
+//     moenv 環境部全國公廁（30794）：不收臺北市（tpt 已有）、中油（cpct 已有）與評等加強級（沒通過檢查）的
+//     兩個都只收「核准的跑點 1 公里內」的列（radius）：全國資料上萬筆，跑者用得到的只有跑點附近
 //   原則：來源主機白名單寫在程式碼裡（只收 https、預設埠）；同步只寫有變的列；幹部的 fix、note、hidden 同步不會動；
 //   不存任何電話與個人姓名；顯名文字放在登錄表，不存在每一列。整個功能由 settings.features 的 rest 控制，預設關閉。
 import { parseHours } from '../public/hours.js';
@@ -16,6 +20,8 @@ const UA = 'cil-run rest-stop sync (+https://cil-run.anselliu7.workers.dev)';
 const LICENSE = '政府資料開放授權條款第1版';
 const LICENSE_URL = 'https://data.gov.tw/license';
 const gov = (provider) => `資料來源：${provider}，依政府資料開放授權條款第1版提供`;
+// 環境部開放資料平臺 API（v2）：金鑰只在抓資料時放進網址，不存、不印、錯誤訊息不帶網址
+const MOENV = (ds) => `https://data.moenv.gov.tw/api/v2/${ds}`;
 const TP = (rid, offset = 0) => `https://data.taipei/api/v1/dataset/${rid}?scope=resourceAquire&limit=1000&offset=${offset}`;
 const MB = 1024 * 1024;
 // Worker 同步的來源上限 64 KB（實際 6–8 KB）：資料意外變大時在下載階段就停（「資料太大」），不會在 10 ms CPU 裡解析幾 MB 被強制中斷
@@ -23,6 +29,8 @@ const WORKER_MAX = 64 * 1024;
 export const ALLOWED_HOURS = [1, 2, 6];   // 台北時間：避開 03:00 備份與清理、04–05 點的攝影機同步
 
 // 來源登錄表：網址、解析、主機白名單、顯名、節奏（hour 最早幾點跑；every 每天／每週／每月）、radius（null＝全收；第二批的環境部、Cool map 才用）
+//   api：分頁的開放資料 API（一頁 limit 筆，依回應的 total 抓完）；key：要哪個環境變數的金鑰（沒有就不同步，來源維持關閉）
+//   batch：第幾批（實地檢查印「加入前後」的覆蓋率用）；firstOn：migration 先關著，維護工具第一次同步成功時才開啟
 //   local：Worker 能不能同步這個來源。true＝只由維護工具同步（tools/rest-sync.mjs 在電腦上用同一套解析產生 SQL，再用 wrangler 寫進 D1），
 //     Worker 的排程與「立即同步」都不跑；沒有標的才留在 Worker 排程。
 //     Workers 免費方案每次執行只有 10 ms CPU、50 個子請求（D1 查詢也算）。留在 Worker 的條件：SHA-256＋解析＋清理遠低於 5 ms，
@@ -74,6 +82,17 @@ export const SOURCES = {
     name: '臺灣騎跡補給站', provider: '交通部 臺灣騎跡', license: '政府網站資料開放宣告', license_url: 'https://taiwanbike.tw/gov', attribution: '資料來源：交通部 臺灣騎跡',
     dataset: 'https://taiwanbike.tw/bikeRoute/search', pages: { index: 'https://taiwanbike.tw/data/zh/bikeRoute.json', list: tbkRoutes, url: tbkRouteUrl, per: 10, gap: 500 },
     max: 8 * MB, parse: parseTbk, hosts: [/^taiwanbike\.tw$/], hour: 2, every: 'month', radius: null, local: true,
+  },
+  // 第二批：要金鑰、全國資料，只收跑點 1 公里內
+  cool: {
+    name: 'Cool map 涼適點', provider: '環境部氣候變遷署', license: LICENSE, attribution: gov('環境部氣候變遷署'),
+    dataset: 'https://data.gov.tw/dataset/177893', api: { url: MOENV('gis_p_82'), limit: 1000, gap: 1000 }, key: 'MOENV_KEY', parse: parseCool,
+    max: 8 * MB, hosts: [/^data\.moenv\.gov\.tw$/], every: 'month', radius: 1000, local: true, batch: 2, firstOn: true,
+  },
+  moenv: {
+    name: '全國公廁（環境部）', provider: '環境部環境管理署', license: LICENSE, attribution: gov('環境部環境管理署'),
+    dataset: 'https://data.gov.tw/dataset/30794', api: { url: MOENV('fac_p_07'), limit: 1000, gap: 1000 }, key: 'MOENV_KEY', parse: parseMoenv,
+    max: 8 * MB, hosts: [/^data\.moenv\.gov\.tw$/], every: 'month', radius: 1000, local: true, batch: 2, firstOn: true,
   },
   cur: { name: '幹部整理清單', provider: '耕跑團', license: '', attribution: '資料整理：耕跑團', manual: true, hosts: [] },
   man: { name: '幹部新增', provider: '耕跑團', license: '', attribution: '資料整理：耕跑團幹部', manual: true, hosts: [] },
@@ -436,6 +455,85 @@ function parseTbk(texts) {
   return out;
 }
 
+// ---- 第二批：環境部開放資料 API 的列（欄位名稱大小寫不一定，一律轉小寫再讀；電話、管理單位不讀）----
+const low = (r) => { const o = {}; for (const [k, v] of Object.entries(r && typeof r === 'object' ? r : {})) o[k.toLowerCase()] = v; return o; };
+export const yes = (v) => /^(是|有|y|yes|true|1|v|○|◯|✓|✔)$/i.test(String(v ?? '').trim());
+// Cool map：連鎖超商、量販、超市（買得到補給）
+export const COOL_CHAIN = /全家|萊爾富|hi-?life|7-?11|7-?eleven|統一超商|ok\s*(超商|mart)|家樂福|全聯|美廉社|愛買|大潤發|好市多|costco|超市|量販|便利商店|超商/i;
+// 其他店家與民間機構（銀行、郵局、藥局、咖啡店…）：飲水、廁所都要先詢問
+export const COOL_BIZ = /銀行|郵局|郵政|農會|漁會|信用合作社|保險|證券|藥局|藥妝|康是美|屈臣氏|寶雅|門市|分行|商店|商行|公司|企業|咖啡|星巴克|路易莎|麥當勞|摩斯|肯德基|餐廳|百貨|商場|購物|飯店|旅館|民宿|診所|書局|誠品|金石堂|民間|私人/;
+// 公有：來源的分類欄寫明公有，或名稱是機關、公共場所
+const COOL_PUBKIND = /公有|公部門|政府|機關|公共|公立|市立|縣立|國立/;
+const COOL_PUBNAME = /公所|圖書館|圖書室|活動中心|市政府|縣政府|政府|服務中心|服務站|運動中心|體育館|體育場|文化中心|博物館|美術館|紀念館|藝文中心|衛生所|戶政|地政|區民|里民|社區|捷運|車站|轉運站|公園|國小|國中|高中|大學|學校|醫院|消防|派出所|分駐所|警察|稅務|稽徵|監理|公立|市立|縣立|國立|長青|老人|社福|議會|代表會|清潔隊|環保局/;
+const TAIPEI = '臺北市';
+function parseCool(records) {
+  return records.map((r0) => {
+    const r = low(r0);
+    const name = clip(r.placename, 60), addr = clip(r.address, 100);
+    const kind = `${clip(r.datasetid, 40)} ${clip(r.coolingtype, 40)} ${clip(r.stationtype, 40)}`;
+    const water = yes(r.waterdispenser), wc = yes(r.restroom);
+    const chain = COOL_CHAIN.test(name) || COOL_CHAIN.test(kind), biz = !chain && (COOL_BIZ.test(name) || COOL_BIZ.test(kind));
+    const pub = !chain && !biz && (COOL_PUBKIND.test(kind) || COOL_PUBNAME.test(name));
+    const town = city(r.city) || city(addr);
+    if (pub && town === TAIPEI) return null;          // 臺北市的公有點：直飲臺、臺北公廁已經有，不重複
+    if (!chain && !water && !wc) return null;         // 只有冷氣、座位：跑者用不到
+    const c = pickCoord(r.latitude, r.longitude, r.twd97tm2_x, r.twd97tm2_y);
+    const raw = clip(r.openinghours, 120), all = ALL_DAY.test(raw);
+    const svc = (water ? SVC.water : 0) | (wc ? SVC.toilet | (yes(r.isaccessible) ? SVC.accessible : 0) : 0) | (yes(r.seats) || yes(r.airconditioning) ? SVC.seat : 0) | (all ? SVC.allday : 0);
+    const id = clip(r.recordid, 40);
+    const base = { sid: fnv(id ? `${clip(r.datasetid, 40)}|${id}` : `${name}|${addr}`), name, address: addr, city: town, lat: c.lat, lng: c.lng,
+      ...hoursOf(all ? ALLDAY_TEXT : normTimes(raw), all ? '' : raw) };
+    // 店家：飲水、廁所是 Cool map 標的，店家實際讓不讓用要先問 → 一律「待確認」
+    if (chain) return { ...base, type: 'supply', subtype: 'store', svc: svc | SVC.supply, access: 'unverified' };
+    const access = pub ? 'public' : 'unverified';
+    return water ? { ...base, type: 'water', subtype: biz ? 'shop' : 'cool', svc, access } : { ...base, type: 'toilet', subtype: biz ? 'store' : 'public', svc, access };
+  });
+}
+// 環境部全國公廁：一列可能是同一處的一種廁間（男、女、無障礙、親子），依「名稱＋地址」分組、60 公尺內分群（跟河濱廁所一樣）
+//   不收：臺北市（tpt 已有）、中油（cpct 已有）、評等加強級（以前叫改善級，沒通過檢查）；管理單位只用來認中油，不存
+const MO_FAIL = /加強|改善|不合格|未通過|不及格/, MO_CPC = /中油/;
+const MO_GAS = /加油站/, MO_STORE = /便利商店|超商|量販|百貨|商場|購物|賣場|餐飲|餐廳|速食|商業|營業場所|商店|旅館|飯店/;
+function parseMoenv(records) {
+  const groups = new Map(), out = [];
+  for (const r0 of records) {
+    const r = low(r0);
+    const name = clip(r.name, 60), addr = clip(r.address, 100), town = city(r.county) || city(addr), kind = clip(r.type2, 40);
+    if (!name || town === TAIPEI || MO_FAIL.test(String(r.grade ?? '')) || MO_CPC.test(`${name} ${r.administration ?? ''} ${r.exec ?? ''}`)) { out.push(null); continue; }
+    const c = { lat: num(r.latitude), lng: num(r.longitude) };
+    if (!inTaiwan(c.lat, c.lng)) { out.push({ sid: 'x', lat: NaN, lng: NaN }); continue; }
+    const k = `${name}|${addr}`, g = groups.get(k) || { name, addr, town, spots: [] };
+    const acc = /無障礙/.test(String(r.type ?? '')), fam = /親子/.test(String(r.type ?? '')) || Number(r.diaper) > 0;
+    const gas = MO_GAS.test(kind), store = !gas && MO_STORE.test(kind);
+    const hit = g.spots.find((x) => haversine(x.first, c) <= CLUSTER_M);
+    if (hit) { hit.lat += c.lat; hit.lng += c.lng; hit.n += 1; hit.acc ||= acc; hit.fam ||= fam; hit.gas ||= gas; hit.store ||= store; }
+    else g.spots.push({ first: c, lat: c.lat, lng: c.lng, n: 1, acc, fam, gas, store });
+    groups.set(k, g);
+  }
+  for (const g of groups.values()) for (const x of g.spots) {
+    const lat = x.lat / x.n, lng = x.lng / x.n;
+    out.push({ sid: fnv(g.spots.length === 1 ? `${g.name}|${g.addr}` : `${g.name}|${g.addr}|${lat.toFixed(3)}|${lng.toFixed(3)}`), type: 'toilet',
+      subtype: x.gas ? 'station' : x.store ? 'store' : 'public', svc: SVC.toilet | (x.acc ? SVC.accessible : 0) | (x.fam ? SVC.family : 0),
+      access: x.gas || x.store ? 'customer' : 'public', name: g.name, address: g.addr, city: g.town, lat, lng });
+  }
+  return out;
+}
+// 半徑篩選：只留任何一個跑點 radius 公尺內的列（跑點用 0.02 度的格子分組，只比對自己與周圍 8 格；一格約 2 公里，所以半徑不能超過 2 公里）
+export function nearSpots(rows, spots, radius) {
+  if (!(radius > 0 && radius <= 2000)) throw new Error('半徑要在 2 公里以內');
+  const grid = new Map();
+  for (const s of spots || []) {
+    const p = { lat: Number(s.lat), lng: Number(s.lng) };
+    if (!inTaiwan(p.lat, p.lng)) continue;
+    const k = cellOf(p.lat, p.lng);
+    (grid.get(k) || grid.set(k, []).get(k)).push(p);
+  }
+  return rows.filter((r) => {
+    const [y, x] = cellOf(r.lat, r.lng).split('_').map(Number);
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if ((grid.get(`${y + dy}_${x + dx}`) || []).some((p) => haversine(p, r) <= radius)) return true;
+    return false;
+  });
+}
+
 // ---- 清理：統一欄位、座標檢查、開放時間、雜湊；同一來源裡重複的代碼合併 ----
 const RAD = Math.PI / 180;
 export const haversine = (a, b) => {
@@ -519,10 +617,46 @@ const hex = async (parts) => {
 const dateOf = (httpDate) => { const t = Date.parse(httpDate || ''); return Number.isFinite(t) ? new Date(t + 8 * 3600e3).toISOString().slice(0, 10) : null; };
 const decode = (b) => new TextDecoder().decode(b);
 
+// 金鑰：只從執行環境讀（維護工具傳進來的 process.env）；測試模式沒給就用假金鑰（Mock.state.nokey 測「沒有金鑰」）
+export const keyOf = (env, S) => (S?.key ? String(env?.[S.key] || (mocked(env) && !Mock.state.nokey ? 'mock-key-0001' : '')) : '');
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// 環境部開放資料 API：一頁 limit 筆，依第一頁的 total 抓完（最多 200 頁）；頁之間停 gap 毫秒；回應不是 JSON 多半是金鑰不對
+async function collectApi(env, source, S) {
+  const key = keyOf(env, S);
+  if (!key) throw new Error(`沒有設定金鑰 ${S.key}`);
+  if (!/^[\w-]{8,64}$/.test(key)) throw new Error(`${S.key} 的格式不對`);
+  const { url, limit } = S.api, records = [];
+  let total = null, date = null;
+  for (let p = 0; p < 200; p++) {
+    if (p && S.api.gap && !mocked(env)) await sleep(S.api.gap);
+    const got = await fetchBytes(env, source, `${url}?format=JSON&limit=${limit}&offset=${records.length}&api_key=${encodeURIComponent(key)}`, { max: S.max || MAX });
+    let j;
+    try { j = JSON.parse(decode(got.bytes)); } catch { throw new Error('來源回應不是 JSON（金鑰可能無效或過期）'); }
+    const list = Array.isArray(j) ? j : Array.isArray(j?.records) ? j.records : null;
+    if (!list) throw new Error('清單格式不對');
+    if (total == null && j && !Array.isArray(j) && String(j.total ?? '').trim() && Number.isFinite(Number(j.total))) total = Number(j.total);
+    date ||= dateOf(got.modified);
+    records.push(...list);
+    if (!list.length || (total != null ? records.length >= total : list.length < limit)) break;
+  }
+  if (total != null && records.length < total) throw new Error('資料不完整（分頁不夠）');
+  return { records, date };
+}
 // 抓＋解析一個非分頁來源（不碰資料庫；tools/rest-check.mjs 也用這個）
 //   prev：上次的 { e, m, h }；沒變時回 { same: true }
-export async function collect(env, source, prev = null, { raw = false } = {}) {
+//   spots：有半徑的來源（radius）一定要給跑點清單 [{ lat, lng }]，只留跑點 radius 公尺內的列（丟掉的算在 bad.far）
+export async function collect(env, source, prev = null, { raw = false, spots = null } = {}) {
   const S = sourceOf(source);
+  if (S?.radius && !Array.isArray(spots)) throw new Error('這個來源要有跑點清單才能篩選');
+  if (S?.api) {
+    const { records, date } = await collectApi(env, source, S);
+    const g = finalize(source, S.parse(records, {}));
+    const rows = S.radius ? nearSpots(g.rows, spots, S.radius) : g.rows;
+    const bad = { ...g.bad, far: g.rows.length - rows.length };
+    const tag = { e: null, m: null, h: await hex([new TextEncoder().encode(rows.map((r) => `${r.id}:${r.h}`).sort().join('\n'))]) };
+    if (prev?.h && prev.h === tag.h) return { same: true, tag };
+    return { rows, dropped: g.dropped + bad.far, bad, tag, date, total: records.length };
+  }
   if (!S?.url) throw new Error('這個來源不能同步');
   const single = S.url.length === 1;
   const got = [];
@@ -532,8 +666,9 @@ export async function collect(env, source, prev = null, { raw = false } = {}) {
   if (prev?.h && prev.h === tag.h) return { same: true, tag };
   const meta = {};
   const raws = S.parse(got.map((g) => decode(g.bytes)), meta);
-  const { rows, dropped, bad } = finalize(source, raws);
-  return { rows, dropped, bad, tag, date: meta.date || dateOf(got[0].modified), texts: raw ? got.map((g) => decode(g.bytes)) : undefined };
+  const f = finalize(source, raws);
+  const rows = S.radius ? nearSpots(f.rows, spots, S.radius) : f.rows, far = f.rows.length - rows.length;
+  return { rows, dropped: f.dropped + far, bad: { ...f.bad, far }, tag, date: meta.date || dateOf(got[0].modified), texts: raw ? got.map((g) => decode(g.bytes)) : undefined };
 }
 // 分頁來源的一頁（tbk：一頁＝per 條路線）
 export async function collectPage(env, source, page) {
@@ -612,7 +747,11 @@ export async function syncSource(env, source) {
   if (!src?.enabled) return { error: '來源沒有開啟' };
   if (S.pages) return syncPaged(env, source, src);
   let got;
-  try { got = await collect(env, source, parseTag(src.etag)); } catch (e) { const error = errText(e); await markFailed(env, source, error); return { error }; }
+  // 有半徑的來源：核准的跑點（多一個 D1 指令；正式環境這些來源只由維護工具同步，這裡是測試的開發端點用）
+  try {
+    const spots = S.radius ? (await env.DB.prepare("SELECT lat, lng FROM spots WHERE status = 'approved'").all()).results : null;
+    got = await collect(env, source, parseTag(src.etag), { spots });
+  } catch (e) { const error = errText(e); await markFailed(env, source, error); return { error }; }
   const ok = (extra = '') => env.DB.prepare(`UPDATE rest_sources SET last_sync_at = datetime('now'), last_ok_at = datetime('now'), last_error = NULL${extra} WHERE source = ?`);
   if (got.same) { await ok().bind(source).run(); return { count: src.last_count || 0, changed: 0, disabled: 0, same: true }; }
   const rows = got.rows;
@@ -685,8 +824,8 @@ export function applyFix(r) {
 }
 // 讀取時合併：同一類、60 公尺內、名稱去掉「男廁、女、無障礙、1F」等字後相同 → 一筆；廁所另外 30 公尺內不看名稱也算同一處
 //   （同一間廁所在不同來源的名稱常常不一樣：「中油中崙站」與「中油中崙加油站」、「百齡右岸景觀」與「百齡右岸河濱公園」）
-//   優先順序 man > cur > 官方 > 店家（例如中油的廁所以中油無障礙公廁的「免費」為準，不用臺北公廁的「店家廁所」），服務旗標取聯集
-const RANK = (r) => (r.source === 'man' ? 0 : r.source === 'cur' ? 1 : r.access === 'customer' ? 3 : 2);
+//   優先順序 man > cur > 官方 > 店家與待確認（例如中油的廁所以中油無障礙公廁的「免費」為準，不用臺北公廁的「店家廁所」），服務旗標取聯集
+const RANK = (r) => (r.source === 'man' ? 0 : r.source === 'cur' ? 1 : r.access === 'customer' || r.access === 'unverified' ? 3 : 2);
 export const normName = (s) => String(s || '').toLowerCase().replace(/^(台灣|臺灣)/, '').replace(/加油站/g, '站')
   .replace(/男廁|女廁|男|女|無障礙|親子|廁所|化妝室|景觀|河濱公園|\b[b]?\d+f\b|\d+樓|[\s・·\-－_()（）]/g, '');
 export const SAME_M = 60, TOILET_M = 30;

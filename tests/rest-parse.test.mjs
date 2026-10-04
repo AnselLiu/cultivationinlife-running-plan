@@ -2,7 +2,7 @@
 //   用真實資料的寫法（2026-10-03 抓的樣本）當回歸案例：補充說明裡的「不開放」時段、超商名稱、捷運站的 24 小時、河濱廁所的分群、跨來源同一間廁所
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { SOURCES, finalize, mergeRows, readFix, readStop, closedHint, savHours, STORE_NAME, collect, collectPage, haversine } from '../src/rest.js';
+import { SOURCES, finalize, mergeRows, readFix, readStop, closedHint, savHours, STORE_NAME, collect, collectPage, haversine, nearSpots, yes, keyOf } from '../src/rest.js';
 import { control } from '../src/rest-mock.js';
 import { hoursNow } from '../public/hours.js';
 
@@ -119,4 +119,30 @@ test('讀取合併：同一間廁所在不同來源名稱不同也合併（30 �
   assert.deepEqual(ids, ['cpct:a', 'tprv:b', 'tprv:c', 'tprv:d', 'tpt:d', 'twd:e']);
   const cp = out.find((x) => x.id === 'cpct:a');
   assert.equal(cp.access, 'public', '以中油無障礙公廁（免費）為準'); assert.deepEqual(cp.also, ['tpt']); assert.ok(cp.svc & 32);
+});
+
+test('第二批：半徑篩選只留跑點 1 公里內、是／否的各種寫法、金鑰只從環境讀、店家與待確認在合併時排在官方後面', () => {
+  const spot = { lat: 25.013897, lng: 121.457759 };
+  const at = (m) => ({ id: `x:${m}`, lat: spot.lat + m / 111320, lng: spot.lng, cell: '' });
+  assert.deepEqual(nearSpots([at(900), at(1100), at(-990)], [spot], 1000).map((r) => r.id), ['x:900', 'x:-990']);
+  // 跨格子邊界（0.02 度）也找得到
+  const edge = { lat: 25.0199, lng: 121.4599 };
+  assert.equal(nearSpots([{ id: 'e', lat: 25.0201, lng: 121.4601 }], [edge], 1000).length, 1);
+  assert.equal(nearSpots([at(10)], [], 1000).length, 0, '沒有跑點就一筆都不留');
+  assert.throws(() => nearSpots([], [spot], 5000), /2 公里/);
+  for (const v of ['是', '有', 'Y', 'yes', 'TRUE', '1', 'V', ' 是 ']) assert.ok(yes(v), v);
+  for (const v of ['否', '無', 'N', '0', '', null, undefined, '不確定']) assert.ok(!yes(v), String(v));
+  assert.equal(keyOf({}, SOURCES.cool), '', '正式環境沒有設定就是空的');
+  assert.equal(keyOf({ MOENV_KEY: 'k-12345678' }, SOURCES.moenv), 'k-12345678');
+  assert.equal(keyOf({ MOENV_KEY: 'k-12345678' }, SOURCES.twd), '', '第一批不用金鑰');
+  for (const k of ['cool', 'moenv']) {
+    const S = SOURCES[k];
+    assert.ok(S.local && S.radius === 1000 && S.firstOn && S.key === 'MOENV_KEY' && /data\.gov\.tw\/dataset\//.test(S.dataset) && /環境部/.test(S.attribution), k);
+  }
+  // 同一處：官方的公廁優先於「待確認」的店家廁所
+  const m = mergeRows([
+    { id: 'cool:a', source: 'cool', type: 'toilet', subtype: 'store', svc: 2, access: 'unverified', name: '某銀行', lat: 25.0139, lng: 121.4577 },
+    { id: 'moenv:b', source: 'moenv', type: 'toilet', subtype: 'public', svc: 34, access: 'public', name: '板橋公廁', lat: 25.01391, lng: 121.45771 },
+  ]);
+  assert.equal(m.length, 1); assert.equal(m[0].id, 'moenv:b'); assert.deepEqual(m[0].also, ['cool']);
 });

@@ -1494,7 +1494,7 @@ test('跑者休息站：功能開關預設關閉、權限、同步轉換與完�
   assert.equal((await sync('tpbk')).status, 400, '關閉的來源不能同步');
   assert.equal((await toggle('tpbk', true)).status, 200);
   assert.equal((await sync('cur')).status, 400, '整理清單不能同步');
-  assert.deepEqual(Object.entries(await srcs()).filter(([, s]) => !s.enabled).map(([k]) => k), [], '第一批來源預設都開啟');
+  assert.deepEqual(Object.entries(await srcs()).filter(([, s]) => !s.enabled).map(([k]) => k), ['cool', 'moenv'], '第一批來源預設都開啟；第二批（要金鑰）先關著');
   // 手動同步（功能開關關著也可以先測）：重複代碼合併、國外座標丟掉；沒變就不寫
   assert.equal((await srcs()).twd.local, true); assert.equal((await srcs()).tpbk.local, false);
   const lw = await sync('twd');
@@ -1698,6 +1698,84 @@ test('跑者休息站（免費方案）：每個來源標明 Worker 能不能同
   assert.equal(await cron('2027-09-06T22:40:00Z'), null, '成功後這一期（這一週）不再跑');
   assert.equal((await call('t_chair', '/settings/features', { method: 'POST', body: { rest: false } })).status, 200);
   await mock('reset=1');
+});
+
+test('跑者休息站第二批（REST_MOCK）：Cool map 與環境部公廁要金鑰、只收跑點 1 公里內、臺北市與中油不重複、店家標待確認、各自顯名', async () => {
+  const mock = (q = '') => fetch(`${BASE}/api/dev/rest-mock?${q}`).then((r) => r.json());
+  const devSync = async (source) => { const r = await fetch(`${BASE}/api/dev/rest-sync?source=${source}`); return { status: r.status, json: await r.json() }; };
+  const srcs = async () => Object.fromEntries((await call('t_chair', '/rest/sources')).json.sources.map((s) => [s.source, s]));
+  const toggle = (source, enabled) => call('t_chair', '/rest/sources', { method: 'POST', body: { source, enabled } });
+  const stops = async (key) => (await call('t_runner', `/rest/cell/${key}`)).json.stops;
+  const moenvHits = async () => Object.entries((await mock()).hits).filter(([u]) => u.includes('data.moenv.gov.tw')).reduce((n, [, v]) => n + v, 0);
+  await mock('reset=1');
+  // 來源清單：先關著、只由維護工具同步、顯名與授權
+  const s0 = await srcs();
+  for (const k of ['cool', 'moenv']) {
+    assert.equal(s0[k].enabled, false, `${k} 先關著`); assert.equal(s0[k].local, true); assert.equal(s0[k].last_ok_at, null);
+    assert.equal(s0[k].license, '政府資料開放授權條款第1版'); assert.equal(s0[k].license_url, 'https://data.gov.tw/license');
+    const r = await call('t_chair', '/rest/sync', { method: 'POST', body: { source: k } });
+    assert.equal(r.status, 400, k); assert.match(r.json.error, /維護工具/);
+  }
+  assert.equal(s0.cool.attribution, '資料來源：環境部氣候變遷署，依政府資料開放授權條款第1版提供');
+  assert.equal(s0.moenv.attribution, '資料來源：環境部環境管理署，依政府資料開放授權條款第1版提供');
+  assert.equal(s0.cool.dataset, 'https://data.gov.tw/dataset/177893'); assert.equal(s0.moenv.dataset, 'https://data.gov.tw/dataset/30794');
+  assert.equal(await moenvHits(), 0);
+  // 沒有金鑰：同步失敗、記下錯誤，不連線
+  for (const k of ['cool', 'moenv']) assert.equal((await toggle(k, true)).status, 200);
+  await mock('nokey=1');
+  const nk = await devSync('moenv');
+  assert.equal(nk.status, 502); assert.match(nk.json.error, /沒有設定金鑰 MOENV_KEY/);
+  assert.match((await srcs()).moenv.last_error, /沒有設定金鑰/);
+  assert.equal(await moenvHits(), 0, '沒有金鑰不連線');
+  await mock('nokey=0');
+  // 有金鑰（測試的假金鑰）：分頁抓完（一頁 3 筆）、只留跑點 1 公里內
+  const c = await devSync('cool'), m = await devSync('moenv');
+  assert.equal(c.status, 200, JSON.stringify(c.json)); assert.equal(c.json.count, 6);
+  assert.equal(m.status, 200, JSON.stringify(m.json)); assert.equal(m.json.count, 4);
+  assert.equal(await moenvHits(), 6, '兩個來源各 3 頁');
+  assert.ok(!JSON.stringify((await mock()).hits).includes('mock-key'), '紀錄裡的網址不帶金鑰');
+  assert.equal((await call('t_chair', '/settings/features', { method: 'POST', body: { rest: true } })).status, 200);
+  try {
+    // 板橋第二運動場那一格：公有的涼適點與公廁、店家待確認、非中油的加油站是店家廁所；中油與評等加強級的不收
+    const ban = Object.fromEntries((await stops('1250_6072')).map((x) => [x[7], x]));
+    assert.equal(ban['新北市板橋區測試公所'][1], 'water'); assert.equal(ban['新北市板橋區測試公所'][4], 'public');
+    assert.equal(ban['全家便利商店板橋二運店'][1], 'supply'); assert.equal(ban['全家便利商店板橋二運店'][4], 'unverified');
+    assert.ok(ban['全家便利商店板橋二運店'][3] & 1, '店家的飲水（待確認）');
+    assert.equal(ban['臺灣測試銀行板橋分行'][4], 'unverified');
+    assert.equal(ban['台塑石油板橋測試站'][4], 'customer');
+    for (const n of ['台灣中油板橋測試站', '板橋測試公廁', '板橋測試活動中心']) assert.equal(ban[n], undefined, n);
+    // 環境部公廁一列一種廁間：同名同地址的男廁與無障礙廁間合併成一處，無障礙旗標合併
+    assert.ok(ban['板橋測試公園公廁'][3] & 32, '無障礙');
+    assert.equal(ban['板橋測試公園涼亭'][1], 'toilet', '涼適點只有廁所的公有點');
+    // 臺北市：公有點不收（直飲臺、臺北公廁已有），店家照收
+    const tp = (await stops('1253_6077')).map((x) => x[7]);
+    assert.ok(tp.includes('萊爾富大直測試店'));
+    for (const n of ['臺北市中山區測試公所', '大佳測試公廁']) assert.ok(!tp.includes(n), n);
+    // 詳情：顯名、待確認、不存電話與管理單位
+    const fm = await call('t_runner', `/rest/${encodeURIComponent(ban['全家便利商店板橋二運店'][0])}`);
+    assert.equal(fm.status, 200);
+    assert.equal(fm.json.stop.access, 'unverified'); assert.equal(fm.json.stop.source, 'cool'); assert.equal(fm.json.stop.hours, '24 小時');
+    assert.match(fm.json.stop.attribution, /環境部氣候變遷署/);
+    const all = JSON.stringify([fm.json, await stops('1250_6072'), await stops('1131_6016')]);
+    assert.ok(!/2960-3456|王大明|測試區公所/.test(all), '沒有電話與管理單位');
+    // 地點附近：板橋第二運動場的飲水、廁所、補給都有；高雄苓雅也有
+    const near = (await call('t_runner', '/spots/seed050/rest')).json.groups;
+    assert.ok(near.water.length && near.toilet.length && near.supply.length, JSON.stringify(Object.fromEntries(Object.entries(near).map(([k, v]) => [k, v.length]))));
+    assert.equal(near.water[0].name, '新北市板橋區測試公所', '公有的排在待確認的店家前面');
+    const ly = (await call('t_runner', '/spots/seed36/rest')).json.groups;
+    assert.ok(ly.water.some((x) => x.name === '苓雅測試圖書館') && ly.toilet.some((x) => x.name === '苓雅測試公園公廁'));
+    assert.ok(ly.toilet.find((x) => x.name === '苓雅測試公園公廁').svc & 64, '親子');
+    // 資料來源清單（地圖選單）有這兩個來源的顯名
+    const meta = (await call('t_runner', '/rest/meta')).json.sources.map((x) => x.source);
+    assert.ok(meta.includes('cool') && meta.includes('moenv'));
+    // 關掉來源：地圖上馬上不顯示
+    assert.equal((await toggle('cool', false)).status, 200);
+    assert.ok(!(await stops('1250_6072')).some((x) => x[0].startsWith('cool:')));
+  } finally {
+    await toggle('cool', false); await toggle('moenv', false);
+    await call('t_chair', '/settings/features', { method: 'POST', body: { rest: false } });
+    await mock('reset=1');
+  }
 });
 
 test('跑者休息站：詳細與地點附近一次讀周圍 9 格，每位跑友 10 分鐘最多 60 次（不讓一個帳號用光 D1 讀取額度）', async () => {

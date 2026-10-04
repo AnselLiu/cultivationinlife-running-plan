@@ -3665,6 +3665,7 @@ export default {
 "店家廁所，依營業時間，建議先詢問": "Shop restroom, during business hours; please ask first",
 "店家提供，依營業時間，建議先詢問": "Provided by a shop during business hours; please ask first",
 "店家（建議先詢問）": "Shop (ask first)",
+"店家・待確認，建議先詢問": "Shop · unconfirmed, please ask first",
 "店家，依營業時間，建議先詢問": "Shop, during business hours; please ask first",
 "座位": "Seating",
 "座位或遮蔭": "Seating or shade",
