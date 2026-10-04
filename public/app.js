@@ -1,9 +1,5 @@
 // 耕跑團 PWA — 畫面：團練列表、活動詳情與報名、我的課表、課表教練、幹部的新增活動與公告產生器
 import * as P from './plan.js';
-import * as Party from './party.js';
-import * as S from './studio.js';
-import * as Run from './run.js';
-import { quote, charges } from './pricing.js';
 import * as I18N from './i18n.js';
 import { CATS, CHIPS } from './notif-cats.js';
 import * as Device from './device.js';
@@ -36,14 +32,37 @@ function reloadForUpdate() {
   location.reload();
   return true;
 }
-const lazy = (file, name) => async (...a) => {
+// 載入整個模組（同樣處理剛部署時的新舊版本混用）；lazy 是只要其中一個函式的簡寫
+const load = async (file, name) => {
   let m;
   try { m = await import(file); } catch (e) {
     if ((e?.name === 'SyntaxError' || VERSION_SKEW.test(e?.message || '')) && reloadForUpdate()) return new Promise(() => {});
     await new Promise((r) => setTimeout(r, 800)); m = await import(`${file}?r=${Date.now()}`);
   }
-  if (typeof m[name] !== 'function' && reloadForUpdate()) return new Promise(() => {});
-  return m[name](...a);
+  if (name && typeof m[name] !== 'function' && reloadForUpdate()) return new Promise(() => {});
+  return m;
+};
+const lazy = (file, name) => async (...a) => (await load(file, name))[name](...a);
+// 跑步記錄（run.js）：有跑到一半或跑完還沒存的紀錄、或直接打開跑步頁才在開機時載入；其他時候點進跑步頁才下載
+//   記錄中的計時列與分頁列的小點靠它，所以有紀錄就一開始載入（每一頁都要看得到）
+let Run = null, runP = null;
+const loadRun = () => (runP ??= load('./run.js', 'session').then((m) => (Run = m), (e) => { runP = null; throw e; }));
+// 活動頁才用到：費用計算（pricing.js）、春酒座位與抽獎（party.js）
+let Pricing = null, Party = null;
+const eventMods = async (party) => { Pricing ??= await load('./pricing.js', 'charges'); if (party) Party ??= await load('./party.js', 'seatSection'); };
+// 拍照分享（studio.js）的時間格式：課表、訓練紀錄也要用，放在這裡（studio.js 從這裡拿），開機不用下載 studio.js
+const fmtDuration = (s) => {
+  s = Math.round(s); const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = s % 60;
+  return h ? `${h}:${String(m).padStart(2, '0')}:${String(x).padStart(2, '0')}` : `${m}:${String(x).padStart(2, '0')}`;
+};
+const fmtDistPace = (dist, s) => {
+  if (!dist || !s) return '—';
+  const p = s / (dist / 1000); return `${Math.floor(p / 60)}'${String(Math.round(p % 60)).padStart(2, '0')}"`;
+};
+const parseHMS = (str) => {
+  const p = String(str).trim().split(':').map(Number);
+  if (p.some(Number.isNaN)) return 0;
+  return p.reduce((a, b) => a * 60 + b, 0);
 };
 
 // 對外公開的乾淨網址（Google 同意畫面等會連到這裡）：/privacy → #/privacy
@@ -366,7 +385,7 @@ const deviceDeps = () => {
   let storage = null, session = null;
   try { storage = localStorage; } catch {}
   try { session = sessionStorage; } catch {}
-  return { storage, session, caches: globalThis.caches, dropPush: () => dropPush(false), reset: () => Run.discard(), priorOwner: cachedBootOwner,
+  return { storage, session, caches: globalThis.caches, dropPush: () => dropPush(false), reset: () => { if (Run) Run.discard(); else runP?.then((m) => m.discard()).catch(() => {}); }, priorOwner: cachedBootOwner,
     ask: () => confirm('這台裝置上有之前留下的課表設定、未送出的訓練紀錄或跑到一半的紀錄，不確定是誰的。\n\n是你的嗎？按「確定」保留，按「取消」清除。') };
 };
 // 上次 /api/me?boot=1 的暫存是誰的（主人不明的裝置用來認出主人；只讀不用它畫畫面）
@@ -1298,12 +1317,13 @@ async function eventView(id) {
     history.replaceState(null, '', `#/e/${id}`);
   }
   const ev = await api(`/events/${id}`);
+  await eventMods(ev.kind === 'party');
   // 打開活動頁＝這個活動的通知都看過了（伺服器會排除幹部待辦與帳號安全）
   if (bellState.unread > 0) api('/notifications/read', { method: 'POST', body: { ref: `e:${id}` } }).then(applyCounts).catch(() => {});
   const inviteOnly = ev.visibility === 'invite';
   const admin = ev.manage;
   const survey = ev.kind === 'survey', qs = ev.questions || [];
-  const useForm = ev.kind === 'party' || qs.length > 0 || (ev.options || []).length > 0 || !!ev.group_reg || (ev.items || []).length > 0 || charges(ev);
+  const useForm = ev.kind === 'party' || qs.length > 0 || (ev.options || []).length > 0 || !!ev.group_reg || (ev.items || []).length > 0 || Pricing.charges(ev);
   const ins = ev.signups.filter((s) => s.status === 'in'), waits = ev.signups.filter((s) => s.status === 'wait');
   // 自己的狀態一律從 myStatus 取（待審核、未通過不在公開的 signups 裡）
   const myStatus = ev.myStatus, live = ['in', 'wait', 'pending'].includes(myStatus);
@@ -1360,7 +1380,7 @@ async function eventView(id) {
       ${routeSvg(ev.route.points)}<div class="row" style="gap:8px"><button class="btn ghost sm" id="evGpx">下載 GPX</button></div></section>` : ''}
 
     ${party && myTicket ? ticketCard(myTicket, ev) : ''}
-    ${myStatus === 'in' && (ev.myAmount || (ev.myAmount == null && charges(ev))) ? payCard(ev) : ''}
+    ${myStatus === 'in' && (ev.myAmount || (ev.myAmount == null && Pricing.charges(ev))) ? payCard(ev) : ''}
 
     <section class="card">
       <div class="row spread">
@@ -1373,7 +1393,7 @@ async function eventView(id) {
       ${useForm && canSubmit ? signupForm(ev, myStatus, full) : ''}
       ${isOffline() && (canSubmit || live) ? '<p class="tiny" style="margin:0">目前離線，連上網路後再報名</p>' : ''}
       ${party && (ev.fee || ev.guest_max || ev.meal_options) ? `<p class="tiny">${ev.fee ? `費用 ${ev.fee} 元　` : ''}${ev.guest_max ? `可攜伴 ${ev.guest_max} 位　` : ''}${ev.meal_options ? `餐點：${esc(ev.meal_options)}` : ''}</p>` : ''}
-      ${myStatus === 'pending' ? `<p class="notice" style="margin:0">你的報名在等主辦幹部審核，結果會通知你${charges(ev) ? '；核准後再繳費' : ''}。</p>`
+      ${myStatus === 'pending' ? `<p class="notice" style="margin:0">你的報名在等主辦幹部審核，結果會通知你${Pricing.charges(ev) ? '；核准後再繳費' : ''}。</p>`
         : myStatus === 'rejected' ? `<p class="notice" style="margin:0">主辦未通過這筆報名${ev.myReviewNote ? `：<span translate="no">${esc(ev.myReviewNote)}</span>` : ''}。有疑問請聯絡主辦人。</p>`
         : myStatus === 'wait' ? `<p class="notice" style="margin:0">你在候補第 ${ev.myPosition || 1} 位，有人取消會自動遞補並通知你。</p>`
         : st === 'soon' && !myStatus ? '<p class="notice" id="openCountdown" style="margin:0"></p>' : ''}
@@ -2241,7 +2261,7 @@ function signupForm(ev, myStatus, full) {
       ? `<label class="inline consent"><input type="checkbox" name="reg_consent" ${ev.myRegConsent ? 'checked' : ''} required> 同意把我的賽事報名資料（含身分證字號）提供給主辦幹部，只用於這場的團體報名</label>`
       : `<p class="notice" style="margin:0">這場由幹部代為團體報名，需要你的報名資料（姓名、身分證字號、生日、緊急聯絡人等）。填一次之後每場都能用。<a href="#/me/reg" id="goReg">去填寫 ›</a></p>`) : ''}
     ${(ev.items || []).length ? `<fieldset class="qset items"><legend>${ev.kind === 'buy' ? '要訂的商品' : '加購（選填）'}</legend>${ev.items.map((it) => itemPicker(it, ev)).join('')}</fieldset>` : ''}
-    ${charges(ev) ? '<div class="quote" id="quote" aria-live="polite"></div>' : ''}
+    ${Pricing.charges(ev) ? '<div class="quote" id="quote" aria-live="polite"></div>' : ''}
     ${questionFields(ev.questions || [], ev.myAnswers || {})}
     ${draft ? '<p class="notice" style="margin:0">已帶回你剛才選的內容，確認後送出報名。</p>' : ''}
     ${survey ? '' : `<label>備註（選填）<input name="note" maxlength="40" value="${esc(ev.draftNote || '')}" placeholder="${party ? '素食、座位需求…' : '晚到、只跑前半段…'}"></label>`}
@@ -2265,7 +2285,7 @@ function bindQuote(f, ev) {
   const paint = () => {
     if (!box) return;
     const signedOn = ev.mySignedOn || nowTp().slice(0, 10);   // 早鳥看這次報名的日期（台北時間）
-    const q = quote(ev, { option: f.querySelector('[name=option]:checked')?.value || null, guests: Number(f.guests?.value || 0), items: readItems(f), membership: ev.myMembership, signedOn });
+    const q = Pricing.quote(ev, { option: f.querySelector('[name=option]:checked')?.value || null, guests: Number(f.guests?.value || 0), items: readItems(f), membership: ev.myMembership, signedOn });
     box.innerHTML = q.lines.length ? `${q.lines.map((l) => `<div class="ql ${l.amount < 0 ? 'off' : ''}"><span>${lineLabel(l)}${l.qty > 1 ? ` × ${l.qty}` : ''}</span><span class="num">${l.amount < 0 ? '−' : ''}${money(Math.abs(l.amount))}</span></div>`).join('')}
       <div class="ql total"><span>合計</span><b class="num">${money(q.total)}</b></div>` : '';
   };
@@ -2762,7 +2782,7 @@ async function planView(n) {
         <span class="dl"><span>${esc(dayLabel(d.d))}</span><span class="k">${P.KIND_LABEL[d.kind]}</span>${d.opt ? '<span class="pill opt">可省略</span>' : ''}</span>
         <div class="t"><span class="tx">${text}</span> <span class="hint">${hint}</span>
           ${notes}
-          ${top ? `<span class="logline">${top.pending ? '待上傳・' : ''}${LOG_STATUS_NAME[st]}${top.km ? `・${top.km} km` : ''}${top.seconds ? `・${S.fmtDuration(top.seconds)}` : ''}${top.rpe ? `・RPE ${top.rpe}` : ''}${L.some((l) => l.unread) ? '<span class="pill solid" style="margin-left:6px">教練回饋</span>' : L.some((l) => l.comments) ? '・有回饋' : ''}</span>` : ''}
+          ${top ? `<span class="logline">${top.pending ? '待上傳・' : ''}${LOG_STATUS_NAME[st]}${top.km ? `・${top.km} km` : ''}${top.seconds ? `・${fmtDuration(top.seconds)}` : ''}${top.rpe ? `・RPE ${top.rpe}` : ''}${L.some((l) => l.unread) ? '<span class="pill solid" style="margin-left:6px">教練回饋</span>' : L.some((l) => l.comments) ? '・有回饋' : ''}</span>` : ''}
           ${coach && d.kind !== 'rest' ? `<details class="xd" data-xd="${i}"><summary>詳細內容</summary><div class="xdb"></div></details>` : ''}
         </div>
         ${top?.pending ? `<span class="logbtn done" role="img" aria-label="待上傳">${LOG_ICON.done}</span>`
@@ -2771,7 +2791,7 @@ async function planView(n) {
       </div>`; }).join('') : `<div class="card"><p class="muted">${info?.missing ? `W${week} 課表還沒公告` : '這週沒有課表資料。'}</p></div>`}</div>
     ${coach && days && !other ? '<div class="warnslot" hidden></div>' : ''}
     ${extras.length || others.length ? `<section class="card"><h3>${others.length ? '自主加練與其他週期的紀錄' : '自主加練'}</h3><div class="roster">${[...others, ...extras].map((l) => `<a class="r" ${l.id ? `href="#/log?id=${l.id}"` : ''}><span class="av">${l.status === 'extra' || !l.plan_day ? '＋' : LOG_ICON[l.status] || '＋'}</span>
-      <span>${esc(dstr(l.date))}${l.plan_day && l.status !== 'extra' ? `・${esc(P.logWeekLabel(l))} ${esc(dayLabel(l.plan_day))}` : ''}${l.km ? `・${l.km} km` : ''}${l.seconds ? `・${S.fmtDuration(l.seconds)}` : ''}${l.pending ? '・待上傳' : ''}<span class="tiny" style="display:block"><span translate="no">${esc(l.note || '')}</span></span></span><span class="tiny">›</span></a>`).join('')}</div>
+      <span>${esc(dstr(l.date))}${l.plan_day && l.status !== 'extra' ? `・${esc(P.logWeekLabel(l))} ${esc(dayLabel(l.plan_day))}` : ''}${l.km ? `・${l.km} km` : ''}${l.seconds ? `・${fmtDuration(l.seconds)}` : ''}${l.pending ? '・待上傳' : ''}<span class="tiny" style="display:block"><span translate="no">${esc(l.note || '')}</span></span></span><span class="tiny">›</span></a>`).join('')}</div>
       ${others.length ? '<p class="tiny" style="margin:0">其他週期的紀錄只算里程，不算這週的完成率。</p>' : ''}</section>` : ''}
     <section class="setgroup"><h3 class="sgt">工具</h3><div class="card setcard">
       ${coach ? `${row('#/plan/season', MI.plan, '全季課表', '20 週一覽、每週完成率')}${row('#/plan/race', MI.flag, '賽事準備', '比賽日計劃、補給、心率、年齡分級')}
@@ -2887,7 +2907,7 @@ async function logView() {
         <label>日期<input type="date" name="date" value="${esc(date)}" max="${today}" required></label>
         <div class="grid2" data-run>
           <label>距離（km）<input name="km" inputmode="decimal" value="${v.km ?? ''}" placeholder="10.0"></label>
-          <label>時間（時:分:秒）<input name="time" inputmode="numeric" value="${v.seconds ? S.fmtDuration(v.seconds) : ''}" placeholder="0:55:00"></label>
+          <label>時間（時:分:秒）<input name="time" inputmode="numeric" value="${v.seconds ? fmtDuration(v.seconds) : ''}" placeholder="0:55:00"></label>
         </div>
         <p class="tiny pace" data-run id="paceOut"></p>
         <div class="grid2" data-run>
@@ -2907,8 +2927,8 @@ async function logView() {
   const sync = () => {
     const skip = f.status.value === 'skip' || f.querySelector('[name=status]:checked')?.value === 'skip';
     for (const el of f.querySelectorAll('[data-run]')) el.hidden = skip;
-    const km = parseFloat(f.km.value), sec = S.parseHMS(f.time.value);
-    $('#paceOut').textContent = km > 0 && sec > 0 ? `平均配速 ${S.fmtPace(km * 1000, sec)}` : '';
+    const km = parseFloat(f.km.value), sec = parseHMS(f.time.value);
+    $('#paceOut').textContent = km > 0 && sec > 0 ? `平均配速 ${fmtDistPace(km * 1000, sec)}` : '';
     $('#rpeOut').textContent = f.rpe.value;
   };
   f.oninput = sync; sync();
@@ -2918,19 +2938,19 @@ async function logView() {
     // 週期欄位：照課表的紀錄帶協會週次（week_no）或個人週期（cycle_anchor、cycle_week）；修改時原樣送回
     const cyc = label && week ? P.cycleFields(lc, week) : { week_no: null };
     const body = { id: log?.id, date: f.date.value, status: st, ...cyc, plan_day: label || null, kind: log?.kind || day?.kind || null,
-      plan_text: planText || null, km: parseFloat(f.km.value) || null, seconds: S.parseHMS(f.time.value) || null, hr: Number(f.hr.value) || null,
+      plan_text: planText || null, km: parseFloat(f.km.value) || null, seconds: parseHMS(f.time.value) || null, hr: Number(f.hr.value) || null,
       rpe: Number(f.rpe.value), feel: Number(f.querySelector('[name=feel]:checked')?.value) || null, note: f.note.value,
       source: log?.source || incoming?.source || 'manual' };
     // 照課表記錄（完成、部分完成）可以不填距離與時間；自主加練才一定要填
     if (st === 'extra' && !body.km && !body.seconds) return toast('填一下距離或時間');
     try {
       await api('/logs', { method: 'POST', body });
-      if (body.source === 'gps' && Run.session()?.status === 'done') Run.discard();   // 已存成紀錄，清掉手機上的這次跑步
+      if (body.source === 'gps') { const R = await loadRun().catch(() => null); if (R?.session()?.status === 'done') R.discard(); }   // 已存成紀錄，清掉手機上的這次跑步
       if (st === 'skip' || log) { toast(st === 'skip' ? '已記下，休息也是訓練的一部分' : '已更新'); location.hash = planHref(lc, week); return; }
       // 記完接著拍照分享：把剛記的距離、時間帶到拍照
       const p = new URLSearchParams({ km: String(body.km || 0), sec: String(body.seconds || 0), date: body.date, title: (fromEv?.title || planText || '今天的跑步').slice(0, 20), logged: '1' });
       view.innerHTML = `<section class="card donecard"><span class="donemark">${IC.check}</span><h2>已記錄，辛苦了</h2>
-        <p class="muted" style="margin:0">${body.km ? `${body.km} 公里` : ''}${body.km && body.seconds ? '・' : ''}${body.seconds ? S.fmtDuration(body.seconds) : ''}${body.km && body.seconds ? `・配速 ${S.fmtPace(body.km * 1000, body.seconds)}` : ''}</p>
+        <p class="muted" style="margin:0">${body.km ? `${body.km} 公里` : ''}${body.km && body.seconds ? '・' : ''}${body.seconds ? fmtDuration(body.seconds) : ''}${body.km && body.seconds ? `・配速 ${fmtDistPace(body.km * 1000, body.seconds)}` : ''}</p>
         ${feat('studio') ? `<a class="btn block iconbtn" href="#/studio?${p}">${ic('<path d="M4 8.2a2 2 0 0 1 2-2h1.9l1.5-2h5.2l1.5 2H18a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2Z"/><circle cx="12" cy="12.6" r="3.6"/>')}拍照分享</a>` : ''}
         <a class="btn ghost block" href="${planHref(lc, week)}">回課表</a></section>`;
     }
@@ -3105,6 +3125,7 @@ function routeSvg(route) {
 }
 async function runView() {
   clearInterval(runTick);
+  await loadRun();
   const x = Run.session();
   // 結束後的成績頁
   if (x?.status === 'done') {
@@ -3140,7 +3161,7 @@ async function runView() {
       studio.source = 'manual'; studio.template = r.route.length > 1 ? 'route' : studio.template; location.hash = '#/studio';
     });
     $('#dlGpx')?.addEventListener('click', async () => {
-      const res = await S.shareFile(new Blob([Run.gpx(x)], { type: 'application/gpx+xml' }), `耕跑團-${r.date}.gpx`, '跑步軌跡');
+      const res = await (await load('./studio.js', 'shareFile')).shareFile(new Blob([Run.gpx(x)], { type: 'application/gpx+xml' }), `耕跑團-${r.date}.gpx`, '跑步軌跡');
       if (res === 'downloaded') toast('已下載 GPX');
     });
     $('#runDiscard').onclick = () => { if (confirm('刪除這次跑步記錄？還沒存成訓練紀錄的話就不見了。')) { Run.discard(); runView(); } };
@@ -3230,7 +3251,7 @@ function showAsk() {
   $('#askGo').onclick = () => { pendingAsk = null; Run.dismissAsk(); if (Run.session()?.status === 'paused' && kind === 'finish') Run.resume(); runView(); };
 }
 // 每秒檢查自動暫停與提醒（在其他頁面時也會檢查）
-setInterval(() => { const k = Run.check(); if (k) askFinish(k); }, 1000);
+setInterval(() => { const k = Run?.check(); if (k) askFinish(k); }, 1000);
 // 今天課表的目標：「11K jog」取距離、「60' easyjog」取分鐘，間歇課不設目標
 async function todayGoal() {
   const t = ymd(new Date()), c = myCycle();
@@ -3248,10 +3269,10 @@ function runBar() {
   let bar = document.getElementById('runbar');
   const onRun = location.hash.split('?')[0] === '#/run';
   // 分頁列「跑步」的小點：記錄中綠色呼吸燈、暫停橘色（每一頁都看得到，包含跑步頁本身）
-  const rt = document.querySelector('.tabs a[data-tab="/run"]'), live = me && Run.active() ? Run.session()?.status || '' : '';
+  const rt = document.querySelector('.tabs a[data-tab="/run"]'), live = me && Run?.active() ? Run.session()?.status || '' : '';
   if (rt && (rt.dataset.live || '') !== live) { if (live) rt.dataset.live = live; else delete rt.dataset.live; tabLabel(rt); }
   document.body.classList.toggle('runbar-on', !!live && !onRun);
-  if (!me || !Run.active() || onRun) { bar?.remove(); return; }
+  if (!me || !Run?.active() || onRun) { bar?.remove(); return; }
   if (!bar) {
     bar = document.createElement('a'); bar.id = 'runbar'; bar.className = 'runbar'; bar.href = '#/run';
     document.body.append(bar);
@@ -3260,6 +3281,7 @@ function runBar() {
   bar.innerHTML = `<i class="${y.status}"></i><span>${y.status === 'paused' ? '已暫停' : '記錄中'}</span><b class="num">${hms(Run.elapsed() / 1000)}</b><b class="num">${(y.dist / 1000).toFixed(2)} km</b><span class="sr">，回到跑步記錄</span>`;
 }
 setInterval(runBar, 1000);
+try { if (localStorage.getItem('cil-run-session') || /^#\/run(\?|$)/.test(location.hash)) loadRun().then(runBar, () => {}); } catch {}
 
 
 // ---------- manage.js（用到才載入）----------
@@ -4059,7 +4081,7 @@ I18N.init().catch(() => {}).finally(() => render());
 // Service Worker：新版本裝好後先等待；剛打開 App、或在背景放了 3 分鐘以上回來，而且沒有填到一半的表單、沒在跑步時，
 //   直接換新版（不然一直不關 App 的人會停在舊版）；其他時候跳出提示讓使用者決定
 document.addEventListener('input', (e) => { if (e.target.closest?.('#view form')) formDirty = true; }, true);
-const busyRunning = () => { try { return ['running', 'paused'].includes(Run.session()?.status); } catch { return false; } };
+const busyRunning = () => { try { return ['running', 'paused'].includes((Run ? Run.session() : JSON.parse(localStorage.getItem('cil-run-session') || 'null'))?.status); } catch { return false; } };
 const quietMoment = () => !formDirty && !busyRunning() && (performance.now() < 15000 || (hiddenAt && Date.now() - hiddenAt > 180000));
 if ('serviceWorker' in navigator) {
   const hadController = !!navigator.serviceWorker.controller;
@@ -4102,4 +4124,4 @@ addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvt 
 addEventListener('appinstalled', () => { installEvt = null; try { localStorage.setItem('cil-installed', '1'); } catch {} document.querySelectorAll('.installcard').forEach((c) => c.remove()); });
 
 // 拆出去的模組（admin.js、photo.js…）從這裡拿共用的工具與狀態
-export { tilePreload, legacyData, removeLegacy, addrField, bindAddrField, latest, $, cfg, downloadAuthed, scanSheet, FEEL, IC, KIND_NAME, LOG_ICON, LOG_STATUS_NAME, MI, PAID_NAME, ROLE_NAME, TAB_DEFAULT, TEAM_PERMS, coachTeam, TEAM_ROLE_NAME, ago, allow, api, applyFeatures, avatar, barChart, bars, bindComments, bindStepup, btnRow, choose, coachPrefs, copy, countdownPicker, dayLabel, dstr, emptyState, esc, eventCard, feat, fixText, group, ic, largeTitle, me, mfaBanner, money, myCycle, nrow, org, pad2, paintCountdown, passkey, planSeg, queueLog, raceTarget, refreshMe, render, route, row, setCoachPrefs, squareIcon, startKey, studio, subTitle, teamAllow, teamIcon, teamOf, teams, toast, rich, keep, names, view, ymd, askReason, isOffline, nowTp, signupDefaults, submitLabel, camLazy, openSheet, apiAll };
+export { tilePreload, legacyData, removeLegacy, addrField, bindAddrField, latest, $, cfg, downloadAuthed, scanSheet, FEEL, IC, KIND_NAME, LOG_ICON, LOG_STATUS_NAME, MI, PAID_NAME, ROLE_NAME, TAB_DEFAULT, TEAM_PERMS, coachTeam, TEAM_ROLE_NAME, ago, allow, api, applyFeatures, avatar, barChart, bars, bindComments, bindStepup, btnRow, choose, coachPrefs, copy, countdownPicker, dayLabel, dstr, emptyState, esc, eventCard, feat, fixText, group, ic, largeTitle, me, mfaBanner, money, myCycle, nrow, org, pad2, paintCountdown, passkey, planSeg, queueLog, raceTarget, refreshMe, render, route, row, setCoachPrefs, squareIcon, startKey, studio, subTitle, teamAllow, teamIcon, teamOf, teams, toast, rich, keep, names, view, ymd, askReason, isOffline, nowTp, signupDefaults, submitLabel, camLazy, openSheet, apiAll, fmtDuration, fmtDistPace, parseHMS };

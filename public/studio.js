@@ -2,6 +2,10 @@
 // 資料來源：手動輸入、Apple 健康捷徑、GPX／TCX 檔（Garmin Connect、Apple 健康、各家錶都能匯出）
 // 全部在瀏覽器裡用 canvas 合成，照片不會上傳到伺服器
 
+// 時間格式放在 app.js（課表與訓練紀錄開機就要用，不用為了它下載整個 studio.js）
+import { fmtDuration, fmtDistPace as fmtPace, parseHMS } from './app.js';
+export { fmtDuration, fmtPace, parseHMS };
+
 // ---------- 資料解析 ----------
 const R = 6371000;
 const rad = (d) => (d * Math.PI) / 180;
@@ -49,21 +53,6 @@ export function parseTrack(text, filename = '') {
     elevation: Math.round(gain), avg_hr: hrs.length ? Math.round(hrs.reduce((a, b) => a + b, 0) / hrs.length) : null, route,
   };
 }
-
-// ---------- 格式 ----------
-export const fmtDuration = (s) => {
-  s = Math.round(s); const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = s % 60;
-  return h ? `${h}:${String(m).padStart(2, '0')}:${String(x).padStart(2, '0')}` : `${m}:${String(x).padStart(2, '0')}`;
-};
-export const fmtPace = (dist, s) => {
-  if (!dist || !s) return '—';
-  const p = s / (dist / 1000); return `${Math.floor(p / 60)}'${String(Math.round(p % 60)).padStart(2, '0')}"`;
-};
-export const parseHMS = (str) => {
-  const p = String(str).trim().split(':').map(Number);
-  if (p.some(Number.isNaN)) return 0;
-  return p.reduce((a, b) => a * 60 + b, 0);
-};
 
 // ---------- 合成 ----------
 export const SIZES = { story: [1080, 1920, '限時動態／Reels'], post: [1080, 1350, '貼文 4:5'], square: [1080, 1080, '方形 1:1'] };
