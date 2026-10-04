@@ -407,7 +407,11 @@ test('跑者休息站：底圖選單打開圖層、13 級以下不抓、類型 c
   await page.reload();
   await expect(page.locator('.rpin-host').first()).toBeAttached();
   await expect(page.locator('.mclus .rpin, .mclus .rclus, .rclus .mpin')).toHaveCount(0);
-  expect(await page.locator('.rpin-host').count()).toBe(await page.locator('.rpin, .rclus').count());
+  // 兩個數字要在同一刻量：分兩次 count() 中間若剛好重畫（休息站模組晚一步載入、格子陸續回來），會量到不同畫面
+  await expect.poll(() => page.evaluate(() => {
+    const hosts = document.querySelectorAll('.rpin-host').length;
+    return hosts > 0 && hosts === document.querySelectorAll('.rpin, .rclus').length;
+  })).toBe(true);
   // 關掉：針都拿掉
   await page.locator('#baseBtn').click();
   await page.locator('#restTog').click();
