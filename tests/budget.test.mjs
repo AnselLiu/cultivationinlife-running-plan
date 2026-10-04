@@ -216,7 +216,7 @@ test('執行額度：一般請求帶 x-budget，而且在 50 以內', async () =
   const r = await call('t_chair', '/me?boot=1');
   assert.equal(r.status, 200);
   const h = r.headers.get('x-budget');
-  assert.match(h, /^d1=\d+;kv=\d+;fetch=\d+;rpc=\d+;sub=\d+$/);
+  assert.match(h, /^d1=\d+;kv=\d+;fetch=\d+;rpc=\d+;sub=\d+;rows=\d+$/);
   assert.ok(Number(/sub=(\d+)/.exec(h)[1]) <= 50);
   assert.deepEqual(await violations(), []);
 });

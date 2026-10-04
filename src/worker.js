@@ -122,11 +122,14 @@ const revokeSessions = (env, memberId) => env.DB.batch([
 // 嘗試次數限制：在 window 秒內超過 limit 次就擋
 async function limited(env, key, limit, windowSec) {
   // 一個陳述式完成「計數＋判斷」，同時多個請求也不會超過上限
-  const r = await env.DB.prepare(`INSERT INTO rate_limits (key, count, window_end) VALUES (?, 1, datetime('now', '+${Math.round(windowSec)} seconds'))
+  //   已經超過上限（計數到 limit＋1）而且還在時間窗內：不再更新（沒有回傳列＝擋下），被擋的請求不寫 D1
+  //   （免費方案每天只有 10 萬列寫入，不讓一直重送的程式靠被擋的請求用光寫入額度）
+  const r = await env.DB.prepare(`INSERT INTO rate_limits (key, count, window_end) VALUES (?1, 1, datetime('now', '+${Math.round(windowSec)} seconds'))
     ON CONFLICT(key) DO UPDATE SET count = CASE WHEN window_end > datetime('now') THEN count + 1 ELSE 1 END,
       window_end = CASE WHEN window_end > datetime('now') THEN window_end ELSE excluded.window_end END
-    RETURNING count`).bind(key).first();
-  return (r?.count || 0) > limit;
+    WHERE rate_limits.window_end <= datetime('now') OR rate_limits.count <= ?2
+    RETURNING count`).bind(key, Math.floor(limit)).first();
+  return !r || r.count > limit;
 }
 
 // 稽核紀錄：特權操作一律記下（detail 只放摘要，不放個資原文）
@@ -993,6 +996,20 @@ const api = (async function api(req, env, path, method) {
   const setting = (k) => settingRows.find((r) => r.key === k)?.value;
   const camsOn = () => Cams.featureOn(setting('features'));
   const restOn = () => Rest.featureOn(setting('features'));
+  // 跑者休息站的讀取額度（免費方案 D1 每天 500 萬列讀取）：每位跑友 10 分鐘的上限（kind＝restc 格子｜restd 詳情與地點附近），
+  //   再加上格子、詳情、地點附近共用的每天上限 REST_DAY_LIMIT（rate_limits 24 小時窗）。先算每天的：每天的用完就不再寫任何計數
+  //   這個 isolate 記得誰今天已經用完（10 分鐘內不再查 D1）
+  const restQuota = async (kind, limit) => {
+    const until = restSpent.get(member.id);
+    if (until && until > Date.now()) return fail(429, '今天查詢休息站的次數已達上限，明天再試');
+    if (await limited(env, `restday:${member.id}`, REST_DAY_LIMIT, 86400)) {
+      restSpent.set(member.id, Date.now() + 600e3);
+      if (restSpent.size > 500) restSpent.delete(restSpent.keys().next().value);
+      return fail(429, '今天查詢休息站的次數已達上限，明天再試');
+    }
+    if (await limited(env, `${kind}:${member.id}`, limit, 600)) return fail(429, '查詢太頻繁，請稍後再試');
+    return null;
+  };
   // 幹部兩步驟驗證：理事長開啟後，幹部的工作階段要用通行金鑰驗證過，才有管理權限（之前一律當一般跑友）
   const security = (() => { try { return JSON.parse(setting('security') || '{}'); } catch { return {}; } })();
   if (member && security.require_mfa && (norm(member.role) !== 'member' || member.team_officer) && !member.s_mfa) {
@@ -1234,11 +1251,13 @@ const api = (async function api(req, env, path, method) {
       const r = camsOn() ? await Cams.forSpot(env, sp) : { cams: [], enabled: false, link: false };
       return json({ ...r, radius: Cams.RADIUS, fallback: Cams.FALLBACK }, 200, { 'cache-control': 'private, max-age=300' });
     }
-    // 附近休息站：周圍 3×3 格、1 公里內每類最多 2 處（距離 × 權重排序）；功能開關關閉時 404
+    // 附近休息站：1 公里內每類最多 2 處（距離 × 權重排序）；功能開關關閉時 404
+    //   結果依地點＋版本快取（記憶體與 Cache API）；和詳情共用 10 分鐘的上限，和格子、詳情共用每天的上限（見 restQuota）
     if (sub === 'rest' && method === 'GET' && !msp[3]) {
       if (!restOn()) return fail(404, '找不到休息站');
-      if (await limited(env, `restd:${member.id}`, REST_DETAIL_LIMIT, 600)) return fail(429, '查詢太頻繁，請稍後再試');
-      return json(await Rest.nearSpot(env, sp), 200, { 'cache-control': 'private, max-age=300' });
+      const q = await restQuota('restd', REST_DETAIL_LIMIT); if (q) return q;
+      const r = await Rest.nearSpot(env, sp);
+      return json(r.out, 200, { 'cache-control': 'private, max-age=300', 'x-rest-cache': r.from });
     }
     if (!sub && method === 'GET') {
       const reps = (await env.DB.prepare(`SELECT id, data, created_at, member_id FROM spot_reports WHERE spot_id = ? AND created_at >= datetime('now', '-24 hours') ORDER BY created_at DESC LIMIT 20`).bind(sp.id).all()).results;
@@ -1413,16 +1432,16 @@ const api = (async function api(req, env, path, method) {
     // 內容依身分不同（editor）：不讓瀏覽器快取（共用裝置換人登入、幹部改完重新讀都要拿到新的）
     return json({ enabled: true, rev: st.rev, editor: canEditSpots(), sources: st.rows.filter((s) => s.enabled).map((s) => Rest.credit(s.source, s)) });
   }
-  // 一格（0.02 度）的休息站：精簡陣列；Cache API 用格子＋版本當 key（workers.dev 上 Cache API 可能沒有作用，每次都讀 D1）；
-  //   每位跑友 10 分鐘最多 150 次（一個畫面最多 16 格，瀏覽器另外快取一天），不讓一個帳號用光每天的 D1 讀取額度
+  // 一格（0.02 度）的休息站：精簡陣列；用格子＋版本快取（這個 isolate 的記憶體＋Cache API；workers.dev 上 Cache API 沒有作用）；
+  //   每位跑友 10 分鐘最多 150 次（一個畫面最多 16 格，瀏覽器另外快取一天），加上格子、詳情、地點附近共用的每天上限（restQuota）
   const mrcell = path.match(/^\/api\/rest\/cell\/([^/]{1,20})$/);
   if (mrcell && method === 'GET') {
     const g = need(); if (g) return g;
     if (!restOn()) return fail(404, '找不到休息站');
     if (!Rest.CELL_RE.test(mrcell[1])) return fail(400, '格子代碼不正確');
-    if (await limited(env, `restc:${member.id}`, 150, 600)) return fail(429, '查詢太頻繁，請稍後再試');
+    const q = await restQuota('restc', 150); if (q) return q;
     const r = await Rest.cellStops(env, mrcell[1]);
-    return new Response(r.body, { headers: { ...SEC_HEADERS, 'content-type': 'application/json; charset=utf-8', 'cache-control': 'private, max-age=86400', 'x-rest-cache': r.hit ? 'hit' : 'miss' } });
+    return new Response(r.body, { headers: { ...SEC_HEADERS, 'content-type': 'application/json; charset=utf-8', 'cache-control': 'private, max-age=86400', 'x-rest-cache': r.from } });
   }
   // 來源開關與同步狀態（系統設定）：理事長、行政人員可以改；監事可以看
   if (path === '/api/rest/sources' && method === 'GET') {
@@ -1492,11 +1511,11 @@ const api = (async function api(req, env, path, method) {
     const editor = canEditSpots();
     if (method === 'GET') {
       if (!restOn()) return fail(404, '找不到休息站');
-      // 一次讀周圍 3×3 格（市區約 800 列）而且沒有快取：每位跑友 10 分鐘最多 60 次（和地點的附近休息站共用）
-      if (await limited(env, `restd:${member.id}`, REST_DETAIL_LIMIT, 600)) return fail(429, '查詢太頻繁，請稍後再試');
+      // 跑友的版本依 id＋版本快取；每位跑友 10 分鐘最多 60 次（和地點的附近休息站共用），加上每天的上限（restQuota）
+      const q = await restQuota('restd', REST_DETAIL_LIMIT); if (q) return q;
       const d = await Rest.detail(env, mrs[1], editor);
       // 幹部多看得到建立者、修正前的值與隱藏的列：不讓瀏覽器快取（json 預設 no-store）
-      return d ? json(d) : fail(404, '找不到休息站');
+      return d.out ? json(d.out, 200, { 'x-rest-cache': d.from }) : fail(404, '找不到休息站');
     }
     if (!editor) return fail(403, '只有幹部可以修改休息站');
     if (!restOn()) return fail(404, '跑者休息站沒有開啟');
@@ -4320,8 +4339,15 @@ const BACKUP_SKIP = new Set(['sessions', 'rate_limits', 'webauthn_challenges', '
 const BACKUP_FILTER = { cams: 'manual = 1', rest_stops: 'manual = 1 OR fix IS NOT NULL OR hidden = 1 OR note IS NOT NULL' };
 // 每筆可能很大的表（路線最多 3000 點約 66 KB、分團小圖最多 80 KB）：第一次只讀幾筆，之後照平均大小調整，一段的 CPU 才不會爆
 const BACKUP_FIRST = { routes: 5, teams: 5, plan_posts: 50, team_posts: 50 };
-const ROUTE_MAX = 100;
-const REST_DETAIL_LIMIT = 60;   // 休息站詳細與地點的附近休息站：每位跑友 10 分鐘最多幾次   // 每人最多存幾條路線（見 POST /api/routes）
+const ROUTE_MAX = 100;   // 每人最多存幾條路線（見 POST /api/routes）
+const REST_DETAIL_LIMIT = 60;   // 休息站詳細與地點的附近休息站：每位跑友 10 分鐘最多幾次
+// 休息站格子、詳細、地點附近合計：每位跑友每天最多幾次（一個畫面最多 16 格、瀏覽器快取一天，一般一天用不到 100 次）。
+//   一次讀的列數（本機 D1 的 rows_read 實測）≈ 範圍內的列＋17（來源狀態、設定等）；快取命中只有那 17 列：
+//   一格 64 處的測試資料：一格 73、地點附近 131（以前讀周圍 9 格 606）、詳情 25。換算真實資料最密的一格 189 列，
+//   最壞一次約 400 列（地點附近、周圍每一格都一樣密），一位跑友一天最多 300 × 400 ≈ 12 萬列（免費方案每天 500 萬列）；
+//   就算每一格都長到上限 800 列，也是 300 × 1,660 ≈ 50 萬列
+const REST_DAY_LIMIT = 300;
+const restSpent = new Map();   // 這個 isolate 記得今天已經用完休息站額度的跑友（id → 到什麼時候前不再查 D1）
 // 加密一個備份物件：'CILB2'＋IV＋AES-GCM(gzip(text))；AAD 綁住日期與第幾段（manifest 是 'manifest'），段落不能被換位置或拿去拼別份
 async function sealBackup(env, text, aad) {
   const gz = await new Response(new Blob([text]).stream().pipeThrough(new CompressionStream('gzip'))).arrayBuffer();
@@ -5116,6 +5142,33 @@ async function devRoute(req, env, ctx, url, path) {
     const r = await Rest.syncSource(env, k);
     return json(r, r.error ? 502 : 200);
   }
+  // 測試用：在一個點周圍 3×3 格鋪滿休息站（每格 per×per 處，source＝man、id 以 man:zg 開頭），量讀取列數用；?clear=1 全部刪掉
+  if (path === '/api/dev/rest-grid' && env.REST_MOCK === '1') {
+    const del = env.DB.prepare("DELETE FROM rest_stops WHERE id LIKE 'man:zg%'"), bump = env.DB.prepare("UPDATE rest_sources SET rev = rev + 1 WHERE source = 'man'");
+    if (q.get('clear') === '1') { await env.DB.batch([del, bump]); return json({ ok: true }); }
+    const lat = Number(q.get('lat')), lng = Number(q.get('lng')), per = Math.min(Math.max(Number(q.get('per')) || 0, 1), 20);
+    if (!Rest.inTaiwan(lat, lng)) return fail(400, '位置要在臺灣');
+    const [cy, cx] = Rest.cellOf(lat, lng).split('_').map(Number), pts = [];
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) for (let i = 0; i < per; i++) for (let j = 0; j < per; j++) {
+      const y = cy + dy, x = cx + dx, la = Math.round(((y + (i + 0.5) / per) / 50) * 1e6) / 1e6, lo = Math.round(((x + (j + 0.5) / per) / 50) * 1e6) / 1e6;
+      pts.push([`man:zg${y}_${x}_${i}_${j}`, la, lo, Rest.cellOf(la, lo)]);
+    }
+    await env.DB.batch([del, env.DB.prepare(`INSERT INTO rest_stops (id, source, type, subtype, svc, access, name, lat, lng, cell, manual, hash)
+      SELECT json_extract(value, '$[0]'), 'man', 'water', 'shop', 1, 'public', '格子測試', json_extract(value, '$[1]'), json_extract(value, '$[2]'), json_extract(value, '$[3]'), 1, '' FROM json_each(?)`)
+      .bind(JSON.stringify(pts)), bump]);
+    return json({ ok: true, rows: pts.length });
+  }
+  // 測試用：直接設定某個次數限制的計數（?key=restday:t_other&count=500&sec=86400）；?get=1 讀回；?clear=1 刪掉；休息站每天上限的 isolate 記憶一起清
+  if (path === '/api/dev/rate') {
+    const key = str(q.get('key'), 80);
+    if (!key) return fail(400, '缺 key');
+    if (key.startsWith('restday:')) restSpent.delete(key.slice(8));
+    if (q.get('get') === '1') return json((await env.DB.prepare('SELECT count, window_end FROM rate_limits WHERE key = ?').bind(key).first()) || { count: null });
+    if (q.get('clear') === '1') await env.DB.prepare('DELETE FROM rate_limits WHERE key = ?').bind(key).run();
+    else await env.DB.prepare(`INSERT INTO rate_limits (key, count, window_end) VALUES (?1, ?2, datetime('now', '+' || ?3 || ' seconds'))
+      ON CONFLICT(key) DO UPDATE SET count = excluded.count, window_end = excluded.window_end`).bind(key, Number(q.get('count')) || 0, Math.max(Number(q.get('sec')) || 600, 1)).run();
+    return json({ ok: true });
+  }
   // 開發用登入
   if (path === '/api/dev/login' && req.method === 'GET') {
     const m = await env.DB.prepare('SELECT * FROM members WHERE id = ?').bind(str(q.get('id'), 32)).first();
@@ -5181,7 +5234,7 @@ export default {
     }
     // 測試用：回應帶這次請求到目前為止用掉的額度（只有 DEV_LOGIN=1 的本機）
     if (env.DEV_LOGIN === '1' && LOCAL.includes(url.hostname)) {
-      try { const x = b.summary(); res.headers.set('x-budget', `d1=${x.d1};kv=${x.kv};fetch=${x.fetch};rpc=${x.rpc};sub=${x.sub}`); } catch {}
+      try { const x = b.summary(); res.headers.set('x-budget', `d1=${x.d1};kv=${x.kv};fetch=${x.fetch};rpc=${x.rpc};sub=${x.sub};rows=${x.rows}`); } catch {}
     }
     return res;
   },

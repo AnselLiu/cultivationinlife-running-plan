@@ -718,48 +718,87 @@ export async function sourceState(env) {
 }
 const LIVE = "enabled = 1 AND hidden = 0 AND status != 'paused'";
 const COLS = 'id, source, type, subtype, svc, access, name, place, lat, lng, hours, hours_raw, status, fix, manual';
-// box：只取這個範圍內的列（地點附近、詳情的同一處）。臺北市中心 3×3 格約 800 列，框到 1 公里內約 170 列：
-//   Worker 少解析八成的列（免費方案每次執行只有 10 ms CPU）；幹部修正過位置的列用修正後的座標
+// box：只取這個範圍內的列（地點附近、詳情的同一處）。索引 idx_rest_cell_pos（migration 0047）是 (cell, 修正後緯度, 修正後經度)，
+//   條件的運算式要跟索引一字不差，SQLite 才會用「格子＋緯度範圍」去找，只讀範圍內的列（D1 依讀到的列數計費，免費方案每天 500 萬列）
+//   幹部修正過位置的列用修正後的座標（格子也跟著修正後的位置）
 //   上限 800 列：第一批真實資料最密的一格（北門、大稻埕一帶）189 列，合併＋JSON 暖的時候約 0.3 ms、第一次約 1.5 ms；上限只防資料暴增時 CPU 失控
 const BOX = " AND COALESCE(json_extract(fix, '$.lat'), lat) BETWEEN ? AND ? AND COALESCE(json_extract(fix, '$.lng'), lng) BETWEEN ? AND ?";
 export const boxOf = (p, m) => { const dl = m / 111320, dg = m / (111320 * Math.cos(p.lat * RAD)); return [p.lat - dl, p.lat + dl, p.lng - dg, p.lng + dg]; };
+// 跟範圍重疊的格子（不是固定周圍 3×3 格）：1 公里附近最多 2×3 格、詳情的 80 公尺最多 2×2 格
+export function cellsIn([la0, la1, lo0, lo1]) {
+  const y0 = Math.floor(la0 * 50 + 1e-9), y1 = Math.floor(la1 * 50 + 1e-9), x0 = Math.floor(lo0 * 50 + 1e-9), x1 = Math.floor(lo1 * 50 + 1e-9), out = [];
+  for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) out.push(`${y}_${x}`);
+  return out;
+}
 export const CELL_LIMIT = 800;
 async function cellRows(env, cells, on, box = null) {
   const ph = cells.map(() => '?').join(',');
   const rows = (await env.DB.prepare(`SELECT ${COLS} FROM rest_stops WHERE cell IN (${ph}) AND ${LIVE}${box ? BOX : ''} LIMIT ${CELL_LIMIT}`).bind(...cells, ...(box || [])).all()).results;
   return rows.filter((r) => on.has(r.source)).map(applyFix);
 }
-// Cache API 也算子請求：經過這次執行的 cacheOf(env)（見 src/budget.js）
+// 結果快取（key 都帶總版本 rev：資料、來源開關或幹部修改都會讓 rev 變，舊的 key 自然用不到）
+//   1. 這個 isolate 的記憶體（workers.dev 上 Cache API 沒有作用，只靠它；最多約 4 MB、600 筆，先放的先清）
+//   2. Cache API（自訂網域才有作用）
+//   Cache API 也算子請求：經過這次執行的 cacheOf(env)（見 src/budget.js）
+const MEM_MAX = 600, MEM_CHARS = 4e6, MEM_TTL = 6 * 3600e3;
+const mem = new Map();
+let memChars = 0;
+export const memClear = () => { mem.clear(); memChars = 0; };
+const memGet = (k) => {
+  const e = mem.get(k);
+  if (!e) return null;
+  if (Date.now() - e.t > MEM_TTL) { mem.delete(k); memChars -= e.v.length; return null; }
+  mem.delete(k); mem.set(k, e);   // 最近用過的移到最後
+  return e.v;
+};
+const memSet = (k, v) => {
+  const old = mem.get(k);
+  if (old) { mem.delete(k); memChars -= old.v.length; }
+  mem.set(k, { v, t: Date.now() }); memChars += v.length;
+  while (mem.size > MEM_MAX || memChars > MEM_CHARS) { const [k0, e0] = mem.entries().next().value; mem.delete(k0); memChars -= e0.v.length; }
+};
 const cachePut = (env, key, body, ttl) => {
+  memSet(key, body);
   const c = cacheOf(env);
   if (!c) return;
-  const put = Promise.resolve().then(() => c.put(key, new Response(body, { headers: { 'content-type': 'application/json', 'cache-control': `public, max-age=${ttl}` } }))).catch(() => {});
+  const put = Promise.resolve().then(() => c.put(new Request(key), new Response(body, { headers: { 'content-type': 'application/json', 'cache-control': `public, max-age=${ttl}` } }))).catch(() => {});
   if (env.defer) env.defer(put); else if (env.ctx?.waitUntil) env.ctx.waitUntil(put);
 };
-const cacheGet = async (env, key) => { try { const hit = await cacheOf(env)?.match(key); return hit ? await hit.text() : null; } catch { return null; } };
+// 回傳 { body, from: 'mem'｜'hit' }；都沒有回傳 null
+const cacheGet = async (env, key) => {
+  const m = memGet(key);
+  if (m != null) return { body: m, from: 'mem' };
+  try {
+    const hit = await cacheOf(env)?.match(new Request(key));
+    if (!hit) return null;
+    const body = await hit.text();
+    memSet(key, body);
+    return { body, from: 'hit' };
+  } catch { return null; }
+};
 // 一格的精簡陣列：[id, type, subtype, svc, access, lat, lng, name, hours]，不含停用、隱藏、暫停的列
 export async function cellStops(env, key) {
   const st = await sourceState(env);
-  const ck = new Request(`https://cil-run.internal/rest/cell/v1/${key}/${st.rev}`);
+  const ck = `https://cil-run.internal/rest/cell/v1/${key}/${st.rev}`;
   const hit = await cacheGet(env, ck);
-  if (hit) return { body: hit, rev: st.rev, hit: true };
+  if (hit) return { body: hit.body, rev: st.rev, hit: true, from: hit.from };
   const stops = mergeRows(await cellRows(env, [key], st.on)).map((r) => [r.id, r.type, r.subtype, r.svc, r.access, r.lat, r.lng, r.name, r.hours || null]);
   const body = JSON.stringify({ cell: key, rev: st.rev, stops });
   cachePut(env, ck, body, 86400);
-  return { body, rev: st.rev, hit: false };
+  return { body, rev: st.rev, hit: false, from: 'miss' };
 }
-// 地點附近：周圍 3×3 格、1 公里內，每類最多 2 處，用「距離 × 權重」排序
+// 地點附近：1 公里內（跟範圍重疊的格子、只讀範圍內的列），每類最多 2 處，用「距離 × 權重」排序
+//   回傳 { out, from }：from＝mem｜hit｜miss（測試與 x-rest-cache 標頭用）
 export const NEAR_RADIUS = 1000, PER_GROUP = 2;
 export const WEIGHT = { public: 1.0, paid: 1.1, customer: 1.3, unverified: 1.6 };
 const weightOf = (r) => (r.status === 'reported' ? 2.0 : WEIGHT[r.access] ?? 1.6);
 export async function nearSpot(env, spot) {
   const st = await sourceState(env);
-  const ck = new Request(`https://cil-run.internal/rest/spot/v1/${encodeURIComponent(spot.id)}/${spot.lat},${spot.lng}/${st.rev}`);
+  const ck = `https://cil-run.internal/rest/spot/v2/${encodeURIComponent(spot.id)}/${spot.lat},${spot.lng}/${st.rev}`;
   const hit = await cacheGet(env, ck);
-  if (hit) return JSON.parse(hit);
-  const [cy, cx] = cellOf(spot.lat, spot.lng).split('_').map(Number), cells = [];
-  for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) cells.push(`${cy + dy}_${cx + dx}`);
-  const all = mergeRows(await cellRows(env, cells, st.on, boxOf(spot, NEAR_RADIUS + 60))).map((r) => ({ ...r, dist: Math.round(haversine(spot, r)) })).filter((r) => r.dist <= NEAR_RADIUS)
+  if (hit) return { out: JSON.parse(hit.body), from: hit.from };
+  const box = boxOf(spot, NEAR_RADIUS + 60);
+  const all = mergeRows(await cellRows(env, cellsIn(box), st.on, box)).map((r) => ({ ...r, dist: Math.round(haversine(spot, r)) })).filter((r) => r.dist <= NEAR_RADIUS)
     .map((r) => ({ ...r, score: Math.max(r.dist, 10) * weightOf(r) })).sort((a, b) => a.score - b.score);
   const groups = {};
   for (const [g, bits] of Object.entries(GROUPS)) {
@@ -768,7 +807,7 @@ export async function nearSpot(env, spot) {
   }
   const out = { enabled: true, rev: st.rev, radius: NEAR_RADIUS, groups };
   cachePut(env, ck, JSON.stringify(out), 3600);
-  return out;
+  return { out, from: 'miss' };
 }
 // 來源的顯名與授權（詳情卡與「休息站資料來源」清單用）
 export const credit = (k, row = {}) => {
@@ -777,18 +816,29 @@ export const credit = (k, row = {}) => {
     license_url: S.license ? S.license_url || LICENSE_URL : null, dataset: S.dataset || null, data_date: row.data_date || null, last_ok_at: row.last_ok_at || null };
 };
 // 詳情：原文時間、收費、補充說明、外連、顯名與資料日期；合併到同一處的其他來源也列出顯名
+//   跑友看到的內容只跟 id 與 rev 有關：快取（記憶體＋Cache API）；幹部的版本多了建立者、修正前的值與隱藏的列，每次重讀
+//   回傳 { out, from }：out 是 null 表示找不到（也快取，同一個 rev 內不會一直重查）
 export async function detail(env, id, editor) {
+  const st = await sourceState(env);
+  const ck = `https://cil-run.internal/rest/detail/v1/${encodeURIComponent(id)}/${st.rev}`;
+  if (!editor) {
+    const hit = await cacheGet(env, ck);
+    if (hit) return { out: JSON.parse(hit.body), from: hit.from };
+  }
+  const out = await detailRead(env, id, editor, st);
+  if (!editor) cachePut(env, ck, JSON.stringify(out), 3600);
+  return { out, from: 'miss' };
+}
+async function detailRead(env, id, editor, st) {
   const r0 = await env.DB.prepare('SELECT r.*, COALESCE(m.nickname, m.name) AS creator FROM rest_stops r LEFT JOIN members m ON m.id = r.created_by WHERE r.id = ?').bind(id).first();
   if (!r0) return null;
-  const st = await sourceState(env);
   const live = r0.enabled && !r0.hidden && st.on.has(r0.source);
   if (!live && !editor) return null;
   const r = applyFix(r0);
   const srow = st.rows.find((s) => s.source === r.source) || {};
-  // 同一處的其他來源（跟地圖合併的規則一樣：同類 60 公尺內名稱相同，或廁所 30 公尺內）
-  const [cy, cx] = cellOf(r.lat, r.lng).split('_').map(Number), cells = [];
-  for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) cells.push(`${cy + dy}_${cx + dx}`);
-  const near = (await cellRows(env, cells, st.on, boxOf(r, 80))).filter((x) => x.id !== r.id && samePlace(r, x));
+  // 同一處的其他來源（跟地圖合併的規則一樣：同類 60 公尺內名稱相同，或廁所 30 公尺內）：只讀 80 公尺範圍內的列
+  const box = boxOf(r, 80);
+  const near = (await cellRows(env, cellsIn(box), st.on, box)).filter((x) => x.id !== r.id && samePlace(r, x));
   const also = [...new Set(near.map((x) => x.source))].filter((k) => k !== r.source).map((k) => credit(k, st.rows.find((s) => s.source === k)));
   const stop = { id: r.id, type: r.type, subtype: r.subtype, svc: near.reduce((n, x) => n | x.svc, r.svc), access: r.access, status: r.status, name: r.name, place: r.place,
     address: r.address, city: r.city, lat: r.lat, lng: r.lng, hours: r.hours || null, hours_raw: r.hours_raw || null, fee: r.fee || null, note: r.note || null,

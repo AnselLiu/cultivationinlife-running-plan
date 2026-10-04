@@ -1588,6 +1588,73 @@ test('跑者休息站：詳細與地點附近一次讀周圍 9 格，每位跑�
   }
 });
 
+test('跑者休息站：地點附近只讀範圍內的列、詳情與附近依版本快取、格子＋詳情＋附近每位跑友每天合計 300 次（D1 讀取額度）', async (t) => {
+  assert.equal((await call('t_chair', '/settings/features', { method: 'POST', body: { rest: true } })).status, 200);
+  const rows = (r) => Number(/rows=(\d+)/.exec(r.headers.get('x-budget') || '')?.[1]);
+  const rate = (q) => fetch(`${BASE}/api/dev/rate?${q}`).then((r) => r.json());
+  try {
+    // 大佳河濱公園（seed07）周圍 3×3 格，每格 8×8＝64 處，共 576 處
+    const g = await (await fetch(`${BASE}/api/dev/rest-grid?lat=25.07358&lng=121.54011&per=8`)).json();
+    assert.equal(g.rows, 576);
+    const a = await call('t_lead', '/spots/seed07/rest');
+    assert.equal(a.status, 200);
+    assert.equal(a.headers.get('x-rest-cache'), 'miss');
+    const b = await call('t_lead', '/spots/seed07/rest');
+    assert.equal(b.headers.get('x-rest-cache'), 'mem', '同一個地點、同一個版本：這個 isolate 的記憶體直接回，不讀休息站的表');
+    assert.deepEqual(b.json, a.json);
+    // 讀到的列（扣掉每次請求都有的部分）：以前讀周圍 9 格全部 576 列，現在只讀範圍重疊的格子裡、緯度範圍內的列
+    const near = rows(a) - rows(b);
+    assert.ok(near > 0 && near < 576 * 0.45, `附近休息站讀了 ${near} 列（9 格共 576 列）`);
+    t.diagnostic(`附近休息站：未快取 ${rows(a)} 列、記憶體快取 ${rows(b)} 列，休息站的表 ${near} 列`);
+    // 詳情：跑友的版本依 id＋版本快取；同一處的比對只讀 80 公尺內
+    const id = a.json.groups.water[0].id;
+    const d1 = await call('t_lead', `/rest/${encodeURIComponent(id)}`), d2 = await call('t_lead', `/rest/${encodeURIComponent(id)}`);
+    assert.equal(d1.status, 200); assert.equal(d1.headers.get('x-rest-cache'), 'miss'); assert.equal(d2.headers.get('x-rest-cache'), 'mem');
+    assert.deepEqual(d2.json, d1.json);
+    assert.ok(rows(d1) - rows(d2) < 60, `詳情讀了 ${rows(d1) - rows(d2)} 列（以前讀周圍 9 格 576 列）`);
+    t.diagnostic(`詳情：未快取 ${rows(d1)} 列、記憶體快取 ${rows(d2)} 列`);
+    // 幹部（地點管理權限）的版本不快取（多了建立者、修正前的值）
+    assert.equal((await call('t_chair', `/rest/${encodeURIComponent(id)}`)).headers.get('x-rest-cache'), 'miss');
+    // 幹部修改後版本變了：跑友馬上看到新的
+    assert.equal((await call('t_chair', `/rest/${encodeURIComponent(id)}`, { method: 'PUT', body: { note: '快取測試' } })).status, 200);
+    const d3 = await call('t_lead', `/rest/${encodeURIComponent(id)}`);
+    assert.equal(d3.headers.get('x-rest-cache'), 'miss'); assert.equal(d3.json.stop.note, '快取測試');
+    // 一格的清單：只讀那一格（格子測試 64 處＋前面同步的假資料）：索引＋資料列，大約是處數的 2 倍
+    const c1 = await call('t_lead', '/rest/cell/1253_6077'), c2 = await call('t_lead', '/rest/cell/1253_6077');
+    assert.equal(c1.headers.get('x-rest-cache'), 'miss'); assert.equal(c2.headers.get('x-rest-cache'), 'mem');
+    assert.ok(rows(c1) - rows(c2) <= 2 * (c1.json.stops.length + 12), `一格讀了 ${rows(c1) - rows(c2)} 列（${c1.json.stops.length} 處）`);
+    t.diagnostic(`一格：未快取 ${rows(c1)} 列、記憶體快取 ${rows(c2)} 列`);
+    // 每天上限：格子、詳情、地點附近共用一個計數（24 小時）
+    await rate('key=restday:t_lead&count=299&sec=86400');
+    assert.equal((await call('t_lead', '/rest/cell/1253_6077')).status, 200, '第 300 次還可以');
+    for (const p of ['/rest/cell/1253_6077', `/rest/${encodeURIComponent(id)}`, '/spots/seed07/rest']) {
+      const r = await call('t_lead', p);
+      assert.equal(r.status, 429, p); assert.match(r.json.error, /今天/);
+    }
+    assert.equal((await call('t_runner', '/rest/cell/1253_6077')).status, 200, '別人不受影響');
+  } finally {
+    await rate('key=restday:t_lead&clear=1');
+    await fetch(`${BASE}/api/dev/rest-grid?clear=1`);
+    await call('t_chair', '/settings/features', { method: 'POST', body: { rest: false } });
+  }
+});
+
+test('次數限制：超過上限後被擋的請求不再寫 D1（不讓重送的程式用光每天 10 萬列的寫入額度）', async () => {
+  // 推播測試：每人一小時 10 次。計數停在上限＋1，被擋的請求不再更新那一列
+  const rate = (q) => fetch(`${BASE}/api/dev/rate?${q}`).then((r) => r.json());
+  await rate('key=pushtest:t_lead&count=10&sec=3600');
+  try {
+    for (let i = 0; i < 3; i++) assert.equal((await call('t_lead', '/push/test', { method: 'POST' })).status, 429);
+    assert.equal((await rate('key=pushtest:t_lead&get=1')).count, 11, '第一次被擋時記到 11，之後不再寫');
+  } finally { await rate('key=pushtest:t_lead&clear=1'); }
+  // 時間窗結束後重新計數
+  await rate('key=pushtest:t_lead&count=11&sec=1');
+  await new Promise((r) => setTimeout(r, 2100));
+  assert.notEqual((await call('t_lead', '/push/test', { method: 'POST' })).status, 429);
+  assert.equal((await rate('key=pushtest:t_lead&get=1')).count, 1);
+  await rate('key=pushtest:t_lead&clear=1');
+});
+
 test('路線：每人最多存 100 條（不讓一個帳號把資料庫與每日備份灌爆）', async () => {
   const pts = [[25.07, 121.53], [25.08, 121.53]];
   const had = (await call('t_other', '/routes')).json.routes.filter((r) => r.mine).length;

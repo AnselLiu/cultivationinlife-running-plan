@@ -20,7 +20,7 @@ export const strictViolations = [];
 export class Budget {
   constructor(env, { kind = 'request', name = '', inherit = 0 } = {}) {
     this.plan = planOf(env); this.kind = kind; this.name = String(name).slice(0, 80);
-    this.d1 = 0; this.kv = 0; this.fetch = 0; this.rpc = 0; this.cache = 0;
+    this.d1 = 0; this.rows = 0; this.kv = 0; this.fetch = 0; this.rpc = 0; this.cache = 0;
     this.inherit = Math.max(0, Number(inherit) || 0);   // 呼叫自己時，父執行已經用掉的（保守算法：假設和父執行共用額度）
     this.sub = this.inherit; this.child = 0;
     this.stopped = []; this.over = false; this.t0 = Date.now();
@@ -34,6 +34,8 @@ export class Budget {
     if (strictViolations.length < 200) strictViolations.push(v);
     throw new BudgetExceeded(`執行額度超過上限：${this.kind} ${this.name} sub=${this.sub} d1=${this.d1}`);
   }
+  // D1 回報的讀取列數（meta.rows_read；只有 all／run／batch 有 meta，first 沒有）：不算額度，只記下來看哪支 API 讀得多
+  read(res) { const n = Array.isArray(res) ? res.reduce((t, r) => t + (Number(r?.meta?.rows_read) || 0), 0) : Number(res?.meta?.rows_read) || 0; this.rows += n; return res; }
   // type：d1 | kv | fetch | rpc | cache，全部都加到 sub
   take(type, n = 1) { this[type] += n; this.sub += n; this.check(); }
   // 子執行（呼叫自己）回報的用量：父執行保守地加回自己的預算
@@ -42,7 +44,7 @@ export class Budget {
   left() { return this.plan.soft - this.sub; }
   stop(reason) { if (this.stopped.length < 20) this.stopped.push(String(reason).slice(0, 60)); }
   summary() {
-    return { kind: this.kind, name: this.name, d1: this.d1, kv: this.kv, fetch: this.fetch, rpc: this.rpc, cache: this.cache, child: this.child, inherit: this.inherit,
+    return { kind: this.kind, name: this.name, d1: this.d1, rows: this.rows, kv: this.kv, fetch: this.fetch, rpc: this.rpc, cache: this.cache, child: this.child, inherit: this.inherit,
       sub: this.sub, stopped: this.stopped.join(',') || null, over: this.over, ms: Date.now() - this.t0 };
   }
 }
@@ -60,8 +62,8 @@ function wrapStmt(st, b) {
     [RAW]: st,
     bind: (...a) => wrapStmt(st.bind(...a), b),
     first: async (...a) => { b.take('d1'); return st.first(...a); },
-    all: async () => { b.take('d1'); return st.all(); },
-    run: async () => { b.take('d1'); return st.run(); },
+    all: async () => { b.take('d1'); return b.read(await st.all()); },
+    run: async () => { b.take('d1'); return b.read(await st.run()); },
     raw: async (...a) => { b.take('d1'); return st.raw(...a); },
   };
 }
@@ -69,7 +71,7 @@ function wrapD1(db, b) {
   return {
     prepare: (sql) => wrapStmt(db.prepare(sql), b),
     // batch 裡每一句分開算（文件的算法）；交給真正的 batch 前把包裝拆回原本的 D1PreparedStatement
-    batch: async (list) => { b.take('d1', list.length); return db.batch(list.map((s) => s?.[RAW] || s)); },
+    batch: async (list) => { b.take('d1', list.length); return b.read(await db.batch(list.map((s) => s?.[RAW] || s))); },
     exec: async () => { throw new Error('DB.exec 沒有計入執行額度，請改用 prepare'); },
   };
 }
