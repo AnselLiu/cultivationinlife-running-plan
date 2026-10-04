@@ -145,7 +145,7 @@ body::after{content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;opa
 /* 內容欄：--wrapw 是欄寬，頂部列用同一個值算左右留白，品牌、倒數跟內容左右對齊 */
 :root{--wrapw:760px;--gut:16px}
 .wrap{max-width:var(--wrapw);margin:0 auto;padding:0 max(var(--gut),env(safe-area-inset-left,0px)) 24px;display:flex;flex-direction:column;gap:14px}
-.top{padding-inline:max(var(--gut),env(safe-area-inset-left,0px),calc((100% - var(--wrapw))/2 + var(--gut)))}
+.top{padding-inline:max(var(--gut),env(safe-area-inset-left,0px),calc((100% - var(--topw,var(--wrapw)))/2 + var(--gut)))}
 
 /* iOS 大標題 */
 /* 大標題列：標題靠左、動作靠右對齊底部；副標題在左欄裡自己換行（basis 0），
@@ -423,17 +423,23 @@ body.guest::before,body.consent::before,body.fullmap::before{display:none}
   .navmore a svg{width:19px;height:19px;flex:none;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
   .navmore a[aria-current]{font-weight:600}
   @media (pointer:coarse){.navmore a{min-height:44px}}   /* iPad 橫向用手指點側邊欄 */
+  .tabs.more{-webkit-mask-image:linear-gradient(#000 calc(100% - 36px),transparent);mask-image:linear-gradient(#000 calc(100% - 36px),transparent)}
+  @media (max-height:900px){.navgrp{margin-top:8px}.tabs .navbrand{padding-bottom:8px}.ngt{padding-bottom:2px}}
   .tabs a:not([aria-current]):hover{background:color-mix(in srgb,var(--ink) 5%,transparent)}
   /* 側邊欄佔左邊 --side，內容在剩下的空間置中（不是貼著側邊欄） */
-  :root{--wrapw:1060px;--gut:32px}
+  :root{--wrapw:1060px;--topw:1060px;--gut:32px}
   body{padding-left:var(--side)}
   .top .brand{visibility:hidden}
   .wrap{padding:0 var(--gut) 32px}
-  /* 表單、設定、活動這類單欄頁面：限制在好讀的寬度 */
-  body:is([data-page=me],[data-page=log],[data-page=run],[data-page=e],[data-page=new],[data-page=edit],[data-page=notifications],[data-page=privacy],[data-page=tickets],[data-page=past],[data-page=logs],[data-page=teams]){--wrapw:800px}
+  /* 表單、設定、活動這類單欄頁面：寬螢幕限制在好讀的寬度，左邊跟其他頁對齊（頂部列與標題切換分頁時不會左右跑）；
+     iPad 橫向（內容區不到 1060）跟其他頁一樣寬 */
+  @media (min-width:1313px){
+    body:is([data-page=me],[data-page=log],[data-page=run],[data-page=e],[data-page=new],[data-page=edit],[data-page=notifications],[data-page=privacy],[data-page=tickets],[data-page=past],[data-page=logs],[data-page=teams]){--wrapw:800px}
+    body:is([data-page=me],[data-page=log],[data-page=run],[data-page=e],[data-page=new],[data-page=edit],[data-page=notifications],[data-page=privacy],[data-page=tickets],[data-page=past],[data-page=logs],[data-page=teams]) .wrap{margin-left:calc((100% - var(--topw))/2)}
+  }
   /* 訪客（登入頁）與重新同意隱私權政策時沒有側邊欄 */
   body.guest,body.consent{--side:0px}
-  body.guest{--wrapw:620px}
+  body.guest{--wrapw:620px;--topw:620px}
   .dash{grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;align-items:start}
 }
 /* 系統偏好：減少透明度用不透明底、增加對比加邊框、減少動態效果不滑動也不縮放 */
@@ -539,7 +545,7 @@ button.seatrow:active{background:var(--accent-soft)}
 /* 權限對照表 */
 .permtable{overflow-x:auto;font-size:13px;scrollbar-width:none;-webkit-mask-image:linear-gradient(90deg,#000 calc(100% - 18px),transparent);mask-image:linear-gradient(90deg,#000 calc(100% - 18px),transparent)}
 .permtable::-webkit-scrollbar{display:none}
-.permtable .hd,.permtable .rw{display:grid;grid-template-columns:72px repeat(8,minmax(52px,1fr));gap:4px;align-items:center;min-width:max-content}
+.permtable .hd,.permtable .rw{display:grid;grid-template-columns:72px;grid-auto-flow:column;grid-auto-columns:64px;gap:4px;align-items:center;min-width:max-content}   /* 每列固定欄寬：英文標題換行也不會跟下面的勾勾錯開 */
 .permtable .hd{color:var(--ink-3);font-size:12px;line-height:1.2;padding-bottom:6px;align-items:end}
 .permtable .hd span:not(:first-child){text-align:center;word-break:keep-all;overflow-wrap:normal}
 .permtable .rw{padding:7px 0;border-top:1px solid var(--stroke)}
@@ -1030,7 +1036,7 @@ html.guiding .runbar,html.guiding .updbar{display:none}
 .setcard .setrow:only-child{border-radius:var(--r-xl)}
 .sic{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;background:var(--sc,var(--tile-blue));color:#fff;box-shadow:inset 0 1px 0 rgba(255,255,255,.25)}
 .sic svg.ic{width:20px;height:20px}
-.st{display:grid;gap:1px;min-width:0}.st b{font-weight:600;font-size:16px}.st .tiny{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.st{display:grid;gap:1px;min-width:0}.st b{font-weight:600;font-size:16px}.st .tiny{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
 .chev{width:8px;height:8px;border-right:2px solid var(--ink-3);border-top:2px solid var(--ink-3);transform:rotate(45deg);opacity:.6;margin-right:4px}
 #logout .sic,#logoutAll .sic{background:color-mix(in srgb,var(--race) 14%,transparent);color:var(--race)}
 #logout b,#logoutAll b{color:var(--race)}
@@ -1210,13 +1216,13 @@ details.group[open] > summary{margin-bottom:2px}
 /* ---------- 登入頁：品牌開場 ---------- */
 body.guest .tabs,body.guest #countdown{display:none}
 body.guest main{padding-bottom:40px}
-.welcome{display:grid;justify-items:center;text-align:center;gap:6px;padding:28px 8px 12px}
+.welcome{display:grid;justify-items:center;text-align:center;gap:6px;padding:28px 0 12px}
 .wmark{width:96px;height:96px;border-radius:26px;box-shadow:0 18px 40px rgba(28,70,152,.35),0 2px 6px rgba(11,27,51,.2);animation:wfloat 6s ease-in-out infinite}
 @keyframes wfloat{50%{transform:translateY(-6px)}}
 .wtitle{margin:14px 0 0;font-size:46px;font-weight:800;letter-spacing:.06em;line-height:1.05}
 .wsub{margin:0;font-size:12px;letter-spacing:.32em;color:var(--ink-3);font-weight:600}
 .wlead{margin:10px 0 4px;font-size:20px;font-weight:600;color:var(--accent)}
-.wfeat{list-style:none;margin:14px 0 0;padding:0;display:grid;grid-template-columns:1fr 1fr;gap:10px;width:100%;max-width:520px}
+.wfeat{list-style:none;margin:14px 0 0;padding:0;display:grid;grid-template-columns:1fr 1fr;gap:10px;width:100%}
 .wfeat li{display:grid;justify-items:start;text-align:left;gap:2px;padding:14px;border-radius:var(--r-l);background:var(--glass);-webkit-backdrop-filter:var(--blur);backdrop-filter:var(--blur);box-shadow:var(--shadow-s),inset 0 1px 0 var(--rim)}
 .wfeat .wic{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;background:var(--accent-soft);color:var(--accent);margin-bottom:6px}
 .wfeat .wic svg.ic{width:20px;height:20px}
@@ -1352,6 +1358,7 @@ input[type="date"]::-webkit-date-and-time-value,input[type="time"]::-webkit-date
 /* 分頁太多、要左右滑的時候，兩側淡出提示還有內容 */
 .seg.scrolls{-webkit-mask-image:linear-gradient(90deg,transparent,#000 14px,#000 calc(100% - 14px),transparent);mask-image:linear-gradient(90deg,transparent,#000 14px,#000 calc(100% - 14px),transparent)}
 .seg button{scroll-snap-align:start}
+.seg.adminseg.wrap2{display:grid;grid-template-columns:repeat(auto-fill,minmax(84px,1fr));border-radius:20px;overflow:visible}
 
 /* 活動頁的地址與導航（像 Apple 地圖的地點列） */
 .navlink{display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:center;padding:10px 12px;border-radius:14px;background:rgba(255,255,255,.14);color:#fff;text-decoration:none;font-size:14px;line-height:1.35}
@@ -1914,7 +1921,11 @@ details > summary.setsum .tiny{font-weight:400}
 /* 文件列：移除用減號圓形圖示按鈕，不是一顆大膠囊 */
 .drow .iconx.rm{justify-self:end;align-self:center;width:44px;height:44px;color:var(--race);background:color-mix(in srgb,var(--race) 10%,transparent)}
 /* 報名預設：選單拿寬欄、時間拿窄欄 */
-.grid2.selwide{grid-template-columns:minmax(0,1fr) 128px}
+.grid2.selwide{grid-template-columns:minmax(0,1fr) minmax(128px,9.5em)}
+.grid2.selwide input[type=time]{min-width:8.5em}
+@media (max-width:420px){.grid2.selwide{grid-template-columns:minmax(0,1fr) 8.5em}}
+/* 停用的欄位：Chromium 預設跟可以填的一樣，看不出來不能改 */
+:is(input:not([type=checkbox],[type=radio]),select,textarea):disabled{opacity:.45;cursor:not-allowed}
 /* 開啟速度：狀態圓點畫在標籤前面，不再整塊縮排 */
 .vital > .tiny:first-child{display:flex;align-items:center;gap:6px}
 .vital > .tiny:first-child::before{content:"";width:8px;height:8px;border-radius:50%;flex:none;background:var(--st,color-mix(in srgb,var(--ink) 18%,transparent))}

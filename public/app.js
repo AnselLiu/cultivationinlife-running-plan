@@ -51,7 +51,11 @@ let segQueued = false;
 const fitSegs = () => {
   segQueued = false;
   for (const s of view.querySelectorAll('.seg')) {
+    // 管理後台的分頁放不下（英文）：改成兩列，不左右滑（藏在右邊的「設定」「稽核」找不到）；先拿掉兩列再量原本的寬度
+    const wraps = s.classList.contains('adminseg');
+    if (wraps) s.classList.remove('wrap2');
     const over = s.scrollWidth > s.clientWidth + 1;
+    if (wraps) { s.classList.toggle('wrap2', over); continue; }
     s.classList.toggle('scrolls', over);
     const on = over && !s.dataset.fit && s.querySelector('[aria-pressed="true"]');
     if (on) { s.dataset.fit = '1'; s.scrollLeft += on.getBoundingClientRect().left - s.getBoundingClientRect().left - (s.clientWidth - on.offsetWidth) / 2; }
@@ -779,7 +783,7 @@ function loginView() {
     </section>
     ${org().parent ? `<p class="tiny center" style="margin:0">${esc(org().parent_note || `${org().parent} 支持`)}</p>` : ''}
     <section class="card">
-      <h3>${esc(org().name || '台灣耕跑團協會')}</h3>
+      <h2 class="h3">${esc(org().name || '台灣耕跑團協會')}</h2>
       <p class="muted" style="margin:0">入會申請使用協會的 Google 表單。</p>
       ${org().join_form ? `<a class="btn ghost block" href="${esc(org().join_form)}" target="_blank" rel="noopener">開啟入會表單</a>` : ''}
     </section>
@@ -859,6 +863,12 @@ function applyNav() {
   for (const a of document.querySelectorAll('.navmore a[data-perm]')) a.hidden = !ok[a.dataset.perm];
   $('#navStaff').hidden = !document.querySelector('.navmore a[data-perm]:not([hidden])');
   document.documentElement.style.setProperty('--n', document.querySelectorAll('.tabs > a[data-tab]:not([hidden])').length);
+  fitTabs();
+}
+// 側邊欄（1024 以上）放不下、還沒捲到底：下緣淡出，看得出下面還有項目
+function fitTabs() {
+  const t = $('#tabs');
+  t.classList.toggle('more', wideNav.matches && t.scrollTop + t.clientHeight < t.scrollHeight - 4);
 }
 // 分頁的選取狀態：1024 以下用 tabOf；側邊欄在主要與次要項目裡找最精確的那一個（沿著上一層往上找，例如 /t/youth 亮「分團」）。
 //   通知頁沿用上一次亮著的分頁；選取膠囊用 --i 滑過去；換頁時縮小的分頁列展開
@@ -1607,6 +1617,10 @@ const NICON = { security: IC.shieldAlert, change: IC.calAlert, signup: IC.ticket
 // 整句都是伺服器範本的標題：英文介面可以翻；夾帶活動或分團名稱的標題、內文一律不翻
 const NFIXED = new Set(['新裝置登入', '新增了一把通行金鑰', '移除了一把通行金鑰', '已登出所有裝置', '幹部需要兩步驟驗證', '你已成為理事長', '你已卸任理事長',
   '身分更新', '候補遞補成功', '入會完成', '會籍已到期', '會費今天到期', '有人申請入會', '練跑地圖：有新的地點提議', '每季權限檢視', '跑完了嗎？', '這週練得很兇，注意恢復', '教練回饋了你的訓練', '每日備份還沒做完']);
+// 夾帶活動名稱的範本：開頭的範本字（「待審核：」）英文介面可以翻，後面的名稱不翻；內文只有固定句型可以翻
+const NPREFIX = /^(待審核：|還有 \d+ 筆待審核：)/, NBODY = [/^目前 \d+ 筆報名等你核准$/];
+const nTitle = (t) => { if (NFIXED.has(t)) return esc(t); const m = t.match(NPREFIX); return m ? `${esc(m[1])}<span translate="no">${esc(t.slice(m[1].length))}</span>` : `<span translate="no">${esc(t)}</span>`; };
+const nBody = (b) => (NBODY.some((re) => re.test(b)) ? esc(b) : `<span translate="no">${esc(b)}</span>`);
 // 只接受站內網址；通知中心本身不算（改開詳細內容）
 const safeHref = (u) => (/^\/#\/[\w/?=&.%-]*$/.test(u || '') && u !== '/#/notifications' ? u.slice(1) : null);
 const nDate = (ts) => new Date(`${ts.replace(' ', 'T')}Z`);
@@ -1642,8 +1656,8 @@ const nrow = (n, pinned = false) => {
       <span class="ntext">
         <span class="sr">${CATS[cat]?.zh || '其他'}</span>${unread ? '<span class="sr nsru">未讀</span>' : ''}
         ${eye ? `<span class="neye">${eye}</span>` : ''}
-        <span class="nt" id="nt-${esc(n.id)}"${NFIXED.has(n.title) ? '' : ' translate="no"'}>${esc(n.title)}</span>
-        ${n.body ? `<span class="nb" translate="no">${esc(n.body)}</span>` : ''}
+        <span class="nt" id="nt-${esc(n.id)}">${nTitle(n.title)}</span>
+        ${n.body ? `<span class="nb">${nBody(n.body)}</span>` : ''}
       </span>
       <span class="nmeta"><time class="num" datetime="${nDate(n.created_at).toISOString()}" data-ts="${esc(n.created_at)}" title="${fullTime(n.created_at)}">${ntime(n.created_at)}</time><i class="ndot" aria-hidden="true"></i></span>
     </a>
@@ -1787,7 +1801,7 @@ function nActions(li) {
     CATS[cat] && !CATS[cat].locked ? ['mute', IC.bellSlash, '關閉這一類推播'] : null,
     CATS[cat] && cat !== 'security' && !NS.offline ? ['del', IC.trash, '刪除這則通知'] : null,
   ].filter(Boolean);
-  const s = openSheet('更多動作', `<div class="nsheethd"><span class="ntile n-${cat}" aria-hidden="true">${NICON[cat]}</span><b${NFIXED.has(n.title) ? '' : ' translate="no"'}>${esc(n.title)}</b></div>
+  const s = openSheet('更多動作', `<div class="nsheethd"><span class="ntile n-${cat}" aria-hidden="true">${NICON[cat]}</span><b>${nTitle(n.title)}</b></div>
     <div class="nacts">${acts.map(([k, icon, label]) => `<button type="button" class="nact${k === 'del' ? ' danger' : ''}" data-act="${k}">${icon}<span>${label}</span></button>`).join('')}</div>
     <button type="button" class="btn ghost block" data-close>取消</button>`, li.querySelector('.nrow'));
   s.host.classList.add('nsheet');
@@ -1806,8 +1820,8 @@ function nDetail(n, opener) {
   const cat = nCat(n), href = safeHref(n.url), eye = nEye(n);
   openSheet(n.title, `<div class="ndetail"><span class="ntile n-${cat}" aria-hidden="true">${NICON[cat]}</span>
       <span class="neye">${eye || CATS[cat]?.zh || '其他'}</span>
-      <h3 id="ndetailh"${NFIXED.has(n.title) ? '' : ' translate="no"'}>${esc(n.title)}</h3>
-      ${n.body ? `<p class="ndbody" translate="no">${esc(n.body)}</p>` : ''}
+      <h3 id="ndetailh">${nTitle(n.title)}</h3>
+      ${n.body ? `<p class="ndbody">${nBody(n.body)}</p>` : ''}
       <time class="tiny num" datetime="${nDate(n.created_at).toISOString()}">${fullTime(n.created_at)}</time></div>
     <div class="choices">${href ? `<a class="btn block" href="${esc(href)}" data-close>前往</a>` : ''}<button type="button" class="btn ghost block" data-close>關閉</button></div>`, opener, 'ndetailh');
 }
@@ -1818,7 +1832,7 @@ const todoBox = (t) => {
     t.applied ? row('#/admin?tab=members', tile, '入會申請', '', num(t.applied)) : '',
     ...t.joins.map((j) => row(`#/t/${esc(j.tid)}`, tile, `<span translate="no">「${esc(j.name)}」</span>入團申請`, '', num(j.n))),
     ...t.pays.map((p) => row(`#/e/${esc(p.id)}/stats`, tile, `<span translate="no">「${esc(p.title)}」</span>繳費確認`, '', num(p.n))),
-    ...(t.reviews || []).map((p) => row(`#/e/${esc(p.id)}/stats?f=pending`, tile, `<span translate="no">「${esc(p.title)}」</span>報名待審核`, '', num(p.n))),
+    ...(t.reviews || []).map((p) => row(`#/e/${esc(p.id)}/stats?f=pending`, tile, `<span translate="no">「${esc(p.title)}」</span><span class="nw">報名待審核</span>`, '', num(p.n))),
     t.spots ? row('#/map', tile, '地點審核', '', num(t.spots)) : '',
   ].join('')}</div></section>`;
 };
@@ -3342,7 +3356,7 @@ function meProfile() {
           <label>暱稱<input name="nickname" value="${esc(me.nickname || '')}" maxlength="20" placeholder="團裡怎麼叫你"></label></div>
         <div class="grid2 g-dist"><label>項目<select name="dist"><option value="fm" ${me.dist === 'fm' ? 'selected' : ''}>全馬</option><option value="hm" ${me.dist === 'hm' ? 'selected' : ''}>半馬</option></select></label>
           <label>組別<select name="grp"></select></label></div>
-        ${feat('coach') ? '<a class="tiny" href="#/plan/setup?go=pb">不知道選哪組？用成績推算 ›</a>' : ''}
+        ${feat('coach') ? '<a class="tiny tlink" href="#/plan/setup?go=pb">不知道選哪組？用成績推算 ›</a>' : ''}
         <div class="field"><span class="flabel">所屬跑團</span><span class="fvalue"><span translate="no">${esc(teamOf(me.main_team)?.name || '等待管理員設定')}</span></span><span class="tiny">跟著主團，由管理員設定</span></div>
         <div class="grid2"><label>餐點偏好<select name="meal_pref"><option value="" ${!me.meal_pref ? 'selected' : ''}>未指定</option>
             <option ${me.meal_pref === '葷食' ? 'selected' : ''}>葷食</option><option ${me.meal_pref === '素食' ? 'selected' : ''}>素食</option></select></label>
@@ -3554,8 +3568,8 @@ function meDisplay() {
       <p class="tiny" style="margin:0">自動會跟著手機的深淺色設定切換</p>
       <label class="switch"><span>分頁列只顯示圖示<span class="tiny" style="display:block">預設顯示文字；往下捲時也會自動收起文字</span></span><input type="checkbox" id="iconsOnly" ${iconsOnly.get() ? 'checked' : ''}><i></i></label>
     </section>
-    <section class="card"><div class="row spread"><span>語言<span class="tiny" style="display:block" translate="no">Language</span></span>
-      <div class="seg" role="group" aria-label="Language" translate="no"><button data-lang="zh" aria-pressed="${I18N.lang === 'zh'}">中文</button><button data-lang="en" aria-pressed="${I18N.lang === 'en'}">English</button></div></div></section>
+    <section class="card"><div class="row spread"><span>語言${I18N.lang === 'en' ? '' : '<span class="tiny" style="display:block" translate="no">Language</span>'}</span>
+      <div class="seg themeseg" role="group" aria-label="Language" translate="no"><button data-lang="zh" aria-pressed="${I18N.lang === 'zh'}">中文</button><button data-lang="en" aria-pressed="${I18N.lang === 'en'}">English</button></div></div></section>
     ${cfg.settings?.features?.cams === true ? `<section class="card"><label class="switch"><span>省流量：影像不自動載入<span class="tiny" style="display:block">地點卡的附近即時影像點了才載入、不自動更新</span></span><input type="checkbox" id="camLazy" ${camLazy.get() ? 'checked' : ''}><i></i></label></section>` : ''}`;
   for (const b of document.querySelectorAll('[data-pick-theme]')) b.onclick = () => {
     theme.set(b.dataset.pickTheme === 'auto' ? null : b.dataset.pickTheme); applyTheme();
@@ -3787,6 +3801,8 @@ async function renderOnce() {
   // 子頁面（管理後台、名冊、活動統計…）也亮起它所屬的分頁
   paintTabs(hash);
   paintCountdown();
+  // asked：這次已經問過伺服器（第一次開 App 的 /me?boot=1），沒登入就不用再問一次 /me
+  let guest = false, asked = false;
   if (!me && firstLoad) {
     firstLoad = false;
     const fresh = api('/me?boot=1');
@@ -3806,11 +3822,10 @@ async function renderOnce() {
         render().finally(() => setTimeout(() => document.body.classList.remove('quiet'), 50));
       }).catch(() => {});
     } else {
-      try { const r = await fresh; me = r.member; cfg = r; bootData = r.boot || null; } catch { me = null; }
+      try { const r = await fresh; me = r.member; cfg = r; bootData = r.boot || null; guest = !me; asked = true; } catch { me = null; }
     }
   }
-  let guest = false;
-  if (!me) {
+  if (!me && !asked) {
     try { const r = await api('/me'); me = r.member; cfg = r; guest = !me; meStale = false; } catch { me = null; }
   }
   // 主人不明時（要認出主人或問本人）先等它做完再畫，不會先把別人的課表設定畫出來；換人時清除是同步的，不用等

@@ -59,10 +59,10 @@ async function overviewPanel() {
   const k = (label, v, sub = '') => `<div class="card kpi"><span class="tiny">${label}</span><b class="num">${v ?? '—'}</b><span class="tiny">${sub || '&nbsp;'}</span></div>`;
   return `<section class="card" id="pendingTop" hidden></section>
     <section class="kpis">
-      ${k('跑友', o.members, `本月新加入 ${o.newThisMonth}`)}${k('30 天內活躍', o.active30, o.members ? `${Math.round(o.active30 / o.members * 100)}%` : '')}
-      ${k('協會會員', o.association, `待審 ${o.applied}・將到期 ${o.expiring}`)}${k('團練出席率', o.attendance == null ? '—' : `${o.attendance}%`, '最近 30 天')}
+      ${k('跑友人數', o.members, `本月新加入 ${o.newThisMonth}`)}${k('30 天內活躍', o.active30, o.members ? `${Math.round(o.active30 / o.members * 100)}%` : '')}
+      ${k('協會會員數', o.association, `待審 ${o.applied}・將到期 ${o.expiring}`)}${k('團練出席率', o.attendance == null ? '—' : `${o.attendance}%`, '最近 30 天')}
       ${k('近 30 天活動', o.events30, `接下來 30 天 ${o.upcoming} 場`)}${k('近 30 天報名', o.signups30)}
-      ${k('7 天訓練紀錄', o.logs7)}${k('開啟推播', o.pushSubs == null ? null : `${o.pushSubs}<small> 人</small>`)}
+      ${k('7 天訓練紀錄', o.logs7)}${k('已開推播', o.pushSubs == null ? null : `${o.pushSubs}<small> 人</small>`)}
     </section>
     ${allow('settings') || allow('audit') ? '<section class="card" id="healthBox"><h3>開啟速度與錯誤</h3><p class="tiny" style="margin:0">載入中…</p></section>' : ''}
     <section class="card"><h3>每月新加入</h3>${barChart(months.map((m) => ({ l: `${Number(m.slice(5))}月`, v: g[m] || 0 })), { unit: ' 人', h: 120 })}</section>
@@ -118,12 +118,14 @@ function budgetHtml(h) {
   const q = h.pushQueue || { n: 0 };
   return `<h3>執行額度</h3>
     <p class="tiny" style="margin:0">免費方案一次執行最多 50 個子請求；做不完的工作會在下個整點接著做。</p>
-    ${h.jobs.length ? `<div class="itemtable">${h.jobs.map((j) => `<div class="itr"><span><b style="font-weight:600">${esc(JOB_NAME[j.job] || j.job)}</b>
-      ${j.last_error ? `<span class="tiny" style="display:block;word-break:break-word">${esc(j.last_error)}</span>` : ''}</span><span class="tiny">${state(j)}</span></div>`).join('')}</div>` : ''}
-    <div class="itemtable"><div class="itr"><span><b style="font-weight:600">推播佇列</b></span><span class="tiny">${q.n ? `待送 ${q.n} 則・最早一則 ${ago(q.oldest)}` : '沒有待送的推播'}</span></div></div>
     ${(h.budget || []).length ? `<div class="itemtable">${h.budget.map((x) => `<div class="itr"><span><b class="num" style="font-weight:600;word-break:break-word">${esc(x.name)}</b>
       <span class="tiny" style="display:block">停下 ${x.stopped} 次${x.over ? `・超過上限 ${x.over} 次` : ''}・單次最高 ${x.max_sub}</span></span><span class="tiny">${ago(x.last_at)}</span></div>`).join('')}</div>
-      <p class="tiny" style="margin:0">最常碰到額度上限的功能：停下表示做到一半留到下次，超過上限要檢查。</p>` : '<p class="tiny" style="margin:0">這段期間沒有功能碰到額度上限。</p>'}`;
+      <p class="tiny" style="margin:0">最常碰到額度上限的功能：停下表示做到一半留到下次，超過上限要檢查。</p>` : '<p class="tiny" style="margin:0">這段期間沒有功能碰到額度上限。</p>'}
+    <h4>排程工作</h4>
+    ${h.jobs.length ? `<div class="itemtable">${h.jobs.map((j) => `<div class="itr"><span><b style="font-weight:600">${esc(JOB_NAME[j.job] || j.job)}</b>
+      ${j.last_error ? `<span class="tiny" style="display:block;word-break:break-word">${esc(j.last_error)}</span>` : ''}</span><span class="tiny">${state(j)}</span></div>`).join('')}</div>` : '<p class="tiny" style="margin:0">排程工作還沒執行過。</p>'}
+    <h4>推播佇列</h4>
+    <p class="tiny" style="margin:0">${q.n ? `待送 ${q.n} 則・最早一則 ${ago(q.oldest)}` : '沒有待送的推播。'}</p>`;
 }
 function bindOverview() {
   loadHealth();
@@ -273,10 +275,10 @@ function rolesPanel(data) {
   for (const m of data.members) (byRole[m.role] ||= []).push(m);
   return `<section class="card">
       <h3>權限對照</h3>
-      <div class="permtable">
+      <div class="permtable" tabindex="0" role="region" aria-label="權限對照">
         <div class="hd"><span>身分</span>${Object.values(PERM_NAME).map((p) => `<span>${p}</span>`).join('')}</div>
         ${order.map((r) => `<div class="rw"><span>${data.roles[r]}</span>${Object.keys(PERM_NAME).map((p) =>
-          `<span>${data.perms[r].includes(p) ? `<i class="yes" aria-label="有">${IC.check}</i>` : '<i class="no" aria-label="無"></i>'}</span>`).join('')}</div>`).join('')}
+          `<span>${data.perms[r].includes(p) ? `<i class="yes" role="img" aria-label="有">${IC.check}</i>` : '<i class="no" role="img" aria-label="無"></i>'}</span>`).join('')}</div>`).join('')}
       </div>
       <p class="tiny">監事可以看名冊與會籍，但不能修改。身分由理事長在下方「指派身分」設定。</p>
     </section>
@@ -418,7 +420,7 @@ function bindAudit() {
   const row = (x) => `<div class="arow">
       <span class="num tiny">${esc(x.at.slice(5, 16))}</span>
       <span><b>${esc(AUDIT_NAME[x.action] || '其他操作')}</b>
-        <span class="tiny" style="display:block">${esc(x.actor_name || '未登入')}${x.actor_role ? `（${esc(ROLE_NAME[x.actor_role] || x.actor_role)}）` : ''}${x.detail ? `・${esc(auditDetail(x.detail))}` : ''}</span></span>
+        <span class="tiny" style="display:block">${x.actor_name ? `<span translate="no">${esc(x.actor_name)}</span>` : '未登入'}${x.actor_role ? `（${esc(ROLE_NAME[x.actor_role] || x.actor_role)}）` : ''}${x.detail ? `・${esc(auditDetail(x.detail))}` : ''}</span></span>
     </div>`;
   const load = async (more) => {
     const r = await api(`/audit?${new URLSearchParams({ ...params, ...(more ? { before: next } : {}) })}`);
@@ -482,9 +484,9 @@ function adminTeamsPanel() {
         <button class="btn">新增</button>
       </form></section>` : ''}
     <section class="card"><h3>分團權限</h3>
-      <div class="permtable">
+      <div class="permtable" tabindex="0" role="region" aria-label="分團權限對照">
         <div class="hd"><span>分團身分</span><span>建立活動</span><span>報到</span><span>抽獎</span><span>座位圖</span><span>看名冊</span><span>審核入團</span><span>指派幹部</span></div>
-        ${[['lead', '團長'], ['officer', '幹部'], ['member', '團員']].map(([k, v]) => `<div class="rw"><span>${v}</span>${['event', 'checkin', 'lottery', 'layout', 'roster', 'approve', 'appoint'].map((p) => `<span>${TEAM_PERMS[k]?.includes(p) ? `<i class="yes" aria-label="有">${IC.check}</i>` : '<i class="no" aria-label="無"></i>'}</span>`).join('')}</div>`).join('')}
+        ${[['lead', '團長'], ['officer', '幹部'], ['member', '團員']].map(([k, v]) => `<div class="rw"><span>${v}</span>${['event', 'checkin', 'lottery', 'layout', 'roster', 'approve', 'appoint'].map((p) => `<span>${TEAM_PERMS[k]?.includes(p) ? `<i class="yes" role="img" aria-label="有">${IC.check}</i>` : '<i class="no" role="img" aria-label="無"></i>'}</span>`).join('')}</div>`).join('')}
       </div>
       <p class="tiny" style="margin:0">分團權限只作用在自己分團的活動；分團名冊不顯示電話。</p></section>`;
 }

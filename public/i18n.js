@@ -78,6 +78,7 @@ const PATTERNS = [
   [/^開放中・到 (\d\d:\d\d)$/, 'Open · until $1'], [/^目前未開放・(\d\d:\d\d) 開放$/, 'Closed now · opens $1'],
   [/^目前未開放・明天 (\d\d:\d\d) 開放$/, 'Closed now · opens tomorrow $1'], [/^目前未開放・週([日一二三四五六]) (\d\d:\d\d) 開放$/, (_, w, t) => `Closed now · opens ${WD[w]} ${t}`],
   [/^還有 (\d+) 筆待審核$/, '$1 pending requests'], [/^還有 (\d+) 筆待審核：/, '$1 pending: '],
+  [/^目前 (\d+) 筆報名等你核准$/, (_, n) => `${n} ${n === '1' ? 'signup is' : 'signups are'} waiting for your approval`],
   // 挑戰、分團人數、首頁待審核、活動報名人數：整句先換，不要被拆成「再 21.2 km」「1 members」「2 rows」
   [/^再 ([\d.]+) 公里達到 (\d+) 公里$/, '$1 km to reach $2 km'],
   [/^(\d+) 人・(\d+) 人有練$/, (_, a, b) => `${a} ${a === '1' ? 'member' : 'members'} · ${b} active`],
