@@ -21,6 +21,7 @@
 <link rel="icon" href="/icons/icon-192.png" sizes="192x192" type="image/png">
 <link rel="mask-icon" href="/icons/favicon-32.png" color="#1C4698">
 <link rel="stylesheet" href="/style.css">
+<!-- 只預載每一頁第一屏都要的模組（app.js 的靜態 import）；活動頁、「我的」子頁、跑步、地圖等用到才載入（app.js 依網址先抓），離線靠 Service Worker 先存好 -->
 <link rel="modulepreload" href="/app.js">
 <link rel="modulepreload" href="/plan.js">
 <link rel="modulepreload" href="/signup-window.js">

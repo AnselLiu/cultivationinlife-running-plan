@@ -75,6 +75,14 @@ const warmMap = () => {
   const l = document.createElement('link'); l.rel = 'preconnect'; l.href = 'https://wmts.nlsc.gov.tw'; l.crossOrigin = 'anonymous'; document.head.append(l);
   import('./map.js').catch(() => { mapWarm = false; });
 };
+// 直接打開活動頁、入場券、「我的」子頁（分享連結、推播、捷徑）：那一頁的模組跟登入資料同時下載，不用等 /api/me 回來
+//   index.html 只預載每一頁第一屏都要的模組；這裡只下載不執行（modulepreload），畫面要用時才 import
+{
+  const pre = (f) => { const l = document.createElement('link'); l.rel = 'modulepreload'; l.href = f; document.head.append(l); };
+  const h = location.hash;
+  if (/^#\/(e\/|tickets)/.test(h)) ['/event.js', '/pricing.js', '/party.js'].forEach(pre);   // event.js 靜態 import 的兩個一起抓，不用等 event.js 解析完才發現
+  else if (/^#\/me\/\w/.test(h)) pre('/me.js');
+}
 if (location.hash.startsWith('#/map')) {
   warmMap();
   // 直接打開地圖：上次位置的中心那幾張圖磚先抓（不用等 Leaflet 載完才知道要哪幾張）；網址格式跟 map.js 的 BASES 一樣

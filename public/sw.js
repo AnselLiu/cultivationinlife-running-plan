@@ -9,6 +9,8 @@ const API_CACHE = 'cil-api';
 const SHARE_CACHE = 'cil-share';
 // 地圖圖磚：看過的與「下載離線地圖」存的都在這裡，最多約 3000 張，先存的先清
 const TILE_CACHE = 'cil-tiles', TILE_HOSTS = ['wmts.nlsc.gov.tw', 'tile.openstreetmap.org'], TILE_MAX = 3000;
+// 外殼：public 的每個 JS 模組都要列（含用到才載入的活動頁、「我的」子頁、休息站、課表加強功能），離線才打得開；
+//   index.html 只 modulepreload 第一屏要的模組，其他的在這裡安裝時一次存好
 const SHELL = ['/', '/style.css', '/app.js', '/plan.js', '/data/season-2026.json', '/data/zip3.json', '/manifest.webmanifest', '/coach', '/party.js', '/qr.js', '/vendor/qrcode.js', '/studio.js', '/run.js', '/guide.js', '/admin.js', '/photo.js', '/report.js', '/manage.js', '/teams.js', '/pricing.js', '/calendar.js', '/map.js', '/reststops.js', '/weather.js', '/wxrule.js', '/hours.js', '/challenge.js', '/badges.js', '/coachcalc.js', '/coach.js', '/coachweek.js', '/coachpdf.js', '/vendor/leaflet.js', '/vendor/leaflet.css', '/i18n.js', '/i18n-en.js', '/notif-cats.js', '/signup-window.js', '/device.js', '/event.js', '/me.js',
   '/icons/icon-192.png', '/teams/youth.webp', '/teams/kids.webp', '/teams/core.webp', '/teams/geng.webp'];
 // 斷線時可以用上次資料的 API（都是本人看得到的內容；登出時整個清掉）
