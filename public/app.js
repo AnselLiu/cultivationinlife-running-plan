@@ -310,14 +310,21 @@ const clearDeviceData = () => {
   navigator.serviceWorker?.controller?.postMessage({ type: 'CLEAR_DATA' });
   // 還沒有 Service Worker 控制這一頁（第一次開、強制重新整理）也要清：頁面直接刪
   for (const c of [Device.API_CACHE, Device.SHARE_CACHE]) globalThis.caches?.delete(c).catch(() => {});
-  try { localStorage.removeItem('cil-log-queue'); localStorage.removeItem('cil-coach'); localStorage.removeItem(OWNER_KEY); } catch {}
+  // 未送出的訓練紀錄、課表設定、跑步中的 GPS 軌跡、地圖位置、草稿等（清單見 device.js 的 LOCAL_KEYS、SESSION_KEYS）
+  Device.clearLocal(deviceDeps());
   navigator.clearAppBadge?.().catch(() => {});
   bellAt = 0; bellFor = null; bellState = { badge: 0, unread: 0 };
 };
 // 這台裝置的課表設定（身體資料）、離線暫存與推播訂閱屬於哪個帳號：登入狀態過期、被撤銷後，
 //   換另一個人在這台登入時，先清掉上一位的資料並取消推播訂閱（不只靠按「登出」，見 device.js）
-const OWNER_KEY = Device.OWNER_KEY;
-const deviceDeps = () => { let storage = null; try { storage = localStorage; } catch {} return { storage, caches: globalThis.caches, dropPush: () => dropPush(false) }; };
+//   reset：換人時把已經讀進記憶體的這次跑步（run.js）也丟掉
+const deviceDeps = () => {
+  let storage = null, session = null;
+  try { storage = localStorage; } catch {}
+  try { session = sessionStorage; } catch {}
+  return { storage, session, caches: globalThis.caches, dropPush: () => dropPush(false), reset: () => Run.discard() };
+};
+const lsOrNull = () => { try { return localStorage; } catch { return null; } };
 // guest：伺服器明確回覆「沒有登入」（不是斷線）時才清 API 暫存，一次載入只清一次
 function bindDeviceData(id, guest = false) {
   if (id) Device.bindOwner(id, deviceDeps()).catch(() => {});
@@ -332,6 +339,7 @@ async function dropPush(server = true) {
     if (!sub) return;
     if (server) await api('/push/unsubscribe', { method: 'POST', body: { endpoint: sub.endpoint } }).catch(() => {});
     await sub.unsubscribe().catch(() => {});
+    Device.markPush(lsOrNull(), null);
   } catch {}
 }
 // 提示：可以帶一個動作（例如刪除後的「復原」）；focus 把焦點移到動作按鈕
@@ -1813,6 +1821,7 @@ function fillFeed(r) {
 // 空狀態的「開啟手機推播」：只有這台裝置真的沒有推播訂閱時才出現
 async function pushHint() {
   const box = $('#npush'); if (!box || !cfg.vapid) return;
+  await Device.pushReady();
   const reg = await Promise.race([navigator.serviceWorker?.ready.catch(() => null), new Promise((r) => setTimeout(() => r(null), 1500))]);
   const sub = await reg?.pushManager?.getSubscription().catch(() => null);
   if (!sub && box.isConnected) box.outerHTML = '<a class="btn sm" href="#/me/notify">開啟手機推播</a>';
@@ -3411,6 +3420,8 @@ const prefRows = (p) => NPREF.filter(([k]) => k !== 'todo' || p.officer).map(([k
     <span class="switch"><input type="checkbox" data-pref="${k}" ${locked || !p.mute.includes(k) ? 'checked' : ''}${locked ? ' disabled' : ''}><i></i></span></label>`;
 });
 async function meNotify() {
+  // 換人時正在取消上一位的推播訂閱：等它做完再讀，不會把上一位的訂閱當成這個人的
+  await Device.pushReady();
   const reg = await Promise.race([navigator.serviceWorker?.ready.catch(() => null), new Promise((r) => setTimeout(() => r(null), 1500))]);
   const [sub, prefs] = await Promise.all([reg?.pushManager?.getSubscription().catch(() => null), api('/me/notify-prefs').catch(() => null)]);
   const denied = typeof Notification !== 'undefined' && Notification.permission === 'denied';
@@ -3440,10 +3451,11 @@ async function meNotify() {
   const focusCat = new URLSearchParams(location.hash.split('?')[1] || '').get('cat');
   const pr = focusCat && /^\w+$/.test(focusCat) && $(`#pref-${focusCat}`);
   if (pr) { pr.scrollIntoView({ block: 'center', behavior: reduceMotion() ? 'auto' : 'smooth' }); pr.classList.add('flash'); setTimeout(() => pr.classList.remove('flash'), 1200); }
-  // 伺服器已經刪掉這支手機的訂閱（推播服務回 404／410）：權限還在就悄悄重新訂閱
+  // 伺服器已經刪掉這支手機的訂閱（推播服務回 404／410）：權限還在、而且這個訂閱是目前登入的人開的，才悄悄重新訂閱
+  //   （不知道是誰開的就請本人自己重新開啟，不把上一位的 endpoint 綁到這個帳號）
   if (sub && cfg.vapid) api('/push/check', { method: 'POST', body: { endpoint: sub.endpoint } }).then(async ({ known }) => {
-    if (known) return;
-    if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+    if (known) { Device.markPush(lsOrNull(), me?.id); return; }
+    if (typeof Notification !== 'undefined' && Notification.permission === 'granted' && Device.mayRebind(lsOrNull(), me?.id)) {
       try { const j = sub.toJSON(); await api('/push/subscribe', { method: 'POST', body: { endpoint: j.endpoint, keys: j.keys } }); toast('已重新連上推播'); return; } catch {}
     }
     const el = $('#pushStale'); if (el) el.hidden = false;
@@ -3606,11 +3618,13 @@ function meAssoc() {
 
 async function togglePush(sub) {
   try {
+    await Device.pushReady();
     const reg = await Promise.race([navigator.serviceWorker?.ready, new Promise((r) => setTimeout(() => r(null), 3000))]);
     if (!reg || typeof Notification === 'undefined') return toast('這個瀏覽器不支援通知，請用 Safari 或 Chrome 打開，並加到主畫面');
     if (sub) {
       await api('/push/unsubscribe', { method: 'POST', body: { endpoint: sub.endpoint } });
       await sub.unsubscribe();
+      Device.markPush(lsOrNull(), null);
       toast('已關閉通知'); render(); return;
     }
     // 第一次開啟前先說明會推播什麼（權限請求要在使用者按下按鈕時發出）
@@ -3620,6 +3634,7 @@ async function togglePush(sub) {
     const s = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlB64(cfg.vapid) });
     const j = s.toJSON();
     await api('/push/subscribe', { method: 'POST', body: { endpoint: j.endpoint, keys: j.keys } });
+    Device.markPush(lsOrNull(), me?.id);
     toast('已開啟通知'); render();
   } catch (e) { toast(e.message || '通知設定失敗'); }
 }
