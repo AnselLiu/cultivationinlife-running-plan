@@ -2557,7 +2557,7 @@ function bindComments() {
 const hms = (sec) => { sec = Math.max(0, Math.round(sec)); const h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60), x = sec % 60; return `${h ? `${h}:` : ''}${h ? pad2(m) : m}:${pad2(x)}`; };
 const paceStr = (secPerKm) => (secPerKm && secPerKm < 1800 ? `${Math.floor(secPerKm / 60)}'${pad2(Math.round(secPerKm % 60))}"` : '—');
 const GPS_NAME = { waiting: '正在定位…', good: 'GPS 良好', ok: 'GPS 普通', weak: 'GPS 訊號弱', denied: '沒有定位權限', off: '只計時' };
-let runTick = null;
+let runTick = null, lapMsgT = 0;
 // 路線預覽（SVG，不載地圖圖資，路線不離開手機）
 function routeSvg(route) {
   if (route.length < 2) return '';
@@ -2651,6 +2651,7 @@ async function runView() {
           : '<button class="runbtn go" id="rResume">繼續</button><button class="runbtn stop" id="rStop">結束</button>'}
       </div>
       ${x.goal ? `<div class="goalbar"><span class="tiny">今天的課表：${esc(x.goal.text)}</span><span class="bar big"><i id="rGoal" style="width:0%"></i></span></div>` : ''}
+      <p class="tiny lapmsg" id="rLapMsg" role="status"></p>
       <div id="rLaps" class="splits"></div>
     </section>
     <div id="askDone"></div>`;
@@ -2662,7 +2663,10 @@ async function runView() {
     $('#rPace').textContent = paceStr(Run.currentPace());
     $('#rAvg').textContent = d > 50 ? paceStr(sec / (d / 1000)) : '—';
     const g = $('.pill.gps'); if (g) { g.className = `pill gps ${y.gps}`; g.textContent = `${GPS_NAME[y.gps] || ''}${y.acc ? `・±${y.acc} m` : ''}`; }
-    $('#rLaps').innerHTML = y.laps.map((l, i) => `<div><span>第 ${i + 1} 圈</span><b class="num">${hms((l.at - (i ? y.laps[i - 1].at : 0)) / 1000)}</b></div>`).reverse().join('');
+    // 計圈：最上面是進行中的這一圈（記過一圈才有），下面是完成的圈（新的在上）
+    const cur = Run.currentLap();
+    $('#rLaps').innerHTML = (cur ? `<div class="cur"><span>第 ${cur.n} 圈・進行中</span><b class="num">${hms(cur.sec)}</b></div>` : '')
+      + y.laps.map((l, i) => `<div><span>第 ${i + 1} 圈</span><b class="num">${hms((l.at - (i ? y.laps[i - 1].at : 0)) / 1000)}</b></div>`).reverse().join('');
     if (y.goal && $('#rGoal')) $('#rGoal').style.width = `${Math.min(100, y.goal.km ? d / (y.goal.km * 10) : sec / (y.goal.min * 0.6))}%`;
     // 自動暫停或自動繼續時，按鈕要跟著換
     if ((y.status === 'paused') !== !!$('#rResume')) { runView(); return; }
@@ -2671,7 +2675,20 @@ async function runView() {
   paint();
   runTick = setInterval(paint, 1000);
   showAsk();
-  $('#rLap')?.addEventListener('click', () => { Run.lap(); navigator.vibrate?.(60); paint(); });
+  // 計圈：3 秒內再按不算（口袋裡誤觸、連按），只輕輕提示、不震動
+  $('#rLap')?.addEventListener('click', () => {
+    const ok = Run.lap(), y = Run.session(), msg = $('#rLapMsg'), btn = $('#rLap');
+    if (ok) {
+      navigator.vibrate?.(60);
+      const l = y.laps[y.laps.length - 1], prev = y.laps[y.laps.length - 2];
+      msg.textContent = `已記第 ${y.laps.length} 圈 ${hms((l.at - (prev ? prev.at : 0)) / 1000)}`;
+    } else {
+      msg.textContent = '剛記過一圈，這次不算';
+      btn.classList.remove('nudge'); void btn.offsetWidth; btn.classList.add('nudge');
+    }
+    clearTimeout(lapMsgT); lapMsgT = setTimeout(() => { msg.textContent = ''; }, 2500);
+    paint();
+  });
   $('#rPause')?.addEventListener('click', () => { Run.pause(); runView(); });
   $('#rResume')?.addEventListener('click', () => { Run.resume(); runView(); });
   $('#rStop')?.addEventListener('click', () => { Run.finish(); runView(); });

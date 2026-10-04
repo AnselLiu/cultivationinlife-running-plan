@@ -889,6 +889,11 @@ h3 svg.ic{width:18px;height:18px}
 div.splits{display:grid;width:100%}
 .splits div{display:flex;justify-content:space-between;padding:8px 2px;border-bottom:1px solid var(--stroke);font-size:15px}
 .splits small{font-weight:500;color:var(--ink-2)}
+.splits div.cur b{color:var(--accent)}
+.lapmsg{min-height:1.5em;margin:-6px 0 0}
+.runbtn.nudge{animation:lapnudge .35s ease}
+@keyframes lapnudge{0%,100%{transform:none}30%{transform:translateX(-5px)}70%{transform:translateX(5px)}}
+@media (prefers-reduced-motion:reduce){.runbtn.nudge{animation:none}}
 .routesvg{width:100%;height:auto;border-radius:var(--r-m);background:color-mix(in srgb,var(--ink) 4%,transparent)}
 .routesvg polyline{fill:none;stroke:var(--accent);stroke-width:5;stroke-linejoin:round;stroke-linecap:round}
 .routesvg .st{fill:#34C759}.routesvg .en{fill:var(--race)}

@@ -16,6 +16,7 @@ const FRESH_MS = 5000, STILL_FIXES = 3;    // 自動暫停：5 秒內有好的�
 const GOOD_ACC = 40;                       // 精度（公尺）在這以內才用
 const EST_MIN_V = 1.2, EST_MAX_V = 7, STILL_M = 30;   // 空檔怎麼補：平均速度（m/s）與「站著」的距離上限
 const JOIN_M = 60;                         // 自動繼續時離暫停前最後一點在這以內就接起來
+const LAP_GAP_MS = 3000;                   // 計圈：3 秒內再按一次不算
 const WOKE_MS = 60000;                     // 剛從凍結回來、還沒收到好的定位點：1 分鐘內先不問「跑完了嗎」
 
 const KEY = 'cil-run-session';
@@ -175,10 +176,20 @@ export function resume() {
   if (s.useGps) watch();
   lock(); save(true); emit();
 }
+// 計圈：3 秒內（剛開始或剛記過一圈）再按不算，避免連按多出一圈 0:01；有記到回傳 true
 export function lap() {
-  if (!s || s.status !== 'running') return;
-  s.laps.push({ at: elapsed(), d: Math.round(s.dist) });
+  if (!s || s.status !== 'running') return false;
+  const at = elapsed(), prev = s.laps[s.laps.length - 1];
+  if (at - (prev ? prev.at : 0) < LAP_GAP_MS) return false;
+  s.laps.push({ at, d: Math.round(s.dist) });
   save(true); emit();
+  return true;
+}
+// 進行中的這一圈（記過至少一圈才有）：第幾圈、經過時間（秒）、距離（公尺）
+export function currentLap(x = s) {
+  const prev = x?.laps[x.laps.length - 1];
+  if (!prev) return null;
+  return { n: x.laps.length + 1, sec: (elapsed(x) - prev.at) / 1000, m: Math.max(0, Math.round(x.dist - prev.d)) };
 }
 export function finish() {
   if (!s) return;

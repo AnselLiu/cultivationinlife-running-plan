@@ -135,6 +135,9 @@ const PATTERNS = [
   [/^活動前 (\d+) 天 (\d\d:\d\d) 開放/, (_, n, t) => `Opens ${n} ${n === '1' ? 'day' : 'days'} before the event at ${t}`],
   [/^每天 03:00 自動備份・上次 (\d+)\/(\d+)$/, 'Daily backup at 03:00 · last $1/$2'],
   [/^(\d{4}-\d\d-\d\d) 的備份還沒做完$/, 'The $1 backup hasn’t finished'],
+  // 跑步記錄的計圈
+  [/^第 (\d+) 圈$/, 'Lap $1'], [/^第 (\d+) 圈・進行中$/, 'Lap $1 · in progress'], [/^第 (\d+) 圈・(\d+) m$/, 'Lap $1 · $2 m'],
+  [/^已記第 (\d+) 圈 ([\d:]+)$/, 'Lap $1 saved · $2'],
   ['FRAG'],
   [/NT\$([\d,]+) 起/g, 'from NT$$$1'],
   [/([\d.]+) 公里/g, '$1 km'], [/([\d.]+) 公尺/g, '$1 m'], [/([\d.]+) 毫秒/g, '$1 ms'], [/([\d.]+) 秒/g, '$1 s'],

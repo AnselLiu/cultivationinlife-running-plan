@@ -168,3 +168,23 @@ test('空檔中重新整理頁面：存下來的狀態接著用，回來的點�
   near(r.seconds, w.moving / 1000, 3, '時間');
   assert.ok(r.est > 200, `估算距離 ${r.est}`);   // 400→(600 北, 100 東) 的直線約 224 公尺
 });
+
+test('(d) 0.6 秒內連按兩次計圈：只算一圈，進行中的這一圈即時算', async () => {
+  const Run = await load(); Run.start({ useGps: true });
+  const w = world(Run);
+  now += 1000; assert.equal(Run.lap(), false, '剛開始 3 秒內不算');
+  w.run(90, 3);
+  assert.equal(Run.currentLap(), null, '還沒記過圈：沒有進行中的圈');
+  assert.equal(Run.lap(), true);
+  now += 600; assert.equal(Run.lap(), false, '0.6 秒後再按不算');
+  w.run(60, 3);
+  assert.equal(Run.session().laps.length, 1);
+  const c = Run.currentLap();
+  assert.equal(c.n, 2);
+  near(c.sec, 60.6, 0.01, '進行中這一圈的時間');
+  near(c.m, 180, 15, '進行中這一圈的距離');
+  w.run(5, 3);
+  assert.equal(Run.lap(), true, '超過 3 秒可以再記');
+  Run.finish();
+  assert.deepEqual(Run.summary().laps.map((l) => l.n), [1, 2], '成績只留完成的圈');
+});
