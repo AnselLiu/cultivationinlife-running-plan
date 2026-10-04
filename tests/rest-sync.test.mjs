@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
-import { gather, buildSql, localSources, checkSql, checkRows, parseArgs, wranglerArgs, seedSpots, spotArgs, parseSpots, keyEnv, coverage } from '../tools/rest-sync.mjs';
+import { gather, buildSql, localSources, checkSql, checkRows, parseArgs, wranglerArgs, seedSpots, spotArgs, parseSpots, keyEnv, coverage, childEnv } from '../tools/rest-sync.mjs';
 import { control } from '../src/rest-mock.js';
 import { SOURCES } from '../src/rest.js';
 
@@ -171,7 +171,7 @@ test('第二批（Cool map、環境部公廁）：要金鑰、只收跑點 1 公
     assert.equal(src(db, k).enabled, 1, `${k} 第一次同步成功就開啟`);
     assert.equal(src(db, k).last_count, g.rows.length);
   }
-  assert.equal(live(db, 'cool'), 6); assert.equal(live(db, 'moenv'), 4);
+  assert.equal(live(db, 'cool'), 8); assert.equal(live(db, 'moenv'), 6);
   // 涼適點：公有照收、店家待確認、臺北市公有點與遠方的點不收
   const names = (k) => db.prepare('SELECT name, type, subtype, access FROM rest_stops WHERE source = ? ORDER BY name').all(k).map((r) => ({ ...r }));
   const cool = Object.fromEntries(names('cool').map((r) => [r.name, `${r.type}/${r.subtype}/${r.access}`]));
@@ -179,9 +179,19 @@ test('第二批（Cool map、環境部公廁）：要金鑰、只收跑點 1 公
   assert.equal(cool['全家便利商店板橋二運店'], 'supply/store/unverified');
   assert.equal(cool['臺灣測試銀行板橋分行'], 'water/shop/unverified');
   assert.equal(cool['萊爾富大直測試店'], 'supply/store/unverified', '臺北市的店家照收');
-  for (const n of ['臺北市中山區測試公所', '遠方測試公所', '板橋測試活動中心']) assert.equal(cool[n], undefined, n);
+  assert.equal(cool['板橋測試大學'], 'water/cool/unverified', '合作涼爽點不算公有');
+  for (const n of ['臺北市中山區測試公所', '遠方測試公所', '板橋測試活動中心', '東門測試市場']) assert.equal(cool[n], undefined, n);
+  // 「24小時營業」是 24 小時；括號裡寫星期的只存原文
+  const cr = (n) => db.prepare("SELECT * FROM rest_stops WHERE source = 'cool' AND name = ?").get(n);
+  assert.equal(cr('全家便利商店板橋二運店').hours, '24 小時'); assert.ok(cr('全家便利商店板橋二運店').svc & 512);
+  assert.equal(cr('萊爾富大直測試店').hours, '24 小時');
+  assert.equal(cr('板橋測試圖書館').hours, null); assert.equal(cr('板橋測試圖書館').hours_raw, '(二)~(六) 08:00-17:00');
+  // 環境部公廁：同一地址的男廁、女廁、無障礙廁所合併成一處，名稱去掉廁間與樓層；加油站看名稱；飯店是店家
   const mo = Object.fromEntries(names('moenv').map((r) => [r.name, `${r.subtype}/${r.access}`]));
-  assert.deepEqual(mo, { 全聯板橋測試店: 'store/customer', 台塑石油板橋測試站: 'station/customer', 板橋測試公園公廁: 'public/public', 苓雅測試公園公廁: 'public/public' });
+  assert.deepEqual(mo, { 全聯板橋測試店: 'store/customer', 全家板橋二運店: 'store/customer', 台塑石油板橋測試加油站: 'station/customer', 板橋測試公園: 'public/public',
+    板橋測試大飯店: 'store/customer', 苓雅測試公園: 'public/public' });
+  const park = db.prepare("SELECT * FROM rest_stops WHERE source = 'moenv' AND name = '板橋測試公園'").get();
+  assert.ok(park.svc & 32, '無障礙廁間'); assert.equal(park.city, '新北市', '縣市代碼換成名稱');
   assert.ok(!JSON.stringify(db.prepare("SELECT * FROM rest_stops WHERE source IN ('cool', 'moenv')").all()).match(/王大明|2960-3456|測試區公所/), '不存管理單位與電話');
   // 管理後台關掉之後：不再寫
   db.exec("UPDATE rest_sources SET enabled = 0 WHERE source = 'cool'");
@@ -193,4 +203,27 @@ test('第二批（Cool map、環境部公廁）：要金鑰、只收跑點 1 公
   const c = coverage(spots, [...g2.rows]);
   assert.ok(c.water[300] >= 1 && c.toilet[300] >= 1 && c.supply[300] >= 1, JSON.stringify({ w: c.water[300], t: c.toilet[300] }));
   control(new URLSearchParams('reset=1'));
+});
+
+test('停用消失的列：代碼很多時分段停用，每個指令都在 D1 上限內，範圍首尾相接（不會漏停用、也不會停用到還在的列）', () => {
+  const at = (i) => ({ id: `moenv:p${String(i).padStart(5, '0')}x${(i * 7919).toString(36)}`, type: 'toilet', subtype: 'public', svc: 2, access: 'public', name: `測試公廁${i}`, place: null, address: null, city: '新北市',
+    lat: 25.0 + (i % 100) * 0.001, lng: 121.4 + Math.floor(i / 100) * 0.001, cell: '', hours: null, hours_raw: null, ref_url: null, status: 'ok', h: `h${i}` });
+  const rows = Array.from({ length: 8000 }, (_, i) => { const r = at(i); r.cell = `${Math.floor(r.lat * 50 + 1e-9)}_${Math.floor(r.lng * 50 + 1e-9)}`; return r; });
+  const db = fresh();
+  const s1 = buildSql('moenv', { rows, tag: '{"h":"a"}', date: null });
+  for (const s of s1) assert.ok(Buffer.byteLength(s) <= 100000, `指令 ${Buffer.byteLength(s)} bytes`);
+  assert.ok(s1.filter((s) => s.startsWith('UPDATE rest_stops SET enabled = 0')).length > 1, '停用分成好幾段');
+  run(db, s1);
+  assert.equal(live(db, 'moenv'), 8000);
+  // 第二次：每 10 筆拿掉一筆（分散在每一段裡；筆數沒有掉到 70% 以下），其他照舊
+  const keep = rows.filter((_, i) => i % 10 !== 3);
+  run(db, buildSql('moenv', { rows: keep, tag: '{"h":"b"}', date: null }));
+  assert.equal(live(db, 'moenv'), keep.length, '只停用消失的列');
+  const on = new Set(db.prepare("SELECT id FROM rest_stops WHERE source = 'moenv' AND enabled = 1").all().map((r) => r.id));
+  assert.ok(keep.every((r) => on.has(r.id)), '還在的列一筆都沒有被停用');
+});
+
+test('維護工具交給 wrangler 的環境變數不帶來源的金鑰', () => {
+  const e = childEnv({ PATH: '/bin', MOENV_KEY: 'secret-12345678', HOME: '/h' });
+  assert.equal(e.MOENV_KEY, undefined); assert.equal(e.PATH, '/bin'); assert.equal(e.CI, '1'); assert.equal(e.WRANGLER_SEND_METRICS, 'false');
 });

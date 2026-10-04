@@ -7,8 +7,8 @@
 //     tbk  臺灣騎跡補給站（taiwanbike.tw 前端 JSON，依政府網站資料開放宣告使用並顯名；分頁同步）
 //     cur  幹部整理清單（migration 0041）              man  幹部在地圖上新增
 //   第二批（migration 0050；要環境部開放資料平臺的 API 金鑰，環境變數 MOENV_KEY，只有維護工具在電腦上用）：
-//     cool  Cool map 涼適點（177893）：公有的飲水、廁所照收；超商、銀行等店家標「待確認」（建議先詢問）；臺北市的公有點不收（直飲臺、臺北公廁已有）
-//     moenv 環境部全國公廁（30794）：不收臺北市（tpt 已有）、中油（cpct 已有）與評等加強級（沒通過檢查）的
+//     cool  Cool map 涼適點（177893）：公有的飲水、廁所照收；超商、銀行等店家與合作涼爽點標「待確認」（建議先詢問）；臺北市的公有點不收（直飲臺、臺北公廁已有）
+//     moenv 環境部全國公廁（30794）：不收臺北市（tpt 已有）、中油（cpct 已有）與評等不合格的；一列一間廁間，依地址合併成一處
 //     兩個都只收「核准的跑點 1 公里內」的列（radius）：全國資料上萬筆，跑者用得到的只有跑點附近
 //   原則：來源主機白名單寫在程式碼裡（只收 https、預設埠）；同步只寫有變的列；幹部的 fix、note、hidden 同步不會動；
 //   不存任何電話與個人姓名；顯名文字放在登錄表，不存在每一列。整個功能由 settings.features 的 rest 控制，預設關閉。
@@ -195,17 +195,42 @@ function pickCoord(lat, lng, x97, y97) {
 const TIME_RANGE = /(\d{1,2})[:：](\d{2})(?:[:：]\d{2})?\s*[~～\-–—至到]\s*(\d{1,2})[:：](\d{2})(?:[:：]\d{2})?/g;
 const pad = (h) => String(Number(h)).padStart(2, '0');
 export const normTimes = (s) => String(s ?? '').replace(TIME_RANGE, (_, a, b, c, d) => `${pad(a)}:${b}–${pad(c)}:${d}`);
-const ALL_DAY = /^\s*0?0[:：]00\s*[~～\-–—至到]\s*24[:：]00\s*$|^\s*24\s*(小時|H)\s*$/i;
+// Cool map 最常見的寫法是「24小時營業」（2026-10-04 全國 8,365 筆）
+const ALL_DAY = /^\s*0?0[:：]00\s*[~～\-–—至到]\s*24[:：]00\s*$|^\s*24\s*(小時|H)\s*(營業|開放)?\s*$/i;
 const ALLDAY_TEXT = '24 小時';
 // 不開放類字樣：parseHours 會把「假日不開放」當成假日開放、把「12:00–13:00 休息」當成多一段開放時間（寧可不判斷也不要判斷錯）
 //   parseHours 看得懂的「週一休館」「週一及國定假日休館」先拿掉，剩下的文字還有這些字樣就只存原文
 const WEEK_CLOSED = /(?:每)?(?:週|星期)[一二三四五六日天](?:\s*[、,和及]\s*(?:週|星期)?[一二三四五六日天])?(?:\s*[及和、]\s*國定假日)?\s*(?:休館|休園|休息|公休|不開放|閉館|休場)/g;
 export const closedHint = (s) => /不開放|不對外|休息|休館|休園|公休|閉館|休場|暫停|停止/.test(String(s ?? '').replace(WEEK_CLOSED, ''));
-// 標準寫法要 parseHours 解析得出、而且沒有不開放類字樣才收；原文最多 120 字，只顯示
+// parseHours 會讀錯的寫法（會在關門時顯示「開放中」或整天顯示未開放）：
+//   1. 括號裡的星期：parseHours 先拿掉括號，「(二)~(六) 08:00–17:00」「09:00–17:00(二~日)」「08:00–17:00(一二三四五)」都變成每天開放
+//      括號裡只有休館日（「（週一及國定假日休館）」）照收；只寫國定假日的照收（國定假日本來就不判斷）；
+//      「(例假日及國定假日除外)」只有括號外已經寫了星期（例如「週一至週五」）才收
+//   2. 跨夜：「06:00–01:00」「10:30–02:00」結束早於開始，會整天顯示未開放
+//   都只存原文（2026-10-04 Cool map 實測：跑點 1 公里內約 14 筆、全國約 40 筆）
+const PAREN = /[（(]([^）)]*)[）)]/g;
+const DAYISH = /週|星期|平日|假日|週末|[一二三四五六日天]\s*[~～\-–—至到、,，]\s*[一二三四五六日天]|^\s*[一二三四五六日天]+\s*$/;
+const HOLIDAY_ONLY = /^[\s例國定假日及和、,，除外休館息園不開放]*$/;
+const NATIONAL_ONLY = /^[\s及和、,，]*國定假日[\s及和、,，]*(?:休館|休息|休園|公休|不開放|閉館|除外)?\s*$/;
+export function riskyHours(s) {
+  const t = String(s ?? '');
+  for (const m of normTimes(t).matchAll(/(\d{2}):(\d{2})–(\d{2}):(\d{2})/g)) {
+    const a = Number(m[1]) * 60 + Number(m[2]), b = Number(m[3]) * 60 + Number(m[4]);
+    if (b !== 0 && b < a) return true;
+  }
+  const outerDays = /週|星期|平日|假日|週末/.test(t.replace(PAREN, ' '));
+  for (const m of t.matchAll(PAREN)) {
+    const c = m[1].replace(/星期/g, '週').replace(WEEK_CLOSED, '').trim();
+    if (!c || !DAYISH.test(c) || NATIONAL_ONLY.test(c) || (outerDays && HOLIDAY_ONLY.test(c))) continue;
+    return true;
+  }
+  return false;
+}
+// 標準寫法要 parseHours 解析得出、沒有不開放類字樣、不是上面那些會讀錯的寫法才收；原文最多 120 字，只顯示
 function hoursOf(std, raw) {
   const s = std ? String(std).trim() : '';
   const r = clip(noPhone(raw), 120);
-  if (s && s.length <= 80 && !closedHint(s) && parseHours(s)) return { hours: s, hours_raw: r && normTimes(r) !== s ? r : null };
+  if (s && s.length <= 80 && !closedHint(s) && !riskyHours(s) && parseHours(s)) return { hours: s, hours_raw: r && normTimes(r) !== s ? r : null };
   return { hours: null, hours_raw: r || (s && s !== ALLDAY_TEXT ? clip(s, 120) : null) };
 }
 const WD = '日一二三四五六';
@@ -466,14 +491,18 @@ export const COOL_BIZ = /銀行|郵局|郵政|農會|漁會|信用合作社|保�
 const COOL_PUBKIND = /公有|公部門|政府|機關|公共|公立|市立|縣立|國立/;
 const COOL_PUBNAME = /公所|圖書館|圖書室|活動中心|市政府|縣政府|政府|服務中心|服務站|運動中心|體育館|體育場|文化中心|博物館|美術館|紀念館|藝文中心|衛生所|戶政|地政|區民|里民|社區|捷運|車站|轉運站|公園|國小|國中|高中|大學|學校|醫院|消防|派出所|分駐所|警察|稅務|稽徵|監理|公立|市立|縣立|國立|長青|老人|社福|議會|代表會|清潔隊|環保局/;
 const TAIPEI = '臺北市';
+// 公有的主要依據是來源的「設施類型」（公有涼爽點）與「店家種類」（某某政府）：先判斷公有，名稱裡的「門市」「商場」才不會把
+//   「東門市場」「西門商場」當成店家；「合作涼爽點」（店家、銀行、大學、醫院、宮廟、社區發展協會）一律不算公有，標「待確認」
+const COOL_PUBST = /公有涼[爽適]點/, COOL_GOV = /政府$/, COOL_COOP = /合作/;
 function parseCool(records) {
   return records.map((r0) => {
     const r = low(r0);
-    const name = clip(r.placename, 60), addr = clip(r.address, 100);
-    const kind = `${clip(r.datasetid, 40)} ${clip(r.coolingtype, 40)} ${clip(r.stationtype, 40)}`;
+    const name = clip(r.placename, 60), addr = clip(r.address, 100), st = clip(r.stationtype, 40), owner = clip(r.coolingtype, 40);
+    const kind = `${clip(r.datasetid, 40)} ${owner} ${st}`;
     const water = yes(r.waterdispenser), wc = yes(r.restroom);
-    const chain = COOL_CHAIN.test(name) || COOL_CHAIN.test(kind), biz = !chain && (COOL_BIZ.test(name) || COOL_BIZ.test(kind));
-    const pub = !chain && !biz && (COOL_PUBKIND.test(kind) || COOL_PUBNAME.test(name));
+    const gov = COOL_PUBST.test(st) || COOL_GOV.test(owner);
+    const chain = !gov && (COOL_CHAIN.test(name) || COOL_CHAIN.test(kind)), biz = !gov && !chain && (COOL_BIZ.test(name) || COOL_BIZ.test(kind));
+    const pub = gov || (!chain && !biz && !COOL_COOP.test(st) && (COOL_PUBKIND.test(kind) || COOL_PUBNAME.test(name)));
     const town = city(r.city) || city(addr);
     if (pub && town === TAIPEI) return null;          // 臺北市的公有點：直飲臺、臺北公廁已經有，不重複
     if (!chain && !water && !wc) return null;         // 只有冷氣、座位：跑者用不到
@@ -489,31 +518,61 @@ function parseCool(records) {
     return water ? { ...base, type: 'water', subtype: biz ? 'shop' : 'cool', svc, access } : { ...base, type: 'toilet', subtype: biz ? 'store' : 'public', svc, access };
   });
 }
-// 環境部全國公廁：一列可能是同一處的一種廁間（男、女、無障礙、親子），依「名稱＋地址」分組、60 公尺內分群（跟河濱廁所一樣）
-//   不收：臺北市（tpt 已有）、中油（cpct 已有）、評等加強級（以前叫改善級，沒通過檢查）；管理單位只用來認中油，不存
-const MO_FAIL = /加強|改善|不合格|未通過|不及格/, MO_CPC = /中油/;
-const MO_GAS = /加油站/, MO_STORE = /便利商店|超商|量販|百貨|商場|購物|賣場|餐飲|餐廳|速食|商業|營業場所|商店|旅館|飯店/;
+// 環境部全國公廁：一列是一間廁間，名稱帶著廁間與樓層（「博愛公園-女廁」「耐斯王子大飯店1F女廁」「前金運動中心-3F男廁」），
+//   所以依「地址」（沒有地址才用整理後的名稱）分組、組內 60 公尺內分群（跟河濱廁所一樣），一群是一處；
+//   2026-10-04 實測：跑點 1 公里內 6,954 間 → 約 1,700 處（不合併的話停用清單超過 D1 單一指令上限，地圖也會顯示某一間廁間的名稱）
+//   名稱：去掉括號、樓層之後的字、結尾的廁間字樣，取這一處最常見的；有公有廁間就用公有的名稱
+//   不收：臺北市（tpt 已有；縣市欄是代碼，63000）、中油（cpct 已有）、評等不合格（真實的評等只有特優級、優等級、普通級、不合格）；管理單位只用來認中油，不存
+//   店家：公廁類別「商業營業場所」「休閒娛樂場所」，或名稱是飯店、餐廳、影城、百貨等（真實資料把飯店、影城放在「其他」）；
+//   加油站看名稱（真實的公廁類別沒有「加油站」，加油站都在「商業營業場所」）
+const MO_FAIL = /不合格|未通過|不及格/, MO_CPC = /中油/, MO_GAS = /加油站/;
+const MO_STORE = /商業|營業場所|休閒娛樂|便利商店|超商|量販|百貨|商場|購物|賣場|餐飲|餐廳|速食|商店|旅館|飯店/;
+export const MO_SHOP = /飯店|酒店|旅館|會館|餐廳|餐飲|火鍋|咖啡|簡餐|影城|威秀|秀泰|百貨|購物|商場|KTV|超商|便利商店|統一超商|7-?11|全家|萊爾富|全聯|家樂福|量販|賣場/i;
+const ROOM_END = /(?:性別友善|無障礙|親子|混合|男女|殘障|身障|哺乳|男|女)?(?:(?<!公)廁所?|廁間|化妝室|洗手間)$|(?:性別友善|無障礙|親子|混合|男女|男|女)$/;
+const FLOOR = /(?<![A-Za-z])B\d{1,2}(?![A-Za-z\d])|\d{1,2}\s*F(?![A-Za-z])|\d{1,2}\s*樓|[一二三四五六七八九十]{1,3}樓(?!房)|地下\s*[一二三]?\s*樓/i;
+const TRIM_END = /[\s\-－_—・·.,，、:：]+$/;
+export function placeName(s) {
+  const full = clip(s, 60);
+  let t = full.replace(/[（(【[][^）)】\]]*[）)】\]]/g, ' ');
+  const f = t.search(FLOOR);
+  if (f >= 2) t = t.slice(0, f);
+  for (let i = 0; i < 4; i++) {
+    const u = t.replace(TRIM_END, '').replace(/(?<=\D)\d{1,2}$/, '').replace(ROOM_END, '');
+    if (u === t) break;
+    t = u;
+  }
+  t = t.replace(TRIM_END, '').replace(/\s+/g, ' ').trim();
+  return t.length >= 2 ? t : full;
+}
+const addrKey = (a) => String(a || '').replace(/[\s　]/g, '').replace(/台/g, '臺');
+const most = (m) => [...m.entries()].sort((a, b) => b[1] - a[1] || a[0].length - b[0].length || (a[0] < b[0] ? -1 : 1))[0]?.[0];
 function parseMoenv(records) {
   const groups = new Map(), out = [];
   for (const r0 of records) {
     const r = low(r0);
-    const name = clip(r.name, 60), addr = clip(r.address, 100), town = city(r.county) || city(addr), kind = clip(r.type2, 40);
-    if (!name || town === TAIPEI || MO_FAIL.test(String(r.grade ?? '')) || MO_CPC.test(`${name} ${r.administration ?? ''} ${r.exec ?? ''}`)) { out.push(null); continue; }
+    const raw = clip(r.name, 60), addr = clip(r.address, 100), kind = clip(r.type2, 40);
+    const town = CITY_CODE[Number(String(r.county ?? '').trim())] || city(r.county) || city(addr);
+    if (!raw || town === TAIPEI || MO_FAIL.test(String(r.grade ?? '')) || MO_CPC.test(`${raw} ${r.administration ?? ''} ${r.exec ?? ''}`)) { out.push(null); continue; }
     const c = { lat: num(r.latitude), lng: num(r.longitude) };
     if (!inTaiwan(c.lat, c.lng)) { out.push({ sid: 'x', lat: NaN, lng: NaN }); continue; }
-    const k = `${name}|${addr}`, g = groups.get(k) || { name, addr, town, spots: [] };
-    const acc = /無障礙/.test(String(r.type ?? '')), fam = /親子/.test(String(r.type ?? '')) || Number(r.diaper) > 0;
-    const gas = MO_GAS.test(kind), store = !gas && MO_STORE.test(kind);
-    const hit = g.spots.find((x) => haversine(x.first, c) <= CLUSTER_M);
-    if (hit) { hit.lat += c.lat; hit.lng += c.lng; hit.n += 1; hit.acc ||= acc; hit.fam ||= fam; hit.gas ||= gas; hit.store ||= store; }
-    else g.spots.push({ first: c, lat: c.lat, lng: c.lng, n: 1, acc, fam, gas, store });
+    const name = placeName(raw), ak = addrKey(addr), k = ak ? `a|${ak}` : `n|${name}`;
+    const g = groups.get(k) || { k, addr, town, spots: [] };
+    const room = String(r.type ?? '');
+    const acc = /無障礙/.test(room) || /無障礙/.test(raw), fam = /親子/.test(room) || Number(r.diaper) > 0;
+    const gas = MO_GAS.test(raw), store = !gas && (MO_STORE.test(kind) || MO_SHOP.test(raw));
+    let x = g.spots.find((p) => haversine(p.first, c) <= CLUSTER_M);
+    if (!x) { x = { first: c, lat: 0, lng: 0, n: 0, acc: false, fam: false, gas: false, pub: new Map(), shop: new Map() }; g.spots.push(x); }
+    x.lat += c.lat; x.lng += c.lng; x.n += 1; x.acc ||= acc; x.fam ||= fam; x.gas ||= gas;
+    const names = gas || store ? x.shop : x.pub;
+    names.set(name, (names.get(name) || 0) + 1);
     groups.set(k, g);
   }
   for (const g of groups.values()) for (const x of g.spots) {
-    const lat = x.lat / x.n, lng = x.lng / x.n;
-    out.push({ sid: fnv(g.spots.length === 1 ? `${g.name}|${g.addr}` : `${g.name}|${g.addr}|${lat.toFixed(3)}|${lng.toFixed(3)}`), type: 'toilet',
-      subtype: x.gas ? 'station' : x.store ? 'store' : 'public', svc: SVC.toilet | (x.acc ? SVC.accessible : 0) | (x.fam ? SVC.family : 0),
-      access: x.gas || x.store ? 'customer' : 'public', name: g.name, address: g.addr, city: g.town, lat, lng });
+    const lat = x.lat / x.n, lng = x.lng / x.n, pub = x.pub.size > 0;
+    // 同一處有公有的廁間就算公有（例如車站裡的超商）；全部是店家才標「店家廁所」
+    out.push({ sid: fnv(g.spots.length === 1 ? g.k : `${g.k}|${lat.toFixed(3)}|${lng.toFixed(3)}`), type: 'toilet',
+      subtype: pub ? 'public' : x.gas ? 'station' : 'store', svc: SVC.toilet | (x.acc ? SVC.accessible : 0) | (x.fam ? SVC.family : 0),
+      access: pub ? 'public' : 'customer', name: most(pub ? x.pub : x.shop), address: g.addr, city: g.town, lat, lng });
   }
   return out;
 }
@@ -829,23 +888,33 @@ const RANK = (r) => (r.source === 'man' ? 0 : r.source === 'cur' ? 1 : r.access 
 export const normName = (s) => String(s || '').toLowerCase().replace(/^(台灣|臺灣)/, '').replace(/加油站/g, '站')
   .replace(/男廁|女廁|男|女|無障礙|親子|廁所|化妝室|景觀|河濱公園|\b[b]?\d+f\b|\d+樓|[\s・·\-－_()（）]/g, '');
 export const SAME_M = 60, TOILET_M = 30;
-export const samePlace = (a, b, d = haversine(a, b)) => a.type === b.type && ((a.type === 'toilet' && d <= TOILET_M) || (d <= SAME_M && normName(a.name) === normName(b.name)));
+// 店家的廁所：店家廁所（環境部、臺北公廁）與有廁所的連鎖店（Cool map 的超商、量販是「補給」類）是同一間店時，30 公尺內合併成一處
+//   （2026-10-04 實測：跑點附近約 190 家店在兩個來源各出現一次，例如「全家便利商店-台中學友店」與「全家台中學友店-性別友善廁」）
+const storeWc = (r) => r.subtype === 'store' && (r.type === 'toilet' || (r.type === 'supply' && (r.svc & SVC.toilet)));
+export const samePlace = (a, b, d = haversine(a, b)) => (a.type === b.type && ((a.type === 'toilet' && d <= TOILET_M) || (d <= SAME_M && normName(a.name) === normName(b.name))))
+  || (a.type !== b.type && storeWc(a) && storeWc(b) && d <= TOILET_M);
 export function mergeRows(rows) {
   const sorted = [...rows].sort((a, b) => RANK(a) - RANK(b) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
-  const keep = [], groups = new Map(), near = new Map();
-  // 廁所用約 50 公尺的小格子找鄰近的列（只比對自己與周圍 8 格，不用兩兩比對全部）
+  const keep = [], groups = new Map(), near = new Map(), shops = new Map();
+  // 廁所與店家廁所用約 50 公尺的小格子找鄰近的列（只比對自己與周圍 8 格，不用兩兩比對全部）
   const bk = (r) => [Math.floor(r.lat * 2000), Math.floor(r.lng * 2000)];
+  const around = (m, r, ok) => {
+    const [y, x] = bk(r);
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) { const o = (m.get(`${y + dy}_${x + dx}`) || []).find((v) => ok(v) && haversine(v, r) <= TOILET_M); if (o) return o; }
+    return null;
+  };
+  const put = (m, o) => { const [y, x] = bk(o), key = `${y}_${x}`; (m.get(key) || m.set(key, []).get(key)).push(o); };
   for (const r of sorted) {
     const k = `${r.type}|${normName(r.name)}`, list = groups.get(k) || [];
     let hit = list.find((x) => haversine(x, r) <= SAME_M);
-    if (!hit && r.type === 'toilet') {
-      const [y, x] = bk(r);
-      for (let dy = -1; dy <= 1 && !hit; dy++) for (let dx = -1; dx <= 1 && !hit; dx++) hit = (near.get(`${y + dy}_${x + dx}`) || []).find((o) => haversine(o, r) <= TOILET_M);
-    }
+    if (!hit && r.type === 'toilet') hit = around(near, r, () => true);
+    // 店家廁所與有廁所的連鎖店（不同類）：排序在前的（官方、或代碼較小的）留著，服務旗標取聯集
+    if (!hit && storeWc(r)) hit = around(shops, r, (v) => v.type !== r.type);
     if (hit) { hit.svc |= r.svc; if (!hit.also.includes(r.source)) hit.also.push(r.source); continue; }
     const o = { ...r, also: [] };
     list.push(o); groups.set(k, list); keep.push(o);
-    if (r.type === 'toilet') { const [y, x] = bk(r), key = `${y}_${x}`; (near.get(key) || near.set(key, []).get(key)).push(o); }
+    if (r.type === 'toilet') put(near, o);
+    if (storeWc(r)) put(shops, o);
   }
   return keep;
 }
@@ -865,6 +934,7 @@ const COLS = 'id, source, type, subtype, svc, access, name, place, lat, lng, hou
 //   一次最多讀 CELL_LIMIT 列（另加來源狀態、設定等約 18 列）。經度範圍、暫停的列放在 SQL 裡的話，被濾掉的列照樣算讀取、
 //   卻不算進 LIMIT（實測地點附近一次讀約「3 × 每格列數＋18」，一格沒有上限），所以改成讀出來後在這裡濾
 //   上限 800 列：第一批真實資料最密的一格（北門、大稻埕一帶）189 列，地點附近最多約 3 格寬 ≈ 570 列，不會被截掉；
+//   第二批（跑點 1 公里內，環境部廁間依地址合併後）2026-10-04 實測最密的一格 113 列、跑點附近的範圍最多約 180 列；
 //   資料暴增到超過時會少列幾處（依格子、緯度的順序截斷），換來讀取量與 CPU 有固定上限
 const BOX = " AND COALESCE(json_extract(fix, '$.lat'), lat) BETWEEN ? AND ?";
 export const boxOf = (p, m) => { const dl = m / 111320, dg = m / (111320 * Math.cos(p.lat * RAD)); return [p.lat - dl, p.lat + dl, p.lng - dg, p.lng + dg]; };
@@ -1006,7 +1076,7 @@ function hoursInput(v) {
   if (s.length > 80) return { error: '開放時間最多 80 字' };
   if (!s) return { hours: null, hours_raw: null };
   const n = normTimes(s);
-  return !closedHint(n) && parseHours(n) ? { hours: n, hours_raw: null } : { hours: null, hours_raw: s };
+  return !closedHint(n) && !riskyHours(n) && parseHours(n) ? { hours: n, hours_raw: null } : { hours: null, hours_raw: s };
 }
 // 新增或整筆修改（man、cur）：回 { value } 或 { error }
 export function readStop(b) {

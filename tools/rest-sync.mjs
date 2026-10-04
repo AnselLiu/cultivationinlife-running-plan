@@ -7,7 +7,7 @@
 //     其他情況 → 只寫有變的列（雜湊比對）、停用清單不再出現的列、版本（rev）加 1、記下筆數與資料日期；幹部的修正、補充說明、隱藏、幹部新增的列都不動
 //   D1 限制：每個 SQL 指令不超過 100 KB（大量列自動分批）、LIKE／GLOB 樣式不超過 50 bytes；整份檔案在 D1 裡依序執行
 //   金鑰：第一批不用金鑰。第二批（cool、moenv，環境部開放資料平臺）要 API 金鑰，只從環境變數 MOENV_KEY 讀（SOURCES 的 key），
-//     只在抓資料時放進網址，不寫進 SQL 檔、不印出來；沒有設定就跳過這兩個來源（來源維持關閉），其他來源照常。寫進 D1 用 wrangler 自己的登入
+//     只在抓資料時放進網址，不寫進 SQL 檔、不印出來、不交給 wrangler；沒有設定就跳過這兩個來源（來源維持關閉），其他來源照常。寫進 D1 用 wrangler 自己的登入
 //   半徑篩選（cool、moenv）：只收核准的跑點 1 公里內的列。試跑用 migrations 裡的 171 個跑點；--apply 時先用 wrangler 讀那個資料庫裡核准的跑點
 //     （跑點新增或搬移後要再跑一次，新跑點附近才會有）
 //   用法（在專案根目錄）：
@@ -116,6 +116,34 @@ export function checkSql(stmts) {
   return stmts;
 }
 
+// 停用清單不再出現的列：代碼排序後依大小切成幾段，每段一個指令，只管自己那一段的代碼範圍（id >= 這段第一個、< 下一段第一個），
+//   各段範圍首尾相接，涵蓋全部代碼；所以代碼再多也不會超過 D1 單一指令上限。代碼只有 ASCII（finalize 的白名單），
+//   JavaScript 的排序與 SQLite 的 BINARY 比較順序相同
+export function disableSql(src, ids, G) {
+  const sorted = [...ids].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  const room = MAX_STMT - bytes(`${sub(DISABLE, { 1: src, 2: "'[]'" })} AND id >= '' AND id < '' AND ${G};`) - 200;
+  const parts = [];
+  let cur = [], size = 0;
+  for (const id of sorted) {
+    const b = bytes(JSON.stringify(id)) + 1;
+    if (cur.length && size + b > room) { parts.push(cur); cur = []; size = 0; }
+    cur.push(id); size += b;
+  }
+  if (cur.length) parts.push(cur);
+  return parts.map((p, i) => {
+    const lo = i ? ` AND id >= ${lit(p[0])}` : '', hi = i < parts.length - 1 ? ` AND id < ${lit(parts[i + 1][0])}` : '';
+    const s = `${sub(DISABLE, { 1: src, 2: lit(JSON.stringify(p)) })}${lo}${hi} AND ${G};`;
+    if (bytes(s) > MAX_STMT) throw new Error('停用指令超過 D1 單一指令上限');
+    return s;
+  });
+}
+// 子程序（wrangler）的環境變數：拿掉來源的金鑰（MOENV_KEY），wrangler 用不到，不要交給它
+export function childEnv(penv = process.env) {
+  const e = { ...penv, CI: '1', WRANGLER_SEND_METRICS: 'false' };
+  for (const S of Object.values(SOURCES)) if (S.key) delete e[S.key];
+  return e;
+}
+
 // 一個來源的 SQL 指令（陣列，依序執行）
 export function buildSql(k, { rows, tag, date }) {
   if (!SOURCES[k] || SOURCES[k].manual) throw new Error(`沒有這個來源：${k}`);
@@ -142,10 +170,7 @@ export function buildSql(k, { rows, tag, date }) {
     batch.push(j); size += b;
   }
   flush();
-  const ids = lit(JSON.stringify(rows.map((r) => r.id)));
-  const dis = `${sub(DISABLE, { 1: src, 2: ids })} AND ${G};`;
-  if (bytes(dis) > MAX_STMT) throw new Error(`${k}：代碼清單超過 D1 單一指令上限，要改成分批停用`);
-  out.push(dis);
+  out.push(...disableSql(src, rows.map((r) => r.id), G));
   // 版本加 1、記下筆數與摘要（要放在上面兩個之後：條件會讀到更新前的值）
   out.push(`UPDATE rest_sources SET rev = rev + 1,${first ? ' enabled = 1,' : ''} last_count = ${n}, etag = ${etag}, data_date = COALESCE(${lit(date)}, data_date), cursor = NULL,
   last_sync_at = datetime('now'), last_ok_at = datetime('now'), last_error = NULL WHERE source = ${src} AND ${G};`);
@@ -194,7 +219,7 @@ async function main() {
   let spots = null, spotErr = null;
   if (radius.length) {
     if (target && !opt.mock) {
-      try { spots = parseSpots(execFileSync('npx', ['--yes', ...spotArgs(target, opt['persist-to'])], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'], env: { ...process.env, CI: '1', WRANGLER_SEND_METRICS: 'false' } })); }
+      try { spots = parseSpots(execFileSync('npx', ['--yes', ...spotArgs(target, opt['persist-to'])], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'inherit'], env: childEnv() })); }
       catch (e) { spotErr = `讀不到資料庫裡的跑點：${String(e?.message || e).slice(0, 120)}`; }
     } else spots = seedSpots();
     console.log(spots ? `半徑篩選用的跑點：${spots.length} 個（${target && !opt.mock ? '資料庫裡核准的' : 'migrations 0033、0037；正式站可能更多，--apply 時改讀資料庫'}）` : spotErr);
@@ -240,7 +265,7 @@ async function main() {
   }
   const cmd = wranglerArgs(target, file, opt['persist-to']);
   console.log(`執行：npx ${cmd.join(' ')}`);
-  execFileSync('npx', ['--yes', ...cmd], { stdio: 'inherit', env: { ...process.env, CI: '1', WRANGLER_SEND_METRICS: 'false' } });
+  execFileSync('npx', ['--yes', ...cmd], { stdio: 'inherit', env: childEnv() });
   console.log('已寫入。管理後台的「休息站資料來源」可以看到這次的時間與筆數；有錯誤（例如筆數掉太多）也會顯示在那裡。');
   process.exit(failed ? 1 : 0);
 }

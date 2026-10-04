@@ -96,7 +96,8 @@ const med = (ds) => { const s = [...ds].sort((a, b) => a - b), v = s[Math.floor(
 const cell = (g, m) => (two ? `${before[g][m]} → ${after[g][m]}` : String(after[g][m])).padStart(12);
 const drops = [];
 for (const g of Object.keys(GROUP_LABEL)) {
-  if (!only.length && !mock && after[g][500] < BASELINE_500[g] * 0.9) drops.push(`${GROUP_LABEL[g]} 500 m 內 ${after[g][500]} 點，基準 ${BASELINE_500[g]} 點`);
+  // 基準是第一批來源＋整理清單：只拿「加入第二批之前」比，第二批補上的點不會蓋掉第一批來源悄悄少掉的列
+  if (!only.length && !mock && before[g][500] < BASELINE_500[g] * 0.9) drops.push(`${GROUP_LABEL[g]} 500 m 內 ${before[g][500]} 點（不含第二批），基準 ${BASELINE_500[g]} 點`);
   console.log(`${GROUP_LABEL[g].padEnd(10, '　')}  ${cell(g, 300)}  ${cell(g, 500)}  ${cell(g, 1000)}  ${two ? `${med(before[g].dists)} → ` : ''}${med(after[g].dists)}`);
 }
 const both = (c) => spots.filter((_, i) => c.water.dists[i] <= 500 && c.toilet.dists[i] <= 500).length;

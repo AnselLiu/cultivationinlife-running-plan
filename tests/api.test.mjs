@@ -1730,27 +1730,31 @@ test('跑者休息站第二批（REST_MOCK）：Cool map 與環境部公廁要�
   await mock('nokey=0');
   // 有金鑰（測試的假金鑰）：分頁抓完（一頁 3 筆）、只留跑點 1 公里內
   const c = await devSync('cool'), m = await devSync('moenv');
-  assert.equal(c.status, 200, JSON.stringify(c.json)); assert.equal(c.json.count, 6);
-  assert.equal(m.status, 200, JSON.stringify(m.json)); assert.equal(m.json.count, 4);
-  assert.equal(await moenvHits(), 6, '兩個來源各 3 頁');
+  assert.equal(c.status, 200, JSON.stringify(c.json)); assert.equal(c.json.count, 8);
+  assert.equal(m.status, 200, JSON.stringify(m.json)); assert.equal(m.json.count, 6);
+  assert.equal(await moenvHits(), 8, '兩個來源各 4 頁');
   assert.ok(!JSON.stringify((await mock()).hits).includes('mock-key'), '紀錄裡的網址不帶金鑰');
   assert.equal((await call('t_chair', '/settings/features', { method: 'POST', body: { rest: true } })).status, 200);
   try {
-    // 板橋第二運動場那一格：公有的涼適點與公廁、店家待確認、非中油的加油站是店家廁所；中油與評等加強級的不收
+    // 板橋第二運動場那一格：公有的涼適點與公廁、店家待確認、非中油的加油站是店家廁所；中油與評等不合格的不收
     const ban = Object.fromEntries((await stops('1250_6072')).map((x) => [x[7], x]));
     assert.equal(ban['新北市板橋區測試公所'][1], 'water'); assert.equal(ban['新北市板橋區測試公所'][4], 'public');
     assert.equal(ban['全家便利商店板橋二運店'][1], 'supply'); assert.equal(ban['全家便利商店板橋二運店'][4], 'unverified');
     assert.ok(ban['全家便利商店板橋二運店'][3] & 1, '店家的飲水（待確認）');
+    // 同一間店：Cool map 的超商（補給）與環境部的店家廁所合併成一處
+    assert.equal(ban['全家板橋二運店'], undefined, '店家廁所併進同一間店'); assert.ok(ban['全家便利商店板橋二運店'][3] & 2, '合併後有廁所');
     assert.equal(ban['臺灣測試銀行板橋分行'][4], 'unverified');
-    assert.equal(ban['台塑石油板橋測試站'][4], 'customer');
-    for (const n of ['台灣中油板橋測試站', '板橋測試公廁', '板橋測試活動中心']) assert.equal(ban[n], undefined, n);
-    // 環境部公廁一列一種廁間：同名同地址的男廁與無障礙廁間合併成一處，無障礙旗標合併
-    assert.ok(ban['板橋測試公園公廁'][3] & 32, '無障礙');
+    assert.equal(ban['台塑石油板橋測試加油站'][2], 'station'); assert.equal(ban['台塑石油板橋測試加油站'][4], 'customer');
+    assert.equal(ban['板橋測試大飯店'][4], 'customer', '飯店是店家');
+    for (const n of ['台灣中油板橋測試加油站', '板橋測試公廁', '板橋測試活動中心']) assert.equal(ban[n], undefined, n);
+    // 環境部公廁一列一間廁間：同一地址的男廁、女廁、無障礙廁所合併成一處，名稱去掉廁間字樣，無障礙旗標合併
+    assert.ok(ban['板橋測試公園'][3] & 32, '無障礙');
+    assert.ok(!Object.keys(ban).some((n) => /廁$/.test(n)), '地圖上不顯示廁間名稱');
     assert.equal(ban['板橋測試公園涼亭'][1], 'toilet', '涼適點只有廁所的公有點');
     // 臺北市：公有點不收（直飲臺、臺北公廁已有），店家照收
     const tp = (await stops('1253_6077')).map((x) => x[7]);
     assert.ok(tp.includes('萊爾富大直測試店'));
-    for (const n of ['臺北市中山區測試公所', '大佳測試公廁']) assert.ok(!tp.includes(n), n);
+    for (const n of ['臺北市中山區測試公所', '大佳測試公廁', '東門測試市場']) assert.ok(!tp.includes(n), n);
     // 詳情：顯名、待確認、不存電話與管理單位
     const fm = await call('t_runner', `/rest/${encodeURIComponent(ban['全家便利商店板橋二運店'][0])}`);
     assert.equal(fm.status, 200);
@@ -1763,8 +1767,8 @@ test('跑者休息站第二批（REST_MOCK）：Cool map 與環境部公廁要�
     assert.ok(near.water.length && near.toilet.length && near.supply.length, JSON.stringify(Object.fromEntries(Object.entries(near).map(([k, v]) => [k, v.length]))));
     assert.equal(near.water[0].name, '新北市板橋區測試公所', '公有的排在待確認的店家前面');
     const ly = (await call('t_runner', '/spots/seed36/rest')).json.groups;
-    assert.ok(ly.water.some((x) => x.name === '苓雅測試圖書館') && ly.toilet.some((x) => x.name === '苓雅測試公園公廁'));
-    assert.ok(ly.toilet.find((x) => x.name === '苓雅測試公園公廁').svc & 64, '親子');
+    assert.ok(ly.water.some((x) => x.name === '苓雅測試圖書館') && ly.toilet.some((x) => x.name === '苓雅測試公園'));
+    assert.ok(ly.toilet.find((x) => x.name === '苓雅測試公園').svc & 64, '親子');
     // 資料來源清單（地圖選單）有這兩個來源的顯名
     const meta = (await call('t_runner', '/rest/meta')).json.sources.map((x) => x.source);
     assert.ok(meta.includes('cool') && meta.includes('moenv'));

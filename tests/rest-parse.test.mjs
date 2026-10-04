@@ -2,7 +2,7 @@
 //   用真實資料的寫法（2026-10-03 抓的樣本）當回歸案例：補充說明裡的「不開放」時段、超商名稱、捷運站的 24 小時、河濱廁所的分群、跨來源同一間廁所
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { SOURCES, finalize, mergeRows, readFix, readStop, closedHint, savHours, STORE_NAME, collect, collectPage, haversine, nearSpots, yes, keyOf } from '../src/rest.js';
+import { SOURCES, finalize, mergeRows, readFix, readStop, closedHint, savHours, STORE_NAME, collect, collectPage, haversine, nearSpots, yes, keyOf, riskyHours, placeName, samePlace } from '../src/rest.js';
 import { control } from '../src/rest-mock.js';
 import { hoursNow } from '../public/hours.js';
 
@@ -145,4 +145,68 @@ test('第二批：半徑篩選只留跑點 1 公里內、是／否的各種寫�
     { id: 'moenv:b', source: 'moenv', type: 'toilet', subtype: 'public', svc: 34, access: 'public', name: '板橋公廁', lat: 25.01391, lng: 121.45771 },
   ]);
   assert.equal(m.length, 1); assert.equal(m[0].id, 'moenv:b'); assert.deepEqual(m[0].also, ['cool']);
+});
+
+test('第二批的開放時間：括號裡的星期、跨夜的時段只存原文（parseHours 會讀成每天開放或整天未開放）；「24小時營業」是 24 小時', () => {
+  const cool = (hours) => parse('cool', [{ datasetid: '室內', recordid: 'H1', coolingtype: '新北市政府', stationtype: '公有涼爽點', placename: '測試圖書館', city: '新北市',
+    address: '新北市板橋區測試路1號', longitude: '121.4580', latitude: '25.0142', openinghours: hours, restroom: '0', waterdispenser: '1', seats: '1', airconditioning: '1', isaccessible: '0' }])[0];
+  // 2026-10-04 Cool map 的真實寫法
+  for (const s of ['(二)~(六) 08:00–17:00', '(二)~(日) 08:00–17:00', '09:00–17:00(二~日)', '08:30–20:30(二~日)', '08:00–17:30(一~五)', '(二)~(五) 08:00–21:00，六、日 08:00–17:00',
+    '08:00–12:00，13:00–17:00，(一二三四五)', '09:00-17:00(週三-週日)', '08:00-17:30 (例假日休息)', '06:00–01:00', '每日06:00–01:00', '10:30–02:00', '09:30–05:30', '06:00-13:00 (週一休市)']) {
+    assert.ok(riskyHours(s), s);
+    const r = cool(s);
+    assert.equal(r.hours, null, `${s} 不能存成 hours`); assert.ok(r.hours_raw, s);
+    assert.equal(readFix({ hours: s }).value.hours, '', `幹部輸入 ${s}`);
+  }
+  // 看得懂的照收：括號裡只有休館日、只寫國定假日、括號外已經有星期
+  for (const s of ['08:30–21:00（週一及國定假日休館）', '11:00–21:00(週一休館)', '09:00–17:00（國定假日休館）', '週一至週五8:30-17:30(例假日及國定假日除外)', '08:00–20:00 (每日)', '06:00–24:00', '06:00–00:00']) {
+    assert.ok(!riskyHours(s), s);
+  }
+  assert.equal(hoursNow(cool('(二)~(六) 08:00–17:00').hours, at('2026-10-05T10:00:00')), null, '週一不顯示開放中');
+  for (const s of ['24小時營業', '24 小時營業', '24小時']) { const r = cool(s); assert.equal(r.hours, '24 小時', s); assert.ok(r.svc & 512, s); assert.equal(r.hours_raw, null); }
+});
+
+test('Cool map：公有先看設施類型與店家種類（「東門市場」不是店家），合作涼爽點不算公有', () => {
+  const row = (placename, coolingtype, stationtype, city = '新北市') => ({ datasetid: '室內', recordid: placename, coolingtype, stationtype, placename, city, address: `${city}測試路`,
+    longitude: city === '臺北市' ? '121.5400' : '121.4580', latitude: city === '臺北市' ? '25.0735' : '25.0142', openinghours: '', restroom: '1', waterdispenser: '1', seats: '1', airconditioning: '1', isaccessible: '0' });
+  const out = Object.fromEntries(parse('cool', [row('東門市場', '台北市政府', '公有涼爽點', '臺北市'), row('西門商場', '台北市政府', '公有涼爽點', '臺北市'), row('河濱一商場', '新北市政府', '公有涼爽點'),
+    row('某某大學', '某某大學', '合作涼爽點'), row('某某醫院', '某某醫院', '合作涼爽點'), row('統一超商測試門市', '統一超商', '合作涼爽點')]).map((r) => [r.name, `${r.type}/${r.subtype}/${r.access}`]));
+  assert.deepEqual(out, { 河濱一商場: 'water/cool/public', 某某大學: 'water/cool/unverified', 某某醫院: 'water/cool/unverified', 統一超商測試門市: 'supply/store/unverified' });
+});
+
+test('環境部公廁：名稱去掉廁間與樓層；同一地址的廁間合併成一處；飯店、影城、休閒娛樂是店家；加油站看名稱；縣市是代碼', () => {
+  // 真實資料的名稱
+  const cases = { '博愛公園-女廁': '博愛公園', '民生加油站男廁': '民生加油站', '西屯區潮洋公園-女廁': '西屯區潮洋公園', '前金運動中心-3F男廁': '前金運動中心',
+    '耐斯王子大飯店1F女廁': '耐斯王子大飯店', '統一超商三重日揚門市-混合廁所': '統一超商三重日揚門市', '新園鄉圖書館4F混合廁': '新園鄉圖書館',
+    'j-Mall食尚廣場-2F(無障礙廁)': 'j-Mall食尚廣場', '新光醫院聖賢樓B1男': '新光醫院聖賢樓', '成功鎮立圖書館一樓女廁': '成功鎮立圖書館', '聖馬爾定1樓親子廁': '聖馬爾定',
+    '中壢區文化公園性別友善廁': '中壢區文化公園', '亞洲大學附屬醫院(2樓婦兒科旁)-男廁': '亞洲大學附屬醫院', '自來水園區大門旁男': '自來水園區大門旁',
+    '三峽老街景觀公廁': '三峽老街景觀公廁', '板橋大漢A停車場-混合廁所': '板橋大漢A停車場', '某某公園女廁2': '某某公園', '青少年服務中心': '青少年服務中心' };
+  for (const [raw, want] of Object.entries(cases)) assert.equal(placeName(raw), want, raw);
+  const mo = (number, name, f = {}) => ({ county: f.county || '65000', areacode: '65000010', village: '測試里', number, name, address: f.addr ?? '新北市板橋區測試路1號',
+    administration: '測試區公所', latitude: String(f.lat || 25.0139), longitude: String(f.lng || 121.4577), grade: f.grade || '特優級', type2: f.kind || '公園', type: f.type || '男廁所', exec: '測試區公所', diaper: '0' });
+  const rows = parse('moenv', [mo('1', '測試公園-男廁'), mo('2', '測試公園-女廁', { type: '女廁所' }), mo('3', '測試公園2F無障礙廁所', { type: '無障礙廁所' }), mo('4', '測試公園-女廁', { lat: 25.0150 }),
+    mo('5', '香格里拉測試大飯店1F女廁', { addr: '高雄市測試路2號', county: '64000', lat: 22.62, lng: 120.30, kind: '其他' }), mo('6', '測試影城-男廁', { addr: '高雄市測試路3號', county: '64000', lat: 22.63, lng: 120.30, kind: '休閒娛樂場所' }),
+    mo('7', '台塑測試加油站-男廁', { addr: '高雄市測試路4號', county: '64000', lat: 22.64, lng: 120.30, kind: '商業營業場所' }),
+    mo('8', '臺北測試公園-男廁', { addr: '中山區測試路5號', county: '63000', lat: 25.07, lng: 121.54 }), mo('9', '不合格測試公廁', { addr: '新北市測試路6號', grade: '不合格', lat: 25.02 })]);
+  const by = Object.fromEntries(rows.map((r) => [`${r.name}@${r.lat.toFixed(3)}`, `${r.subtype}/${r.access}/${r.city}/${r.svc}`]));
+  assert.deepEqual(by, { '測試公園@25.014': 'public/public/新北市/34', '測試公園@25.015': 'public/public/新北市/2', '香格里拉測試大飯店@22.620': 'store/customer/高雄市/2',
+    '測試影城@22.630': 'store/customer/高雄市/2', '台塑測試加油站@22.640': 'station/customer/高雄市/2' });
+});
+
+test('讀取合併：Cool map 有廁所的連鎖店（補給）與同一間店的店家廁所 30 公尺內合併；店家不併進公廁、不同店不合併', () => {
+  const r = (id, source, type, subtype, svc, access, name, lat, lng) => ({ id, source, type, subtype, svc, access, name, lat, lng });
+  const out = mergeRows([
+    r('cool:a', 'cool', 'supply', 'store', 2 | 16 | 1, 'unverified', '全家便利商店-台中學友店', 24.10000, 120.60000),
+    r('moenv:a', 'moenv', 'toilet', 'store', 2, 'customer', '全家台中學友店', 24.10001, 120.60001),
+    r('cool:b', 'cool', 'supply', 'store', 16 | 1, 'unverified', '7-11 沒有廁所', 24.20000, 120.60000),
+    r('moenv:b', 'moenv', 'toilet', 'store', 2, 'customer', '某某餐廳', 24.20001, 120.60001),
+    r('cool:c', 'cool', 'supply', 'store', 2 | 16, 'unverified', '萊爾富某店', 24.30000, 120.60000),
+    r('moenv:c', 'moenv', 'toilet', 'public', 2, 'public', '某某公園', 24.30001, 120.60001),
+    r('cool:d', 'cool', 'supply', 'store', 2 | 16, 'unverified', '全聯某店', 24.40000, 120.60000),
+    r('cool:e', 'cool', 'supply', 'store', 2 | 16, 'unverified', '家樂福某店', 24.40001, 120.60001),
+  ]);
+  const ids = out.map((x) => x.id).sort();
+  assert.deepEqual(ids, ['cool:a', 'cool:b', 'cool:c', 'cool:d', 'cool:e', 'moenv:b', 'moenv:c']);
+  assert.deepEqual(out.find((x) => x.id === 'cool:a').also, ['moenv']);
+  assert.ok(samePlace(out.find((x) => x.id === 'cool:a'), { type: 'toilet', subtype: 'store', svc: 2, lat: 24.10001, lng: 120.60001, name: 'x' }));
 });
