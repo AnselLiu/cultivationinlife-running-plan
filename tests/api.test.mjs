@@ -1573,3 +1573,19 @@ test('跑者休息站（免費方案）：每個來源標明 Worker 能不能同
   assert.equal((await call('t_chair', '/settings/features', { method: 'POST', body: { rest: false } })).status, 200);
   await mock('reset=1');
 });
+
+test('路線：每人最多存 100 條（不讓一個帳號把資料庫與每日備份灌爆）', async () => {
+  const pts = [[25.07, 121.53], [25.08, 121.53]];
+  const had = (await call('t_other', '/routes')).json.routes.filter((r) => r.mine).length;
+  assert.equal((await call(null, `/dev/seed-bulk?routes=${100 - had}&owner=t_other`)).status, 200);
+  try {
+    const r = await call('t_other', '/routes', { method: 'POST', body: { name: '第 101 條', points: pts, shared: false } });
+    assert.equal(r.status, 400, r.text);
+    assert.match(r.json.error, /最多存 100 條/);
+    assert.equal((await call('t_other', '/routes/b_r0000_t_other', { method: 'DELETE' })).status, 200);
+    assert.equal((await call('t_other', '/routes', { method: 'POST', body: { name: '刪掉一條後可以存', points: pts, shared: false } })).status, 200);
+    assert.equal((await call('t_runner', '/routes', { method: 'POST', body: { name: '別人不受影響', points: pts, shared: false } })).status, 200);
+  } finally {
+    await call(null, '/dev/seed-bulk?clear=1');
+  }
+});

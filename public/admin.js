@@ -656,9 +656,11 @@ function bindSettings() {
   const loadBk = async () => {
     const r = await api('/backups').catch(() => null);
     if (!$('#bkList')) return;
-    $('#bkList').innerHTML = !r ? '<p class="tiny" style="margin:0">沒有權限</p>' : !r.enabled ? '<p class="tiny" style="margin:0">備份還沒設定</p>'
+    // 備份卡住（進行中的超過 24 小時，或最新的超過 36 小時）：舊備份 36 天後會過期，要馬上處理
+    const stale = r?.stale ? `<p class="notice err" role="alert" style="margin:0">${r.stale.pending ? `${esc(r.stale.pending)} 的備份開始超過 24 小時還沒做完` : `最新的每日備份是 ${esc(r.stale.newest)}，已經超過 36 小時`}。請檢查資料量是否暴增（例如大量路線），必要時改用 D1 Time Travel 並聯絡維護人員。</p>` : '';
+    $('#bkList').innerHTML = stale + (!r ? '<p class="tiny" style="margin:0">沒有權限</p>' : !r.enabled ? '<p class="tiny" style="margin:0">備份還沒設定</p>'
       : r.list.length ? r.list.slice(0, 7).map((b) => `<div class="r"><span class="av num" style="font-size:10px">${esc(String(b.key).slice(11, 16).replace('-', '/'))}</span><span><b>${esc(String(b.key).replace('daily/', '').replace('.bin', ''))}</b><span class="tiny" style="display:block">${b.tables || '—'} 張表・${b.rows || '—'} 筆・${Math.round((Number(b.bytes) || b.size || 0) / 1024)} KB・存在 ${esc(r.where || '')}</span></span></div>`).join('')
-      : '<p class="tiny" style="margin:0">還沒有備份，今晚 3 點會自動執行第一次。</p>';
+      : '<p class="tiny" style="margin:0">還沒有備份，今晚 3 點會自動執行第一次。</p>');
   };
   loadBk();
   $('#bkNow')?.addEventListener('click', async (e) => {

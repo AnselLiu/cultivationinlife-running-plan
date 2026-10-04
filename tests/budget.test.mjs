@@ -563,3 +563,54 @@ test('執行額度紀錄：管理後台看得到排程工作、推播佇列、�
 test('staging 驗證：沒有 SELFTEST=1 的環境沒有 /api/admin/selftest', async () => {
   assert.equal((await call('t_chair', '/admin/selftest', { method: 'POST', body: {} })).status, 404);
 });
+
+// 前面的測試可能留下做到一半的備份：先做完，下面的測試才是從新的一份開始
+async function finishPendingBackup() {
+  for (let h = 0; h < 24 && (await jobs()).backup?.cursor; h++) await cron(`at=${new Date(Date.UTC(2033, 0, 1, h)).toISOString()}&seg=${ONE_SEG}&skip=retention`);
+  assert.equal((await jobs()).backup?.cursor ?? null, null, '沒有做到一半的備份');
+}
+
+test('每日備份：只讀到開始時的最後一筆，備份進行中一直新增的資料（例如大量存路線）不會讓它永遠做不完', async () => {
+  await finishPendingBackup();
+  const before = (await call(null, '/dev/backup-check')).json.now.routes;
+  const first = await cron('at=2033-02-10T19:00:00Z&seg=4096&skip=retention');
+  within(first, '第一段');
+  assert.equal(first.backup, 'deferred', JSON.stringify(first.backup));
+  // 備份進行中有人存了 3 條路線：留給下一份，不追著讀
+  for (let i = 0; i < 3; i++) assert.equal((await call('t_lead', '/routes', { method: 'POST', body: { name: `備份中新增 ${i}`, points: [[25.07, 121.53], [25.08, 121.53 + i / 1000]], shared: false } })).status, 200);
+  let r;
+  for (let h = 20; h < 44; h++) {
+    r = await cron(`at=${new Date(Date.UTC(2033, 1, 10, h)).toISOString()}&seg=65536&skip=retention`);
+    within(r, `第 ${h - 18} 段`);
+    if (r.backup && typeof r.backup === 'object') break;
+  }
+  assert.equal(r.backup?.label, '2033-02-11', JSON.stringify(r.backup));
+  const d = (await call(null, '/dev/backup-check?label=2033-02-11')).json;
+  assert.deepEqual(d.counts, d.manifest);
+  assert.equal(d.counts.routes, before, '只有開始時就有的路線');
+  assert.equal(d.now.routes, before + 3);
+  assert.deepEqual(await violations(), []);
+});
+
+test('每日備份：開始超過 24 小時還沒做完，通知理事長與行政人員一次、稽核記一筆', async () => {
+  const notes = async (who) => { const n = (await call(who, '/notifications')).json; return [...(n.pinned || []), ...n.items].filter((x) => x.title === '每日備份還沒做完'); };
+  await finishPendingBackup();
+  const n0 = (await notes('t_chair')).length;
+  assert.equal((await cron('at=2033-03-10T19:00:00Z&seg=4096&skip=retention')).backup, 'deferred');
+  assert.equal((await cron('at=2033-03-11T18:00:00Z&seg=4096&skip=retention')).backup, 'deferred', '23 小時：還不算卡住');
+  assert.equal((await notes('t_chair')).length, n0);
+  const late = await cron('at=2033-03-11T20:00:00Z&seg=4096&skip=retention');
+  within(late, '卡住通知');
+  assert.equal(late.backup, 'deferred');
+  assert.equal((await notes('t_chair')).length, n0 + 1, '理事長收到通知');
+  assert.ok((await notes('t_staff')).length >= 1, '行政人員收到通知');
+  assert.equal((await notes('t_runner')).length, 0);
+  await cron('at=2033-03-11T21:00:00Z&seg=4096&skip=retention');
+  assert.equal((await notes('t_chair')).length, n0 + 1, '同一份只通知一次');
+  const au = (await call('t_chair', `/audit?from=${plus(-1)}&to=${plus(1)}&action=backup.stalled`)).json.items;
+  assert.equal(au.filter((x) => x.target_id === '2033-03-11').length, 1, JSON.stringify(au));
+  // 做完：清單上看得到
+  const done = await cron(`at=2033-03-11T22:00:00Z&seg=${ONE_SEG}&skip=retention`);
+  assert.equal(done.backup?.label, '2033-03-11', JSON.stringify(done.backup));
+  assert.deepEqual(await violations(), []);
+});

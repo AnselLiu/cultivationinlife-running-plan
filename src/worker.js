@@ -1156,8 +1156,12 @@ const api = (async function api(req, env, path, method) {
     if (!can(member, 'settings') && !can(member, 'audit')) return fail(403, '只有理事長、行政人員與監事可以看');
     const store = backupStore(env);
     if (!store) return json({ enabled: false, list: [] });
-    const l = await store.list();
-    return json({ enabled: !!env.BACKUP_KEY, where: store.kind, list: l.sort((a, b) => b.key.localeCompare(a.key)).slice(0, 40) });
+    const [l, run] = await Promise.all([store.list(), env.DB.prepare("SELECT cursor FROM job_runs WHERE job = 'backup'").first()]);
+    // 備份是不是卡住了：進行中的那份開始超過 24 小時，或最新做完的每日備份超過 36 小時（A.8.13）
+    const cur = parseQ(run?.cursor, null);
+    const newest = l.map((x) => /^daily\/(\d{4}-\d{2}-\d{2})\.bin$/.exec(x.key)?.[1]).filter(Boolean).sort().pop() || null;
+    const stale = cur?.label && backupStalled(cur) ? { pending: cur.label, since: cur.at } : newest && newest < tpDate(new Date(Date.now() - 36 * 3600e3)) ? { newest } : null;
+    return json({ enabled: !!env.BACKUP_KEY, where: store.kind, list: l.sort((a, b) => b.key.localeCompare(a.key)).slice(0, 40), stale });
   }
   if (path === '/api/backups' && method === 'POST') {
     const g = need(); if (g) return g;
@@ -1561,8 +1565,11 @@ const api = (async function api(req, env, path, method) {
     for (let i = 1; i < pts.length; i++) { const [a1, o1] = pts[i - 1], [a2, o2] = pts[i]; const h = Math.sin(rad(a2 - a1) / 2) ** 2 + Math.cos(rad(a1)) * Math.cos(rad(a2)) * Math.sin(rad(o2 - o1) / 2) ** 2; dist += 2 * R * Math.asin(Math.sqrt(h)); }
     const id = rid(8), name = str(b.name, 40) || `${(dist / 1000).toFixed(1)} 公里路線`;
     const spot = /^[\w-]{1,32}$/.test(b.spot_id || '') ? b.spot_id : null;
-    await env.DB.prepare('INSERT INTO routes (id, name, points, distance, spot_id, shared, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    // 每人最多 ROUTE_MAX 條（一條最多約 66 KB）：不讓一個帳號把資料庫與每日備份灌爆（A.8.13）；數量檢查和寫入同一句
+    const r = await env.DB.prepare(`INSERT INTO routes (id, name, points, distance, spot_id, shared, created_by) SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7
+      WHERE (SELECT COUNT(*) FROM routes WHERE created_by = ?7) < ${ROUTE_MAX}`)
       .bind(id, name, JSON.stringify(pts), Math.round(dist), spot, b.shared === false ? 0 : 1, member.id).run();
+    if (!r.meta.changes) return fail(400, `每人最多存 ${ROUTE_MAX} 條路線，請先刪掉不用的`);
     return json({ id, distance: Math.round(dist), name });
   }
   const mrt = path.match(/^\/api\/routes\/([\w-]{1,32})$/);
@@ -4309,6 +4316,7 @@ const BACKUP_SKIP = new Set(['sessions', 'rate_limits', 'webauthn_challenges', '
 const BACKUP_FILTER = { cams: 'manual = 1', rest_stops: 'manual = 1 OR fix IS NOT NULL OR hidden = 1 OR note IS NOT NULL' };
 // 每筆可能很大的表（路線最多 3000 點約 66 KB、分團小圖最多 80 KB）：第一次只讀幾筆，之後照平均大小調整，一段的 CPU 才不會爆
 const BACKUP_FIRST = { routes: 5, teams: 5, plan_posts: 50, team_posts: 50 };
+const ROUTE_MAX = 100;
 // 加密一個備份物件：'CILB2'＋IV＋AES-GCM(gzip(text))；AAD 綁住日期與第幾段（manifest 是 'manifest'），段落不能被換位置或拿去拼別份
 async function sealBackup(env, text, aad) {
   const gz = await new Response(new Blob([text]).stream().pipeThrough(new CompressionStream('gzip'))).arrayBuffer();
@@ -4335,9 +4343,9 @@ async function dailyBackup(env, now) {
   if (!backupStore(env) || !env.BACKUP_KEY) return { done: true, result: null };
   const rows = (await env.DB.prepare("SELECT job, claim_key, attempts, cursor FROM job_runs WHERE job IN ('backup', 'backup_manual')").all()).results;
   const m = rows.find((r) => r.job === 'backup_manual'), d = rows.find((r) => r.job === 'backup');
-  if (backupPending(m)) return backupStep(env, 'backup_manual', m.claim_key, { action: 'backup.manual' });
+  if (backupPending(m)) return backupStep(env, 'backup_manual', m.claim_key, { action: 'backup.manual', now });
   const label = backupPending(d) ? d.claim_key : tpDate(now);
-  return backupStep(env, 'backup', label, { action: 'backup.daily' });
+  return backupStep(env, 'backup', label, { action: 'backup.daily', now });
 }
 // 分段備份的一段（一次執行）：依表名排序，每張表依 rowid 往後讀，讀到 plan.backupSeg 個 JSON 字元或額度用完就停，
 //   加密寫成一段 part/<日期>/<第幾段>.bin，游標存在 job_runs.cursor，下個整點接著做；全部做完才寫 daily/<日期>.bin（manifest：每張表幾筆、共幾段），
@@ -4345,7 +4353,12 @@ async function dailyBackup(env, now) {
 //   子請求：佔用 1、開頭一次（表名 1、哪些表有資料 1）、每次讀取 1、寫入一段 1、收尾 2（manifest 1＋完成標記與稽核）
 //   注意：資料多而跨好幾個整點時，每張表是各自讀取時的狀態，不是同一時間點的快照；要還原到某個時間點請用 D1 Time Travel（免費方案 7 天）
 const BK_RESERVE = 5;
-async function backupStep(env, job, label, { action = 'backup.daily' } = {}) {
+const BACKUP_STALL_MS = 24 * 3600e3;
+const backupStalled = (cur, now = new Date()) => now.getTime() - (cur.started ?? Date.parse(cur.at)) > BACKUP_STALL_MS;
+// 各表目前最大的 rowid（有 BACKUP_FILTER 的只看符合條件的列）；空的表是 null。一句
+const maxRowids = async (env, names) => (names.length
+  ? JSON.parse((await env.DB.prepare(`SELECT json_array(${names.map((n) => `(SELECT MAX(rowid) FROM "${n}"${BACKUP_FILTER[n] ? ` WHERE (${BACKUP_FILTER[n]})` : ''})`).join(', ')}) AS j`).first()).j) : []);
+async function backupStep(env, job, label, { action = 'backup.daily', now = new Date() } = {}) {
   const store = backupStore(env), plan = planOf(env);
   const c0 = await claim(env, job, label);
   if (!c0) return { done: true, result: null };
@@ -4354,16 +4367,27 @@ async function backupStep(env, job, label, { action = 'backup.daily' } = {}) {
     if (!fits(env, 2 + BK_RESERVE, 'backup:start')) { await yieldStmt(env, job).run(); return { done: false, result: 'deferred' }; }
     const names = (await env.DB.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%' ORDER BY name").all())
       .results.map((r) => r.name).filter((n) => !BACKUP_SKIP.has(n) && /^\w+$/.test(n));
-    // 空的表不用逐張去讀（一句看完哪些表有資料）
-    const has = names.length ? JSON.parse((await env.DB.prepare(`SELECT json_array(${names.map((n) => `EXISTS (SELECT 1 FROM "${n}"${BACKUP_FILTER[n] ? ` WHERE (${BACKUP_FILTER[n]})` : ''})`).join(', ')}) AS j`).first()).j) : [];
-    cur = { label, at: new Date().toISOString(), all: names, tables: names.filter((n, i) => has[i]), t: 0, after: 0, n: 0, rows: Object.fromEntries(names.map((n) => [n, 0])), bytes: 0 };
+    // 一句看完各表開始時的最大 rowid：空的表不用逐張去讀；之後只讀到這個 rowid 為止（max），
+    //   備份進行中新增的列（例如有人一直存路線）留給下一份，不會一直追著新資料跑而永遠做不完（A.8.13）
+    const top = await maxRowids(env, names);
+    cur = { label, at: new Date().toISOString(), started: now.getTime(), all: names, tables: names.filter((n, i) => top[i] != null), t: 0, after: 0, n: 0, rows: Object.fromEntries(names.map((n) => [n, 0])), bytes: 0,
+      max: Object.fromEntries(names.map((n, i) => [n, top[i]]).filter(([, v]) => v != null)) };
+  }
+  // 部署前就開始、還沒有上限的游標：現在補上（1 句）
+  if (!cur.max) { if (!fits(env, 1 + BK_RESERVE, 'backup:max')) { await yieldStmt(env, job).run(); return { done: false, result: 'deferred' }; } const top = await maxRowids(env, cur.tables); cur.max = Object.fromEntries(cur.tables.map((n, i) => [n, top[i] ?? 0])); }
+  // 開始超過 24 小時還沒做完：通知理事長與行政人員一次、稽核記一筆（資料暴增或有人大量寫入時，舊備份 36 天後就會過期）
+  if (!cur.alerted && backupStalled(cur, now) && fits(env, 1 + notifyCost(10) + BK_RESERVE, 'backup:alert')) {
+    const ids = (await env.DB.prepare("SELECT id FROM members WHERE role IN ('chair', 'staff') LIMIT 20").all()).results.map((r) => r.id);
+    cur.alerted = true;
+    await notify(env, ids, 'todo', { kind: 'system', title: '每日備份還沒做完', body: `${label} 的備份開始超過 24 小時還沒做完，請到管理後台「設定」查看`, url: '/#/admin?tab=settings', ref: `backup:${label}` },
+      { force: true, also: [cursorStmt(env, job, cur), await auditStmt(env, null, null, 'backup.stalled', 'system', label, `開始於 ${cur.at}，已完成 ${cur.n} 段`)] });
   }
   const pieces = [], seg = env.backupSeg || plan.backupSeg;   // backupSeg：測試用（/api/dev/cron?seg=，只有 DEV_LOGIN=1 的本機）
   let size = 0, lim = BACKUP_FIRST[cur.tables[cur.t]] || 200;
   while (cur.t < cur.tables.length && size < seg) {
     if (!env.budget.room(1 + BK_RESERVE)) { env.budget.stop('backup:sub'); break; }
     const t = cur.tables[cur.t], L = lim;
-    const rows = (await env.DB.prepare(`SELECT *, rowid AS _rid FROM "${t}" WHERE rowid > ?1${BACKUP_FILTER[t] ? ` AND (${BACKUP_FILTER[t]})` : ''} ORDER BY rowid LIMIT ?2`).bind(cur.after, L).all()).results;
+    const rows = (await env.DB.prepare(`SELECT *, rowid AS _rid FROM "${t}" WHERE rowid > ?1 AND rowid <= ?3${BACKUP_FILTER[t] ? ` AND (${BACKUP_FILTER[t]})` : ''} ORDER BY rowid LIMIT ?2`).bind(cur.after, L, cur.max[t] ?? 0).all()).results;
     if (rows.length) {
       const js = JSON.stringify(rows);
       pieces.push(`[${JSON.stringify(t)},${js}]`); size += js.length;
@@ -4371,7 +4395,7 @@ async function backupStep(env, job, label, { action = 'backup.daily' } = {}) {
       // 下一次讀幾筆：照這次每筆的平均大小，填滿這一段剩下的空間（20–2000 筆）
       lim = Math.max(5, Math.min(2000, Math.floor((seg - size) / Math.max(1, js.length / rows.length))));
     }
-    if (rows.length < L) { cur.t++; cur.after = 0; lim = BACKUP_FIRST[cur.tables[cur.t]] || 200; }
+    if (rows.length < L || cur.after >= (cur.max[t] ?? 0)) { cur.t++; cur.after = 0; lim = BACKUP_FIRST[cur.tables[cur.t]] || 200; }
   }
   if (pieces.length) {
     const blob = await sealBackup(env, `{"format":"cil-backup-part","version":2,"label":${JSON.stringify(label)},"n":${cur.n},"tables":[${pieces.join(',')}]}`, `${label}|${cur.n}`);
@@ -5005,12 +5029,17 @@ async function devRoute(req, env, ctx, url, path) {
         env.DB.prepare("DELETE FROM push_subs WHERE endpoint LIKE 'https://fcm.googleapis.com/fcm/send/b\\_%' ESCAPE '\\'"),
         env.DB.prepare("UPDATE draws SET member_id = NULL WHERE member_id LIKE 'b\\_%' ESCAPE '\\'"),   // 得獎紀錄沒有 ON DELETE（刪帳號時匿名化）
         env.DB.prepare("DELETE FROM members WHERE id LIKE 'b\\_%' ESCAPE '\\'"),
+        env.DB.prepare("DELETE FROM routes WHERE id LIKE 'b\\_%' ESCAPE '\\'"),
       ]);
       return json({ ok: true });
     }
     const nm = Math.min(Number(q.get('members')) || 0, 1000), ns = Math.min(Number(q.get('subs')) || 0, 2000), np = Math.min(Number(q.get('pending')) || 0, 1000);
+    // ?routes=100&owner=<id>：替這位會員建小路線（id 以 b_ 開頭，?clear=1 一起清掉）
+    const nr = Math.min(Number(q.get('routes')) || 0, 200), owner = str(q.get('owner'), 32);
     const seq = (n) => JSON.stringify(Array.from({ length: n }, (_, i) => i));
     const stmts = [];
+    if (nr && owner) stmts.push(env.DB.prepare(`INSERT OR IGNORE INTO routes (id, name, points, distance, shared, created_by)
+      SELECT printf('b_r%04d_%s', value, ?2), '大量測試路線', '[[25,121],[25.001,121]]', 111, 0, ?2 FROM json_each(?1)`).bind(seq(nr), owner));
     if (nm) stmts.push(env.DB.prepare(`INSERT OR IGNORE INTO members (id, name, nickname, dist, grp, role, membership, consent_at, consent_version)
       SELECT printf('b_%04d', value), printf('大量測試%04d', value), NULL, 'fm', 'D', 'member', 'none', datetime('now'), '2026-10-03.1' FROM json_each(?)`).bind(seq(nm)));
     if (ns && nm) stmts.push(env.DB.prepare(`INSERT OR IGNORE INTO push_subs (endpoint, member_id, p256dh, auth)
