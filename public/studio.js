@@ -96,6 +96,7 @@ function scrim(ctx, W, H, from = .38) {
   ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
 }
 // 路線：把經緯度縮放進指定方框，progress 0–1 用在影片的「畫出路線」
+//   跑步記錄的點可以帶第三個值：1＝空檔的直線估算（畫成淡的虛線）、2＝跟上一點斷開（不連線）
 function drawRoute(ctx, route, box, progress = 1, width = 10) {
   if (route.length < 2) return;
   const lats = route.map((p) => p[0]), lons = route.map((p) => p[1]);
@@ -111,8 +112,22 @@ function drawRoute(ctx, route, box, progress = 1, width = 10) {
   ctx.shadowColor = 'rgba(253,243,109,.7)'; ctx.shadowBlur = width * 2.4;
   ctx.strokeStyle = '#FDF36D'; ctx.lineWidth = width;
   ctx.beginPath();
-  route.slice(0, n).forEach((p, i) => { const [x, y] = P(p); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
+  const est = [];
+  route.slice(0, n).forEach((p, i) => {
+    const [x, y] = P(p);
+    if (!i || p[2] === 2) ctx.moveTo(x, y);
+    else if (p[2] === 1) { est.push([P(route[i - 1]), [x, y]]); ctx.moveTo(x, y); }
+    else ctx.lineTo(x, y);
+  });
   ctx.stroke();
+  if (est.length) {
+    ctx.save();
+    ctx.shadowBlur = 0; ctx.globalAlpha = .5; ctx.lineWidth = width * .7; ctx.setLineDash([width * .2, width * 1.6]);
+    ctx.beginPath();
+    for (const [[ax, ay], [bx, by]] of est) { ctx.moveTo(ax, ay); ctx.lineTo(bx, by); }
+    ctx.stroke();
+    ctx.restore();
+  }
   // 起點與目前位置
   ctx.shadowBlur = 0;
   const [sx, sy] = P(route[0]), [ex, ey] = P(route[n - 1]);

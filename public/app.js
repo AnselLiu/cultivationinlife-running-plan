@@ -2310,7 +2310,8 @@ async function logView() {
   // 從拍照分享、跑步記錄或捷徑帶進來的數據
   const num = (k, max) => { const v = parseFloat(String(q.get(k) || '').replace(',', '.')); return v > 0 && v < max ? v : null; };
   const incoming = q.get('km') ? { km: num('km', 400), seconds: num('sec', 200000) || (num('min', 3000) ? Math.round(num('min', 3000) * 60) : null), hr: num('hr', 230),
-    date: /^\d{4}-\d{2}-\d{2}$/.test(q.get('date') || '') ? q.get('date') : null, source: ['health', 'gps'].includes(q.get('src')) ? q.get('src') : 'manual' } : null;
+    date: /^\d{4}-\d{2}-\d{2}$/.test(q.get('date') || '') ? q.get('date') : null, source: ['health', 'gps'].includes(q.get('src')) ? q.get('src') : 'manual',
+    ...(q.get('src') === 'gps' && q.get('note') ? { note: q.get('note').slice(0, 40) } : {}) } : null;
   const today = ymd(new Date());
   // 從「跑完了嗎？」通知進來：帶入那場團練的日期與名稱
   const fromEv = q.get('event') ? await api(`/events/${q.get('event')}`).catch(() => null) : null;
@@ -2559,6 +2560,7 @@ const paceStr = (secPerKm) => (secPerKm && secPerKm < 1800 ? `${Math.floor(secPe
 const GPS_NAME = { waiting: '正在定位…', good: 'GPS 良好', ok: 'GPS 普通', weak: 'GPS 訊號弱', denied: '沒有定位權限', off: '只計時' };
 let runTick = null, lapMsgT = 0, wakeBadAt = 0;
 // 路線預覽（SVG，不載地圖圖資，路線不離開手機）
+//   點是 [緯度, 經度, 記號]：記號 1＝空檔的直線估算（虛線、淡一點）、2＝跟上一點斷開（不連線）
 function routeSvg(route) {
   if (route.length < 2) return '';
   const lats = route.map((p) => p[0]), lons = route.map((p) => p[1]);
@@ -2566,9 +2568,18 @@ function routeSvg(route) {
   const minX = Math.min(...lons) * kx, maxX = Math.max(...lons) * kx, minY = Math.min(...lats), maxY = Math.max(...lats);
   const w = Math.max(maxX - minX, 1e-6), h = Math.max(maxY - minY, 1e-6), sc = Math.min(560 / w, 260 / h);
   const P = ([la, lo]) => `${(20 + (lo * kx - minX) * sc + (560 - w * sc) / 2).toFixed(1)},${(20 + (maxY - la) * sc + (260 - h * sc) / 2).toFixed(1)}`;
-  return `<svg class="routesvg" viewBox="0 0 600 300" role="img" aria-label="這次跑步的路線"><polyline points="${route.map(P).join(' ')}"/>
-    <circle cx="${P(route[0]).split(',')[0]}" cy="${P(route[0]).split(',')[1]}" r="8" class="st"/><circle cx="${P(route[route.length - 1]).split(',')[0]}" cy="${P(route[route.length - 1]).split(',')[1]}" r="8" class="en"/></svg>`;
+  let line = '', est = '';
+  route.forEach((p, i) => {
+    if (!i || p[2] === 2) line += `M${P(p)}`;
+    else if (p[2] === 1) { est += `M${P(route[i - 1])}L${P(p)}`; line += `M${P(p)}`; }
+    else line += `L${P(p)}`;
+  });
+  const [sx, sy] = P(route[0]).split(','), [ex, ey] = P(route[route.length - 1]).split(',');
+  return `<svg class="routesvg" viewBox="0 0 600 300" role="img" aria-label="這次跑步的路線"><path d="${line}"/>${est ? `<path class="est" d="${est}"/>` : ''}
+    <circle cx="${sx}" cy="${sy}" r="8" class="st"/><circle cx="${ex}" cy="${ey}" r="8" class="en"/></svg>`;
 }
+// 空檔的估算：「螢幕鎖定或訊號弱時以直線估算 620 公尺」
+const estText = (m) => `螢幕鎖定或訊號弱時以直線估算 ${Math.round(m)} 公尺`;
 async function runView() {
   clearInterval(runTick);
   await loadRun();
@@ -2589,6 +2600,7 @@ async function runView() {
       </section>
       ${!r.gps || r.distance < 50 ? `<section class="card"><h3>距離</h3><p class="tiny" style="margin:0">${r.gps ? 'GPS 沒有記到距離（可能在室內或訊號太弱），' : '這次沒有開 GPS，'}請填實際跑的距離，例如跑步機上的數字或操場圈數。</p>
         <form id="manDist" class="row" style="gap:8px"><input name="km" inputmode="decimal" placeholder="例如 8.0" aria-label="實際距離（公里）" style="flex:1" value="${x.manualDist ? (x.manualDist / 1000).toFixed(2) : ''}"><span>km</span><button class="btn sm">更新</button></form></section>` : ''}
+      ${r.est ? `<p class="tiny estnote">${estText(r.est)}，路線上畫成虛線；實際跑的通常比直線長一點。</p>` : ''}
       ${r.route.length > 1 ? `<section class="card"><div class="row spread"><h3>路線</h3><span class="tiny">只留在你的手機上</span></div>${routeSvg(r.route)}</section>` : ''}
       <div class="statgrid">
         ${r.splits.length ? `<section class="card"><h3>每公里分段</h3><div class="splits">${r.splits.map((sp) => `<div><span>${sp.km} km</span><b class="num">${paceStr(sp.sec)}</b></div>`).join('')}</div></section>` : ''}
@@ -2597,7 +2609,7 @@ async function runView() {
       <section class="card"><div class="row spread"><h3>${r.date === t ? '今天' : dstr(r.date)}累計</h3><span class="tiny">包含這一次</span></div>
         <div class="lstats"><span><b class="num">${(dayKm + r.distance / 1000).toFixed(1)}</b> km</span><span><b class="num">${hms(daySec + r.seconds)}</b></span><span><b class="num">${logs.filter((l) => l.status !== 'skip').length + 1}</b> 次</span></div></section>
       <section class="card actions">
-        <a class="btn block iconbtn" href="#/log?${new URLSearchParams({ date: r.date, km: (r.distance / 1000).toFixed(2), sec: String(r.seconds), src: 'gps' })}">${IC.check}存到訓練紀錄</a>
+        <a class="btn block iconbtn" href="#/log?${new URLSearchParams({ date: r.date, km: (r.distance / 1000).toFixed(2), sec: String(r.seconds), src: 'gps', ...(r.est ? { note: I18N.lang === 'en' ? `Includes ${r.est} m straight-line estimate` : `含直線估算 ${r.est} 公尺` } : {}) })}">${IC.check}存到訓練紀錄</a>
         ${feat('studio') ? '<button class="btn ghost block" id="toStudio">拍照分享到 IG</button>' : ''}
         ${r.route.length > 1 ? '<button class="btn ghost block" id="dlGpx">下載 GPX 檔</button>' : ''}
         <button class="btn danger block" id="runDiscard">刪除這次記錄</button>
@@ -2658,6 +2670,7 @@ async function runView() {
         <p>iPhone 鎖定螢幕時網頁會停住、收不到定位，解鎖後空白的那段只能用直線估算。想記完整，跑步時讓螢幕保持亮著：放口袋時開口袋模式，或把「設定 › 螢幕顯示與亮度 › 自動鎖定」暫時設為「永不」（低電量模式下 iPhone 會 30 秒就鎖定）。</p>
         <button type="button" class="linkbtn" id="rWakeRetry">再試一次讓螢幕保持亮著</button></div>
       <button type="button" class="btn ghost sm iconbtn" id="rPocket">${IC.lock}口袋模式</button>
+      <p class="tiny gapline" id="rGap" hidden></p>
       <p class="tiny lapmsg" id="rLapMsg" role="status"></p>
       <div id="rLaps" class="splits"></div>
     </section>
@@ -2675,6 +2688,9 @@ async function runView() {
     $('#rLaps').innerHTML = (cur ? `<div class="cur"><span>第 ${cur.n} 圈・進行中</span><b class="num">${hms(cur.sec)}</b></div>` : '')
       + y.laps.map((l, i) => `<div><span>第 ${i + 1} 圈</span><b class="num">${hms((l.at - (i ? y.laps[i - 1].at : 0)) / 1000)}</b></div>`).reverse().join('');
     if (y.goal && $('#rGoal')) $('#rGoal').style.width = `${Math.min(100, y.goal.km ? d / (y.goal.km * 10) : sec / (y.goal.min * 0.6))}%`;
+    // 空檔：等 GPS 回來再用直線補；補過的話說一下補了多少
+    const gl = $('#rGap'), gt = y.gap ? '收不到定位，等 GPS 回來後這段用直線估算' : y.estM >= 1 ? estText(y.estM) : '';
+    if (gl && gl.dataset.t !== gt) { gl.dataset.t = gt; gl.textContent = gt; gl.hidden = !gt; }
     // 螢幕保持亮著要不到、或被系統放掉：跑步中超過 2 秒就提醒（不擋畫面）
     const wk = $('#rWake');
     if (wk) {

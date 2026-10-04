@@ -74,6 +74,11 @@ test('(a) 跑步中鎖定螢幕 5 分鐘，解鎖後先跑 check()：計時照�
   assert.ok(r.distance >= 1550 && r.distance <= w.m + 20, `距離 ${Math.round(r.distance)} 要接近實際 ${Math.round(w.m)}（直線補的是下限）`);
   assert.ok(r.est > 700 && r.est < 1100, `估算距離 ${r.est}`);
   near(r.estSec, 300, 3, '估算時間');
+  assert.equal(r.route.filter((p) => p[2] === 1).length, 1, '路線上有一段估算（虛線）');
+  assert.equal(r.route.filter((p) => p[2] === 2).length, 0, '沒有斷開');
+  const g = Run.gpx();
+  assert.equal((g.match(/<trkseg>/g) || []).length, 3, 'GPX：前段、估算段（兩個點）、後段');
+  assert.match(g, /<desc>螢幕鎖定或訊號弱時以直線估算 \d+ 公尺<\/desc>/);
 });
 
 test("(a') 鎖定螢幕 5 分鐘，解鎖後定位點先到：結果一樣", async () => {
@@ -124,6 +129,8 @@ test('(c) 等紅燈 60 秒、GPS 良好：照常自動暫停、自動繼續，�
   near(r.seconds, w.moving / 1000, 6, '時間（停下來的 60 秒不算）');
   near(r.distance, w.m, 35, '距離（±1.5 m 雜訊會多算一點）');
   assert.equal(r.est, 0, '沒有空檔，不用估算');
+  assert.equal(r.route.filter((p) => p[2]).length, 0, '等紅燈前後的路線接起來');
+  assert.equal((Run.gpx().match(/<trkseg>/g) || []).length, 1);
   assert.deepEqual(w.asks, []);
 });
 
@@ -155,6 +162,8 @@ test('空檔後快得不合理（搭車）：路線斷開、距離不算，計�
   w.run(30, 3);
   Run.finish();
   near(Run.summary().seconds, 151, 2, '時間');
+  assert.equal(Run.summary().route.filter((p) => p[2] === 2).length, 1, '路線斷開一次');
+  assert.equal(Run.summary().est, 0);
 });
 
 test('空檔中重新整理頁面：存下來的狀態接著用，回來的點照樣補上', async () => {

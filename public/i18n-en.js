@@ -4136,6 +4136,8 @@ export default {
 "第一次使用會詢問定位權限。跑步時螢幕會保持亮著；iPhone 鎖定螢幕時會停止記錄，解鎖後空白的那段用直線估算（路線畫成虛線）。手機放口袋可以開「口袋模式」防誤觸。": "You'll be asked for location access the first time. The screen stays on while you run. If iPhone locks the screen, recording stops, and the gap is estimated as a straight line once you unlock (drawn dashed on the route). With your phone in a pocket, turn on Pocket mode to avoid accidental taps.",
 "螢幕可能會自動關掉": "The screen may turn off on its own",
 "iPhone 鎖定螢幕時網頁會停住、收不到定位，解鎖後空白的那段只能用直線估算。想記完整，跑步時讓螢幕保持亮著：放口袋時開口袋模式，或把「設定 › 螢幕顯示與亮度 › 自動鎖定」暫時設為「永不」（低電量模式下 iPhone 會 30 秒就鎖定）。": "When iPhone locks the screen, the page pauses and gets no location, so the gap can only be estimated as a straight line after you unlock. To record the whole run, keep the screen on: use Pocket mode when the phone is in your pocket, or set Settings › Display & Brightness › Auto-Lock to Never while you run (in Low Power Mode, iPhone locks after 30 seconds).",
-"再試一次讓螢幕保持亮著": "Try again to keep the screen on"
+"再試一次讓螢幕保持亮著": "Try again to keep the screen on",
+"收不到定位，等 GPS 回來後這段用直線估算": "No location right now. This stretch will be estimated as a straight line once GPS is back",
+"含直線估算": "Includes straight-line estimate"
 };
 export const inner = {"團練": "group run", "課表": "training plan", "拍照": "photo", "跑步": "running", "我的": "my", "揪跑": "social run", "分團": "sub-club", "主團": "home club", "報名": "sign up", "幹部": "officers", "團員": "members", "跑友": "runners", "活動": "event", "協會": "Association", "行事曆": "calendar", "地點": "spot", "路線": "route", "天氣": "weather", "通知": "notifications", "賽事": "race", "組別": "group", "訓練紀錄": "training log", "內容": "details", "流程": "process", "選擇": "option", "跑法": "how to run", "起跑": "start", "慢跑": "jog", "小時": "hours", "碳水": "carbs", "熱身": "warm-up", "分段": "segments", "強度": "intensity", "主課": "main set", "前段": "first part", "組數": "sets", "比賽日": "race day", "可在": "can be done on"};

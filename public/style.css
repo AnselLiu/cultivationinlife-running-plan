@@ -917,7 +917,10 @@ div.splits{display:grid;width:100%}
 @keyframes lapnudge{0%,100%{transform:none}30%{transform:translateX(-5px)}70%{transform:translateX(5px)}}
 @media (prefers-reduced-motion:reduce){.runbtn.nudge{animation:none}}
 .routesvg{width:100%;height:auto;border-radius:var(--r-m);background:color-mix(in srgb,var(--ink) 4%,transparent)}
-.routesvg polyline{fill:none;stroke:var(--accent);stroke-width:5;stroke-linejoin:round;stroke-linecap:round}
+.routesvg polyline,.routesvg path{fill:none;stroke:var(--accent);stroke-width:5;stroke-linejoin:round;stroke-linecap:round}
+.routesvg path.est{stroke-width:4;stroke-dasharray:2 10;opacity:.5}
+.estnote{margin:-4px 2px 0}
+.gapline{margin:0}
 .routesvg .st{fill:#34C759}.routesvg .en{fill:var(--race)}
 /* 記錄中的計時列：分頁列上方的配件，和分頁列一樣寬；分頁列縮小時跟著往下 */
 .runbar{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(var(--tabb) + var(--tabh) + 8px);z-index:55;display:flex;align-items:center;gap:10px;

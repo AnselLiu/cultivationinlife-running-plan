@@ -302,26 +302,38 @@ export function summary(x = s) {
     prev = p;
   }
   const laps = x.laps.map((l, i) => ({ n: i + 1, sec: Math.round((l.at - (i ? x.laps[i - 1].at : 0)) / 1000), m: l.d - (i ? x.laps[i - 1].d : 0) }));
+  // 路線：[緯度, 經度, 記號]，記號 1＝從上一點到這點是空檔的直線估算（畫虛線）、2＝跟上一點斷開（暫停、搭車），沒有＝一般連線
+  const route = [];
+  let cut = false;
+  for (const p of x.points) {
+    if (p.brk) { cut = route.length > 0; continue; }
+    route.push(cut ? [p.lat, p.lon, 2] : p.est ? [p.lat, p.lon, 1] : [p.lat, p.lon]);
+    cut = false;
+  }
   const tp = new Date(x.startedAt + 8 * 3600e3).toISOString();
   return { distance, seconds, pace: distance > 0 ? seconds / (distance / 1000) : null, gain: Math.round(x.gain || 0),
-    route: pts.map((p) => [p.lat, p.lon]), splits, laps, date: tp.slice(0, 10), start: tp.slice(11, 16), gps: x.useGps, points: pts.length,
+    route, splits, laps, date: tp.slice(0, 10), start: tp.slice(11, 16), gps: x.useGps, points: pts.length,
     est: x.manualDist ? 0 : Math.round(x.estM || 0), estSec: Math.round((x.estS || 0) / 1000) };
 }
 
 // 匯出 GPX（存到手機或給其他 App）
+//   暫停、搭車斷開的地方分成不同的 <trkseg>；空檔的直線估算自己一段（兩個點），其他 App 也看得出來
 export function gpx(x = s) {
   if (!x) return '';
+  const pt = (p) => `<trkpt lat="${p.lat}" lon="${p.lon}">${p.alt != null ? `<ele>${p.alt}</ele>` : ''}<time>${new Date(p.t).toISOString()}</time></trkpt>`;
   const seg = [];
-  let cur = [];
+  let cur = [], prev = null;
   for (const p of x.points) {
-    if (p.brk) { if (cur.length) seg.push(cur); cur = []; continue; }
-    cur.push(`<trkpt lat="${p.lat}" lon="${p.lon}">${p.alt != null ? `<ele>${p.alt}</ele>` : ''}<time>${new Date(p.t).toISOString()}</time></trkpt>`);
+    if (p.brk) { if (cur.length) seg.push(cur); cur = []; prev = null; continue; }
+    if (p.est && prev) { if (cur.length) seg.push(cur); seg.push([pt(prev), pt(p)]); cur = []; }
+    cur.push(pt(p)); prev = p;
   }
   if (cur.length) seg.push(cur);
+  const est = Math.round(x.estM || 0);
   return `<?xml version="1.0" encoding="UTF-8"?>
 <gpx version="1.1" creator="耕跑團 cil-run" xmlns="http://www.topografix.com/GPX/1/1">
 <metadata><time>${new Date(x.startedAt).toISOString()}</time></metadata>
-<trk><name>耕跑團跑步記錄</name><type>running</type>
+<trk><name>耕跑團跑步記錄</name>${est ? `<desc>螢幕鎖定或訊號弱時以直線估算 ${est} 公尺</desc>` : ''}<type>running</type>
 ${seg.map((pts) => `<trkseg>\n${pts.join('\n')}\n</trkseg>`).join('\n')}
 </trk></gpx>`;
 }
