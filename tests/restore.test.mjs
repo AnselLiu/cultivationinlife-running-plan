@@ -3,7 +3,10 @@
 //   用 node:sqlite 跑全部 migrations 建一份跟 D1 一樣的資料庫，實際執行還原工具輸出的 SQL
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, readdirSync } from 'node:fs';
+import { readFileSync, readdirSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
 import { toSql, erasedFrom, erasedQuery, auditRowsFrom, replayQuery, replaySql, REPLAY_ACTIONS } from '../tools/restore-sql.mjs';
 
@@ -157,4 +160,32 @@ test('撤回紀錄：讀得懂新備份的 audit_log、舊的 --erased 格式；
   assert.match(q, /AND at >= '2026-10-01 19:00:00' ORDER BY at, id$/);
   for (const a of REPLAY_ACTIONS) assert.ok(q.includes(`'${a}'`));
   assert.ok(!q.includes(';') && !/\b(INSERT|UPDATE|DELETE|DROP)\b/.test(q), '只有一句 SELECT');
+});
+
+test('Time Travel 工具模式：--query 只印唯讀查詢；--replay 從抓下來的檔案產生重做 SQL，時間一定要帶時區', () => {
+  const tool = new URL('../tools/restore-backup.mjs', import.meta.url).pathname;
+  const run = (...a) => spawnSync(process.execPath, [tool, ...a], { encoding: 'utf8', env: { ...process.env, BACKUP_KEY: '' } });
+  const q = run('--query', '2026-10-01T19:00:00Z');
+  assert.equal(q.status, 0, q.stderr);
+  assert.ok(q.stdout.includes("npx wrangler d1 execute cil-run --remote --json --command \"SELECT id, at,"));
+  assert.ok(q.stdout.includes("at >= '2026-10-01 18:50:00'"), '往前多抓 10 分鐘');
+  assert.notEqual(run('--query', '2026-10-01 19:00:00').status, 0, '沒有時區要擋');
+  const dir = mkdtempSync(join(tmpdir(), 'cil-restore-'));
+  try {
+    const f = join(dir, 'withdrawals.json');
+    writeFileSync(f, wranglerJson(WITHDRAWALS));
+    const r = run('--replay', f, '--since', '2026-10-02T03:00:00+08:00');
+    assert.equal(r.status, 0, r.stderr);
+    assert.ok(!r.stdout.includes('x2') && !r.stdout.includes('某人'), '摘要不印帳號 id 與姓名');
+    const sql = readFileSync(join(dir, 'withdrawals-replay.sql'), 'utf8').split('\n');
+    assert.equal(sql[0], 'PRAGMA defer_foreign_keys = true;');
+    assert.ok(sql.includes("UPDATE members SET share_logs = 0 WHERE id = 'x2';") && sql.includes('DELETE FROM push_queue;'));
+    assert.ok(!sql.some((l) => l.includes("'a0'")), '還原時間點之前的不重做');
+    // 實際在跟 D1 一樣的資料庫跑一次
+    const db = freshDb();
+    db.exec(`BEGIN;\n${toSql(backupWithPrivacy(), {}).join('\n')}\nCOMMIT;`);
+    db.exec(`BEGIN;\n${sql.join('\n')}\nCOMMIT;`);
+    assert.equal(one(db, "SELECT share_logs FROM members WHERE id = 'x2'").share_logs, 0);
+    assert.notEqual(run('--replay', f).status, 0, '沒有 --since 要擋');
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });

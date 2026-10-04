@@ -1,4 +1,4 @@
-// 還原備份：把 KV（或 R2）上的加密備份解開，輸出 JSON 或可以匯入 D1 的 SQL
+// 還原備份：把 KV（或 R2）上的加密備份解開，輸出 JSON 或可以匯入 D1 的 SQL；也產生 D1 Time Travel 之後重做撤回的 SQL
 // 用法：
 //   1. 下載備份（檔名用備份的日期，例如 2026-10-04.bin）：
 //        存在 KV 時 npx wrangler kv key get "daily/2026-10-04.bin" --binding BACKUP_KV --remote > 2026-10-04.bin
@@ -16,6 +16,10 @@
 //        正式資料庫整個不見時，改用比這份新的備份解出來的 JSON 裡的 audit_log（--withdrawals 新備份.json 也讀得懂）
 //        舊的 --erased（只有刪除帳號的 id）、--no-erased 照樣可以用
 //   4. 匯入（先在測試環境試）：npx wrangler d1 execute cil-run-staging --env staging --remote --file 2026-10-04.sql
+// D1 Time Travel（步驟見 docs/RESTORE.md）：Time Travel 連 audit_log 一起倒回，所以撤回紀錄一定要在還原「之前」抓：
+//   node tools/restore-backup.mjs --query <還原到的時間>                      印出唯讀的查詢指令（不需要備份金鑰）
+//   node tools/restore-backup.mjs --replay withdrawals.json --since <同一個時間>  → withdrawals-replay.sql（還原後匯入）
+//   時間要帶時區（2026-10-04T03:00:00Z、2026-10-04T11:00:00+08:00）或 Unix 秒數；兩邊都自動往前多抓 10 分鐘（重做是冪等的，多抓不會錯）
 // 還原後：
 //   - 附近即時影像：水利署、水利處在管理後台「立即同步」一次；公路局的清單要在電腦上執行 node tools/cams-sync.mjs thb，
 //     再照工具印出的 wrangler d1 execute 指令匯入（備份只有幹部手動新增的鏡頭連結）
@@ -24,7 +28,7 @@
 //     再到管理後台「休息站資料來源」對 Worker 同步的來源按「立即同步」（或等排程的 01、02、06 點）
 //   - 不在備份裡的：遙測（client_metrics、client_errors）、通知中心（notifications，還原後從空的開始）、推播佇列、執行額度紀錄
 //   - 資料多時備份分好幾個整點做，每張表是各自讀取時的狀態，不是同一時間點的快照；
-//     要還原到某個時間點（例如誤刪）請優先用 D1 Time Travel（免費方案 7 天）：npx wrangler d1 time-travel restore cil-run --timestamp …
+//     要還原到某個時間點（例如誤刪）請優先用 D1 Time Travel（免費方案 7 天），照 docs/RESTORE.md 的清單做
 // 金鑰跟 Cloudflare 上的 BACKUP_KEY 是同一把；請另外存一份在密碼管理器，不要放進 git 或貼到聊天裡
 // 抓下來的撤回紀錄（withdrawals.json）有會員 id 與幹部姓名：存在自己的電腦、不要進 git，用完刪掉
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
@@ -41,9 +45,37 @@ const staging = flags.includes('--staging');
 const DB = staging ? 'cil-run-staging --env staging' : 'cil-run';
 const captureCmd = (at) => `npx wrangler d1 execute ${DB} --remote --json --command "${replayQuery(at)}"`;
 
+// D1 Time Travel：撤回紀錄的查詢指令與重做的 SQL（不需要備份金鑰）
+//   時間一定要帶時區（audit_log 的時間是 UTC，避免台北時間與 UTC 弄混）；往前多抓 10 分鐘
+const MARGIN = 10 * 60e3;
+function sinceOf(s) {
+  const t = /^\d{9,10}$/.test(s || '') ? Number(s) * 1000 : /(Z|[+-]\d{2}:?\d{2})$/.test(s || '') ? Date.parse(s) : NaN;
+  if (!Number.isFinite(t)) { console.error('時間要帶時區，例如 2026-10-04T03:00:00Z、2026-10-04T11:00:00+08:00，或 Unix 秒數'); process.exit(1); }
+  return new Date(t - MARGIN).toISOString();
+}
+if (flags.includes('--query')) {
+  const at = sinceOf(opt('--query'));
+  console.log(`還原「之前」先抓 ${at} 之後的撤回（唯讀，存成檔案；檔案有會員 id 與幹部姓名，用完刪掉）：`);
+  console.log(`  ${captureCmd(at)} > withdrawals.json`);
+  process.exit(0);
+}
+if (flags.includes('--replay')) {
+  const src = opt('--replay');
+  if (!src || !existsSync(src) || !opt('--since')) { console.error('用法：node tools/restore-backup.mjs --replay withdrawals.json --since <還原到的時間>'); process.exit(1); }
+  let rows;
+  try { rows = auditRowsFrom(readFileSync(src, 'utf8'), sinceOf(opt('--since'))); } catch (e) { console.error(e.message); process.exit(1); }
+  const { lines, plan } = replaySql(rows, { timeTravel: true });
+  const out = join(dirname(src), `${basename(src).replace(/\.json$/, '')}-replay.sql`);
+  writeFileSync(out, ['PRAGMA defer_foreign_keys = true;', ...lines].join('\n'));
+  console.log(`重做：${planSummary(plan)}；補回稽核紀錄 ${rows.filter((r) => r.id && r.mac).length} 筆`);
+  if (plan.passkeyUnknown.length) console.log(`有 ${plan.passkeyUnknown.length} 位移除通行金鑰的紀錄沒有金鑰 id（舊版）：已讓他們的登入失效，請通知本人到「帳號與安全」確認通行金鑰`);
+  console.log(`已輸出 ${out}；檢查後匯入：npx wrangler d1 execute ${DB} --remote --file ${out}`);
+  process.exit(0);
+}
 const keyFile = `${homedir()}/.config/cil-run/backup-key${staging ? '-staging' : ''}`;
 const KEY = process.env.BACKUP_KEY || (() => { try { return readFileSync(keyFile, 'utf8').trim(); } catch { return ''; } })();
-if (!file || !KEY) { console.error(`用法：node tools/restore-backup.mjs <備份檔> [--sql --withdrawals <檔案>｜--no-withdrawals] [--table 名稱] [--label 日期] [--fetch] [--r2] [--staging]（金鑰：${keyFile} 或 BACKUP_KEY）`); process.exit(1); }
+if (!file || !KEY) { console.error(`用法：node tools/restore-backup.mjs <備份檔> [--sql --withdrawals <檔案>｜--no-withdrawals] [--table 名稱] [--label 日期] [--fetch] [--r2] [--staging]（金鑰：${keyFile} 或 BACKUP_KEY）
+      node tools/restore-backup.mjs --query <時間>｜--replay withdrawals.json --since <時間>（D1 Time Travel，見 docs/RESTORE.md）`); process.exit(1); }
 const key = await crypto.subtle.importKey('raw', Buffer.from(KEY.replace(/-/g, '+').replace(/_/g, '/'), 'base64'), 'AES-GCM', false, ['decrypt']);
 async function open(buf, aad) {
   const magic = buf.subarray(0, 5).toString();
