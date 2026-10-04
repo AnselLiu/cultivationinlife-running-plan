@@ -626,13 +626,15 @@ details.card summary::-webkit-details-marker{display:none}
 :root[data-theme="dark"] .pill.team{background:color-mix(in srgb,var(--tc) 30%,transparent);color:color-mix(in srgb,var(--tc) 35%,var(--ink))}
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .pill.team{background:color-mix(in srgb,var(--tc) 30%,transparent);color:color-mix(in srgb,var(--tc) 35%,var(--ink))}}
 .pill.survey{background:color-mix(in srgb,#0A84FF 14%,transparent);color:#0A6BD6}
-.chipbar{display:flex;gap:8px;overflow-x:auto;padding:2px 2px 6px;margin:0 -2px;scrollbar-width:none;-webkit-mask-image:linear-gradient(90deg,#000 92%,transparent)}
+.chipbar{display:flex;gap:8px;overflow-x:auto;padding:5px 2px 9px;margin:-3px -2px;scrollbar-width:none;-webkit-mask-image:linear-gradient(90deg,#000 92%,transparent)}
 .chipbar::-webkit-scrollbar{display:none}
 .chipbar button{display:inline-flex;align-items:center;gap:7px;flex:none;border:1px solid var(--stroke);background:var(--glass-2);-webkit-backdrop-filter:var(--blur);backdrop-filter:var(--blur);
   color:var(--ink-2);border-radius:999px;padding:8px 15px;font-family:inherit;font-weight:600;font-size:14px;line-height:1.2;cursor:pointer;transition:background .2s,color .2s,transform .2s var(--tap)}
 .chipbar button i{width:8px;height:8px;border-radius:50%;background:var(--tc)}
 .chipbar button[aria-selected="true"]{background:var(--ink);color:var(--bg);border-color:transparent}
 .chipbar button:active{transform:scale(.95)}
+/* 點擊範圍 44pt：往上下延伸到 .chipbar 的內距裡（橫向捲動會裁掉內距以外的部分） */
+.chipbar button{position:relative}.chipbar button::after{content:"";position:absolute;inset:-5px -2px}
 .teamgrid{display:grid;gap:12px;grid-template-columns:repeat(auto-fill,minmax(260px,1fr))}
 .teamcard{gap:8px;overflow:hidden}
 .teamcard b{font-size:20px;letter-spacing:.02em}
@@ -1105,7 +1107,7 @@ details.group[open] > summary{margin-bottom:2px}
 /* ---------- 行事曆 ---------- */
 .calcard{gap:10px}
 .calhead h2{margin:0;font-size:22px;letter-spacing:.02em}
-.calgrid{display:grid;grid-template-columns:repeat(7,1fr);gap:4px}
+.calgrid{display:grid;grid-template-columns:repeat(7,1fr);gap:4px 0}
 .calgrid .wd{text-align:center;font-size:12px;font-weight:600;color:var(--ink-3);padding:4px 0}
 .calgrid .wd.off{color:var(--race)}
 .cd{display:grid;grid-template-rows:auto auto 1fr;justify-items:center;align-content:start;gap:1px;min-height:58px;padding:6px 2px 4px;border:0;border-radius:14px;
@@ -2046,8 +2048,9 @@ a.footlink{display:inline-flex;align-items:center;gap:4px;min-height:44px;paddin
 .infochips > span{min-width:0}
 /* 篩選列：縣市選單做成跟旁邊一樣的膠囊；三顆排成一列不換行，放不下時縣市選單縮窄（選單寬度預設是最長的縣市名） */
 .spotopts{flex-wrap:nowrap}
-.spotopts select{-webkit-appearance:none;appearance:none;flex:0 1 auto;max-width:100%;width:auto;min-width:0;min-height:34px;height:34px;padding:0 30px 0 14px;border:0;border-radius:999px;font-size:14px;font-weight:600;
-  background:var(--glass-2) var(--chev) right 10px center/14px no-repeat;box-shadow:var(--shadow-s),inset 0 1px 0 var(--rim)}
+.spotopts select{-webkit-appearance:none;appearance:none;flex:0 1 auto;max-width:100%;width:auto;min-width:0;min-height:44px;height:44px;margin-block:-5px;padding:0 30px 0 14px;border:5px solid transparent;border-radius:999px;font-size:14px;font-weight:600;
+  background:var(--glass-2) var(--chev) right 10px center/14px no-repeat;background-clip:padding-box;box-shadow:inset 0 1px 0 var(--rim);filter:drop-shadow(0 1px 2px rgba(11,27,51,.10))}
+/* 看起來 34px 的膠囊，透明邊框讓點擊範圍是 44pt（陰影跟著膠囊形狀，不畫在透明邊框外） */
 /* 清單列：名稱第一行排滿、避免最後一行只剩一個字；資訊段落不在中間斷開 */
 .spotrow b{text-wrap-style:pretty}
 .nw{white-space:nowrap}
@@ -2130,11 +2133,20 @@ body.fullmap .aurora,body.fullmap::after{display:none}
 .brand > span{min-width:0}
 .brand small{overflow:hidden;text-overflow:ellipsis}
 /* 課表頁的點擊範圍（44pt）：分段控制、記錄鈕、詳細內容、本週訓練的按鈕與連結，外觀大小盡量不變 */
-.planseg button{position:relative;min-height:38px}
-.planseg button::after{content:"";position:absolute;inset:-3px -1px}   /* 往外延伸到分段控制的內距（不會被橫向捲動裁掉） */
+.seg button{position:relative;min-height:38px}
+.seg button::after{content:"";position:absolute;inset:-3px -1px}   /* 往外延伸到分段控制的內距（不會被橫向捲動裁掉） */
 .day .logbtn{position:relative}
 .day .logbtn::after{content:"";position:absolute;inset:-4px -2px}
-details.xd summary{min-height:44px;margin:-7px 0}
+details.xd summary{min-height:44px;margin:-1px 0 -7px}
+/* 句子裡的連結（同意隱私權政策）：外觀不變，上下多一點點擊範圍 */
+label.inline a{display:inline-block;padding-block:11px;margin-block:-11px}
+/* 表單裡單獨一行的小字連結：點擊範圍 44pt */
+a.tiny.tlink{display:inline-flex;align-items:center;justify-self:start;min-height:44px;margin-block:-10px}
+/* 一般按鈕至少 44pt；小膠囊（類型 chip、名單篩選、地圖篩選）外觀不變，點擊範圍往外延伸 */
+.btn:not(.sm){min-height:44px}
+.kindchips .chip,.chips > button.chip{position:relative}
+:is(.kindchips .chip,.chips > button.chip,.spotopts .btn)::after{content:"";position:absolute;inset:-5px -2px}
+.linkbtn{position:relative}.linkbtn::after{content:"";position:absolute;inset:-6px -8px}
 .lsumact .btn{min-height:44px}
 .lsum a.tiny{display:inline-flex;align-items:center;justify-self:start;min-height:44px;margin:-12px 0}
 /* 手機：抽屜拉到蓋住右上的地圖按鈕（全開）時，按鈕與休息站 chip 淡出、不能點（map.js 的 coverCtl），收回來再出現 */

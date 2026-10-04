@@ -818,7 +818,7 @@ function loginView() {
       <p class="muted" style="margin:0">入會申請使用協會的 Google 表單。</p>
       ${org().join_form ? `<a class="btn ghost block" href="${esc(org().join_form)}" target="_blank" rel="noopener">開啟入會表單</a>` : ''}
     </section>
-    <div class="seg langseg" role="group" aria-label="Language" translate="no"><button data-lang="zh" aria-pressed="${I18N.lang === 'zh'}">中文</button><button data-lang="en" aria-pressed="${I18N.lang === 'en'}">English</button></div>`;
+    <div class="seg langseg themeseg" role="group" aria-label="Language" translate="no"><button data-lang="zh" aria-pressed="${I18N.lang === 'zh'}">中文</button><button data-lang="en" aria-pressed="${I18N.lang === 'en'}">English</button></div>`;
   for (const b of document.querySelectorAll('[data-lang]')) b.onclick = () => { if (b.dataset.lang !== I18N.lang) I18N.setLang(b.dataset.lang); };
   // 從分享連結進來：記住要去的活動，登入後直接帶過去
   if (shared) {
