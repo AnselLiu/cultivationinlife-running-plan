@@ -1793,3 +1793,14 @@ test('路線：每人最多存 100 條（不讓一個帳號把資料庫與每日
     await call(null, '/dev/seed-bulk?clear=1');
   }
 });
+
+test('登出所有裝置寫稽核 session.revoke_all（還原備份或 Time Travel 後靠它重做：登入失效、推播訂閱刪除）', async () => {
+  const j = await fetch(`${BASE}/api/join`, { method: 'POST', headers: { origin: BASE, 'content-type': 'application/json' }, body: JSON.stringify({ code: 'test-join', name: '登出測試', consent: true }) });
+  assert.equal(j.status, 200);
+  const id = (await j.json()).member.id, cookie = j.headers.get('set-cookie').split(';')[0];
+  const out = await fetch(`${BASE}/api/logout`, { method: 'POST', headers: { origin: BASE, cookie, 'content-type': 'application/json' }, body: JSON.stringify({ all: true }) });
+  assert.equal(out.status, 200);
+  assert.equal((await fetch(`${BASE}/api/members`, { headers: { cookie } })).status, 401, '登出所有裝置後原本的登入失效');
+  const au = (await call(CHAIR, `/audit?from=${plus(-1)}&to=${plus(1)}&action=session.revoke&target=${id}`)).json.items;
+  assert.ok(au.some((x) => x.action === 'session.revoke_all' && x.target_id === id));
+});

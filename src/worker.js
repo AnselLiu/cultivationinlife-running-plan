@@ -1922,7 +1922,8 @@ const api = (async function api(req, env, path, method) {
     const g = need(); if (g) return g;
     const r = await env.DB.prepare('DELETE FROM passkeys WHERE id = ? AND member_id = ?').bind(mpk[1], member.id).run();
     if (r.meta.changes) {
-      await audit(env, req, member, 'passkey.remove', 'member', member.id, '');
+      // 記下金鑰 id 的前 64 字（公開的識別碼，不是金鑰本身）：還原備份或 Time Travel 後才能把這一把再刪一次（tools/restore-sql.mjs）
+      await audit(env, req, member, 'passkey.remove', 'member', member.id, `id=${mpk[1].slice(0, 64)}`);
       await securityNotify(env, [member.id], { title: '移除了一把通行金鑰', body: `${deviceLabel(req.headers.get('user-agent') || '')} 移除了一把通行金鑰。不是你的話，請到「我的 → 帳號與安全」登出所有裝置。`, url: '/#/me/security' });
     }
     return json({ ok: true });
@@ -2115,6 +2116,8 @@ const api = (async function api(req, env, path, method) {
       await revokeSessions(env, member.id);
       // 推播訂閱一起刪掉：被拿走的裝置不再收到任何推播（這則通知也只留在通知中心）
       await env.DB.prepare('DELETE FROM push_subs WHERE member_id = ?').bind(member.id).run();
+      // 寫稽核：還原備份或 Time Travel 會把撤銷的登入與推播訂閱帶回來，還原工具靠這一列重做（tools/restore-sql.mjs）
+      await audit(env, req, member, 'session.revoke_all', 'member', member.id, deviceLabel(req.headers.get('user-agent') || ''));
       await securityNotify(env, [member.id], { title: '已登出所有裝置', body: `${deviceLabel(req.headers.get('user-agent') || '')} 登出了你所有裝置上的工作階段。不是你的話，請盡快重新登入並檢查通行金鑰。`, url: '/#/me/security' });
     }
     else if (token) await env.DB.prepare('DELETE FROM sessions WHERE token_hash = ?').bind(await sha(token)).run();

@@ -9,10 +9,12 @@
 //            node tools/restore-backup.mjs 2026-10-04.bin --sql      → 2026-10-04.sql（INSERT OR REPLACE，可指定 --table 名稱只還原一張表）
 //      金鑰預設讀 ~/.config/cil-run/backup-key（測試環境 --staging 讀 backup-key-staging），也可以用 BACKUP_KEY 環境變數；
 //      檔名不是日期時用 --label 2026-10-04 指定（AAD 綁住日期與第幾段，對不上就解不開）
-//   3. 備份之後刪除的帳號（本人刪除帳號）要在匯入後重做，不然會跟著舊備份回來（PDPA／A.5.34）：
-//        --sql 一定要帶 --erased <檔案或 id,id>（或確定沒有時帶 --no-erased）；工具會印出查詢指令（唯讀）：
-//        npx wrangler d1 execute cil-run --remote --json --command "SELECT target_id FROM audit_log WHERE action IN ('privacy.delete') AND at >= '<備份時間>'" > erased.json
-//        正式資料庫整個不見時，改用比這份新的備份解出來的 JSON 裡的 audit_log（--erased 新備份.json 也讀得懂）
+//   3. 備份之後本人做的撤回（刪除帳號、刪除賽事報名資料、停止分享訓練、退出排行榜、通知分類、取消推播、移除通行金鑰、登出所有裝置）
+//      要在匯入後重做，不然會跟著舊備份回來（PDPA／A.5.34；重做什麼見 tools/restore-sql.mjs）：
+//        --sql 一定要帶 --withdrawals <檔案>（或確定沒有時帶 --no-withdrawals）；工具會印出查詢指令（唯讀）：
+//        npx wrangler d1 execute cil-run --remote --json --command "SELECT … FROM audit_log WHERE action IN (…) AND at >= '<備份時間>' ORDER BY at, id" > withdrawals.json
+//        正式資料庫整個不見時，改用比這份新的備份解出來的 JSON 裡的 audit_log（--withdrawals 新備份.json 也讀得懂）
+//        舊的 --erased（只有刪除帳號的 id）、--no-erased 照樣可以用
 //   4. 匯入（先在測試環境試）：npx wrangler d1 execute cil-run-staging --env staging --remote --file 2026-10-04.sql
 // 還原後：
 //   - 附近即時影像：水利署、水利處在管理後台「立即同步」一次；公路局的清單要在電腦上執行 node tools/cams-sync.mjs thb，
@@ -24,20 +26,24 @@
 //   - 資料多時備份分好幾個整點做，每張表是各自讀取時的狀態，不是同一時間點的快照；
 //     要還原到某個時間點（例如誤刪）請優先用 D1 Time Travel（免費方案 7 天）：npx wrangler d1 time-travel restore cil-run --timestamp …
 // 金鑰跟 Cloudflare 上的 BACKUP_KEY 是同一把；請另外存一份在密碼管理器，不要放進 git 或貼到聊天裡
+// 抓下來的撤回紀錄（withdrawals.json）有會員 id 與幹部姓名：存在自己的電腦、不要進 git，用完刪掉
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { gunzipSync } from 'node:zlib';
 import { webcrypto as crypto } from 'node:crypto';
 import { homedir } from 'node:os';
 import { dirname, basename, join } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { toSql, erasedFrom, erasedQuery } from './restore-sql.mjs';
+import { toSql, auditRowsFrom, replayQuery, replaySql, planSummary } from './restore-sql.mjs';
 
-const [file, ...flags] = process.argv.slice(2);
+const argv = process.argv.slice(2), file = argv[0] && !argv[0].startsWith('--') ? argv[0] : null, flags = file ? argv.slice(1) : argv;
 const opt = (k) => (flags.includes(k) ? flags[flags.indexOf(k) + 1] : null);
 const staging = flags.includes('--staging');
+const DB = staging ? 'cil-run-staging --env staging' : 'cil-run';
+const captureCmd = (at) => `npx wrangler d1 execute ${DB} --remote --json --command "${replayQuery(at)}"`;
+
 const keyFile = `${homedir()}/.config/cil-run/backup-key${staging ? '-staging' : ''}`;
 const KEY = process.env.BACKUP_KEY || (() => { try { return readFileSync(keyFile, 'utf8').trim(); } catch { return ''; } })();
-if (!file || !KEY) { console.error(`用法：node tools/restore-backup.mjs <備份檔> [--sql --erased <檔案或 id,id>｜--no-erased] [--table 名稱] [--label 日期] [--fetch] [--r2] [--staging]（金鑰：${keyFile} 或 BACKUP_KEY）`); process.exit(1); }
+if (!file || !KEY) { console.error(`用法：node tools/restore-backup.mjs <備份檔> [--sql --withdrawals <檔案>｜--no-withdrawals] [--table 名稱] [--label 日期] [--fetch] [--r2] [--staging]（金鑰：${keyFile} 或 BACKUP_KEY）`); process.exit(1); }
 const key = await crypto.subtle.importKey('raw', Buffer.from(KEY.replace(/-/g, '+').replace(/_/g, '/'), 'base64'), 'AES-GCM', false, ['decrypt']);
 async function open(buf, aad) {
   const magic = buf.subarray(0, 5).toString();
@@ -87,17 +93,19 @@ const counts = Object.fromEntries(Object.entries(data.tables).map(([k, v]) => [k
 console.log(`備份時間 ${data.at}${data.done_at ? `（做完 ${data.done_at}）` : ''}，${Object.keys(counts).length} 張表`, counts);
 const out = join(dirname(file), basename(file).replace(/\.bin$/, ''));
 if (!flags.includes('--sql')) { writeFileSync(`${out}.json`, JSON.stringify(data, null, 1)); console.log('已輸出 JSON'); process.exit(0); }
-// 備份之後刪除的帳號：檔案（wrangler --json 輸出、新備份解出來的 JSON、一行一個 id）或逗號分隔的 id
-const erasedArg = opt('--erased');
-if (!erasedArg && !flags.includes('--no-erased')) {
-  console.error('要先查備份之後刪除的帳號，匯入後才能重做刪除（不然被刪除的帳號會跟著備份回來）。到正式資料庫查（唯讀）：');
-  console.error(`  npx wrangler d1 execute cil-run --remote --json --command "${erasedQuery(data.at)}" > erased.json`);
-  console.error('再加 --erased erased.json；確定沒有人刪除帳號時加 --no-erased');
+// 備份之後的撤回：檔案（wrangler --json 輸出、新備份解出來的 JSON、一行一個 id）或逗號分隔的帳號 id；--erased 是舊名字
+const wArg = opt('--withdrawals') || opt('--erased');
+if (!wArg && !flags.includes('--no-withdrawals') && !flags.includes('--no-erased')) {
+  console.error('要先查備份之後的撤回（刪除帳號、刪除賽事報名資料、停止分享…），匯入後才能重做（不然會跟著備份回來）。到正式資料庫查（唯讀）：');
+  console.error(`  ${captureCmd(data.at)} > withdrawals.json`);
+  console.error('再加 --withdrawals withdrawals.json；確定沒有任何撤回時加 --no-withdrawals');
   process.exit(1);
 }
-let erased = [];
-try { erased = erasedArg ? erasedFrom(existsSync(erasedArg) ? readFileSync(erasedArg, 'utf8') : erasedArg, data.at) : []; } catch (e) { console.error(e.message); process.exit(1); }
-const lines = toSql(data, { only, erased });
-if (erased.length) console.log(`匯入後重做 ${erased.length} 個帳號的刪除`);
+let audit = [];
+try { audit = wArg ? auditRowsFrom(existsSync(wArg) ? readFileSync(wArg, 'utf8') : wArg, data.at) : []; } catch (e) { console.error(e.message); process.exit(1); }
+const lines = toSql(data, { only, audit });
+const { plan } = replaySql(audit);
+console.log(`匯入後重做：${planSummary(plan)}`);
+if (plan.passkeyUnknown.length) console.log(`有 ${plan.passkeyUnknown.length} 位移除通行金鑰的紀錄沒有金鑰 id（舊版）：已讓他們的登入失效，請通知本人到「帳號與安全」確認通行金鑰`);
 writeFileSync(`${out}.sql`, lines.join('\n'));
 console.log(`已輸出 SQL：${lines.length - 1} 筆`);

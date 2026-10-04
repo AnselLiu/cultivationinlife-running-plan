@@ -362,7 +362,7 @@ const AUDIT_NAME = {
   'event.invite_accept': '用邀請連結加入', 'review.reminder': '每季權限檢視提醒', 'event.payment': '更新繳費狀態', 'event.attend_token': '設定現場報到', 'event.bulk': '整批匯入',
   'privacy.race_profile': '更新賽事報名資料', 'privacy.race_profile_delete': '刪除賽事報名資料', 'event.reg_export': '下載團體報名資料',
   'calendar.on': '產生行事曆訂閱', 'calendar.off': '停用行事曆訂閱',
-  'passkey.add': '新增通行金鑰', 'passkey.remove': '移除通行金鑰', 'passkey.denied': '通行金鑰驗證失敗', 'mfa.verify': '兩步驟驗證', 'login.new_device': '新裝置登入',
+  'passkey.add': '新增通行金鑰', 'passkey.remove': '移除通行金鑰', 'session.revoke_all': '登出所有裝置', 'passkey.denied': '通行金鑰驗證失敗', 'mfa.verify': '兩步驟驗證', 'login.new_device': '新裝置登入',
   'settings.security': '修改兩步驟驗證設定', 'audit.verify': '稽核完整性檢查',
   'settings.signup': '修改活動報名預設', 'event.signup_review': '審核報名', 'event.signup_reject': '婉拒或移出報名', 'event.reopen': '恢復活動',
   'signup.expire': '待審核逾期失效', 'event.orders_export': '下載訂購單',
