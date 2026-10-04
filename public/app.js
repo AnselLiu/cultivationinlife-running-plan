@@ -15,7 +15,8 @@ const qrSVG = (...a) => lazy('./qr.js', 'qrSVG')(...a);
 const scan = (...a) => lazy('./qr.js', 'scan')(...a);
 const canScan = () => !!navigator.mediaDevices?.getUserMedia;
 // 導覽看過就不用下載 guide.js（版本號要跟 guide.js 的 VER 一致）
-const Guide = { start: () => lazy('./guide.js', 'start')(), maybeStart: () => { try { if (localStorage.getItem('cil-guide') === '2') return; } catch { return; } lazy('./guide.js', 'maybeStart')(); } };
+// 五個分頁的導覽：不再自動跳出來，從「開始使用」卡做完三步後、或「我的 → 使用說明」打開
+const Guide = { start: () => lazy('./guide.js', 'start')() };
 // 課表頁的加強功能（用語說明、詳細內容、提醒、滑動換週）：課表畫好、閒下來才載入，首頁不會下載；
 //   在小的 coachweek.js，完整的課表教練（coach.js）只有全季、賽事準備、配速與用語、課表設定、分享才載入
 const coachWeekExtras = (...a) => lazy('./coachweek.js', 'weekExtras')(...a);
@@ -1118,18 +1119,12 @@ async function listView() {
     </div>` : '';
   // 英文的分團名稱比較長：窄螢幕只留「＋」圖示，讓分團 chip 多一點空間（aria-label 照樣唸）
   const teamLink = mine.length ? `<a class="chiplink" href="#/teams" aria-label="分團">${IC.plus}<span class="cltx">分團</span></a>` : '<a class="chiplink" href="#/teams">加入分團 ›</a>';
-  // 第二次打開以後才提示安裝，不要一進來就打擾
-  let visits = 0;
-  try {
-    visits = Number(localStorage.getItem('cil-visits') || 0);
-    if (!sessionStorage.getItem('cil-counted')) { visits += 1; localStorage.setItem('cil-visits', String(visits)); sessionStorage.setItem('cil-counted', '1'); }
-  } catch {}
+  // 新帳號（邀請碼加入是 #/?welcome=1）與還沒加到主畫面、還沒開推播的人：最上面是「開始使用」卡（取代以前的歡迎文字與安裝提示卡）
   const welcome = new URLSearchParams(location.hash.split('?')[1] || '').get('welcome');
   view.innerHTML = `
     ${largeTitle('團練', todayLabel())}
-    ${welcome ? '<div class="notice">歡迎加入耕跑團！先看看今天的課表和接下來的團練；主團會由管理員幫你設定，也可以到「我的 → 主團與分團」申請加入分團。</div>' : ''}
     ${mfaBanner()}
-    ${visits >= 2 ? installCard('home') : ''}
+    ${startShown(welcome) ? startCard() : ''}
     <div class="chiprow">${chips}${teamLink}</div>
     <div class="dash"><div style="display:grid;gap:14px">
     ${today}
@@ -1149,10 +1144,9 @@ async function listView() {
   homeWeather(all);
   bindTodayCard();
   if (anyTeamAllow('event')) reviewCard();
-  bindInstall();
+  bindStart();
   bindStepup();
   flushLogQueue();
-  if (!me.mfaPending) Guide.maybeStart();   // 第一次登入：使用說明導覽
 }
 // 幹部：報名待審核（畫面畫好後才載入，有資料才顯示）
 async function reviewCard() {
@@ -1880,18 +1874,20 @@ const isStandalone = () => matchMedia('(display-mode: standalone)').matches || n
 const isIOS = () => /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 const SHARE_IC = ic('<path d="M12 15V3.5M7.5 8 12 3.5 16.5 8M5 12.5v6A2.5 2.5 0 0 0 7.5 21h9a2.5 2.5 0 0 0 2.5-2.5v-6"/>');
 const ADD_IC = ic('<rect x="4" y="4" width="16" height="16" rx="4"/><path d="M12 8.5v7M8.5 12h7"/>');
-function installCard(where) {
+// iPhone Safari 加到主畫面的步驟：「開始使用」卡與通知設定頁的說明卡共用同一份（以前四個入口的說明不一樣）
+//   iOS 26 起分享按鈕收在網址列旁的「⋯」裡；iOS 27 的實際按鈕文字要用實機再對一次
+const iosAddSteps = () => `<ol class="steps">
+    <li>點 Safari 網址列旁的「⋯」${SHARE_IC}，選「分享」</li>
+    <li>往下滑，選「加入主畫面」${ADD_IC}</li>
+    <li>打開「以網頁 App 打開」，按「加入」</li>
+    <li>之後從主畫面的耕跑團打開（要再登入一次）</li></ol>`;
+// 通知設定頁的說明卡（查詢用）：還沒加到主畫面才顯示
+function installCard() {
   if (isStandalone()) return '';
-  try { if (where === 'home' && localStorage.getItem('cil-install-dismiss')) return ''; } catch {}
-  const ios = isIOS();
   return `<section class="card tight installcard">
     <div class="instrow"><img src="/icons/icon-192.png" alt="" width="40" height="40">
-      <span><b>把耕跑團加到主畫面</b><span class="tiny">才收得到團練通知，入場券沒網路也能出示</span></span>
-      ${where === 'home' ? '<button class="iconx" id="installX" aria-label="不再顯示">' + ic('<path d="M7 7l10 10M17 7 7 17"/>') + '</button>' : ''}</div>
-    ${ios ? `<details ${where === 'me' ? 'open' : ''}><summary class="tiny">怎麼加？三個步驟</summary><ol class="steps">
-        <li>點 Safari 下方的分享按鈕 ${SHARE_IC}</li>
-        <li>往下滑，選「加入主畫面」${ADD_IC}</li>
-        <li>按「新增」，之後從主畫面的耕跑團圖示打開</li></ol>
+      <span><b>把耕跑團加到主畫面</b><span class="tiny">才收得到團練通知，入場券沒網路也能出示</span></span></div>
+    ${isIOS() ? `<details open><summary class="tiny">怎麼加？</summary>${iosAddSteps()}
         <p class="tiny" style="margin:0">在 LINE 裡打開的話，先點右下角選單選「用預設瀏覽器開啟」。</p></details>`
       : `<button class="btn sm block" data-install ${installEvt ? '' : 'hidden'}>安裝 App</button>
          <p class="tiny" style="margin:0" ${installEvt ? 'hidden' : ''}>點瀏覽器右上角選單，選「安裝應用程式」或「加到主畫面」。</p>`}
@@ -1902,10 +1898,138 @@ function bindInstall() {
     if (!installEvt) return;
     installEvt.prompt();
     const { outcome } = await installEvt.userChoice.catch(() => ({}));
-    if (outcome === 'accepted') toast('安裝完成，之後從主畫面打開');
+    if (outcome === 'accepted') { toast('安裝完成，之後從主畫面打開'); saveStart({ install: 'done' }); }
     installEvt = null;
   };
-  $('#installX')?.addEventListener('click', () => { try { localStorage.setItem('cil-install-dismiss', '1'); } catch {} $('.installcard')?.remove(); });
+}
+
+// ---------- 開始使用（第一次使用的三步）----------
+// 不是彈出視窗：首頁與「我的」最上面同一張卡（像 iPhone 設定最上面的「完成設定」），三步各自可以做、可以略過，整張卡可以「稍後再說」
+//   ① 加到主畫面 ② 開啟推播（iPhone 要先從主畫面打開）③ 選距離與組別；全部完成才問要不要看五個分頁的導覽
+//   進度只記在這台裝置（cil-start）：主畫面 App 一律算 ①完成；② 以「這支手機現在有沒有推播訂閱」為準；③ 在這台裝置確認或存過組別
+//   iPhone 主畫面 App 跟 Safari 的儲存空間是分開的：在 Safari 做完 ①，從主畫面打開會自然從 ② 接著做
+const START_KEY = 'cil-start';
+const startState = () => { try { return { v: 1, ...(JSON.parse(localStorage.getItem(START_KEY) || '{}') || {}) }; } catch { return { v: 1 }; } };
+const saveStart = (patch) => { const st = { ...startState(), ...patch }; try { localStorage.setItem(START_KEY, JSON.stringify(st)); } catch {} return st; };
+// 推播這一步在這台裝置能不能做：沒有推播金鑰（na）、iPhone 還沒從主畫面打開（ios）、瀏覽器不支援（no）、被封鎖（denied）、可以（ok）
+function pushMode() {
+  if (!cfg.vapid) return 'na';
+  if (isIOS() && !isStandalone()) return 'ios';
+  if (!('serviceWorker' in navigator) || typeof Notification === 'undefined' || !('PushManager' in window)) return 'no';
+  return Notification.permission === 'denied' ? 'denied' : 'ok';
+}
+// 每一步的狀態：done／skip／na（這台裝置不適用，算完成）／null（還沒做）
+function startSteps(st = startState()) {
+  return { install: isStandalone() ? 'done' : st.install || null, push: pushMode() === 'na' ? 'na' : st.push || null, group: st.group || null };
+}
+const startLeft = (steps) => Object.values(steps).filter((v) => !v).length;
+// 要不要出現：按過「稍後」或 ✕ 就不出現；新帳號（?welcome=1）一定出現；舊帳號只有 ① 或 ② 還沒做才出現
+function startShown(welcome) {
+  let st = startState();
+  if (welcome && !st.fresh) st = saveStart({ fresh: 1, dismissed: 0 });
+  if (st.dismissed) return false;
+  const k = startSteps(st);
+  return !!st.fresh || !k.install || !k.push;
+}
+const ST_LABEL = { done: '已完成', skip: '已略過', na: '不需要' };
+const STEP_IC = { install: ADD_IC, push: ic('<path d="M6.4 9.6a5.6 5.6 0 0 1 11.2 0c0 4 1.4 5.4 1.4 5.4H5s1.4-1.4 1.4-5.4Z"/><path d="M10.2 18.4a2 2 0 0 0 3.6 0"/>'), group: ic('<path d="M5.5 21V4M5.5 4.5h11l-2 3.7 2 3.8h-11"/>') };
+function startCard() {
+  const steps = startSteps(), left = startLeft(steps), n = 3 - left;
+  if (!left) return `<section class="card startcard alldone" id="startCard" aria-labelledby="startTitle">
+    <div class="sthead"><h2 id="startTitle" tabindex="-1">都設定好了</h2><button type="button" class="iconx" id="startX" aria-label="收起開始使用">${ic('<path d="M7 7l10 10M17 7 7 17"/>')}</button></div>
+    <p class="muted" style="margin:0">要不要用一分鐘看看五個分頁？</p>
+    <div class="row" style="gap:8px"><button type="button" class="btn sm" id="startTour">看看五個分頁</button></div></section>`;
+  const pm = pushMode(), app = inAppBrowser(), ios = isIOS();
+  const stateTx = (k) => `<span class="ststate">${steps[k] ? ST_LABEL[steps[k]] : '還沒做'}</span>`;
+  const SKIP = { install: '略過「加到主畫面」', push: '略過「開啟推播」', group: '略過「選距離與組別」' };
+  const skip = (k) => `<button type="button" class="linkbtn tiny" data-stskip="${k}">${SKIP[k]}</button>`;
+  // ① 加到主畫面：LINE／Facebook 的內建瀏覽器要先換 Safari；iPhone Safari 三步；Android／電腦用瀏覽器的安裝提示
+  const install = steps.install ? '' : app ? `<p class="tiny">${app === 'line' ? '現在是在 LINE 裡打開：點右下角的選單，選「用預設瀏覽器開啟」，再到 Safari 加到主畫面。' : '現在是在 Facebook 或 Instagram 裡打開：點右上角「⋯」，選「在瀏覽器開啟」，再加到主畫面。'}</p>
+      <div class="stacts">${app === 'line' ? `<a class="btn sm" href="${esc(`${location.origin}/?openExternalBrowser=1#/`)}">用瀏覽器打開</a>` : '<button type="button" class="btn sm" id="stCopy">複製網址</button>'}${skip('install')}</div>`
+    : ios ? `<details class="sthow"><summary>怎麼加？</summary>${iosAddSteps()}</details>
+      <div class="stacts"><button type="button" class="btn sm ghost" data-stdone="install">我加好了</button>${skip('install')}</div>`
+    : `<div class="stacts">${installEvt ? '<button type="button" class="btn sm" id="stInstall">安裝 App</button>' : ''}<button type="button" class="btn sm ghost" data-stdone="install">我加好了</button>${skip('install')}</div>
+      ${installEvt ? '' : '<p class="tiny">點瀏覽器的選單，選「安裝應用程式」或「加到主畫面」。</p>'}`;
+  // ② 開啟推播：iPhone Safari 先停用並說明原因（aria-disabled，VoiceOver 唸得到）
+  const pushWhy = pm === 'ios' ? '先加到主畫面，從主畫面的耕跑團打開後再開推播' : pm === 'no' ? '這個瀏覽器不支援推播，請用 Safari 或 Chrome 打開並加到主畫面'
+    : pm === 'denied' ? (ios ? '推播被關掉了：到 iPhone 設定 → 通知 → 耕跑團，打開「允許通知」' : '推播被封鎖了：到瀏覽器的網站設定打開通知') : '';
+  const push = steps.push ? '' : `<div class="stacts"><button type="button" class="btn sm" id="stPush"${pushWhy ? ' aria-disabled="true" aria-describedby="stPushWhy"' : ''}>開啟推播</button>${skip('push')}</div>
+      ${pushWhy ? `<p class="tiny" id="stPushWhy">${pushWhy}</p>` : ''}`;
+  // ③ 選距離與組別：確認目前的，或到課表設定改（存好自動回來打勾）
+  const grp = `${me.dist === 'hm' ? '半馬' : '全馬'} ${esc(me.grp)} 組`;
+  const group = steps.group ? '' : `<div class="stacts"><button type="button" class="btn sm" data-stdone="group">確認 ${grp}</button><a class="btn sm ghost" id="stGroupEdit" href="#/plan/setup?go=grp&from=start">修改 ›</a>${skip('group')}</div>`;
+  const item = (k, title, sub, body) => `<li class="ststep${steps[k] ? ' ok' : ''}" data-step="${k}"><span class="stic" aria-hidden="true">${steps[k] ? IC.check : STEP_IC[k]}</span>
+      <div class="stbody"><span class="sttl"><b>${title}</b><span class="sr">，</span>${stateTx(k)}</span>${steps[k] ? '' : `<span class="tiny">${sub}</span>${body}`}</div></li>`;
+  return `<section class="card startcard" id="startCard" aria-labelledby="startTitle">
+    <div class="sthead"><h2 id="startTitle" tabindex="-1">開始使用</h2><span class="tiny num" id="startProg">${n} / 3 完成</span></div>
+    <div class="stbar" aria-hidden="true"><i style="width:${Math.round(n / 3 * 100)}%"></i></div>
+    <ol class="ststeps">
+      ${item('install', '加到主畫面', '像 App 一樣打開，入場券沒網路也能出示', install)}
+      ${item('push', '開啟推播', '團練異動、候補遞補、帳號安全第一時間通知你', push)}
+      ${item('group', '選距離與組別', `課表的配速照組別換算・<span class="nw">目前：${grp}</span>`, group)}
+    </ol>
+    <div class="stfoot"><button type="button" class="btn ghost sm" id="startLater">稍後再說</button></div></section>`;
+}
+// 換掉卡片內容（不重畫整頁），焦點移到下一步的第一個按鈕；全部完成時移到卡片標題
+function repaintStart(msg) {
+  const el = $('#startCard'); if (!el) return;
+  el.outerHTML = startCard();
+  bindStart();
+  const next = $('#startCard .ststep:not(.ok) .stacts > :is(button,a)') || $('#startTitle');
+  next?.focus({ preventScroll: true });
+  if (msg) { const left = startLeft(startSteps()); announce(left ? `${msg}，還剩 ${left} 步` : `${msg}，都設定好了`); }
+}
+const STEP_DONE = { install: '已加到主畫面', push: '已開啟推播', group: '已確認組別' };
+function bindStart() {
+  const card = $('#startCard'); if (!card) return;
+  card.addEventListener('click', async (e) => {
+    const d = e.target.closest('[data-stdone]')?.dataset.stdone, k = e.target.closest('[data-stskip]')?.dataset.stskip;
+    if (d) { saveStart({ [d]: 'done' }); repaintStart(STEP_DONE[d]); return; }
+    if (k) { saveStart({ [k]: 'skip' }); repaintStart('已略過'); return; }
+    if (e.target.closest('#startLater, #startX')) {
+      saveStart({ dismissed: 1 });
+      card.remove();
+      announce('已收起，之後可以在「我的 → 使用說明」再打開');
+      (view.querySelector('h1'))?.focus({ preventScroll: true });
+      return;
+    }
+    if (e.target.closest('#startTour')) { saveStart({ dismissed: 1 }); Guide.start(); return; }
+    if (e.target.closest('#stCopy')) { copy(`${location.origin}/`); return; }
+    if (e.target.closest('#stGroupEdit')) { try { sessionStorage.setItem('cil-start-back', location.hash || '#/'); } catch {} return; }
+    const pb = e.target.closest('#stPush');
+    if (pb) {
+      if (pb.getAttribute('aria-disabled') === 'true') { toast($('#stPushWhy')?.textContent || ''); return; }
+      await togglePush(null);
+      if (await pushSub()) { saveStart({ push: 'done' }); repaintStart(STEP_DONE.push); }
+      return;
+    }
+    const ib = e.target.closest('#stInstall');
+    if (ib && installEvt) {
+      installEvt.prompt();
+      const { outcome } = await installEvt.userChoice.catch(() => ({}));
+      installEvt = null;
+      if (outcome === 'accepted') { saveStart({ install: 'done' }); repaintStart(STEP_DONE.install); } else repaintStart();
+    }
+  });
+  // 推播以這支手機現在的訂閱為準：有訂閱就打勾；記成完成但訂閱不見了（換手機、重新安裝）就回到還沒做
+  if (cfg.vapid && pushMode() === 'ok') pushSub().then((sub) => {
+    const st = startState();
+    if (sub && st.push !== 'done') { saveStart({ push: 'done' }); if ($('#startCard')) repaintStart(); }
+    else if (!sub && st.push === 'done') { saveStart({ push: null }); if ($('#startCard')) repaintStart(); }
+  });
+}
+// 課表設定改好組別、從「開始使用」來的：打勾，回到原本的頁面
+function startGroupSaved() {
+  saveStart({ group: 'done' });
+  let back = '#/'; try { back = sessionStorage.getItem('cil-start-back') || '#/'; sessionStorage.removeItem('cil-start-back'); } catch {}
+  focusAfterRender(['#startCard .ststep:not(.ok) .stacts > :is(button,a)', '#startTitle']);
+  location.hash = back;
+}
+// 「我的 → 使用說明」：重新打開「開始使用」卡（狀態還在）
+function reopenStart() {
+  saveStart({ dismissed: 0, fresh: 1 });
+  focusAfterRender('#startTitle');
+  if (location.hash.split('?')[0] === '#/me') render(); else location.hash = '#/me';
 }
 
 // 掃描台：有相機就用相機掃（iPhone 也可以，第一次會詢問相機權限），也可以手動輸入代碼
@@ -2646,8 +2770,8 @@ async function meHome(welcome) {
   const staff = admin || allow('roster') || canTeamLogs() || canPublishPlan();
   view.innerHTML = `
     ${largeTitle('我的')}
-    ${welcome ? '<div class="notice">歡迎加入！先到「個人資料」確認項目和組別；主團會由管理員設定。</div>' : ''}
     ${mfaBanner()}
+    ${startShown(welcome) ? startCard() : ''}
     <a class="card mecard" href="#/me/profile">
       ${avatar(me)}
       <span class="mi"><b><span translate="no">${esc(me.name)}</span></b>${me.nickname ? ` <span class="tiny"><span translate="no">${esc(me.nickname)}</span></span>` : ''}
@@ -2678,15 +2802,12 @@ async function meHome(welcome) {
       row('#/me/calendar', MI.calsub, '行事曆訂閱', '團練與賽事自動出現在手機行事曆', cfg.calendarOn ? '<span class="pill solid">已開啟</span>' : ''),
       row('#/me/privacy', MI.eye, '隱私', '分享給教練、排行榜、下載或刪除資料'),
     ])}
-    ${group('', [isStandalone() ? '' : btnRow('addHome', MI.addhome, '加到主畫面', '才收得到團練通知，入場券沒網路也能出示'),
-      btnRow('shareApp', MI.share, '分享耕跑團 App', '用 LINE、QR Code 邀朋友一起跑'), btnRow('openGuide', MI.help, '使用說明', '一分鐘帶你看過每個功能')])}`;
+    ${group('', [btnRow('shareApp', MI.share, '分享耕跑團 App', '用 LINE、QR Code 邀朋友一起跑'), btnRow('openGuide', MI.help, '使用說明', '開始使用的三步、五個分頁的導覽')])}`;
   bindStepup();
-  $('#openGuide').onclick = () => Guide.start();
+  bindStart();
+  // 使用說明：重新打開「開始使用」卡（加到主畫面、推播、組別的進度還在），做完可以看五個分頁的導覽
+  $('#openGuide').onclick = () => reopenStart();
   $('#shareApp').onclick = () => shareApp();
-  $('#addHome')?.addEventListener('click', () => {
-    openSheet('加到主畫面', `${installCard('me').replace('class="card tight installcard"', 'class="installcard sheetinstall"')}<button type="button" class="btn ghost block" data-close>關閉</button>`, $('#addHome'));
-    bindInstall();
-  });
   // 團體報名資料填好了沒：畫面先出來，狀態晚一點補上（要解密，不要擋住整頁）
   api('/me/race-profile').then((r) => { const b = $('#regBadge'); if (b) b.outerHTML = r?.complete ? '<span class="pill solid">已填好</span>' : r?.profile ? '<span class="pill wait">未填完</span>' : ''; }).catch(() => {});
   // 通知的副標：這支手機的推播狀態
@@ -3105,7 +3226,7 @@ if ('serviceWorker' in navigator) {
 // 記住安裝提示（Android／桌機 Chrome），在「我的」與首頁顯示安裝按鈕
 let installEvt = null;
 addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvt = e; document.querySelectorAll('[data-install]').forEach((b) => { b.hidden = false; }); });
-addEventListener('appinstalled', () => { installEvt = null; try { localStorage.setItem('cil-installed', '1'); } catch {} document.querySelectorAll('.installcard').forEach((c) => c.remove()); });
+addEventListener('appinstalled', () => { installEvt = null; try { localStorage.setItem('cil-installed', '1'); } catch {} saveStart({ install: 'done' }); document.querySelectorAll('.installcard').forEach((c) => c.remove()); if ($('#startCard')) repaintStart(); });
 
 // 拆出去的模組（admin.js、photo.js…）從這裡拿共用的工具與狀態
 export { tilePreload, legacyData, removeLegacy, addrField, bindAddrField, latest, $, cfg, downloadAuthed, scanSheet, FEEL, IC, KIND_NAME, LOG_ICON, LOG_STATUS_NAME, MI, PAID_NAME, ROLE_NAME, TAB_DEFAULT, TEAM_PERMS, coachTeam, TEAM_ROLE_NAME, ago, allow, api, applyFeatures, avatar, barChart, bars, bindComments, bindStepup, btnRow, choose, coachPrefs, copy, countdownPicker, dayLabel, dstr, emptyState, esc, eventCard, feat, fixText, group, ic, largeTitle, me, mfaBanner, money, myCycle, nrow, org, pad2, paintCountdown, passkey, planSeg, queueLog, raceTarget, refreshMe, render, route, row, setCoachPrefs, squareIcon, startKey, studio, subTitle, teamAllow, teamIcon, teamOf, teams, toast, rich, keep, names, view, ymd, askReason, isOffline, nowTp, signupDefaults, submitLabel, camLazy, openSheet, apiAll, fmtDuration, fmtDistPace, parseHMS,
@@ -3115,4 +3236,6 @@ export { tilePreload, legacyData, removeLegacy, addrField, bindAddrField, latest
   // map.js（休息站用到才載入）
   load,
   // 無障礙共用：播報、表單錯誤、重畫後的焦點
-  announce, fieldError, focusAfterRender };
+  announce, fieldError, focusAfterRender,
+  // coach.js：課表設定從「開始使用」來，存好組別後打勾
+  startGroupSaved };

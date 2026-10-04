@@ -198,3 +198,56 @@ test('地圖：跳到地點清單、地圖針不進 Tab 順序', async ({ page }
   await page.keyboard.press('Escape');
   await expect(page.locator('#spotList [data-open]').first()).toBeFocused();
 });
+
+// ---------- 開始使用（第一次使用的三步） ----------
+// 新帳號（#/?welcome=1）：第一個畫面就是「開始使用」卡、不出現全畫面導覽；每一步的狀態用文字；確認組別後焦點到下一步；稍後再說、重新整理後不出現，從「使用說明」再打開狀態還在
+test('開始使用：三步卡片、略過與稍後、從使用說明再打開', async ({ page }) => {
+  await login(page, 't_other', { start: true }); await acceptPrivacyIfAsked(page);
+  await page.evaluate(() => localStorage.removeItem('cil-start'));
+  await page.goto('/#/?welcome=1');
+  const card = page.locator('#startCard');
+  await expect(card).toBeVisible();
+  await expect(page.locator('#guide')).toHaveCount(0);
+  expect(await axeBad(page)).toEqual([]);
+  await expect(card.getByRole('heading', { level: 2, name: '開始使用' })).toBeVisible();
+  await expect(card.locator('.ststeps > li')).toHaveCount(3);
+  // e2e 沒有推播金鑰：② 是「不需要」，算完成
+  await expect(card.locator('[data-step="push"] .ststate')).toHaveText('不需要');
+  await expect(card.locator('#startProg')).toHaveText('1 / 3 完成');
+  await expect(card.locator('[data-step="group"]')).toContainText('全馬 E 組');
+  await card.getByRole('button', { name: /確認 全馬 E 組/ }).click();
+  await expect(card.locator('[data-step="group"] .ststate')).toHaveText('已完成');
+  await expect(card.locator('#startProg')).toHaveText('2 / 3 完成');
+  // 焦點移到下一步（加到主畫面）的第一個按鈕
+  expect(await page.evaluate(() => document.activeElement?.closest('[data-step]')?.dataset.step)).toBe('install');
+  await card.getByRole('button', { name: '稍後再說' }).click();
+  await expect(card).toHaveCount(0);
+  await page.reload();
+  await expect(page.locator('#view h1')).toHaveText('團練');
+  await expect(page.locator('#startCard')).toHaveCount(0);
+  await page.goto('/#/me');
+  await page.locator('#openGuide').click();
+  await expect(page.locator('#startCard')).toBeVisible();
+  await expect(page.locator('#startTitle')).toBeFocused();
+  await expect(page.locator('#startCard [data-step="group"] .ststate')).toHaveText('已完成');
+  expect(await axeBad(page)).toEqual([]);
+  // 改組別：到課表設定，存好自動回來打勾
+  await page.locator('#startCard [data-stskip="install"]').click();
+  await expect(page.locator('#startTitle')).toHaveText('都設定好了');
+  await expect(page.locator('#startTitle')).toBeFocused();
+});
+// 主畫面 App（display-mode: standalone）：① 自動完成；從課表設定改組別，存好回到原頁並打勾
+test('開始使用：主畫面 App 自動完成加到主畫面；修改組別存好回來打勾', async ({ page }) => {
+  await page.addInitScript(() => { const mm = window.matchMedia.bind(window); window.matchMedia = (q) => (q === '(display-mode: standalone)' ? { matches: true, media: q, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} } : mm(q)); });
+  await login(page, 't_runner', { start: true }); await acceptPrivacyIfAsked(page);
+  await page.evaluate(() => localStorage.setItem('cil-start', JSON.stringify({ v: 1, fresh: 1 })));
+  await page.goto('/#/me');
+  const card = page.locator('#startCard');
+  await expect(card.locator('[data-step="install"] .ststate')).toHaveText('已完成');
+  await card.getByRole('link', { name: '修改 ›' }).click();
+  await expect(page).toHaveURL(/#\/plan\/setup\?go=grp&from=start/);
+  await page.locator('#gtiles label.chip', { hasText: 'C 組' }).click();
+  await page.locator('#grpSave').click();
+  await expect(page).toHaveURL(/#\/me$/);
+  await expect(page.locator('#startTitle')).toHaveText('都設定好了');
+});

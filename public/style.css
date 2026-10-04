@@ -2169,3 +2169,35 @@ a.tiny.tlink{display:inline-flex;align-items:center;justify-self:start;min-heigh
 /* 手機：抽屜拉到蓋住右上的地圖按鈕（全開）時，按鈕與休息站 chip 淡出、不能點（map.js 的 coverCtl），收回來再出現 */
 .restbar{transition:opacity .2s,visibility .2s}
 .amap.ctl-off :is(.mapctl,.restbar){opacity:0;visibility:hidden;pointer-events:none}
+
+/* ---------- 開始使用（第一次使用的三步）：首頁與「我的」最上面同一張卡，不擋人 ---------- */
+.startcard{gap:12px;border:1px solid color-mix(in srgb,var(--accent) 22%,transparent)}
+.sthead{display:flex;align-items:baseline;justify-content:space-between;gap:12px}
+.sthead h2{font-size:20px;line-height:1.25}
+.startcard.alldone .sthead{align-items:center}
+.stbar{height:4px;border-radius:2px;background:color-mix(in srgb,var(--ink) 9%,transparent);overflow:hidden}
+.stbar i{display:block;height:100%;border-radius:inherit;background:var(--accent);transition:width .45s var(--tap)}
+.ststeps{list-style:none;margin:0;padding:0;display:grid}
+.ststep{display:grid;grid-template-columns:34px minmax(0,1fr);gap:12px;align-items:start;padding:12px 0;border-top:1px solid var(--stroke)}
+.ststep:first-child{border-top:0;padding-top:4px}
+.stic{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;background:var(--accent-soft);color:var(--accent)}
+.stic svg.ic{width:19px;height:19px}
+.ststep.ok .stic{background:color-mix(in srgb,var(--ok) 18%,transparent);color:var(--ok-ink)}
+.ststep.ok .stic svg{animation:stpop .35s var(--tap)}
+@keyframes stpop{from{transform:scale(.4);opacity:0}to{transform:none;opacity:1}}
+.stbody{display:grid;gap:6px;min-width:0}
+.sttl{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;min-height:34px;align-content:center}
+.sttl b{font-size:16px;font-weight:600}
+.ststate{font-size:12px;font-weight:600;color:var(--ink-3)}
+.ststep.ok .ststate{color:var(--ok-ink)}
+.ststep.ok .sttl b{color:var(--ink-2)}
+.stacts{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.stacts .btn{min-height:44px}
+.stacts .linkbtn{min-height:44px;padding:0 6px;font-size:13px}
+.stbody .tiny{margin:0}
+.sthow summary{font-size:14px;font-weight:600;color:var(--accent);cursor:pointer;min-height:32px;display:flex;align-items:center}
+.sthow .steps{margin:6px 0 0;padding-left:1.3em;display:grid;gap:8px;font-size:15px}
+.sthow .steps svg.ic{color:var(--accent);width:1.25em;height:1.25em;margin-left:4px;vertical-align:-.2em}
+.stfoot{display:flex;justify-content:flex-end}
+.startcard [aria-disabled="true"]{opacity:.5;cursor:not-allowed}
+@media (prefers-reduced-transparency:reduce){.startcard{background:var(--sheet-solid)!important}}

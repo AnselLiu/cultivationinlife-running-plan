@@ -3,7 +3,7 @@
 //   shareSheet：課表頁按了「分享與匯出」才載入
 //   單週課表頁的加強功能（weekExtras）在 coachweek.js
 //   身體資料（年齡、安靜心率）只從這台裝置的 cil-coach 讀，不會送到伺服器
-import { $, api, cfg, choose, coachPrefs, dayLabel, dstr, emptyState, esc, feat, fixText, group, IC, ic, largeTitle, legacyData, me, MI, myCycle, org, paintCountdown, planSeg,
+import { $, api, cfg, choose, coachPrefs, startGroupSaved, dayLabel, dstr, emptyState, esc, feat, fixText, group, IC, ic, largeTitle, legacyData, me, MI, myCycle, org, paintCountdown, planSeg,
   raceTarget, refreshMe, removeLegacy, render, row, setCoachPrefs, startKey, subTitle, toast, view } from './app.js';
 import * as P from './plan.js';
 import { ageGrade, createCoach, EST_LINE, fuelCalc, GL, GL_ORDER, hrCalc, icsTranslate, legacyBackup, legacyLogBackup, legacyPatch, legacyRange, lvl, parseGoal, planLegacyImport, std100,
@@ -392,7 +392,12 @@ async function setupView(q) {
   $('#grpSave').onclick = async (e) => {
     const btn = e.currentTarget;
     btn.disabled = true;
-    try { await api('/me/plan', { method: 'PUT', body: { dist: distNow(), grp: grpNow() } }); await refreshMe(); toast('已儲存'); if (coachOn) trainPaint(); }
+    try {
+      await api('/me/plan', { method: 'PUT', body: { dist: distNow(), grp: grpNow() } }); await refreshMe(); toast('已儲存');
+      // 從「開始使用」卡來的：打勾，回到原本的頁面
+      if (q.get('from') === 'start') { startGroupSaved(); return; }
+      if (coachOn) trainPaint();
+    }
     catch (err) { toast(err.message); }
     btn.disabled = false;
   };
