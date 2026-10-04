@@ -11,7 +11,7 @@ import * as WebAuthn from './webauthn.js';
 import { quote } from '../public/pricing.js';
 import { hourOf } from '../public/wxrule.js';
 import { BADGES, earned, weeksOf } from '../public/badges.js';
-import { clubWeekOf, cycleOf, weekIndexOf, RACE_ISO } from '../public/plan.js';
+import { clubWeekOf, cycleOf, weekIndexOf, RACE_ISO, logFloor } from '../public/plan.js';
 import { CATS, isCat, MUTABLE } from '../public/notif-cats.js';
 import { tpNow, shiftDays, daysBetween, evStart, signupEnd, signupState, STATE_TEXT, tpText, SIGNUP_DEFAULTS, windowError, isStamp } from '../public/signup-window.js';
 import * as Cams from './cams.js';
@@ -3026,12 +3026,28 @@ const api = (async function api(req, env, path, method) {
        FROM training_logs WHERE member_id = ? AND date BETWEEN ? AND ? ORDER BY date, created_at LIMIT 1000`).bind(member.id, ...r).all()).results;
     return json({ logs: rows, from: r[0], to: r[1] });
   }
+  // 新增與修改（離線補傳、舊版資料搬移也走這裡）：每位跑友每天最多 LOG_DAY_LIMIT 次、10 分鐘最多 LOG_BURST 次（先算每天的，
+  //   用完後被擋的請求不寫 D1）；日期最早到 logFloor（協會這一季第 1 週往前 400 天）；整個請求最多 8 KB、備註最多 300 字
+  //   一個帳號一天最多新增約 600 筆，總數也被「每天最多 5 筆 × 可以記的天數」限住，不會把資料庫與每日備份灌爆
   if (path === '/api/logs' && method === 'POST') {
     const g = need(); if (g) return g;
-    const b = await body(), id = str(b.id, 32);
+    if (Number(req.headers.get('content-length')) > LOG_BODY_MAX) return fail(413, '資料太大');
+    if (await limited(env, `logday:${member.id}`, LOG_DAY_LIMIT, 86400)) return fail(429, '今天記錄的次數已達上限，明天再試');
+    if (await limited(env, `logw:${member.id}`, LOG_BURST, 600)) return fail(429, '記錄太頻繁，請 10 分鐘後再試');
+    let b = {};
+    try { const raw = await req.text(); if (raw.length > LOG_BODY_MAX) return fail(413, '資料太大'); b = JSON.parse(raw || '{}') || {}; } catch {}
+    if (typeof b !== 'object') b = {};
+    const id = str(b.id, 32);
     const n = (v, lo, hi, int) => { const x = Number(v); return Number.isFinite(x) && x >= lo && x <= hi ? (int ? Math.round(x) : Math.round(x * 100) / 100) : null; };
     const date = str(b.date, 10);
     if (!isDate(date) || date > new Date(Date.now() + 864e5).toISOString().slice(0, 10)) return fail(400, '日期不正確（不能記未來的訓練）');
+    const floor = logFloor(today());
+    if (date < floor) {
+      // 以前就存在的舊紀錄：日期沒改的話照樣可以修改
+      const keep = id && (await env.DB.prepare('SELECT date FROM training_logs WHERE id = ? AND member_id = ?').bind(id, member.id).first())?.date === date;
+      if (!keep) return fail(400, `日期太早，最早只能記到 ${floor}`);
+    }
+    if (typeof b.note === 'string' && b.note.trim().length > LOG_NOTE_MAX) return fail(400, `備註最多 ${LOG_NOTE_MAX} 字`);
     const status = LOG_STATUS.includes(b.status) ? b.status : 'done';
     // 個人週期：記下比賽日與第幾週；week_no 由伺服器算成這一天在協會賽季的週次（賽季外是空的）
     const anchor = isDate(str(b.cycle_anchor, 10)) ? str(b.cycle_anchor, 10) : null;
@@ -3043,7 +3059,7 @@ const api = (async function api(req, env, path, method) {
       kind: LOG_KINDS.includes(b.kind) ? b.kind : null, plan_text: str(b.plan_text, 300) || null,
       km: status === 'skip' ? null : n(b.km, 0.01, 400), seconds: status === 'skip' ? null : n(b.seconds, 1, 200000, true),
       hr: n(b.hr, 30, 230, true), rpe: n(b.rpe, 1, 10, true), feel: n(b.feel, 1, 5, true),
-      note: str(b.note, 300) || null, source: LOG_SOURCES.includes(b.source) ? b.source : 'manual',
+      note: str(b.note, LOG_NOTE_MAX) || null, source: LOG_SOURCES.includes(b.source) ? b.source : 'manual',
     };
     if (id) {
       // 修改：有送 cycle_anchor 才改週期欄位；舊版 App 沒送時保留原本的週期（個人週期的 week_no 也不動）
@@ -4340,6 +4356,10 @@ const BACKUP_FILTER = { cams: 'manual = 1', rest_stops: 'manual = 1 OR fix IS NO
 // 每筆可能很大的表（路線最多 3000 點約 66 KB、分團小圖最多 80 KB）：第一次只讀幾筆，之後照平均大小調整，一段的 CPU 才不會爆
 const BACKUP_FIRST = { routes: 5, teams: 5, plan_posts: 50, team_posts: 50 };
 const ROUTE_MAX = 100;   // 每人最多存幾條路線（見 POST /api/routes）
+// 訓練紀錄的新增與修改（POST /api/logs）：每位跑友每天最多幾次、10 分鐘最多幾次、一次請求最大、備註最多幾字
+//   舊版課表教練資料搬移一筆一個請求（一季約 120 筆，兩三個週期也在 10 分鐘 300 次內）；離線暫存區最多 30 筆
+//   最壞情況一個帳號一天寫 D1：600 次 ×（紀錄 1 列＋3 個索引＋計數 2 列）≈ 3,600 列（免費方案每天 10 萬列）
+const LOG_DAY_LIMIT = 600, LOG_BURST = 300, LOG_BODY_MAX = 8192, LOG_NOTE_MAX = 300;
 const REST_DETAIL_LIMIT = 60;   // 休息站詳細與地點的附近休息站：每位跑友 10 分鐘最多幾次
 // 休息站格子、詳細、地點附近合計：每位跑友每天最多幾次（一個畫面最多 16 格、瀏覽器快取一天，一般一天用不到 100 次）。
 //   一次讀的列數（本機 D1 的 rows_read 實測）≈ 範圍內的列＋17（來源狀態、設定等）；快取命中只有那 17 列：

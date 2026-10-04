@@ -538,7 +538,9 @@ export function legacyLogs({ model, dash, weeks, today, existing = [], include =
   }).sort((a, b) => (a.bad || b.bad ? (a.bad ? 1 : -1) : a.anchor < b.anchor ? -1 : a.anchor > b.anchor ? 1 : a.n - b.n || a.i - b.i));
   const perDay = {}, seen = new Set(), others = {}, mapped = {};
   for (const l of existing) perDay[l.date] = (perDay[l.date] || 0) + 1;
-  const out = { upload: [], existed: 0, unmatched: 0, capped: 0, other: [], otherLeft: 0, total: keys.length };
+  // old：日期早於伺服器收的最早一天（P.logFloor），送出去也會被擋，先排除
+  const floor = P.logFloor(today);
+  const out = { upload: [], existed: 0, unmatched: 0, capped: 0, old: 0, floor, other: [], otherLeft: 0, total: keys.length };
   for (const x of keys) {
     if (x.bad || !okISO(x.anchor) || x.n < 2 || x.n > 21) { out.unmatched++; continue; }
     const w = weeks?.[x.n - 1], plan = w?.plan;
@@ -552,6 +554,7 @@ export function legacyLogs({ model, dash, weeks, today, existing = [], include =
     const ts = Number(log[x.k]), tick = Number.isFinite(ts) && ts > 0 ? P.iso(new Date(ts)) : null;
     const date = (tick && cands.includes(tick) && tick) || (tick && cands.filter((v) => v <= tick).pop()) || cands[0] || null;
     if (!date) { out.unmatched++; continue; }
+    if (date < floor) { out.old++; continue; }
     if (!club) mapped[x.anchor] = (mapped[x.anchor] || 0) + 1;
     if (!club && !include.includes(x.anchor)) { others[x.anchor] = (others[x.anchor] || 0) + 1; out.otherLeft++; continue; }
     const dup = `${P.cycleKey(cyc, x.n)}|${d}`;

@@ -32,6 +32,10 @@ export function cycleOf(anchorISO, meta = {}) {      // meta: { kind, raceId, na
   return Object.freeze({ kind: meta.kind || 'race', anchor: anchorISO, w1, w1ISO: iso(w1), ...meta });
 }
 export const CLUB = cycleOf(RACE_ISO, { kind: 'club', name: '臺北馬拉松' });
+// 訓練紀錄最早能記到哪一天：協會這一季的第 1 週（還沒到就用今天）往前 400 天，涵蓋上一季與這一季的個人週期
+//   伺服器（POST /api/logs）擋這之前的日期，舊版課表教練資料搬移也照這個先排除（不會送出去才被擋）
+export const LOG_BACK_DAYS = 400;
+export const logFloor = (todayISO) => iso(addDays(parseISO(todayISO && todayISO < CLUB.w1ISO ? todayISO : CLUB.w1ISO), -LOG_BACK_DAYS));
 // 既有的週次函式都多一個選填的週期參數，預設協會賽季，舊的呼叫方式結果不變
 export const weekStart = (n, c = CLUB) => addDays(c.w1, (n - 1) * 7);                                    // Date
 export const weekIndexOf = (dateISO, c = CLUB) => Math.floor(dayDiff(parseISO(dateISO), c.w1) / 7) + 1; // 不夾在 1–21

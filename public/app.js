@@ -2920,14 +2920,17 @@ async function flushLogQueue() {
   let up = 0, dup = 0;
   // 原樣送出：只有快速打勾的那幾筆本來就帶 if_absent（同一週、同一天已經有紀錄就不重複新增）；
   //   修改既有紀錄帶 id 是更新；那一筆已經在別的裝置刪掉，就改成新增，不讓這次的修改不見
+  let rate = false;
   for (const { queued, qid, ...b } of q) {
+    // 伺服器的次數限制：這一筆和後面的都留在暫存區，下次再傳（不能當成失敗丟掉）
+    if (rate) { left.push({ ...b, qid, queued }); continue; }
     try {
       let r;
       try { r = await api('/logs', { method: 'POST', body: b }); }
       catch (e) { if (b.id && !(e instanceof TypeError) && /找不到這筆紀錄/.test(e.message)) r = await api('/logs', { method: 'POST', body: { ...b, id: undefined } }); else throw e; }
       if (qid) flushed.set(qid, r);
       if (r?.existed) dup++; else up++;
-    } catch (e) { if (e instanceof TypeError) left.push({ ...b, qid, queued }); }
+    } catch (e) { if (e instanceof TypeError || e.status === 429) left.push({ ...b, qid, queued }); if (e.status === 429) rate = true; }
   }
   logQueue.set(left);
   if (up) toast(`已上傳 ${up} 筆離線時的訓練紀錄`);

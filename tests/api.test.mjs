@@ -129,6 +129,53 @@ test('訓練紀錄：不能記未來、查詢有上限、教練要本人分享�
   assert.ok((await call('t_runner', `/logs?from=${today}&to=${today}`)).json.logs.some((l) => l.id === r.json.id), '別人刪不掉我的紀錄');
 });
 
+test('訓練紀錄寫入：每天與 10 分鐘的次數限制（離線補傳、修改也算）、最早日期、備註與請求大小；舊版資料搬移一批 150 筆照常上傳', async () => {
+  const rate = (q) => fetch(`${BASE}/api/dev/rate?${q}`).then((r) => r.json());
+  const post = (body, who = 't_staff') => call(who, '/logs', { method: 'POST', body });
+  const ids = [];
+  try {
+    // 舊版課表教練資料搬移：一筆一個請求、帶 if_absent，150 筆（一季多）都在上限內
+    const st = [];
+    for (let i = 0; i < 150; i++) {
+      const r = await post({ date: plus(-i - 1), status: 'done', week_no: 3, plan_day: `搬${i}`, plan_text: '輕鬆跑 40 分鐘', kind: 'easy', source: 'manual', note: '從舊版課表教練匯入', if_absent: true });
+      st.push(r.status); if (r.json?.id) ids.push(r.json.id);
+    }
+    assert.ok(st.every((x) => x === 200), JSON.stringify(st.filter((x) => x !== 200)));
+    // 最早日期：協會這一季第 1 週往前 400 天
+    const floor = P.logFloor(today);
+    const prev = new Date(Date.parse(`${floor}T00:00:00Z`) - 864e5).toISOString().slice(0, 10);
+    const old = await post({ date: prev, status: 'done', km: 5 });
+    assert.equal(old.status, 400); assert.match(old.json.error, /最早只能記到/);
+    assert.equal((await post({ date: '1999-01-01', status: 'done', km: 5 })).status, 400, '很久以前的日期不收（以前任何過去的日期都收）');
+    const atFloor = await post({ date: floor, status: 'done', km: 5 });
+    assert.equal(atFloor.status, 200); ids.push(atFloor.json.id);
+    assert.equal((await post({ id: atFloor.json.id, date: prev, status: 'done', km: 5 })).status, 400, '修改也不能改到更早');
+    // 備註最多 300 字（以前超過會直接截掉）；整個請求最多 8 KB
+    assert.equal((await post({ date: today, status: 'skip', note: '字'.repeat(301) })).status, 400);
+    const big = await fetch(`${BASE}/api/logs`, { method: 'POST', headers: { cookie: await as('t_staff'), origin: BASE, 'content-type': 'application/json' },
+      body: JSON.stringify({ date: today, status: 'skip', plan_text: 'x'.repeat(9000) }) });
+    assert.equal(big.status, 413);
+    // 10 分鐘上限
+    await rate('key=logw:t_staff&count=300&sec=600');
+    const burst = await post({ date: today, status: 'skip' });
+    assert.equal(burst.status, 429); assert.match(burst.json.error, /10 分鐘/);
+    await rate('key=logw:t_staff&clear=1');
+    // 每天上限：新增、修改（離線補傳也是同一支 API）共用
+    await rate('key=logday:t_staff&count=599&sec=86400');
+    const last = await post({ date: today, status: 'skip' });
+    assert.equal(last.status, 200, '第 600 次還可以'); ids.push(last.json.id);
+    const over = await post({ date: today, status: 'skip' });
+    assert.equal(over.status, 429); assert.match(over.json.error, /今天/);
+    assert.equal((await post({ id: last.json.id, date: today, status: 'done' })).status, 429, '修改也算');
+    const other = await post({ date: today, status: 'skip' }, 't_runner');
+    assert.equal(other.status, 200, '別人不受影響');
+    await call('t_runner', `/logs/${other.json.id}`, { method: 'DELETE' });
+  } finally {
+    await rate('key=logday:t_staff&clear=1'); await rate('key=logw:t_staff&clear=1');
+    for (const id of ids) await call('t_staff', `/logs/${id}`, { method: 'DELETE' });
+  }
+});
+
 test('團員訓練只給教練與分團幹部：監事、理事、行政看不到也不能留回饋', async () => {
   const r = await call('t_runner', '/logs', { method: 'POST', body: { date: today, status: 'done', km: 8, rpe: 5 } });
   assert.equal(r.status, 200);

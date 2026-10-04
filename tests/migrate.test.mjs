@@ -88,6 +88,19 @@ test('其他比賽日的鍵：沒勾就不上傳（算其他週期）；勾了�
   assert.equal(P.weekIndexOf(p.date, c), 3);   // 伺服器的合理性檢查（週次跟日期差不到一週）
 });
 
+test('太早的紀錄：早於伺服器收的最早一天（協會這一季第 1 週往前 400 天）先排除，不送出去才被擋', () => {
+  const floor = P.logFloor(TODAY);
+  assert.equal(floor, '2025-06-29');   // 協會 W1 2026-08-03 往前 400 天
+  assert.equal(P.logFloor('2026-05-01'), '2025-03-27', '賽季還沒開始：從今天往前 400 天');
+  // 2025-03-16 的比賽：W3 在 2024 年底；2025-11-02 的比賽：W3 在 2025-06-30（剛好在範圍內）
+  const dash = { log: { '2025-03-16|3|1': at('2024-11-12'), '2025-11-02|3|1': at('2025-07-01'), '2026-12-20|3|1': at('2026-08-18') } };
+  const r = logs(dash, { include: ['2025-03-16', '2025-11-02'] });
+  assert.equal(r.old, 1);
+  assert.equal(r.floor, floor);
+  assert.deepEqual(r.upload.map((x) => x.cycle_anchor || 'club').sort(), ['2025-11-02', 'club']);
+  assert.ok(r.upload.every((x) => x.date >= floor));
+});
+
 test('個人週期的比賽那一列記成「比賽日」，不帶比賽名稱', () => {
   // 2026-10-25（日）比賽：W20 週末是比賽那一列
   const r = logs({ log: { '2026-10-25|20|5': at('2026-10-25', 12) } }, { include: ['2026-10-25'] });

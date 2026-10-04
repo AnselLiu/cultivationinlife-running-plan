@@ -650,13 +650,13 @@ async function legacySection(raw, { races, startRace }) {
     const opts = L.other.map((o) => `<label class="lgrow"><input type="checkbox" data-anchor="${o.anchor}" ${include.includes(o.anchor) ? 'checked' : ''}>
       <span><span>另外 ${o.count} 筆是跟「${dstr(o.anchor)} 的比賽」排的課表，也一起上傳</span><span class="tiny" style="display:block">記成那場比賽的個人週期；你的課表週期不會改</span></span></label>`).join('');
     const parts = [`可以上傳 ${n} 筆`, L.existed ? `已經在訓練紀錄 ${L.existed} 筆` : '', L.otherLeft ? `其他週期 ${L.otherLeft} 筆` : '',
-      L.unmatched ? `對不到協會課表 ${L.unmatched} 筆` : '', L.capped ? `超過每天 5 筆 ${L.capped} 筆` : ''].filter(Boolean);
+      L.unmatched ? `對不到協會課表 ${L.unmatched} 筆` : '', L.capped ? `超過每天 5 筆 ${L.capped} 筆` : '', L.old ? `${dstr(L.floor)} 以前的 ${L.old} 筆（太早，不能上傳）` : ''].filter(Boolean);
     let res = '';
     if (result) {
       const cyc = myCycle(), offer = feat('plan_cycle') && cyc.kind === 'club'
         ? result.anchors.map((a) => raceList.find((r) => r.date === a && r.date >= t0)).filter(Boolean) : [];
-      res = `<p class="notice" role="status" style="margin:0"><span>已上傳 ${result.up} 筆・已存在 ${result.ex} 筆・其他週期 ${result.other} 筆・對不到 ${result.unmatched} 筆</span>${result.capped ? `<span>・略過 ${result.capped} 筆（每天最多 5 筆）</span>` : ''}
-        ${result.stopped ? '<br><span>網路中斷，停在這裡；連上網路後再按一次，會從沒上傳的繼續。</span>' : ''}</p>
+      res = `<p class="notice" role="status" style="margin:0"><span>已上傳 ${result.up} 筆・已存在 ${result.ex} 筆・其他週期 ${result.other} 筆・對不到 ${result.unmatched} 筆</span>${result.capped ? `<span>・略過 ${result.capped} 筆（每天最多 5 筆）</span>` : ''}${result.old ? `<span>・太早 ${result.old} 筆</span>` : ''}
+        ${result.stopped === 'rate' ? `<br><span>${esc(result.why)}；之後再按一次上傳，會從沒上傳的繼續。</span>` : result.stopped ? '<br><span>網路中斷，停在這裡；連上網路後再按一次，會從沒上傳的繼續。</span>' : ''}</p>
         <button type="button" class="btn ghost sm" id="lgBk">下載這些紀錄的備份（JSON）</button>
         ${offer.map((r) => `<a class="tiny" href="#/plan/setup?go=cycle&race=${encodeURIComponent(r.id)}">改成跟 <span translate="no">${esc(r.name)}</span> 排課 ›</a>`).join('')}`;
     }
@@ -735,18 +735,19 @@ async function legacySection(raw, { races, startRace }) {
         if (!online) { toast('連不上伺服器，請稍後再試'); paintLogs(); return; }
         M = calc();
         const list = M.logs.upload, anchors = M.logs.other.map((o) => o.anchor);
-        let up = 0, ex = 0, skip = 0, stopped = false;
+        // 伺服器的次數限制（10 分鐘 300 次、每天 600 次）：停下來，之後再按會從沒上傳的繼續（已上傳的會被認出是已存在）
+        let up = 0, ex = 0, skip = 0, stopped = false, why = '';
         for (const { key, ...b } of list) {
           btn.textContent = `正在上傳 ${up + ex + skip + 1}/${list.length}`;
           try { const r = await api('/logs', { method: 'POST', body: b }); if (r.existed) ex++; else up++; }
-          catch (err) { if (err instanceof TypeError) { stopped = true; break; } skip++; }
+          catch (err) { if (err instanceof TypeError) { stopped = true; break; } if (err.status === 429) { stopped = 'rate'; why = err.message; break; } skip++; }
         }
         legacyTotals.logs += up;
         const before = M.logs;
         await loadExisting(); M = calc();
-        result = { up, ex: ex + before.existed, other: before.otherLeft, unmatched: before.unmatched, capped: before.capped + skip, stopped, anchors };
+        result = { up, ex: ex + before.existed, other: before.otherLeft, unmatched: before.unmatched, capped: before.capped + skip, old: before.old, stopped, why, anchors };
         paintLogs();
-        toast(stopped ? `網路中斷，已上傳 ${up} 筆` : `已上傳 ${up} 筆完成紀錄`);
+        toast(stopped === 'rate' ? `已上傳 ${up} 筆，${why}` : stopped ? `網路中斷，已上傳 ${up} 筆` : `已上傳 ${up} 筆完成紀錄`);
       });
     }
     function bindCds() {
