@@ -7,6 +7,7 @@
 //   功能開關 features.rest 預設關閉；關閉時這裡什麼都不顯示、也不連線
 import { api, cfg, esc, IC, openSheet, toast } from './app.js';
 import { hoursNow, parseHours } from './hours.js';
+import { t } from './i18n.js';
 
 // 線條圖示（跟地點針同一個 24×24、圓頭線條風格）
 const RGLYPH = {
@@ -225,7 +226,9 @@ function paint() {
     if (g.items.length === 1) {
       const s = g.items[0], isSel = s[0] === cur?.id;
       const icon = L.divIcon({ className: 'rpin-host', iconSize: [44, 44], iconAnchor: [22, 22], html: pinHtml(s, isSel) });
-      L.marker([s[5], s[6]], { icon, title: `${s[7]}・${subOf(s[1], s[2])}`, keyboard: true, zIndexOffset: isSel ? 900 : -500, riseOnHover: true }).addTo(layer)
+      // 名稱照原文（translate="no"），類型先用 t() 換好；不然英文介面會把名稱拆成「大佳 Riverside Park」
+      L.marker([s[5], s[6]], { icon, title: `${s[7]}・${t(subOf(s[1], s[2]))}`, keyboard: true, zIndexOffset: isSel ? 900 : -500, riseOnHover: true })
+        .on('add', (e) => e.target.getElement()?.setAttribute('translate', 'no')).addTo(layer)
         .on('click', () => pinClick(s));
       continue;
     }

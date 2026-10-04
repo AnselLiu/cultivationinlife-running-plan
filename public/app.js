@@ -889,12 +889,12 @@ wideNav.addEventListener?.('change', () => paintTabs());
 function paintCountdown() {
   const r = cfg.race, el = $('#countdown');
   el.hidden = !me;
-  if (!r?.date) { el.innerHTML = me ? '<small>設定倒數</small>' : ''; el.title = '選擇要倒數的比賽'; return; }
+  if (!r?.date) { el.innerHTML = me ? '<small>設定倒數</small>' : ''; el.title = I18N.t('選擇要倒數的比賽'); return; }
   const t = new Date(`${r.date}T00:00:00`), now = new Date(); now.setHours(0, 0, 0, 0);
   const days = Math.round((t - now) / 864e5);
   const short = r.name.replace(/^20\d\d\s*/, '').replace('馬拉松', '馬').slice(0, 7);
   $('#countdown').innerHTML = days > 0 ? `<b class="num">${days}</b>天到${esc(short)}` : days === 0 ? `<b>今天</b>${esc(short)}` : '';
-  $('#countdown').title = `${r.name}（${r.date}），點一下可以換`;
+  $('#countdown').title = I18N.t(`${r.name}（${r.date}），點一下可以換`);
 }
 // 點右上角倒數：選要倒數哪一場（自己的賽事、常用賽事清單、協會預設，或不顯示）
 async function countdownPicker() {
@@ -1603,7 +1603,7 @@ const NICON = { security: IC.shieldAlert, change: IC.calAlert, signup: IC.ticket
   membership: IC.idcard, announce: IC.megaphone, todo: IC.clipCheck, other: IC.bell };
 // 整句都是伺服器範本的標題：英文介面可以翻；夾帶活動或分團名稱的標題、內文一律不翻
 const NFIXED = new Set(['新裝置登入', '新增了一把通行金鑰', '移除了一把通行金鑰', '已登出所有裝置', '幹部需要兩步驟驗證', '你已成為理事長', '你已卸任理事長',
-  '身分更新', '候補遞補成功', '入會完成', '會籍已到期', '會費今天到期', '有人申請入會', '練跑地圖：有新的地點提議', '每季權限檢視', '跑完了嗎？', '這週練得很兇，注意恢復', '教練回饋了你的訓練']);
+  '身分更新', '候補遞補成功', '入會完成', '會籍已到期', '會費今天到期', '有人申請入會', '練跑地圖：有新的地點提議', '每季權限檢視', '跑完了嗎？', '這週練得很兇，注意恢復', '教練回饋了你的訓練', '每日備份還沒做完']);
 // 只接受站內網址；通知中心本身不算（改開詳細內容）
 const safeHref = (u) => (/^\/#\/[\w/?=&.%-]*$/.test(u || '') && u !== '/#/notifications' ? u.slice(1) : null);
 const nDate = (ts) => new Date(`${ts.replace(' ', 'T')}Z`);
@@ -3766,7 +3766,7 @@ function paintBack(hash) {
   const [href, parentLabel] = parentOf(hash);
   const label = navStack.length > 1 ? nameOf(navStack[navStack.length - 2].split('?')[0]) : parentLabel;
   $('#backLabel').textContent = label;
-  btn.setAttribute('aria-label', `返回${label}`);
+  btn.setAttribute('aria-label', I18N.lang === 'en' ? `Back to ${I18N.t(label)}` : `返回${label}`);   // 屬性改了 MutationObserver 不會再翻：直接給英文
   btn.onclick = () => { if (navStack.length > 1) history.back(); else location.hash = href; };
 }
 async function renderOnce() {

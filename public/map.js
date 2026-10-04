@@ -11,9 +11,11 @@ import { $, allow, api, camLazy, cfg, esc, IC, largeTitle, openSheet, teamAllow,
 const canCreate = () => allow('event') || teams().some((t) => teamAllow(t.id, 'event'));
 const lineShare = (text) => `https://line.me/R/share?text=${encodeURIComponent(text)}`;
 import * as W from './weather.js';
-import { lang } from './i18n.js';
+import { lang, t } from './i18n.js';
 import { hoursNow } from './hours.js';
 import * as RS from './reststops.js';
+// 標記加到地圖時標成不翻譯（i18n.js 的 MutationObserver 在之後才處理新節點）
+const noTr = (e) => e.target.getElement()?.setAttribute('translate', 'no');
 
 const KIND = { track: '田徑場', river: '河濱', park: '公園', trail: '山徑', road: '道路', other: '其他' };
 // 地圖針：水滴形的針頭，裡面是類型的線條圖示（跟系統圖示同一個風格，不用文字）
@@ -222,7 +224,7 @@ function coverCtl(y) {
 function setDetent(d, opt = {}) {
   const sh = $('#msheet'); if (!sh) return;
   detent = d; sh.dataset.detent = d; $('#amap').dataset.detent = d;
-  const g = $('#grab'); g?.setAttribute('aria-expanded', String(d !== 'peek')); g?.setAttribute('aria-label', d === 'full' ? '收合清單' : '展開清單');
+  const g = $('#grab'); g?.setAttribute('aria-expanded', String(d !== 'peek')); g?.setAttribute('aria-label', t(d === 'full' ? '收合清單' : '展開清單'));
   if (wide()) { sh.style.transform = ''; sh.style.height = ''; $('#amap').classList.remove('ctl-off'); return; }
   measure();
   sh.style.height = `${sheetH.full}px`;
@@ -324,8 +326,10 @@ function paintPins() {
     if (g.items.length === 1) {
       const s = g.items[0], warn = s.latest && (['積水', '施工', '封閉'].includes(s.latest.surface) || s.latest.crowd === '多');
       const icon = window.L.divIcon({ className: 'mpin-host', iconSize: [36, 46], iconAnchor: [18, 45], html: pinHtml(s, warn) });
-      window.L.marker([s.lat, s.lng], { icon, title: s.name, keyboard: true, alt: `${s.name}・${KIND[s.kind]}`, riseOnHover: true, zIndexOffset: s.id === selected ? 1000 : 0 }).addTo(spotsLayer)
-        .bindTooltip(esc(s.name), { direction: 'top', offset: [0, -44], className: 'pintip' })
+      // 地點名稱是團員取的，英文介面不翻：標記整個標 translate="no"（title、alt 才不會被拆成中英夾雜），種類先用 t() 換好
+      window.L.marker([s.lat, s.lng], { icon, title: s.name, keyboard: true, alt: `${s.name}・${t(KIND[s.kind])}`, riseOnHover: true, zIndexOffset: s.id === selected ? 1000 : 0 })
+        .on('add', noTr).addTo(spotsLayer)
+        .bindTooltip(`<span translate="no">${esc(s.name)}</span>`, { direction: 'top', offset: [0, -44], className: 'pintip' })
         .on('click', () => openSpot(s.id, 'pan'));
       continue;
     }

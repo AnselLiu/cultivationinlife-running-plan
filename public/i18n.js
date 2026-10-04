@@ -56,6 +56,24 @@ const PATTERNS = [
   [/^還有 (\d+) 筆待審核，關閉審核會依報名順序直接錄取（額滿排候補）並通知他們。確定嗎？$/, '$1 pending requests. Turning off approval admits them in signup order (waitlisted when full) and notifies them. Continue?'],
   [/^只剩 (\d+) 個名額，核准後依報名先後排正取，其餘 (\d+) 人排候補。確定？$/, 'Only $1 spots left. Approved people are confirmed in signup order and the other $2 go to the waitlist. Continue?'],
   [/^其中 (\d+) 人已繳費，會標記待退費。$/, '$1 of them have paid and will be marked for refund.'],
+  [/^連同之後 (\d+) 場一起刪$/, (_, n) => `Delete this and the next ${n === '1' ? 'one' : n}`],
+  // 伺服器的次數與大小上限：數字在句子中間，整句換
+  [/^每人最多存 (\d+) 條路線，請先刪掉不用的$/, 'You can save up to $1 routes. Delete ones you don’t use first.'],
+  [/^備註最多 (\d+) 字$/, 'Notes can be up to $1 characters'],
+  [/^日期太早，最早只能記到 (\d{4}-\d\d-\d\d)$/, 'That date is too early. The earliest you can log is $1.'],
+  // 舊版課表教練資料搬移：太早不能上傳的筆數（要在一般日期句型之前）；被次數限制擋下時，原因照字典整句換，再接後半句
+  [/(\d{1,2})\/(\d{1,2})（([日一二三四五六])） ?以前的 (\d+) 筆（太早，不能上傳）/g, (_, m, d, w, n) => `${n} dated before ${WD[w]} ${m}/${d} (too early to upload)`],
+  [/^・太早 (\d+) 筆$/, ' · too early $1'],
+  [/^(.+?)；之後再按一次上傳，會從沒上傳的繼續。$/, (_, why) => `${(dict[why] ?? why).replace(/[.。]?$/, '.')} Tap upload again later to continue with the rest.`],
+  // 問卷結果：簡答的回覆數（「・5 則」單獨換只剩數字）
+  [/^簡答・(\d+) 則$/, (_, n) => `Short answer · ${n} ${n === '1' ? 'response' : 'responses'}`],
+  // 每日備份逾時：管理後台「設定」的提醒、通知中心的內文
+  [/^(?:(.+?) 的備份開始超過 24 小時還沒做完|最新的每日備份是 (.+?)，已經超過 36 小時)。請檢查資料量是否暴增（例如大量路線），必要時改用 D1 Time Travel 並聯絡維護人員。$/,
+    (_, a, b) => `${a ? `The backup for ${a} started more than 24 hours ago and hasn’t finished.` : `The latest daily backup is from ${b}, more than 36 hours ago.`} Check whether the data has grown sharply (for example, a lot of routes). If needed, use D1 Time Travel and contact the maintainer.`],
+  [/^(.+?) 的備份開始超過 24 小時還沒做完，請到管理後台「設定」查看$/, 'The backup for $1 started more than 24 hours ago and hasn’t finished. Check Settings in Admin.'],
+  // 稽核紀錄的系統說明：前面接著操作者（「未登入・…」），不能用 ^
+  [/略過 (\d+) 則（過期或送不出去）/g, 'dropped $1 (expired or undeliverable)'],
+  [/開始於 (.+?)，已完成 (\d+) 段/g, 'started $1, $2 parts done'],
   // 開放時間的狀態（public/hours.js）：要排在星期與時間的通用句型前面
   [/^開放中・到 (\d\d:\d\d)$/, 'Open · until $1'], [/^目前未開放・(\d\d:\d\d) 開放$/, 'Closed now · opens $1'],
   [/^目前未開放・明天 (\d\d:\d\d) 開放$/, 'Closed now · opens tomorrow $1'], [/^目前未開放・週([日一二三四五六]) (\d\d:\d\d) 開放$/, (_, w, t) => `Closed now · opens ${WD[w]} ${t}`],
@@ -86,15 +104,17 @@ const PATTERNS = [
   [/(\d{1,2})\/(\d{1,2})（([日一二三四五六])）/g, (_, m, d, w) => `${WD[w]} ${m}/${d}`],
   [/^(\d{1,2})月$/, (_, m) => MO3[m - 1]], [/(\d{1,2})月/g, (_, m) => MO3[m - 1] || `${m}`],
   [/(\d{1,2}) 月 (\d{1,2}) 日/g, (_, m, d) => `${MO3[m - 1]} ${d}`],
+  [/週([日一二三四五六])／([日一二三四五六])/g, (_, a, b) => `${WD[a]}/${WD[b]}`],   // 課表的彈性日「週二／三」
   [/^週([日一二三四五六])$/, (_, w) => WD[w]],
   [/週([日一二三四五六])/g, (_, w) => WD[w]],
   [/^天到(.+)$/, (_, r) => `days to ${r}`],
   // 「還有 N 人沒處理完」整段先換：片段「還有」單獨是 KPI 的 To go，拆開會變成「To go 3 people」
   [/還有 (\d+) 人沒處理完，請再按一次/g, '$1 people not processed yet. Tap again to continue'],
   [/・同步到第 (\d+) 頁/g, ' · synced to page $1'],
-  ['FRAG'],
+  // 「N 天前」「還有 N 天」要在片段之前：字典有「3 天」「7 天」「還有」，先換片段會變成「3 days 前」「To go 3 days」
+  [/(\d+) 分鐘前/g, '$1 min ago'], [/(\d+) 小時前/g, '$1 hr ago'], [/(\d+) 天前/g, '$1 d ago'],
   [/還有 (\d+) 天/g, '$1 days to go'],
-  [/(\d+) 分鐘前/g, '$1 min ago'], [/(\d+) 小時前/g, '$1 h ago'], [/(\d+) 天前/g, '$1 d ago'],
+  ['FRAG'],
   [/NT\$([\d,]+) 起/g, 'from NT$$$1'],
   [/([\d.]+) 公里/g, '$1 km'], [/([\d.]+) 公尺/g, '$1 m'], [/([\d.]+) 毫秒/g, '$1 ms'], [/([\d.]+) 秒/g, '$1 s'],
   [/(^|[^\d.,])1 人/g, (_, p) => `${p}1 person`], [/(\d+) 人/g, '$1 people'], [/(\d+) 位/g, '$1'], [/(\d+) 堂/g, '$1 sessions'], [/(\d+) 次/g, '$1×'], [/(\d+) 筆/g, '$1'],

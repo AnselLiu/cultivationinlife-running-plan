@@ -3816,6 +3816,23 @@ export default {
 "期間：帳號存續期間；帳號刪除後立即刪除，惟中獎紀錄匿名化後保留 3 年供贊助對帳。": "Period: for as long as your account exists. Data is deleted as soon as the account is deleted, except prize records, which are anonymized and kept for 3 years for sponsor reconciliation.",
 "這台裝置上有之前留下的課表設定、未送出的訓練紀錄或跑到一半的紀錄，不確定是誰的。\\n\\n是你的嗎？按「確定」保留，按「取消」清除。": "This device has training plan settings, unsent training entries or an unfinished run left from before, and we can't tell whose they are.\n\nAre they yours? OK keeps them; Cancel clears them.",
 "登入過期時關掉了這支手機的推播": "Push on this phone was turned off when your sign-in expired",
-"重新開啟": "Turn on again"
+"重新開啟": "Turn on again",
+"每日備份還沒做完": "Daily backup hasn’t finished",
+"今天查詢休息站的次數已達上限，明天再試": "You’ve reached today’s limit for rest stop lookups. Try again tomorrow.",
+"今天記錄的次數已達上限，明天再試": "You’ve reached today’s logging limit. Try again tomorrow.",
+"記錄太頻繁，請 10 分鐘後再試": "Logging too often. Try again in 10 minutes.",
+"監事不能留訓練回饋": "Supervisors can’t leave training feedback",
+"中途被終止": "Stopped partway",
+"中途被終止（CPU 或子請求超過上限），沒有留下錯誤訊息": "Stopped partway (CPU or subrequest limit exceeded) without an error message",
+"不支援的 CBOR 格式": "Unsupported CBOR format",
+"不支援的 CBOR 型別": "Unsupported CBOR type",
+"這個裝置的金鑰類型不支援": "This device’s key type isn’t supported",
+"簽章格式錯誤": "Invalid signature format",
+"驗證類型不正確": "Invalid verification type",
+"來源網域不正確": "Invalid origin",
+"網域不符": "Domain mismatch",
+"沒有完成使用者確認": "User presence wasn’t confirmed",
+"通行金鑰計數異常，請重新登入": "Passkey counter mismatch. Please sign in again.",
+"已刪除帳號": "Deleted account"
 };
 export const inner = {"團練": "group run", "課表": "training plan", "拍照": "photo", "跑步": "running", "我的": "my", "揪跑": "social run", "分團": "sub-club", "主團": "home club", "報名": "sign up", "幹部": "officers", "團員": "members", "跑友": "runners", "活動": "event", "協會": "Association", "行事曆": "calendar", "地點": "spot", "路線": "route", "天氣": "weather", "通知": "notifications", "賽事": "race", "組別": "group", "訓練紀錄": "training log", "內容": "details", "流程": "process", "選擇": "option", "跑法": "how to run", "起跑": "start", "慢跑": "jog", "小時": "hours", "碳水": "carbs", "熱身": "warm-up", "分段": "segments", "強度": "intensity", "主課": "main set", "前段": "first part", "組數": "sets", "比賽日": "race day", "可在": "can be done on"};
