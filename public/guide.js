@@ -2,7 +2,7 @@
 // 導覽會實際帶到每個分頁（團練、課表、跑步或拍照、地圖、我的），結束或略過時回到開始前的頁面，不會新增任何資料。
 // 不會自動跳出來：「開始使用」卡做完三步後問要不要看，或從「我的 → 使用說明」打開。
 
-import { focusAfterRender } from './app.js';
+import { focusAfterRender, focusEl } from './app.js';
 
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -199,6 +199,6 @@ function end() {
   for (const el of document.querySelectorAll('#view, .top, #tabs')) el.inert = false;
   // 焦點回到打開導覽的地方（「我的 → 使用說明」那一列）；那一列重畫過就找同一個 id，找不到就是新頁面的大標題
   const back = T.opener, id = back?.id;
-  const restore = () => { const el = back?.isConnected ? back : id && document.getElementById(id); if (el) el.focus(); else document.querySelector('#view h1')?.focus(); };
+  const restore = () => { const el = back?.isConnected ? back : id && document.getElementById(id); if (!(el && focusEl(el))) focusEl(document.querySelector('#view h1')); };
   if (location.hash !== T.back) { focusAfterRender(id ? [`#${id}`, 'h1'] : ['h1']); location.hash = T.back; } else restore();
 }

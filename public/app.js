@@ -460,7 +460,8 @@ function toast(msg, { action, onAction, onExpire, focus = false, ms = 2600, say 
   const m = document.createElement('span');
   if (msg instanceof Node) m.append(msg); else m.textContent = msg;
   el.append(m);
-  if (say) { const sr = document.createElement('span'); sr.className = 'sr'; sr.textContent = say; el.append(sr); }
+  // 補充播報前加句號（自己一個文字節點，英文介面照樣翻）：VoiceOver 在訊息與說明之間會停一下，不會連成一句
+  if (say) { const sr = document.createElement('span'); sr.className = 'sr'; sr.append('。', document.createTextNode(say)); el.append(sr); }
   let done = false;
   el.expire = () => { if (done) return; done = true; const had = el.contains(document.activeElement); el.remove(); onExpire?.(had); };
   let b;
@@ -486,7 +487,8 @@ function announce(msg) {
 function fieldError(el, msg, { also = [], anchor } = {}) {
   if (!el) { toast(msg); return; }
   const id = `${el.name || el.dataset.q || 'f'}Err`.replace(/[^\w-]/g, '');
-  const box = anchor || el.closest('fieldset, label') || el;
+  // chip 型的單選、複選：錯誤放在整組選項（fieldset 或 .chips）後面，不會擠在第一個選項後面
+  const box = anchor || (el.closest('.chip') && (el.closest('fieldset') || el.closest('.chips'))) || el.closest('fieldset, label') || el;
   let p = document.getElementById(id);
   if (!p) { p = document.createElement('p'); p.id = id; p.className = 'ferr'; box.after(p); }
   p.textContent = msg;
@@ -721,7 +723,8 @@ const setMe = (m, c) => { me = m; if (c !== undefined) cfg = c; };
 // 大標題：頁面最上方的 Large Title；捲出畫面後，標題縮到頂部列中間（iOS 行為）
 function largeTitle(title, sub = '', action = '') {
   $('#ctitle').textContent = title;
-  return `<header class="lt"><div><h1>${esc(title)}</h1>${sub ? `<p>${sub}</p>` : ''}</div>${action}</header>`;
+  // tabindex=-1：收起卡片、導覽結束時可以把焦點放回大標題（VoiceOver 從頁首開始唸）
+  return `<header class="lt"><div><h1 tabindex="-1">${esc(title)}</h1>${sub ? `<p>${sub}</p>` : ''}</div>${action}</header>`;
 }
 const ICONS = {
   calendar: '<svg viewBox="0 0 24 24"><rect x="3.2" y="4.8" width="17.6" height="15.4" rx="3.4"/><path d="M3.4 9.6h17.2M8 3.2v3.4M16 3.2v3.4"/></svg>',
@@ -1037,7 +1040,7 @@ function richText(src) {
   return esc(src).split(/\n{2,}/).map((block) => {
     const lines = block.split('\n');
     if (lines.every((l) => l.startsWith('- '))) return `<ul>${lines.map((l) => `<li>${l.slice(2)}</li>`).join('')}</ul>`;
-    if (block.startsWith('## ')) return `<h3>${block.slice(3)}</h3>`;
+    if (block.startsWith('## ')) return `<h2 class="h3">${block.slice(3)}</h2>`;
     return `<p>${lines.join('<br>')}</p>`;
   }).join('');
 }
@@ -1058,9 +1061,9 @@ function privacyView() {
       <p class="tiny" style="margin:0">全文在下方，同意後就會回到剛才的頁面。</p></section>` : ''}
     ${custom ? `<section class="card prose">${richText(custom)}</section>` : `<section class="card prose">
       <p>依個人資料保護法第 8 條，${esc(PRIVACY.org)}在蒐集您的個人資料前，告知以下事項。</p>
-      <h3>一、蒐集目的</h3>
+      <h2 class="h3">一、蒐集目的</h2>
       <p>〇五二 法人或團體對會員之內部管理（團練報名、分組課表、會籍管理）；〇六九 契約、類似契約或其他法律關係事務（活動報名、入場與抽獎）；一三五 資（通）訊服務（通知推播）。</p>
-      <h3>二、蒐集的資料</h3>
+      <h2 class="h3">二、蒐集的資料</h2>
       <p>識別類（C001）：姓名、暱稱、Google 帳號的顯示名稱與大頭貼（不取得 Email）、電話（選填）。<br>
          活動相關：項目與組別、所屬跑團、加入的分團與分團身分、餐點偏好、報名與報到紀錄、活動問卷的回答、中獎紀錄。<br>
          系統紀錄：登入時間、裝置型號摘要、IP 位址的單向雜湊值（無法還原）；App 的開啟速度與錯誤訊息只記裝置類型與頁面，不記是誰，保留 90 天。<br>
@@ -1069,23 +1072,23 @@ function privacyView() {
          照片：拍照分享的照片在你的手機上合成，不會上傳到我們的伺服器。<br>
          賽事報名資料（選填）：只有你需要幹部代為報名馬拉松等賽事時才填，包含中英文姓名、身分證字號或護照號碼、生日、性別、電話、Email、地址、緊急聯絡人與衣服尺寸；<b>加密後保存</b>，只有你自己看得到完整內容。<br>
          協會入會申請另以協會的 Google 表單辦理。</p>
-      <h3>三、利用期間、地區、對象與方式</h3>
+      <h2 class="h3">三、利用期間、地區、對象與方式</h2>
       <p>期間：${esc(PRIVACY.retention)}。<br>
          地區：台灣，以及雲端服務（Cloudflare）的資料中心所在地。<br>
          對象：依職務最小權限開放給協會幹部；分團團長與幹部可以看自己分團的名冊（不含電話）與該分團活動的報名及問卷結果；電話完整號碼只有行政人員看得到。賽事報名資料只在你報名「代為團體報名」的活動並勾選同意後，提供給該活動的主辦幹部，用來向賽事主辦單位送出團體報名，每次下載都留有稽核紀錄。通訊地址存檔前會送到中華郵政的 3+3 郵遞區號服務核對寫法並補上郵遞區號，只傳送地址文字。練跑地圖的「附近即時影像」由本站伺服器向政府公開攝影機取得畫面再轉給你，你的 IP 與位置不會傳給影像來源，本站也不保存影像。不提供給第三方行銷使用。<br>
          方式：以電子方式處理，全程加密傳輸。</p>
-      <h3>四、您的權利</h3>
+      <h2 class="h3">四、您的權利</h2>
       <p>您可以隨時行使個人資料保護法第 3 條的權利：</p>
       <ul>
         <li>查詢、閱覽、製給複本：「我的 → 隱私 → 下載我的資料」</li>
         <li>補充或更正：「我的 → 個人資料」直接修改</li>
         <li>停止蒐集、處理、利用及刪除：「我的 → 隱私 → 刪除帳號」</li>
       </ul>
-      <h3>五、不提供資料的影響</h3>
+      <h2 class="h3">五、不提供資料的影響</h2>
       <p>姓名與組別是報名與排課表的必要資料；不提供就無法報名活動。賽事報名資料只在報名「代為團體報名」的活動時需要，不填不影響其他功能。其他欄位都是選填。</p>
-      <h3>六、安全措施</h3>
+      <h2 class="h3">六、安全措施</h2>
       <p>存取控制依職務分級、特權操作留有稽核紀錄、登入權杖只存雜湊值，並設有嘗試次數限制。詳見專案的資訊安全設計說明。</p>
-      <h3>七、聯絡方式</h3>
+      <h2 class="h3">七、聯絡方式</h2>
       <p>${esc(PRIVACY.contact)}。</p>
     </section>`}
     ${asking ? `<div class="consentbar"><span class="tiny">同意後才能繼續使用</span><button class="btn" id="consentBtn">同意並繼續</button></div>` : ''}`;
@@ -1500,7 +1503,9 @@ function openSheet(label, inner, opener, labelledby = '', { onClose } = {}) {
   document.body.append(host);
   // 收合的 <details> 裡的欄位、hidden 的按鈕不算（Tab 本來就到不了，算進來會讓焦點跑出面板）
   const focusables = () => [...host.querySelectorAll(FOCUSABLE)].filter((x) => x.getClientRects().length && (x.matches('summary') || !x.closest('details:not([open])')));
-  focusables()[0]?.focus();
+  // 有危險選項（取消報名、刪除）：焦點先放在安全的那一顆（data-close，例如「保留報名」），VoiceOver 打開後直接點兩下不會誤刪
+  const fs0 = focusables(), safe = host.querySelector('.btn.danger') && fs0.find((x) => x.matches('[data-close]'));
+  (safe || fs0[0])?.focus();
   const key = (e) => {
     if (!host.isConnected) { document.removeEventListener('keydown', key, true); return; }
     if (e.key === 'Escape') { e.preventDefault(); close(); return; }
@@ -1908,9 +1913,15 @@ function bindInstall() {
 //   ① 加到主畫面 ② 開啟推播（iPhone 要先從主畫面打開）③ 選距離與組別；全部完成才問要不要看五個分頁的導覽
 //   進度只記在這台裝置（cil-start）：主畫面 App 一律算 ①完成；② 以「這支手機現在有沒有推播訂閱」為準；③ 在這台裝置確認或存過組別
 //   iPhone 主畫面 App 跟 Safari 的儲存空間是分開的：在 Safari 做完 ①，從主畫面打開會自然從 ② 接著做
+//   共用手機換人登入：新帳號、稍後再說、組別是帳號的（記著是誰的 who，換人就從頭算）；加到主畫面、推播是這台裝置的
 const START_KEY = 'cil-start';
-const startState = () => { try { return { v: 1, ...(JSON.parse(localStorage.getItem(START_KEY) || '{}') || {}) }; } catch { return { v: 1 }; } };
-const saveStart = (patch) => { const st = { ...startState(), ...patch }; try { localStorage.setItem(START_KEY, JSON.stringify(st)); } catch {} return st; };
+const ACCT_START = ['fresh', 'dismissed', 'group'];
+const startState = () => {
+  let st; try { st = JSON.parse(localStorage.getItem(START_KEY) || '{}') || {}; } catch { st = {}; }
+  if (st.who && me?.id && st.who !== me.id) for (const k of ACCT_START) delete st[k];
+  return { v: 1, ...st };
+};
+const saveStart = (patch) => { const st = { ...startState(), ...patch, who: me?.id || startState().who }; try { localStorage.setItem(START_KEY, JSON.stringify(st)); } catch {} return st; };
 // 推播這一步在這台裝置能不能做：沒有推播金鑰（na）、iPhone 還沒從主畫面打開（ios）、瀏覽器不支援（no）、被封鎖（denied）、可以（ok）
 function pushMode() {
   if (!cfg.vapid) return 'na';
@@ -1929,7 +1940,10 @@ function startShown(welcome) {
   if (welcome && !st.fresh) st = saveStart({ fresh: 1, dismissed: 0 });
   if (st.dismissed) return false;
   const k = startSteps(st);
-  return !!st.fresh || !k.install || !k.push;
+  if (st.fresh) return true;
+  // 已經允許通知、這台還沒查過訂閱（更新後第一次打開的舊使用者）：先不出現，等背景查完訂閱（bindStart）再決定，卡片不會閃一下又消失
+  if (k.install && !k.push && st.pushOff == null && pushMode() === 'ok' && Notification.permission === 'granted') return false;
+  return !k.install || !k.push;
 }
 const ST_LABEL = { done: '已完成', skip: '已略過', na: '不需要' };
 const STEP_IC = { install: ADD_IC, push: ic('<path d="M6.4 9.6a5.6 5.6 0 0 1 11.2 0c0 4 1.4 5.4 1.4 5.4H5s1.4-1.4 1.4-5.4Z"/><path d="M10.2 18.4a2 2 0 0 0 3.6 0"/>'), group: ic('<path d="M5.5 21V4M5.5 4.5h11l-2 3.7 2 3.8h-11"/>') };
@@ -1957,32 +1971,37 @@ function startCard() {
       ${pushWhy ? `<p class="tiny" id="stPushWhy">${pushWhy}</p>` : ''}`;
   // ③ 選距離與組別：確認目前的，或到課表設定改（存好自動回來打勾）
   const grp = `${me.dist === 'hm' ? '半馬' : '全馬'} ${esc(me.grp)} 組`;
-  const group = steps.group ? '' : `<div class="stacts"><button type="button" class="btn sm" data-stdone="group">確認 ${grp}</button><a class="btn sm ghost" id="stGroupEdit" href="#/plan/setup?go=grp&from=start">修改 ›</a>${skip('group')}</div>`;
+  const group = steps.group ? '' : `<div class="stacts"><button type="button" class="btn sm" data-stdone="group">確認 ${grp}</button><a class="btn sm ghost" id="stGroupEdit" href="#/plan/setup?go=grp&from=start" aria-label="修改距離與組別">修改 ›</a>${skip('group')}</div>`;
   const item = (k, title, sub, body) => `<li class="ststep${steps[k] ? ' ok' : ''}" data-step="${k}"><span class="stic" aria-hidden="true">${steps[k] ? IC.check : STEP_IC[k]}</span>
       <div class="stbody"><span class="sttl"><b>${title}</b><span class="sr">，</span>${stateTx(k)}</span>${steps[k] ? '' : `<span class="tiny">${sub}</span>${body}`}</div></li>`;
   return `<section class="card startcard" id="startCard" aria-labelledby="startTitle">
     <div class="sthead"><h2 id="startTitle" tabindex="-1">開始使用</h2><span class="tiny num" id="startProg">${n} / 3 完成</span></div>
     <div class="stbar" aria-hidden="true"><i style="width:${Math.round(n / 3 * 100)}%"></i></div>
-    <ol class="ststeps">
+    <ol class="ststeps" role="list">
       ${item('install', '加到主畫面', '像 App 一樣打開，入場券沒網路也能出示', install)}
       ${item('push', '開啟推播', '團練異動、候補遞補、帳號安全第一時間通知你', push)}
       ${item('group', '選距離與組別', `課表的配速照組別換算・<span class="nw">目前：${grp}</span>`, group)}
     </ol>
-    <div class="stfoot"><button type="button" class="btn ghost sm" id="startLater">稍後再說</button></div></section>`;
+    <div class="stfoot"><button type="button" class="btn ghost sm" id="startLater">稍後再說</button><button type="button" class="btn ghost sm" id="startTour">看看五個分頁</button></div></section>`;
 }
-// 換掉卡片內容（不重畫整頁），焦點移到下一步的第一個按鈕；全部完成時移到卡片標題
+// 換掉卡片內容（不重畫整頁）；使用者按了卡片上的按鈕（有 msg）才把焦點移到下一步的第一個按鈕（全部完成時移到卡片標題）
+//   背景查訂閱的更新（沒有 msg）只換內容、不動焦點；查完發現不該出現（主畫面 App、已經有推播）就安靜地收起
 function repaintStart(msg) {
   const el = $('#startCard'); if (!el) return;
+  const had = el.contains(document.activeElement);   // 焦點本來就在卡片裡：換掉內容後放回卡片裡（不會掉到 body）
+  if (!msg && !startShown()) { el.remove(); if (had) focusEl(view.querySelector('h1')); return; }
   el.outerHTML = startCard();
-  bindStart();
+  bindStart(false);
+  if (!msg && !had) return;
   const next = $('#startCard .ststep:not(.ok) .stacts > :is(button,a)') || $('#startTitle');
   next?.focus({ preventScroll: true });
-  if (msg) { const left = startLeft(startSteps()); announce(left ? `${msg}，還剩 ${left} 步` : `${msg}，都設定好了`); }
+  if (!msg) return;
+  const left = startLeft(startSteps()); announce(left ? `${msg}，還剩 ${left} 步` : `${msg}，都設定好了`);
 }
 const STEP_DONE = { install: '已加到主畫面', push: '已開啟推播', group: '已確認組別' };
-function bindStart() {
-  const card = $('#startCard'); if (!card) return;
-  card.addEventListener('click', async (e) => {
+function bindStart(check = true) {
+  const card = $('#startCard');
+  card?.addEventListener('click', async (e) => {
     const d = e.target.closest('[data-stdone]')?.dataset.stdone, k = e.target.closest('[data-stskip]')?.dataset.stskip;
     if (d) { saveStart({ [d]: 'done' }); repaintStart(STEP_DONE[d]); return; }
     if (k) { saveStart({ [k]: 'skip' }); repaintStart('已略過'); return; }
@@ -1990,17 +2009,21 @@ function bindStart() {
       saveStart({ dismissed: 1 });
       card.remove();
       announce('已收起，之後可以在「我的 → 使用說明」再打開');
-      (view.querySelector('h1'))?.focus({ preventScroll: true });
+      focusEl(view.querySelector('h1'));
       return;
     }
-    if (e.target.closest('#startTour')) { saveStart({ dismissed: 1 }); Guide.start(); return; }
+    // 導覽隨時可以看（不用先做完三步）；三步都做完的「都設定好了」卡看完導覽就收起
+    if (e.target.closest('#startTour')) { if (!startLeft(startSteps())) saveStart({ dismissed: 1 }); Guide.start(); return; }
     if (e.target.closest('#stCopy')) { copy(`${location.origin}/`); return; }
     if (e.target.closest('#stGroupEdit')) { try { sessionStorage.setItem('cil-start-back', location.hash || '#/'); } catch {} return; }
     const pb = e.target.closest('#stPush');
     if (pb) {
       if (pb.getAttribute('aria-disabled') === 'true') { toast($('#stPushWhy')?.textContent || ''); return; }
-      await togglePush(null);
-      if (await pushSub()) { saveStart({ push: 'done' }); repaintStart(STEP_DONE.push); }
+      // quiet：不跳「已開啟通知」、不重畫整頁（焦點才不會掉到 body，VoiceOver 只唸一次「已開啟推播，還剩 N 步」）
+      if (await togglePush(null, { quiet: true }) && await pushSub()) {
+        saveStart({ push: 'done', pushOff: null }); repaintStart(STEP_DONE.push);
+        const ps = $('#pushSub'); if (ps) ps.textContent = '推播已開啟';
+      }
       return;
     }
     const ib = e.target.closest('#stInstall');
@@ -2012,10 +2035,13 @@ function bindStart() {
     }
   });
   // 推播以這支手機現在的訂閱為準：有訂閱就打勾；記成完成但訂閱不見了（換手機、重新安裝）就回到還沒做
-  if (cfg.vapid && pushMode() === 'ok') pushSub().then((sub) => {
-    const st = startState();
-    if (sub && st.push !== 'done') { saveStart({ push: 'done' }); if ($('#startCard')) repaintStart(); }
-    else if (!sub && st.push === 'done') { saveStart({ push: null }); if ($('#startCard')) repaintStart(); }
+  //   pushOff 記下「查過，沒有訂閱」：startShown 等這個結果才決定要不要出現；這裡只換內容，不移動焦點
+  if (!check || !cfg.vapid || pushMode() !== 'ok') return;
+  pushSub().then((sub) => {
+    const st = startState(), had = !!$('#startCard');
+    if (sub) { if (st.push !== 'done' || st.pushOff != null) { saveStart({ push: 'done', pushOff: null }); if (had) repaintStart(); } return; }
+    if (st.push === 'done' || st.pushOff == null) saveStart({ push: st.push === 'done' ? null : st.push, pushOff: 1 });
+    if (had && st.push === 'done') repaintStart();
   });
 }
 // 課表設定改好組別、從「開始使用」來的：打勾，回到原本的頁面
@@ -2796,7 +2822,7 @@ async function meHome(welcome) {
       canPublishPlan() ? row('#/plan/new', MI.plan, '發布課表', allow('plan') ? '教練' : '分團團長') : '',
     ]) : ''}
     ${group('設定', [
-      row('#/me/notify', MI.bell, '通知', `<span id="pushSub">${cfg.vapid ? '推播類別、這支手機的推播' : '推播類別'}</span>`),
+      row('#/me/notify', MI.bell, '通知設定', `<span id="pushSub">${cfg.vapid ? '推播類別、這支手機的推播' : '推播類別'}</span>`),
       row('#/me/security', MI.shield, '帳號與安全', `${me.google ? 'Google 已綁定' : '綁定 Google'}、通行金鑰、登出`),
       row('#/me/display', MI.display, '外觀與語言', '深淺色、分頁列、語言 Language'),
       row('#/me/calendar', MI.calsub, '行事曆訂閱', '團練與賽事自動出現在手機行事曆', cfg.calendarOn ? '<span class="pill solid">已開啟</span>' : ''),
@@ -2817,7 +2843,8 @@ async function meHome(welcome) {
 const meSection = lazy('./me.js', 'meSection');
 const shareApp = lazy('./me.js', 'shareApp');
 
-async function togglePush(sub) {
+// quiet：「開始使用」卡自己更新畫面與播報（不跳提示、不重畫整頁）；成功開啟回傳 true
+async function togglePush(sub, { quiet = false } = {}) {
   try {
     await Device.pushReady();
     const reg = await Promise.race([navigator.serviceWorker?.ready, new Promise((r) => setTimeout(() => r(null), 3000))]);
@@ -2836,8 +2863,10 @@ async function togglePush(sub) {
     const j = s.toJSON();
     await api('/push/subscribe', { method: 'POST', body: { endpoint: j.endpoint, keys: j.keys } });
     Device.markPush(lsOrNull(), me?.id);
+    if (quiet) return true;
     toast('已開啟通知'); render();
   } catch (e) { toast(e.message || '通知設定失敗'); }
+  return false;
 }
 // 開啟推播前的說明 sheet：回傳權限結果；按「先不要」或關掉回傳 null
 function pushExplainer() {
@@ -2966,8 +2995,9 @@ async function renderOnce() {
   applyFeatures();
   $('#bell').hidden = !me;
   document.body.classList.toggle('guest', !me);
-  if (hash === '/privacy') { if (!me) { try { const r = await api('/me'); me = r.member; cfg = r; } catch {} } return privacyView(); }
-  if (!me) return loginView();
+  // 隱私權政策與登入畫面也要換分頁標題、消耗換頁的焦點設定（不然 title 停在上一頁、焦點掉到 body）
+  if (hash === '/privacy') { if (!me) { try { const r = await api('/me'); me = r.member; cfg = r; } catch {} } $('#ctitle').textContent = ''; privacyView(); return pageSettled(); }
+  if (!me) { $('#ctitle').textContent = ''; loginView(); return pageSettled(); }
   if (cfg.needConsent) {
     // 記住原本要去的頁面（例如捷徑帶數據進來），同意後再回去
     try { sessionStorage.setItem('cil-after-consent', location.hash); } catch {}
@@ -2996,7 +3026,8 @@ async function renderOnce() {
 //   點分頁列換頁：焦點留在分頁上，只唸一次頁名；第一次打開、資料回來後的重畫（不是使用者換頁）不動焦點
 //   focusAfterRender(selector)：這次重畫完要把焦點放到指定的地方（例如報名後的「我的報名狀態」）
 let navKind = null, focusNext = null;
-const focusAfterRender = (sel) => { focusNext = sel; };
+//   nav：只有使用者換頁時才移焦點（頁面裡改設定後的重畫不搶焦點）
+const focusAfterRender = (sel, { nav = false } = {}) => { focusNext = nav ? { nav, sel } : sel; };
 function focusEl(el) {
   if (!el) return false;
   if (!el.matches(FOCUSABLE)) el.setAttribute('tabindex', '-1');
@@ -3010,7 +3041,8 @@ function pageSettled() {
   document.title = name && name !== app ? `${name} – ${app}` : app;
   const kind = navKind, want = focusNext; navKind = null; focusNext = null;
   if (document.documentElement.classList.contains('guiding')) return;   // 使用說明導覽換頁：焦點留在導覽的說明框
-  if (want && [].concat(want).some((sel) => focusEl(view.querySelector(sel)))) return;
+  const sels = want?.nav ? (kind ? want.sel : null) : want;
+  if (sels && [].concat(sels).some((sel) => focusEl(view.querySelector(sel)))) return;
   if (kind === 'go' && h1 && focusEl(h1)) return;
   if (kind && name) announce(name);
 }
@@ -3040,7 +3072,7 @@ async function route(hash) {
     if (hash === '/roster') return await rosterView();
     if (hash === '/admin') return await adminView();
     // 系統設定：清單（等於 #/admin?tab=settings）與子頁
-    if (hash === '/admin/settings') return await adminView('settings');
+    if (hash === '/admin/settings') return await settingsPage();
     const aset = hash.match(/^\/admin\/settings\/(\w+)$/);
     if (aset) return await settingsPage(aset[1]);
     if (hash === '/plan/new') return planNewView();
@@ -3229,7 +3261,7 @@ addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvt 
 addEventListener('appinstalled', () => { installEvt = null; try { localStorage.setItem('cil-installed', '1'); } catch {} saveStart({ install: 'done' }); document.querySelectorAll('.installcard').forEach((c) => c.remove()); if ($('#startCard')) repaintStart(); });
 
 // 拆出去的模組（admin.js、photo.js…）從這裡拿共用的工具與狀態
-export { tilePreload, legacyData, removeLegacy, addrField, bindAddrField, latest, $, cfg, downloadAuthed, scanSheet, FEEL, IC, KIND_NAME, LOG_ICON, LOG_STATUS_NAME, MI, PAID_NAME, ROLE_NAME, TAB_DEFAULT, TEAM_PERMS, coachTeam, TEAM_ROLE_NAME, ago, allow, api, applyFeatures, avatar, barChart, bars, bindComments, bindStepup, btnRow, choose, coachPrefs, copy, countdownPicker, dayLabel, dstr, emptyState, esc, eventCard, feat, fixText, group, ic, largeTitle, me, mfaBanner, money, myCycle, nrow, org, pad2, paintCountdown, passkey, planSeg, queueLog, raceTarget, refreshMe, render, route, row, setCoachPrefs, squareIcon, startKey, studio, subTitle, teamAllow, teamIcon, teamOf, teams, toast, rich, keep, names, view, ymd, askReason, isOffline, nowTp, signupDefaults, submitLabel, camLazy, openSheet, apiAll, fmtDuration, fmtDistPace, parseHMS,
+export { tilePreload, focusEl, legacyData, removeLegacy, addrField, bindAddrField, latest, $, cfg, downloadAuthed, scanSheet, FEEL, IC, KIND_NAME, LOG_ICON, LOG_STATUS_NAME, MI, PAID_NAME, ROLE_NAME, TAB_DEFAULT, TEAM_PERMS, coachTeam, TEAM_ROLE_NAME, ago, allow, api, applyFeatures, avatar, barChart, bars, bindComments, bindStepup, btnRow, choose, coachPrefs, copy, countdownPicker, dayLabel, dstr, emptyState, esc, eventCard, feat, fixText, group, ic, largeTitle, me, mfaBanner, money, myCycle, nrow, org, pad2, paintCountdown, passkey, planSeg, queueLog, raceTarget, refreshMe, render, route, row, setCoachPrefs, squareIcon, startKey, studio, subTitle, teamAllow, teamIcon, teamOf, teams, toast, rich, keep, names, view, ymd, askReason, isOffline, nowTp, signupDefaults, submitLabel, camLazy, openSheet, apiAll, fmtDuration, fmtDistPace, parseHMS,
   // event.js、me.js
   applyCounts, bellState, canScan, dayPattern, mapsUrl, once, qrSVG, routeSvg, scan, setStopScan, GOOGLE_G, NICON, applyTabs, applyTheme, askLegacyOnLeave,
   bindInstall, clearDeviceData, dropPush, googleHref, iconsOnly, installCard, isStandalone, lsOrNull, pkSupported, reduceMotion, theme, togglePush, setMe,

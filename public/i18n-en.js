@@ -1,5 +1,11 @@
 // 自動產生：英文介面字典（中文介面文字 → 英文）。來源：public/*.js 的介面字串，由 i18n.js 使用
 export default {
+"的備份開始超過 24 小時還沒做完，請到「系統設定 › 每日加密備份」查看": " backup started more than 24 hours ago and hasn’t finished. Check Club settings › Daily encrypted backup",
+"修改距離與組別": "Edit distance and group",
+"修改": "Edit",
+"超過 36 小時沒有新的備份": "No new backup in over 36 hours",
+"要處理": "Needs attention",
+"已開啟推播": "Push turned on",
 "## 一、蒐集目的&#10;…&#10;&#10;- 清單項目": "## 1. Purpose of collection&#10;…&#10;&#10;- List item",
 "%，路面濕滑": "%, slippery roads",
 "-團體報名.csv": "-group-entry.csv",
@@ -1689,7 +1695,7 @@ export default {
 "系統初始設定（只限第一位理事長）": "Initial system setup (first President only)",
 "系統排程": "Scheduled task",
 "系統紀錄：登入時間、裝置型號摘要、IP 位址的單向雜湊值（無法還原）；App 的開啟速度與錯誤訊息只記裝置類型與頁面，不記是誰，保留 90 天。": "System records: sign-in times, device model summary, one-way hash of IP address (irreversible). App load speed and error messages record only device type and page, not who you are, and are kept for 90 days.",
-"系統設定": "Settings",
+"系統設定": "Club settings",
 "系統設定不完整，請聯絡管理員": "The system isn’t fully configured. Please contact an administrator.",
 "紀錄兩週以上才看得出趨勢": "Log at least two weeks to see trends",
 "紀錄只有你看得到；想讓教練看到，到「我的 → 隱私」打開分享。": "Only you can see your logs. To share them with your coach, turn on sharing in “Me → Privacy”.",

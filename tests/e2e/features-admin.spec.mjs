@@ -61,7 +61,8 @@ test('系統設定：功能開關、分頁名稱、立即備份；稽核查詢�
   // 從「我的 → 系統設定」捷徑兩下就到控制項
   await page.goto('/#/me');
   await page.locator('#view a[href="#/admin/settings"]').click();
-  await page.locator('#panel a[href="#/admin/settings/backup"]').click();
+  await expect(page.locator('#view h1')).toHaveText('系統設定');   // 大標題跟點的那一列同名
+  await page.locator('#view a[href="#/admin/settings/backup"]').click();
   await page.locator('#bkNow').click();
   await expect(page.getByText(/已備份/)).toBeVisible();
   await expect(page.locator('#bkList')).toContainText('manual');

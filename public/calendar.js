@@ -41,7 +41,7 @@ async function calendarView() {
       </div>
       <div class="calgrid" role="group" aria-label="${y} 年 ${m} 月">${WD.map((w, i) => `<span class="wd ${i === 0 || i === 6 ? 'off' : ''}">${w}</span>`).join('')}${cells.join('')}</div>
       <div class="legend tiny"><span><i class="dot"></i>活動</span><span><i class="dot mine"></i>已報名</span><span><i class="dot item"></i>賽事提醒</span><span><i class="dot race"></i>我的賽事</span></div>
-      ${needHol ? `<p class="tiny" style="margin:0">${allow('settings') ? `還沒匯入 ${y} 年的國定假日，<a href="#/admin?tab=settings">到系統設定匯入</a>。` : `${y} 年的國定假日還沒匯入。`}</p>` : ''}
+      ${needHol ? `<p class="tiny" style="margin:0">${allow('settings') ? `還沒匯入 ${y} 年的國定假日，<a href="#/admin/settings/holidays">到系統設定匯入</a>。` : `${y} 年的國定假日還沒匯入。`}</p>` : ''}
     </section>
     <section class="card" id="dayBox"></section>
     <div class="row" style="gap:8px">${d.canAdd ? `<button class="btn sm iconbtn" id="addItem">${IC.plus}新增賽事提醒</button>` : ''}<a class="btn ghost sm" href="#/me/calendar">訂閱到手機行事曆</a></div>

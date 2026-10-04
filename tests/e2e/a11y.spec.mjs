@@ -61,7 +61,7 @@ for (const scheme of ['light', 'dark']) test(`無障礙 報名設定與審核（
   await page.emulateMedia({ colorScheme: scheme });
   await page.setViewportSize({ width: 375, height: 812 });
   await login(page, 't_chair'); await acceptPrivacyIfAsked(page);
-  for (const p of ['#/new', `#/e/${ev.id}/stats?f=pending`, '#/admin?tab=settings', '#/admin/settings/signup', '#/admin/settings/features', '#/admin/settings/retention', '#/admin/settings/races']) {
+  for (const p of ['#/new', `#/e/${ev.id}/stats?f=pending`, '#/admin?tab=settings', '#/admin/settings', ...['signup', 'features', 'retention', 'races', 'holidays', 'docs', 'training', 'rest', 'cams', 'tabs', 'mfa', 'backup', 'privacy'].map((k) => `#/admin/settings/${k}`)]) {
     await page.goto(`/${p}`);
     await page.waitForTimeout(1200);
     expect(await axeBad(page), p).toEqual([]);
@@ -126,6 +126,26 @@ test('標題層級：活動頁與「我的」子頁有 h1、不跳級', async ({
     const r = await new AxeBuilder({ page }).withRules(['page-has-heading-one', 'heading-order']).analyze();
     expect(r.violations.map((v) => `${v.id}｜${v.nodes.slice(0, 2).map((n) => n.target.join(' ')).join(' | ')}`), p).toEqual([]);
   }
+});
+// 幹部頁面：管理後台總覽、活動統計、系統設定清單、隱私權政策（卡片標題是 h2，不從 h1 直接跳到 h3）
+test('標題層級：管理後台總覽、活動統計、系統設定、隱私權政策', async ({ page, request }) => {
+  const ev = await apiAs(request, 't_chair', '/events', { method: 'POST', body: { kind: 'track', title: '無障礙 統計標題', date: plus(5), gather_time: '07:00', capacity: 10, notify: false } });
+  await apiAs(request, 't_other', `/events/${ev.id}/signup`, { method: 'POST', body: {} });
+  await login(page, 't_chair'); await acceptPrivacyIfAsked(page);
+  for (const p of ['#/admin?tab=overview', `#/e/${ev.id}/stats`, '#/admin/settings', '#/privacy']) {
+    await page.goto(`/${p}`);
+    await page.waitForTimeout(1200);
+    const r = await new AxeBuilder({ page }).withRules(['page-has-heading-one', 'heading-order']).analyze();
+    expect(r.violations.map((v) => `${v.id}｜${v.nodes.slice(0, 2).map((n) => n.target.join(' ')).join(' | ')}`), p).toEqual([]);
+  }
+  // 系統設定清單的大標題跟「我的」那一列同名；隱私權政策頁的分頁標題也要換
+  await page.goto('/#/admin/settings');
+  await expect(page.locator('#view h1')).toHaveText('系統設定');
+  await page.goto('/#/me/privacy');
+  await page.locator('#view a[href="#/privacy"]').first().click();
+  await expect(page.locator('#view h1')).toHaveText('隱私權政策');
+  await expect(page).toHaveTitle(/隱私權政策/);
+  await expect(page.locator('#view h1')).toBeFocused();
 });
 // 換頁：從「我的」點一列，焦點在新頁的 h1、分頁標題含頁名；點分頁列焦點留在分頁
 test('換頁後焦點在新頁面的大標題，document.title 有頁名', async ({ page }) => {
@@ -222,6 +242,7 @@ test('開始使用：三步卡片、略過與稍後、從使用說明再打開',
   expect(await page.evaluate(() => document.activeElement?.closest('[data-step]')?.dataset.step)).toBe('install');
   await card.getByRole('button', { name: '稍後再說' }).click();
   await expect(card).toHaveCount(0);
+  await expect(page.locator('#view h1')).toBeFocused();
   await page.reload();
   await expect(page.locator('#view h1')).toHaveText('團練');
   await expect(page.locator('#startCard')).toHaveCount(0);
@@ -244,10 +265,23 @@ test('開始使用：主畫面 App 自動完成加到主畫面；修改組別存
   await page.goto('/#/me');
   const card = page.locator('#startCard');
   await expect(card.locator('[data-step="install"] .ststate')).toHaveText('已完成');
-  await card.getByRole('link', { name: '修改 ›' }).click();
+  await card.getByRole('link', { name: '修改距離與組別' }).click();
   await expect(page).toHaveURL(/#\/plan\/setup\?go=grp&from=start/);
   await page.locator('#gtiles label.chip', { hasText: 'C 組' }).click();
   await page.locator('#grpSave').click();
   await expect(page).toHaveURL(/#\/me$/);
   await expect(page.locator('#startTitle')).toHaveText('都設定好了');
+});
+// 開始使用卡：深色、iPad（1024）與側邊欄寬度也要通過 axe，不能水平捲動；導覽不用先做完三步就能打開
+for (const [scheme, width] of [['dark', 390], ['light', 1024], ['dark', 1280]]) test(`開始使用：卡片無障礙（${scheme}、${width}px）`, async ({ page }) => {
+  await page.emulateMedia({ colorScheme: scheme });
+  await page.setViewportSize({ width, height: 900 });
+  await login(page, 't_other', { start: true }); await acceptPrivacyIfAsked(page);
+  await page.evaluate(() => localStorage.removeItem('cil-start'));
+  await page.goto('/#/?welcome=1');
+  await expect(page.locator('#startCard')).toBeVisible();
+  await page.waitForTimeout(600);
+  expect(await axeBad(page)).toEqual([]);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+  await expect(page.locator('#startCard #startTour')).toBeVisible();
 });

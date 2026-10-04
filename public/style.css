@@ -579,7 +579,7 @@ details.card summary::-webkit-details-marker{display:none}
 /* 長文（隱私權政策） */
 .prose{line-height:1.7}
 .prose p,.prose ul{margin:0;color:var(--ink-2);font-size:15px}
-.prose h3{margin-top:6px}
+.prose h3,.prose h2.h3{margin-top:6px}
 .prose ul{padding-left:1.2em}
 
 /* ---- 拍照分享 ---- */
@@ -2199,6 +2199,6 @@ a.tiny.tlink{display:inline-flex;align-items:center;justify-self:start;min-heigh
 .sthow summary{font-size:14px;font-weight:600;color:var(--accent);cursor:pointer;min-height:32px;display:flex;align-items:center}
 .sthow .steps{margin:6px 0 0;padding-left:1.3em;display:grid;gap:8px;font-size:15px}
 .sthow .steps svg.ic{color:var(--accent);width:1.25em;height:1.25em;margin-left:4px;vertical-align:-.2em}
-.stfoot{display:flex;justify-content:flex-end}
+.stfoot{display:flex;justify-content:flex-end;flex-wrap:wrap;gap:8px}
 .startcard [aria-disabled="true"]{opacity:.5;cursor:not-allowed}
 @media (prefers-reduced-transparency:reduce){.startcard{background:var(--sheet-solid)!important}}

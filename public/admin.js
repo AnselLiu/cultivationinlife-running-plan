@@ -67,10 +67,10 @@ async function overviewPanel() {
       ${k('近 30 天活動', o.events30, `接下來 30 天 ${o.upcoming} 場`)}${k('近 30 天報名', o.signups30)}
       ${k('7 天訓練紀錄', o.logs7)}${k('已開推播', o.pushSubs == null ? null : `${o.pushSubs}<small> 人</small>`)}
     </section>
-    ${allow('settings') || allow('audit') ? '<section class="card" id="healthBox"><h3>開啟速度與錯誤</h3><p class="tiny" style="margin:0">載入中…</p></section>' : ''}
-    <section class="card"><h3>每月新加入</h3>${barChart(months.map((m) => ({ l: `${Number(m.slice(5))}月`, v: g[m] || 0 })), { unit: ' 人', h: 120 })}</section>
-    <section class="card"><h3>分團人數</h3>${bars(o.teamSizes.map((t) => [t.name, t.n]))}</section>
-    ${bc ? `<section class="card" id="bcCard"><h3 id="bcTitle" tabindex="-1">群發通知</h3>
+    ${allow('settings') || allow('audit') ? '<section class="card" id="healthBox"><h2 class="h3">開啟速度與錯誤</h2><p class="tiny" style="margin:0">載入中…</p></section>' : ''}
+    <section class="card"><h2 class="h3">每月新加入</h2>${barChart(months.map((m) => ({ l: `${Number(m.slice(5))}月`, v: g[m] || 0 })), { unit: ' 人', h: 120 })}</section>
+    <section class="card"><h2 class="h3">分團人數</h2>${bars(o.teamSizes.map((t) => [t.name, t.n]))}</section>
+    ${bc ? `<section class="card" id="bcCard"><h2 class="h3" id="bcTitle" tabindex="-1">群發通知</h2>
       <form id="bcForm" class="filters">
         <input name="title" maxlength="60" placeholder="標題，例如：週六團練改到河濱" required>
         <textarea name="body" maxlength="300" placeholder="內容（選填）"></textarea>
@@ -93,7 +93,7 @@ async function loadHealth(days = 7) {
   if (!h || !box.isConnected) return;
   const fmt = (v, u) => (v == null ? '—' : u === 'ms' ? (v >= 1000 ? `${(v / 1000).toFixed(1)} 秒` : `${Math.round(v)} 毫秒`) : v.toFixed(v < 0.01 ? 3 : 2));
   const grade = (v, good, poor) => (v == null ? '' : v <= good ? 'good' : v <= poor ? 'ok' : 'poor');
-  box.innerHTML = `<div class="row spread"><h3>開啟速度與錯誤</h3><div class="seg" role="group" aria-label="期間">${[7, 30, 90].map((d) => `<button data-hd="${d}" aria-pressed="${h.days === d}">${d} 天</button>`).join('')}</div></div>
+  box.innerHTML = `<div class="row spread"><h2 class="h3">開啟速度與錯誤</h2><div class="seg" role="group" aria-label="期間">${[7, 30, 90].map((d) => `<button data-hd="${d}" aria-pressed="${h.days === d}">${d} 天</button>`).join('')}</div></div>
     <div class="vitals">${HEALTH.map(([k, label, good, poor, u]) => { const m = h.metrics[k]; return `<div class="vital ${grade(m.p75, good, poor)}"><span class="tiny">${label}</span><b class="num">${fmt(m.p75, u)}</b>
       <span class="tiny">${m.n ? `${m.n} 次${k === 'ready' && m.warmP75 != null ? `・有暫存 ${fmt(m.warmP75, u)}` : ''}` : '還沒有資料'}</span></div>`; }).join('')}</div>
     <p class="tiny" style="margin:0">數字是 p75：四分之三的人比這個快。綠色達到 Google 建議值、橘色要注意、紅色要改善。不記錄是誰。</p>
@@ -549,8 +549,8 @@ const SET = {
   cams: { t: '附近即時影像來源', icon: MI.camera, sub: () => (cfg.settings?.features?.cams === true ? '已開啟・資料來源與同步狀態' : '功能關閉・可以先設定來源'), html: () => camsCard() },
   features: { t: '功能開關', icon: IC.sliders, sub: () => { const n = Object.keys(FEATURE_NAME).filter((k) => featOn(k)).length; return `${n} / ${Object.keys(FEATURE_NAME).length} 項開啟`; }, html: () => featuresCard() },
   tabs: { t: '分頁列名稱', icon: MI.display, sub: () => { const t = cfg.settings?.tabs || {}; return Object.keys(t).length ? Object.entries(t).map(([k, v]) => `<span translate="no">${esc(v)}</span>`).join('・') : '使用預設名稱'; }, html: () => tabsCard() },
-  mfa: { t: '幹部兩步驟驗證', icon: MI.shield, show: () => (me.realRole || me.role) === 'chair', sub: () => (cfg.requireMfa ? '已開啟' : '關閉'), html: () => mfaCard() },
-  backup: { t: '每日加密備份', icon: IC.lock, sub: () => '每天 03:00 自動備份・保留 35 天', html: () => backupCard() },
+  mfa: { t: '幹部兩步驟驗證', icon: MI.shield, show: () => (me.realRole || me.role) === 'chair', sub: () => (cfg.requireMfa ? '已開啟' : '未開啟'), html: () => mfaCard() },
+  backup: { t: '每日加密備份', icon: IC.lock, sub: () => '<span id="bkSub">每天 03:00 自動備份・保留 35 天</span>', badge: '<span id="bkBadge"></span>', html: () => backupCard() },
   privacy: { t: '隱私權政策', icon: MI.eye, sub: () => (cfg.settings?.privacy?.version ? `版本 ${esc(cfg.settings.privacy.version)}` : '個資法第 8 條告知內容'), html: () => privacyCard() },
   retention: { t: '資料保存期限', icon: IC.trash, sub: () => `活動報名 ${yrs(org().event_data_years)}・訓練紀錄 ${yrs(org().log_years)}・稽核紀錄 ${yrs(org().audit_years || 3)}`, html: () => retentionCard() },
 };
@@ -559,13 +559,15 @@ const SET_GROUPS = [['活動與報名', ['signup', 'races', 'holidays', 'seats']
 const groupOf = (k) => SET_GROUPS.find(([, ks]) => ks.includes(k))?.[0] || '';
 const featOn = (k) => (FEATURE_OFF.has(k) ? cfg.settings?.features?.[k] === true : cfg.settings?.features?.[k] !== false);
 function settingsPanel() {
-  return SET_GROUPS.map(([g, ks]) => group(g, ks.filter((k) => !SET[k].show || SET[k].show()).map((k) => row(SET[k].href || `#/admin/settings/${k}`, SET[k].icon, SET[k].t, SET[k].sub())))).join('');
+  return SET_GROUPS.map(([g, ks]) => group(g, ks.filter((k) => !SET[k].show || SET[k].show()).map((k) => row(SET[k].href || `#/admin/settings/${k}`, SET[k].icon, SET[k].t, SET[k].sub(), SET[k].badge || '')))).join('');
 }
 // 子頁：#/admin/settings/<段>，大標題是這一項、副標是分組；返回鍵回到系統設定清單
+//   沒有段（#/admin/settings，從「我的 › 系統設定」來）：清單本身，大標題就是「系統設定」（跟點的那一列同名，VoiceOver 與分頁標題一致）
 async function settingsPage(seg) {
   if (me.mfaPending) { view.innerHTML = `${largeTitle('系統設定')}${mfaBanner()}`; bindStepup(); return; }
   const S = SET[seg];
   if (!allow('settings')) { view.innerHTML = `${largeTitle('系統設定')}<div class="card"><p class="muted" style="margin:0">只有理事長與行政人員可以修改系統設定。</p></div>`; return; }
+  if (!seg) { view.innerHTML = `${largeTitle('系統設定')}${settingsPanel()}`; bindSettings(); return; }
   if (!S || S.href || (S.show && !S.show())) { location.replace('#/admin/settings'); return; }
   view.innerHTML = `${largeTitle(S.t, groupOf(seg))}${S.html()}`;
   bindSettings();
@@ -715,6 +717,13 @@ function bindSettings() {
       : '<p class="tiny" style="margin:0">還沒有備份，今晚 3 點會自動執行第一次。</p>');
   };
   if ($('#bkList')) loadBk();
+  // 清單上的「每日加密備份」：卡住時副標直接寫出來、加上「要處理」（不用點進去才知道）；正常時寫上次備份的日期
+  if ($('#bkSub')) api('/backups').then((r) => {
+    const sub = $('#bkSub'), badge = $('#bkBadge'); if (!sub || !r?.enabled) return;
+    if (r.stale) { sub.textContent = r.stale.pending ? `${r.stale.pending} 的備份還沒做完` : '超過 36 小時沒有新的備份'; if (badge) badge.innerHTML = '<span class="pill wait">要處理</span>'; return; }
+    const last = r.list.map((b) => /^daily\/(\d{4}-\d{2}-\d{2})\.bin$/.exec(b.key)?.[1]).filter(Boolean).sort().pop();
+    if (last) sub.textContent = `每天 03:00 自動備份・上次 ${Number(last.slice(5, 7))}/${Number(last.slice(8))}`;
+  }).catch(() => {});
   $('#bkNow')?.addEventListener('click', async (e) => {
     e.target.disabled = true;
     try { const r = await api('/backups', { method: 'POST', body: {} }); toast(r.started ? '資料較多，備份會在接下來的整點分段做完' : `已備份 ${r.tables} 張表、${r.rows} 筆`); loadBk(); } catch (err) { toast(err.message); }

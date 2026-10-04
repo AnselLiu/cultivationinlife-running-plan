@@ -4485,7 +4485,7 @@ async function backupStep(env, job, label, { action = 'backup.daily', now = new 
   if (!cur.alerted && backupStalled(cur, now) && fits(env, 1 + notifyCost(10) + BK_RESERVE, 'backup:alert')) {
     const ids = (await env.DB.prepare("SELECT id FROM members WHERE role IN ('chair', 'staff') LIMIT 20").all()).results.map((r) => r.id);
     cur.alerted = true;
-    await notify(env, ids, 'todo', { kind: 'system', title: '每日備份還沒做完', body: `${label} 的備份開始超過 24 小時還沒做完，請到管理後台「設定」查看`, url: '/#/admin?tab=settings', ref: `backup:${label}` },
+    await notify(env, ids, 'todo', { kind: 'system', title: '每日備份還沒做完', body: `${label} 的備份開始超過 24 小時還沒做完，請到「系統設定 › 每日加密備份」查看`, url: '/#/admin/settings/backup', ref: `backup:${label}` },
       { force: true, also: [cursorStmt(env, job, cur), await auditStmt(env, null, null, 'backup.stalled', 'system', label, `開始於 ${cur.at}，已完成 ${cur.n} 段`)] });
   }
   const pieces = [], seg = env.backupSeg || plan.backupSeg;   // backupSeg：測試用（/api/dev/cron?seg=，只有 DEV_LOGIN=1 的本機）

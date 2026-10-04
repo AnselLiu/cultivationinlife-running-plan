@@ -36,6 +36,8 @@ for (const scheme of ['light', 'dark']) test(`逐頁檢查・${scheme === 'dark'
     '#/new', `#/e/${ev.id}`, `#/e/${ev.id}/stats`, `#/e/${ev.id}/stats?f=pending`, `#/edit/${ev.id}`, `#/e/${party.id}`, `#/e/${party.id}/stats`, '#/log?extra=1', '#/plan/new', '#/privacy'];
   const problems = {};
   routes.push('#/me/calendar', '#/me/display');   // 「我的」的行事曆訂閱、外觀與語言子頁
+  // 系統設定的其他子頁（清單本身與每一段）
+  routes.push('#/admin/settings', ...['races', 'holidays', 'docs', 'training', 'rest', 'cams', 'tabs', 'mfa', 'backup', 'privacy'].map((k) => `#/admin/settings/${k}`));
   const dir = `test-results/sweep${scheme === 'dark' ? '-dark' : ''}`;
   // 每一頁的 JavaScript 錯誤與失敗的 API（4xx 權限類以外）都算問題
   let errs = [];

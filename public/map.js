@@ -319,6 +319,17 @@ function bindSheet() {
   sh.addEventListener('pointercancel', end);
   const re = () => { if (!$('#msheet')) return removeEventListener('resize', re); setDetent(detent, { instant: true }); map?.invalidateSize(); };
   addEventListener('resize', re);
+  // 鍵盤（或 VoiceOver）把焦點移到抽屜裡被分頁列蓋住、或在畫面外的控制項：抽屜拉到全開，再把那一項捲到分頁列上方（WCAG 2.4.11）
+  const visBottom = () => { const tabs = $('.tabs'); return tabs && innerWidth < 1024 ? tabs.getBoundingClientRect().top : innerHeight; };
+  const reveal = (el) => { const over = el.getBoundingClientRect().bottom - (visBottom() - 12); if (over > 0) sc.scrollTop += over; };
+  sh.addEventListener('focusin', (e) => {
+    const el = e.target;
+    if (wide() || pid != null || el === sc || el.closest('#grab')) return;
+    if (el.getBoundingClientRect().bottom <= visBottom() - 4) return;
+    if (detent === 'full') return requestAnimationFrame(() => reveal(el));
+    setDetent('full');
+    setTimeout(() => { if (el.isConnected && document.activeElement === el) reveal(el); }, 460);   // 等抽屜升上來（動畫 0.42 秒）再量
+  });
 }
 
 function setBase(k) {
