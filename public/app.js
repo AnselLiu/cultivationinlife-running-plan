@@ -552,7 +552,8 @@ const WD = ['日', '一', '二', '三', '四', '五', '六'];
 const d2 = (d) => new Date(`${d}T00:00:00`);
 const dayLabel = (s) => s.replace('週五或週六', '週五／六').replace('週一或週三', '週一／三').replace('週二或週三', '週二／三').replace('週四或週五', '週四／五').replace('週三或週五', '週三／五').replace('週三或週六', '週三／六');
 const fixText = (s) => s.replace(/\brep(\d)/g, 'rpe$1');
-const dstr = (d) => { const x = d2(d); return `${x.getMonth() + 1}/${x.getDate()}（${WD[x.getDay()]}）`; };
+const dstr = (d, meta) => { const x = d2(d); return meta ? `${x.getMonth() + 1}/${x.getDate()} 週${WD[x.getDay()]}` : `${x.getMonth() + 1}/${x.getDate()}（${WD[x.getDay()]}）`; };
+// meta：接在「・」前面的精簡日期（10/10 週六）。Safari 不會把「）・」兩個全形標點的空白收掉，中間會空一大格
 const avatar = (s) => s.avatar
   ? `<img class="av" src="${esc(s.avatar)}" alt="" loading="lazy" referrerpolicy="no-referrer">`
   : `<span class="av" aria-hidden="true">${esc((s.name || '?').slice(0, 1))}</span>`;
@@ -1036,7 +1037,8 @@ async function listView() {
       <button role="tab" data-tf="assoc" aria-selected="${pick === 'assoc'}">全協會</button>
       ${mine.map((t) => `<button role="tab" data-tf="${esc(t.id)}" aria-selected="${pick === t.id}" style="--tc:${esc(t.color)}">${t.icon ? `<img class="ticon xs" src="${esc(t.icon)}" alt="">` : '<i></i>'}<span translate="no">${esc(t.name)}</span></button>`).join('')}
     </div>` : '';
-  const teamLink = `<a class="chiplink" href="#/teams">${mine.length ? `${IC.plus}分團` : '加入分團 ›'}</a>`;
+  // 英文的分團名稱比較長：窄螢幕只留「＋」圖示，讓分團 chip 多一點空間（aria-label 照樣唸）
+  const teamLink = mine.length ? `<a class="chiplink" href="#/teams" aria-label="分團">${IC.plus}<span class="cltx">分團</span></a>` : '<a class="chiplink" href="#/teams">加入分團 ›</a>';
   // 第二次打開以後才提示安裝，不要一進來就打擾
   let visits = 0;
   try {
@@ -1077,7 +1079,7 @@ async function listView() {
 async function reviewCard() {
   const r = await api('/me/reviews').catch(() => null), box = $('#reviewCard');
   if (!r?.events?.length || !box?.isConnected) return;
-  box.innerHTML = `<h3>報名待審核</h3>${r.events.map((e) => `<a class="todayev" href="#/e/${esc(e.id)}/stats?f=pending">${IC.calendar}<span><b><span translate="no">${esc(e.title)}</span></b><span class="tiny" style="display:block">${dstr(e.date)}・${e.n} 筆${e.seatsLeft != null ? `・剩 ${e.seatsLeft} 個名額` : ''}</span></span><span class="tiny">›</span></a>`).join('')}`;
+  box.innerHTML = `<h3>報名待審核</h3>${r.events.map((e) => `<a class="todayev" href="#/e/${esc(e.id)}/stats?f=pending">${IC.calendar}<span><b><span translate="no">${esc(e.title)}</span></b><span class="tiny" style="display:block">${dstr(e.date, 1)}・${e.n} 筆${e.seatsLeft != null ? `・剩 ${e.seatsLeft} 個名額` : ''}</span></span><span class="tiny">›</span></a>`).join('')}`;
   box.hidden = false;
 }
 // 首頁天氣：今天報名的活動有指定地點就用那裡，否則用「常跑地點」；畫面畫好後才載入，不拖慢開啟

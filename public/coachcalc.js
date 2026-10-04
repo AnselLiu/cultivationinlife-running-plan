@@ -451,7 +451,7 @@ export const LEGACY_NOTE = '從舊版課表教練匯入';
 // 舊版的預設值：跟預設一樣的欄位可能從來沒改過，預設不勾、標「可能是預設值」
 export const LEGACY_DEFAULTS = { vol: '30', days: 6, club: true, start: '06:30', age: 45, sex: 'M', kg: 62, sweat: '中', pbDist: '10', pbTime: '0:48:30' };
 const PB_NAME = { 5: '5K', 10: '10K', 21.0975: '半馬', 42.195: '全馬' };
-const SWEAT_NAME = { 低: '少', 中: '一般', 高: '多' };
+const SWEAT_NAME = { 低: '少汗', 中: '一般', 高: '多汗' };
 const obj = (x) => (x && typeof x === 'object' && !Array.isArray(x) ? x : {});
 const numIn = (v, lo, hi, dec = 0) => { if (v === '' || v == null || typeof v === 'boolean') return null; const n = Number(v); return Number.isFinite(n) && n >= lo && n <= hi ? Math.round(n * 10 ** dec) / 10 ** dec : null; };
 const distName2 = (d) => (d === 'hm' ? '半馬' : '全馬');

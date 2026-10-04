@@ -254,8 +254,8 @@ button.pill{cursor:pointer}
 .days{display:grid;gap:8px}
 .day{position:relative;display:grid;grid-template-columns:78px 1fr;gap:12px;padding:12px 15px;border-radius:var(--r-l);
   background:var(--glass);-webkit-backdrop-filter:var(--blur);backdrop-filter:var(--blur);box-shadow:var(--shadow-s),inset 0 1px 0 var(--rim)}
-.day .dl{display:grid;gap:5px;font-size:13px;font-weight:650;align-content:start}
-.day .k{justify-self:start;font-size:12px;font-weight:700;border-radius:6px;padding:2px 8px;display:flex;align-items:center;gap:5px}
+.day .dl{display:grid;gap:5px;font-size:13px;font-weight:650;align-content:start;overflow-wrap:normal}
+.day .k{justify-self:start;font-size:12px;font-weight:700;border-radius:6px;padding:2px 8px;display:flex;align-items:center;gap:5px;white-space:nowrap}
 .day .k::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
 .day .t{font-size:15px;line-height:1.45}
 .day.easy .k{color:var(--easy);background:color-mix(in srgb,var(--easy) 13%,transparent)}
@@ -675,7 +675,7 @@ fieldset.group legend{font-size:13px;font-weight:700;color:var(--ink-2);padding:
 .kpis > .kpi:nth-child(n+5):last-child:nth-child(odd){grid-column:1/-1}
 .kpis:has(> .kpi:nth-child(3):last-child){grid-template-columns:repeat(3,minmax(0,1fr))}
 @media (min-width:600px){.kpis > .kpi:nth-child(n+5):last-child:nth-child(odd){grid-column:auto}.kpis:has(> .kpi:nth-child(5):last-child){grid-template-columns:repeat(5,minmax(0,1fr))}.kpis:has(> .kpi:nth-child(6):last-child){grid-template-columns:repeat(3,minmax(0,1fr))}}
-.kpi{gap:2px;padding:14px 16px;align-content:start}
+.kpi{gap:2px;padding:14px 16px;align-content:start;grid-template-rows:1fr auto}
 .kpi b{font-size:30px;font-weight:700;letter-spacing:-.02em;line-height:1.1}
 .statgrid{display:grid;gap:12px}
 @media (min-width:860px){.statgrid{grid-template-columns:1fr 1fr;align-items:start}}
@@ -733,8 +733,9 @@ fieldset.group legend{font-size:13px;font-weight:700;color:var(--ink-2);padding:
 .logform{display:grid;gap:14px}
 .logform input[type=range]{padding:0;height:32px;accent-color:var(--accent);background:transparent;border:0}
 .chips.status label.chip > span{padding:10px 16px;font-weight:650}
-.r.tlog{grid-template-columns:32px 1fr 92px}
-.r.tlog .bar{height:6px;border-radius:3px;margin-top:6px}
+.r.tlog{grid-template-columns:32px minmax(0,1fr) auto}
+.r.tlog > .num{white-space:nowrap}
+.r.tlog .bar{display:block;height:6px;border-radius:3px;margin-top:6px}
 @media (max-width:400px){.day{grid-template-columns:62px 1fr auto}}
 .pill.lock{background:color-mix(in srgb,var(--ink) 9%,transparent);color:var(--ink-2)}
 .invlink{display:grid;gap:10px;padding:12px;border-radius:var(--r-m);background:color-mix(in srgb,var(--ink) 4%,transparent)}
@@ -799,6 +800,7 @@ h3 svg.ic{width:18px;height:18px}
 .cmt b{font-size:13px}
 @media (max-width:480px){.kpi b{font-size:26px}}
 .kpi b{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+@media (max-width:400px){.kpis:has(> .kpi:nth-child(3):last-child) .kpi{padding:12px}.kpis:has(> .kpi:nth-child(3):last-child) .kpi b{font-size:22px}}
 
 /* 分團公告欄、排行榜 */
 .board{display:grid;gap:10px}
@@ -858,7 +860,7 @@ h3 svg.ic{width:18px;height:18px}
 .pill.gps.good{background:color-mix(in srgb,#34C759 16%,transparent);color:#1E7A3A}
 .pill.gps.ok{background:var(--warn-bg);color:var(--warn)}
 .pill.gps.weak,.pill.gps.denied{background:color-mix(in srgb,var(--race) 12%,transparent);color:var(--race)}
-.splits{display:grid;width:100%}
+div.splits{display:grid;width:100%}
 .splits div{display:flex;justify-content:space-between;padding:8px 2px;border-bottom:1px solid var(--stroke);font-size:15px}
 .splits small{font-weight:500;color:var(--ink-2)}
 .routesvg{width:100%;height:auto;border-radius:var(--r-m);background:color-mix(in srgb,var(--ink) 4%,transparent)}
@@ -1321,6 +1323,8 @@ body.detail .top .brand{display:none}
 .formactions{margin-top:4px}
 .chiplink{display:inline-flex;align-items:center;gap:4px;padding:8px 12px;border-radius:999px;font-size:14px;font-weight:600;color:var(--accent);white-space:nowrap;flex:none}
 .chiplink svg.ic{width:16px;height:16px}
+.chiplink{min-height:44px}
+@media (max-width:400px){:root:lang(en) .chiplink .cltx{display:none}:root:lang(en) .chiplink{padding-inline:14px}}
 .chiprow{display:flex;align-items:center;gap:6px;min-width:0}
 .chiprow .chipbar{flex:1;min-width:0}
 .shareapp{gap:14px}
@@ -1618,6 +1622,10 @@ body.fullmap{background:none}
 /* 快速打勾：看起來 28px，可點範圍 44px */
 .days.ticks .day{grid-template-columns:30px 70px minmax(0,1fr) auto;gap:10px}
 @media (max-width:400px){.days.ticks .day{grid-template-columns:28px 56px minmax(0,1fr) auto;gap:8px}}
+/* 英文的星期與課型比較長（Weekend、Long run）：拿掉圓點、窄一點的內距，欄寬多 10px */
+:root:lang(en) .day .k{padding:2px 6px}
+:root:lang(en) .day .k::before{display:none}
+@media (max-width:400px){:root:lang(en) .days.ticks .day{grid-template-columns:28px 66px minmax(0,1fr) auto}}
 .day .tick{position:relative;align-self:center;width:28px;height:28px;border-radius:50%;padding:0;display:grid;place-items:center;cursor:pointer;
   border:2px solid color-mix(in srgb,var(--ink) 28%,transparent);background:transparent;color:#fff;transition:transform .15s var(--tap)}
 .day .tick::after{content:"";position:absolute;inset:-8px}
@@ -1657,6 +1665,7 @@ details.xd .xdlink{display:flex;align-items:center;min-height:30px;font-weight:6
 /* 賽前階段 */
 .stagecard{gap:8px;border:1px solid color-mix(in srgb,var(--race) 25%,transparent)}
 .stagecard h3{display:flex;align-items:center;gap:8px;margin:0}
+.card > h3:has(> svg.ic:first-child){display:flex;align-items:center;gap:8px}
 .stagecard.recover{border-color:color-mix(in srgb,var(--ok) 30%,transparent)}
 .tl-list{margin:0;padding-left:1.2em;display:grid;gap:4px;font-size:14px}
 /* 個人週期：協會公告收在可展開的卡片裡 */
@@ -1668,7 +1677,7 @@ details.clubposts .card::before{display:none}
 .planseg{align-self:center;justify-self:center;width:min(100%,420px)}
 .setgroup[id],.card[id],details[id]{scroll-margin-top:calc(var(--toph,56px) + 12px)}
 /* 賽事卡：細條紋、不用圖片 */
-.card.bib{gap:10px;background:linear-gradient(135deg,color-mix(in srgb,var(--accent) 10%,var(--glass)) 0 22%,var(--glass) 22% 100%);
+.card.bib{gap:10px;background:linear-gradient(135deg,color-mix(in srgb,var(--accent) 10%,var(--glass)),var(--glass) 45%);
   border:1px solid color-mix(in srgb,var(--accent) 22%,transparent)}
 .bib .bibrace{margin:0;font-size:26px;font-weight:800;line-height:1.2;letter-spacing:.01em}
 .bibmeta{display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px;color:var(--ink-2);font-size:15px}
@@ -1681,8 +1690,9 @@ details.clubposts .card::before{display:none}
 .bibsrc{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px}
 /* 比賽日時間表、配速分段 */
 .card h4{margin:6px 0 0;font-size:15px;font-weight:700}
-ol.tl{list-style:none;margin:0;padding:0;display:grid;gap:0}
-ol.tl li{display:grid;grid-template-columns:minmax(64px,auto) 1fr;gap:2px 12px;padding:9px 0 9px 14px;border-left:2px solid color-mix(in srgb,var(--accent) 35%,transparent);position:relative}
+ol.tl{list-style:none;margin:0;padding:0;display:grid;gap:0;grid-template-columns:max-content minmax(0,1fr)}
+ol.tl li{grid-column:1/-1;display:grid;grid-template-columns:subgrid;gap:2px 12px;padding:9px 0 9px 14px;border-left:2px solid color-mix(in srgb,var(--accent) 35%,transparent);position:relative}
+@supports not (grid-template-columns:subgrid){ol.tl li{grid-template-columns:6.4em 1fr}:root:lang(en) ol.tl li{grid-template-columns:7.4em 1fr}}
 ol.tl li::before{content:"";position:absolute;left:-6px;top:15px;width:10px;height:10px;border-radius:50%;background:var(--accent)}
 ol.tl li > span.num{grid-row:span 2;font-weight:700;color:var(--accent);font-size:14px}
 ol.tl li > b{font-size:15px}
@@ -1731,9 +1741,10 @@ dl.kv dd{margin:0}
 .lockline{display:flex;align-items:center;gap:6px}
 .bodyform{display:grid;gap:12px}
 /* 全季課表 */
-.r.wkrow{grid-template-columns:52px minmax(0,1fr) auto;align-items:start;color:var(--ink);text-decoration:none}
+.r.wkrow{grid-template-columns:58px minmax(0,1fr) auto;align-items:start;color:var(--ink);text-decoration:none}
 .r.wkrow[aria-current]{background:var(--accent-soft);border-radius:12px;padding-left:8px;padding-right:8px}
 .wkn{display:flex;align-items:center;gap:6px;padding-top:2px}
+.wkn b{white-space:nowrap;overflow-wrap:normal}
 .wkn i,.phlegend i,.phrow > i{width:9px;height:9px;border-radius:50%;background:var(--ph);flex:none;display:inline-block}
 .wkb{display:grid;gap:2px;min-width:0}
 .wkl{font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

@@ -260,7 +260,7 @@ async function raceView(q) {
 
     <section class="card" id="fuel"><h3>${CI.droplet}補給試算</h3>
       <p class="tiny" style="margin:0"><span>預估完賽時間</span> <b class="num">${P.fmtT(tMin)}</b></p>
-      <div class="field"><span class="flabel">流汗程度</span><div class="seg" role="group" aria-label="流汗程度">${[['低', '少'], ['中', '一般'], ['高', '多']].map(([v, l]) =>
+      <div class="field"><span class="flabel">流汗程度</span><div class="seg" role="group" aria-label="流汗程度">${[['低', '少汗'], ['中', '一般'], ['高', '多汗']].map(([v, l]) =>
         `<button type="button" data-sweat="${v}" aria-pressed="${sweat === v}">${l}</button>`).join('')}</div></div>
       <div class="fuel">
         ${fuelRow('比賽中碳水', `每小時 <b class="num">${perH} g</b>，全程約 ${tot} g`)}
@@ -428,7 +428,7 @@ async function setupView(q) {
   // 5. 比賽
   const r0 = tgt?.race;
   const secRace = sec('race', '比賽', `
-    ${r0 ? `<a class="setrow" href="#/plan/race"><span class="sic">${MI.flag}</span><span class="st"><b><span translate="no">${esc(r0.name)}</span></b><span class="tiny">${dstr(r0.date)}・賽事準備</span></span><span class="chev" aria-hidden="true"></span></a>
+    ${r0 ? `<a class="setrow" href="#/plan/race"><span class="sic">${MI.flag}</span><span class="st"><b><span translate="no">${esc(r0.name)}</span></b><span class="tiny">${dstr(r0.date, 1)}・賽事準備</span></span><span class="chev" aria-hidden="true"></span></a>
       <label class="setrow"><span class="sic">${CI.clock}</span><span class="st"><b>起跑時間</b><span class="tiny">比賽日計劃會換成時鐘時間</span></span><input type="time" step="300" id="setStart" value="${esc(p.start[startKey(r0)] || '')}"></label>` : ''}
     ${row('#/me/races', MI.cal, '管理我的賽事與倒數', '右上角倒數哪一場')}`, 'setcard');
 
@@ -440,7 +440,7 @@ async function setupView(q) {
       <fieldset class="qset"><legend>性別</legend><div class="chips">${[['M', '男'], ['F', '女']].map(([v, l]) =>
         `<label class="chip"><input type="radio" name="sex" value="${v}" ${b.sex === v ? 'checked' : ''}><span>${l}</span></label>`).join('')}</div></fieldset>
       <div class="grid2"><label>安靜心率<input name="rest" type="number" inputmode="numeric" min="30" max="120" value="${esc(b.rest ?? '')}" placeholder="早上醒來量"></label><span></span></div>
-      <fieldset class="qset"><legend>流汗程度</legend><div class="chips">${[['低', '少'], ['中', '一般'], ['高', '多']].map(([v, l]) =>
+      <fieldset class="qset"><legend>流汗程度</legend><div class="chips">${[['低', '少汗'], ['中', '一般'], ['高', '多汗']].map(([v, l]) =>
         `<label class="chip"><input type="radio" name="sweat" value="${v}" ${b.sweat === v ? 'checked' : ''}><span>${l}</span></label>`).join('')}</div></fieldset>
     </form>
     <p class="tiny lockline" style="margin:0">${IC.lock}<span>只存在這台裝置，不會上傳；登出時清除</span></p>
@@ -640,7 +640,7 @@ async function legacySection(raw, { races, startRace }) {
     if (!r) return '';
     return `${h3('目標賽事')}
       <label>賽事名稱<input id="lgRaceName" maxlength="40" value="${esc(r.name)}" autocomplete="off"></label>
-      <p class="tiny" style="margin:0">${dstr(r.date)}・${r.dist}${r.unnamed ? '・舊版沒有填名稱' : ''}</p>
+      <p class="tiny" style="margin:0">${dstr(r.date, 1)}・${r.dist}${r.unnamed ? '・舊版沒有填名稱' : ''}</p>
       ${raceList.length ? '' : '<p class="tiny" style="margin:0">你還沒有賽事：加入後這場會變成右上角倒數的那一場。</p>'}
       <button type="button" class="btn ghost block" id="lgRace">加到我的賽事</button>`;
   };
