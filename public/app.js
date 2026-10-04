@@ -257,7 +257,16 @@ function offlineBar(on) {
   el.textContent = '離線中，顯示的是上次的資料；入場券 QR Code 仍然可以使用';
   document.body.append(el);
 }
-addEventListener('online', () => { offlineBar(false); flushLogQueue(); });
+// 連上網路：先跟伺服器確認目前登入的是誰（開 App 時離線，用的是上次的資料），再補傳離線時的紀錄
+addEventListener('online', async () => {
+  offlineBar(false);
+  if (me && meStale) {
+    try { const r = await api('/me'); me = r.member; cfg = r; meStale = false; } catch { return; }
+    if (!me) { render(); return; }
+    resumePush();
+  }
+  flushLogQueue();
+});
 // 前端錯誤回報：送到伺服器記錄（Cloudflare 後台 Logs 看得到），每個頁面最多回報 5 次，不含個資
 let errSent = 0;
 const reportError = (message, source, line) => {
@@ -322,25 +331,58 @@ const deviceDeps = () => {
   let storage = null, session = null;
   try { storage = localStorage; } catch {}
   try { session = sessionStorage; } catch {}
-  return { storage, session, caches: globalThis.caches, dropPush: () => dropPush(false), reset: () => Run.discard() };
+  return { storage, session, caches: globalThis.caches, dropPush: () => dropPush(false), reset: () => Run.discard(), priorOwner: cachedBootOwner,
+    ask: () => confirm('這台裝置上有之前留下的課表設定、未送出的訓練紀錄或跑到一半的紀錄，不確定是誰的。\n\n是你的嗎？按「確定」保留，按「取消」清除。') };
 };
+// 上次 /api/me?boot=1 的暫存是誰的（主人不明的裝置用來認出主人；只讀不用它畫畫面）
+async function cachedBootOwner() {
+  try { const hit = await (await caches.open(Device.API_CACHE)).match('/api/me?boot=1'); return hit ? (await hit.json())?.member?.id || null : null; } catch { return null; }
+}
 const lsOrNull = () => { try { return localStorage; } catch { return null; } };
 // guest：伺服器明確回覆「沒有登入」（不是斷線）時才清 API 暫存，一次載入只清一次
+//   回傳 bindOwner 的結果（'same'｜'adopted'｜'bound'｜'switched'｜'none'）
 function bindDeviceData(id, guest = false) {
-  if (id) Device.bindOwner(id, deviceDeps()).catch(() => {});
-  else if (guest && !sessionPurged) { sessionPurged = true; Device.sessionEnded(deviceDeps()).catch(() => {}); }
+  if (id) {
+    sessionPurged = false;
+    return Device.bindOwner(id, deviceDeps()).catch(() => 'none');
+  }
+  if (guest && !sessionPurged) { sessionPurged = true; Device.sessionEnded(deviceDeps()).catch(() => {}); }
+  return Promise.resolve('none');
 }
 let sessionPurged = false;
+// 登入狀態過期時關掉的推播（device.js 的 sessionEnded）：同一個人重新登入、通知權限還在，就自動重新開啟
+//   Safari 要使用者按一下才能訂閱：自動開不成功就提示一次，按「重新開啟」再開
+let resuming = false;
+async function resumePush() {
+  if (resuming || !me || meStale || !cfg.vapid) return;
+  if (typeof Notification === 'undefined' || Notification.permission !== 'granted' || !Device.takeResume(lsOrNull(), me.id)) return;
+  resuming = true;
+  try {
+    await Device.pushReady();
+    const reg = await Promise.race([navigator.serviceWorker?.ready, new Promise((r) => setTimeout(() => r(null), 3000))]);
+    if (!reg?.pushManager) return;
+    try {
+      const s = (await reg.pushManager.getSubscription().catch(() => null)) || await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlB64(cfg.vapid) });
+      const j = s.toJSON();
+      await api('/push/subscribe', { method: 'POST', body: { endpoint: j.endpoint, keys: j.keys } });
+      Device.markPush(lsOrNull(), me.id);
+    } catch {
+      toast('登入過期時關掉了這支手機的推播', { action: '重新開啟', ms: 10000, onAction: () => togglePush(null) });
+    }
+  } finally { resuming = false; }
+}
 // 登出前：這台裝置的推播訂閱先從伺服器刪掉，再取消瀏覽器端的訂閱（登出後不再收到這個帳號的推播）
+//   回傳這台原本有沒有推播訂閱（登入過期時 device.js 用來決定之後要不要自動重新開啟）
 async function dropPush(server = true) {
   try {
     const reg = await Promise.race([navigator.serviceWorker?.ready, new Promise((r) => setTimeout(() => r(null), 1500))]);
     const sub = await reg?.pushManager?.getSubscription().catch(() => null);
-    if (!sub) return;
+    if (!sub) return false;
     if (server) await api('/push/unsubscribe', { method: 'POST', body: { endpoint: sub.endpoint } }).catch(() => {});
     await sub.unsubscribe().catch(() => {});
     Device.markPush(lsOrNull(), null);
-  } catch {}
+    return true;
+  } catch { return false; }
 }
 // 提示：可以帶一個動作（例如刪除後的「復原」）；focus 把焦點移到動作按鈕
 // 時間到或被下一則提示取代時呼叫 onExpire（參數：焦點當時是否在提示裡）；滑鼠停在上面或焦點在裡面時先不關
@@ -516,6 +558,8 @@ const avatar = (s) => s.avatar
   : `<span class="av" aria-hidden="true">${esc((s.name || '?').slice(0, 1))}</span>`;
 
 let me = null, cfg = {};
+// me 是開 App 時先畫用的上次資料（還沒跟伺服器確認）：這段時間不補傳離線紀錄、不自動重新開啟推播
+let meStale = false;
 // 開啟 App 時 /api/me?boot=1 一起帶回的首頁資料（活動、今天的訓練紀錄），各用一次就丟掉
 let bootData = null;
 const takeBoot = (k) => { if (!bootData || bootData.today !== ymd(new Date()) || bootData[k] == null) return null; const v = bootData[k]; bootData[k] = null; return v; };
@@ -2911,9 +2955,16 @@ async function quickTick(btn, c, n, row, date) {
     if (btn.isConnected) { btn.disabled = false; btn.removeAttribute('aria-busy'); }
   } finally { ticking.delete(key); }
 }
+//   只在伺服器確認過目前登入的是誰之後才送（上次的資料可能是過期的登入，或 cookie 已經是別人）；同時只跑一個
+let flushing = false;
 async function flushLogQueue() {
-  if (!me) return;
-  bindDeviceData(me.id);   // 暫存區是上一位登入者的就先清掉，不會傳到這個帳號
+  if (!me || meStale || flushing) return;
+  flushing = true;
+  try { await flushLogQueue0(me.id); } finally { flushing = false; }
+}
+async function flushLogQueue0(who) {
+  await bindDeviceData(who);   // 暫存區是上一位登入者的就先清掉，不會傳到這個帳號
+  if (me?.id !== who || Device.ownerOf(lsOrNull()) !== who) return;
   const q = logQueue.get();
   if (!q.length) return;
   const left = [];
@@ -2922,7 +2973,7 @@ async function flushLogQueue() {
   //   修改既有紀錄帶 id 是更新；那一筆已經在別的裝置刪掉，就改成新增，不讓這次的修改不見
   let rate = false;
   for (const { queued, qid, ...b } of q) {
-    // 伺服器的次數限制：這一筆和後面的都留在暫存區，下次再傳（不能當成失敗丟掉）
+    // 伺服器的次數限制、登入過期（401）：這一筆和後面的都留在暫存區，下次再傳（不能當成失敗丟掉；同一個人重新登入後接著送）
     if (rate) { left.push({ ...b, qid, queued }); continue; }
     try {
       let r;
@@ -2930,9 +2981,12 @@ async function flushLogQueue() {
       catch (e) { if (b.id && !(e instanceof TypeError) && /找不到這筆紀錄/.test(e.message)) r = await api('/logs', { method: 'POST', body: { ...b, id: undefined } }); else throw e; }
       if (qid) flushed.set(qid, r);
       if (r?.existed) dup++; else up++;
-    } catch (e) { if (e instanceof TypeError || e.status === 429) left.push({ ...b, qid, queued }); if (e.status === 429) rate = true; }
+    } catch (e) { const hold = e.status === 429 || e.status === 401; if (e instanceof TypeError || hold) left.push({ ...b, qid, queued }); if (hold) rate = true; }
   }
-  logQueue.set(left);
+  // 送的時候換了人（暫存區已經清掉）：不把上一位的寫回去；送的時候新加進暫存區的保留
+  if (me?.id !== who || Device.ownerOf(lsOrNull()) !== who) return;
+  const sent = new Set(q.map((x) => x.qid));
+  logQueue.set([...left, ...logQueue.get().filter((x) => !sent.has(x.qid))]);
   if (up) toast(`已上傳 ${up} 筆離線時的訓練紀錄`);
   else if (dup) toast('離線時打勾的那幾天已經記錄過了');
 }
@@ -3736,12 +3790,13 @@ async function renderOnce() {
     const stale = await peekBoot();
     if (stale?.member && !stale.needConsent) {
       // 先用上次的資料畫出來，網路回來後資料有變才重畫（不重播進場動畫、使用者正在輸入就不打擾）
-      me = stale.member; cfg = stale; bootData = stale.boot || null; vitals.warm = true;
+      me = stale.member; cfg = stale; bootData = stale.boot || null; vitals.warm = true; meStale = true;
       fresh.then((r) => {
         const same = (x) => JSON.stringify({ ...x, serverNow: 0 });   // 伺服器時間每次都不同，不算資料有變
         const changed = same(r) !== same(stale);
-        me = r.member; cfg = r; bootData = r.boot || null;
-        if (!changed && me) return;
+        me = r.member; cfg = r; bootData = r.boot || null; meStale = false;
+        // 伺服器確認是同一個人：這時才補傳離線紀錄、重新開啟登入過期時關掉的推播
+        if (!changed && me) { bindDeviceData(me.id).then((b) => { if (b === 'same' || b === 'adopted') resumePush(); }); flushLogQueue(); return; }
         const typing = document.activeElement?.matches?.('input, textarea, select') && view.contains(document.activeElement);
         if (me && typing) return;
         document.body.classList.add('quiet');
@@ -3753,9 +3808,12 @@ async function renderOnce() {
   }
   let guest = false;
   if (!me) {
-    try { const r = await api('/me'); me = r.member; cfg = r; guest = !me; } catch { me = null; }
+    try { const r = await api('/me'); me = r.member; cfg = r; guest = !me; meStale = false; } catch { me = null; }
   }
-  bindDeviceData(me?.id, guest);
+  // 主人不明時（要認出主人或問本人）先等它做完再畫，不會先把別人的課表設定畫出來；換人時清除是同步的，不用等
+  const bound = bindDeviceData(me?.id, guest);
+  if (me && Device.ownerOf(lsOrNull()) !== me.id) await bound;
+  if (me && !meStale) bound.then((b) => { if (b === 'same' || b === 'adopted') resumePush(); });
   paintCountdown();
   applyFeatures();
   $('#bell').hidden = !me;

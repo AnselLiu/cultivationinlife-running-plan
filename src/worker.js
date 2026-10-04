@@ -131,6 +131,20 @@ async function limited(env, key, limit, windowSec) {
     RETURNING count`).bind(key, Math.floor(limit)).first();
   return !r || r.count > limit;
 }
+// 每天＋短時間兩層上限：回傳 'day'｜'burst'｜null（放行）
+//   1. 短時間的上限已經滿了：只讀不寫就擋下，不扣每天的次數（被擋的請求不寫 D1，也不會把一天的額度白白用掉）
+//   2. 每天的上限：用完後被擋的請求不寫任何計數
+//   3. 短時間的上限：剛好在這一次滿了，把第 2 步扣掉的每天次數還回去（每個時間窗最多還一次）
+async function limitedPair(env, dayKey, dayLimit, burstKey, burstLimit, burstSec) {
+  const full = await env.DB.prepare("SELECT 1 FROM rate_limits WHERE key = ? AND count > ? AND window_end > datetime('now')").bind(burstKey, Math.floor(burstLimit)).first();
+  if (full) return 'burst';
+  if (await limited(env, dayKey, dayLimit, 86400)) return 'day';
+  if (await limited(env, burstKey, burstLimit, burstSec)) {
+    await env.DB.prepare('UPDATE rate_limits SET count = count - 1 WHERE key = ? AND count > 0').bind(dayKey).run();
+    return 'burst';
+  }
+  return null;
+}
 
 // 稽核紀錄：特權操作一律記下（detail 只放摘要，不放個資原文）
 // 防竄改：每筆用 AUDIT_KEY（只有 Worker 知道）算 HMAC，改動任何欄位都驗得出來；刪除則由每日摘要鏈檢查
@@ -997,18 +1011,18 @@ const api = (async function api(req, env, path, method) {
   const camsOn = () => Cams.featureOn(setting('features'));
   const restOn = () => Rest.featureOn(setting('features'));
   // 跑者休息站的讀取額度（免費方案 D1 每天 500 萬列讀取）：每位跑友 10 分鐘的上限（kind＝restc 格子｜restd 詳情與地點附近），
-  //   再加上格子、詳情、地點附近共用的每天上限 REST_DAY_LIMIT（rate_limits 24 小時窗）。先算每天的：每天的用完就不再寫任何計數
-  //   這個 isolate 記得誰今天已經用完（10 分鐘內不再查 D1）
+  //   再加上格子、詳情、地點附近共用的每天上限 REST_DAY_LIMIT（rate_limits 24 小時窗）。見 limitedPair：被 10 分鐘上限擋下的請求
+  //   不扣每天的次數；每天的用完後被擋的請求不寫任何計數。這個 isolate 記得誰今天已經用完（10 分鐘內不再查 D1）
   const restQuota = async (kind, limit) => {
     const until = restSpent.get(member.id);
     if (until && until > Date.now()) return fail(429, '今天查詢休息站的次數已達上限，明天再試');
-    if (await limited(env, `restday:${member.id}`, REST_DAY_LIMIT, 86400)) {
+    const hit = await limitedPair(env, `restday:${member.id}`, REST_DAY_LIMIT, `${kind}:${member.id}`, limit, 600);
+    if (hit === 'day') {
       restSpent.set(member.id, Date.now() + 600e3);
       if (restSpent.size > 500) restSpent.delete(restSpent.keys().next().value);
       return fail(429, '今天查詢休息站的次數已達上限，明天再試');
     }
-    if (await limited(env, `${kind}:${member.id}`, limit, 600)) return fail(429, '查詢太頻繁，請稍後再試');
-    return null;
+    return hit ? fail(429, '查詢太頻繁，請稍後再試') : null;
   };
   // 幹部兩步驟驗證：理事長開啟後，幹部的工作階段要用通行金鑰驗證過，才有管理權限（之前一律當一般跑友）
   const security = (() => { try { return JSON.parse(setting('security') || '{}'); } catch { return {}; } })();
@@ -3026,14 +3040,15 @@ const api = (async function api(req, env, path, method) {
        FROM training_logs WHERE member_id = ? AND date BETWEEN ? AND ? ORDER BY date, created_at LIMIT 1000`).bind(member.id, ...r).all()).results;
     return json({ logs: rows, from: r[0], to: r[1] });
   }
-  // 新增與修改（離線補傳、舊版資料搬移也走這裡）：每位跑友每天最多 LOG_DAY_LIMIT 次、10 分鐘最多 LOG_BURST 次（先算每天的，
-  //   用完後被擋的請求不寫 D1）；日期最早到 logFloor（協會這一季第 1 週往前 400 天）；整個請求最多 8 KB、備註最多 300 字
-  //   一個帳號一天最多新增約 600 筆，總數也被「每天最多 5 筆 × 可以記的天數」限住，不會把資料庫與每日備份灌爆
+  // 新增與修改（離線補傳、舊版資料搬移也走這裡）：每位跑友每天最多 LOG_DAY_LIMIT 次、10 分鐘最多 LOG_BURST 次（見 limitedPair：
+  //   被 10 分鐘上限擋下的不扣每天的次數，每天的用完後被擋的請求不寫 D1）；日期最早到 logFloor（協會這一季第 1 週往前 400 天）；
+  //   整個請求最多 8 KB、備註最多 300 字。同一天最多 5 筆：新增與「修改時改了日期」都檢查，
+  //   所以總數被「每天最多 5 筆 × 可以記的天數（logFloor 到明天）」限住，不會把資料庫與每日備份灌爆
   if (path === '/api/logs' && method === 'POST') {
     const g = need(); if (g) return g;
     if (Number(req.headers.get('content-length')) > LOG_BODY_MAX) return fail(413, '資料太大');
-    if (await limited(env, `logday:${member.id}`, LOG_DAY_LIMIT, 86400)) return fail(429, '今天記錄的次數已達上限，明天再試');
-    if (await limited(env, `logw:${member.id}`, LOG_BURST, 600)) return fail(429, '記錄太頻繁，請 10 分鐘後再試');
+    const hit = await limitedPair(env, `logday:${member.id}`, LOG_DAY_LIMIT, `logw:${member.id}`, LOG_BURST, 600);
+    if (hit) return fail(429, hit === 'day' ? '今天記錄的次數已達上限，明天再試' : '記錄太頻繁，請 10 分鐘後再試');
     let b = {};
     try { const raw = await req.text(); if (raw.length > LOG_BODY_MAX) return fail(413, '資料太大'); b = JSON.parse(raw || '{}') || {}; } catch {}
     if (typeof b !== 'object') b = {};
@@ -3070,10 +3085,14 @@ const api = (async function api(req, env, path, method) {
         if (!cur) return fail(404, '找不到這筆紀錄');
         if (cur.cycle_anchor) delete upd.week_no;
       }
+      // 改到別的日期：那一天已經有 5 筆就不能搬過去（同一個陳述式判斷，同時送也不會超過）
       const ucols = Object.keys(upd);
-      const r = await env.DB.prepare(`UPDATE training_logs SET ${ucols.map((c) => `${c} = ?`).join(', ')}, updated_at = datetime('now') WHERE id = ? AND member_id = ?`)
-        .bind(...Object.values(upd), id, member.id).run();
-      return r.meta.changes ? json({ id }) : fail(404, '找不到這筆紀錄');
+      const r = await env.DB.prepare(`UPDATE training_logs SET ${ucols.map((c) => `${c} = ?`).join(', ')}, updated_at = datetime('now')
+        WHERE id = ? AND member_id = ? AND (date = ? OR (SELECT COUNT(*) FROM training_logs t WHERE t.member_id = ? AND t.date = ?) < 5)`)
+        .bind(...Object.values(upd), id, member.id, date, member.id, date).run();
+      if (r.meta.changes) return json({ id });
+      const exists = await env.DB.prepare('SELECT 1 FROM training_logs WHERE id = ? AND member_id = ?').bind(id, member.id).first();
+      return exists ? fail(400, '同一天最多 5 筆紀錄') : fail(404, '找不到這筆紀錄');
     }
     log.cycle_anchor = anchor; log.cycle_week = cweek;
     const cols = Object.keys(log);
@@ -4362,10 +4381,10 @@ const ROUTE_MAX = 100;   // 每人最多存幾條路線（見 POST /api/routes�
 const LOG_DAY_LIMIT = 600, LOG_BURST = 300, LOG_BODY_MAX = 8192, LOG_NOTE_MAX = 300;
 const REST_DETAIL_LIMIT = 60;   // 休息站詳細與地點的附近休息站：每位跑友 10 分鐘最多幾次
 // 休息站格子、詳細、地點附近合計：每位跑友每天最多幾次（一個畫面最多 16 格、瀏覽器快取一天，一般一天用不到 100 次）。
-//   一次讀的列數（本機 D1 的 rows_read 實測）≈ 範圍內的列＋17（來源狀態、設定等）；快取命中只有那 17 列：
-//   一格 64 處的測試資料：一格 73、地點附近 131（以前讀周圍 9 格 606）、詳情 25。換算真實資料最密的一格 189 列，
-//   最壞一次約 400 列（地點附近、周圍每一格都一樣密），一位跑友一天最多 300 × 400 ≈ 12 萬列（免費方案每天 500 萬列）；
-//   就算每一格都長到上限 800 列，也是 300 × 1,660 ≈ 50 萬列
+//   一次讀的列數（本機 D1 的 rows_read 實測）＝索引範圍內讀到的列＋約 18 列（來源狀態、設定等）；快取命中只有那 18 列。
+//   地點附近的範圍約 3 格寬、1 格高，讀到的列約「3 × 每格列數」：真實資料最密的一格 189 列，最壞一次約 590 列。
+//   上限是結構上的：休息站的查詢在 SQL 裡只有索引的條件，讀到幾列就算進 LIMIT（Rest.CELL_LIMIT 800，見 src/rest.js 的 cellRows），
+//   所以不管一格長到多少，一次最多約 820 列（每格 1,024 處的測試實測），一位跑友一天最多 300 × 820 ≈ 25 萬列（免費方案每天 500 萬列）
 const REST_DAY_LIMIT = 300;
 const restSpent = new Map();   // 這個 isolate 記得今天已經用完休息站額度的跑友（id → 到什麼時候前不再查 D1）
 // 加密一個備份物件：'CILB2'＋IV＋AES-GCM(gzip(text))；AAD 綁住日期與第幾段（manifest 是 'manifest'），段落不能被換位置或拿去拼別份
@@ -5166,7 +5185,7 @@ async function devRoute(req, env, ctx, url, path) {
   if (path === '/api/dev/rest-grid' && env.REST_MOCK === '1') {
     const del = env.DB.prepare("DELETE FROM rest_stops WHERE id LIKE 'man:zg%'"), bump = env.DB.prepare("UPDATE rest_sources SET rev = rev + 1 WHERE source = 'man'");
     if (q.get('clear') === '1') { await env.DB.batch([del, bump]); return json({ ok: true }); }
-    const lat = Number(q.get('lat')), lng = Number(q.get('lng')), per = Math.min(Math.max(Number(q.get('per')) || 0, 1), 20);
+    const lat = Number(q.get('lat')), lng = Number(q.get('lng')), per = Math.min(Math.max(Number(q.get('per')) || 0, 1), 32);
     if (!Rest.inTaiwan(lat, lng)) return fail(400, '位置要在臺灣');
     const [cy, cx] = Rest.cellOf(lat, lng).split('_').map(Number), pts = [];
     for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) for (let i = 0; i < per; i++) for (let j = 0; j < per; j++) {

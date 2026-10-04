@@ -191,9 +191,10 @@ test('「我的」：幹部看得到幹部專區（排在設定前面），含�
   await expect(page.locator('#view a[href="#/logs/team"]')).toHaveCount(1);
 });
 
+// 跑到一半的紀錄要標明是這位跑友的（cil-device-owner）：主人不明的跑步軌跡登入時會先問是誰的（public/device.js）
 test('記錄中：跑步分頁有小點與「跑步，記錄中」，計時列和分頁列一樣寬、在分頁列上方', async ({ page }) => {
   await page.addInitScript(() => {
-    try { localStorage.setItem('cil-run-session', JSON.stringify({ status: 'running', startedAt: Date.now() - 60000, elapsedMs: 0, resumedAt: Date.now() - 60000, points: [], dist: 1200, gain: 0, laps: [],
+    try { localStorage.setItem('cil-device-owner', 't_runner'); localStorage.setItem('cil-run-session', JSON.stringify({ status: 'running', startedAt: Date.now() - 60000, elapsedMs: 0, resumedAt: Date.now() - 60000, points: [], dist: 1200, gain: 0, laps: [],
       useGps: false, gps: 'off', acc: null, goal: null, goalAsked: false, auto: false, lastMoveAt: Date.now(), anchor: null, askedAt: Date.now() })); } catch {}
   });
   await enter(page);
@@ -235,12 +236,12 @@ test('鍵盤：跳到主要分頁', async ({ page }) => {
 });
 
 const RUN = () => {
-  try { localStorage.setItem('cil-run-session', JSON.stringify({ status: 'running', startedAt: Date.now() - 60000, elapsedMs: 0, resumedAt: Date.now() - 60000, points: [], dist: 1200, gain: 0, laps: [],
+  try { localStorage.setItem('cil-device-owner', 't_runner'); localStorage.setItem('cil-run-session', JSON.stringify({ status: 'running', startedAt: Date.now() - 60000, elapsedMs: 0, resumedAt: Date.now() - 60000, points: [], dist: 1200, gain: 0, laps: [],
     useGps: false, gps: 'off', acc: null, goal: null, goalAsked: false, auto: false, lastMoveAt: Date.now(), anchor: null, askedAt: Date.now() })); } catch {}
 };
 
 test('暫停：跑步分頁唸「跑步，已暫停」；計時列的名稱包含畫面上的文字（沒有 aria-label 蓋掉）', async ({ page }) => {
-  await page.addInitScript(({ s }) => { try { localStorage.setItem('cil-run-session', s); } catch {} }, { s: JSON.stringify({ status: 'paused', startedAt: Date.now() - 60000, elapsedMs: 60000, resumedAt: null, points: [], dist: 1200, gain: 0, laps: [],
+  await page.addInitScript(({ s }) => { try { localStorage.setItem('cil-device-owner', 't_runner'); localStorage.setItem('cil-run-session', s); } catch {} }, { s: JSON.stringify({ status: 'paused', startedAt: Date.now() - 60000, elapsedMs: 60000, resumedAt: null, points: [], dist: 1200, gain: 0, laps: [],
     useGps: false, gps: 'off', acc: null, goal: null, goalAsked: false, auto: false, lastMoveAt: Date.now(), anchor: null, askedAt: Date.now() }) });
   await enter(page);
   await page.goto('/#/plan');
@@ -318,4 +319,38 @@ test.describe('iPad 橫向 1180×820（觸控、側邊欄）', () => {
     b = await box(page.locator('#tabs'));
     expect(b.x).toBeGreaterThanOrEqual(0); expect(b.y).toBeLessThan(100);
   });
+});
+
+// 升級：這個版本之前的裝置沒有主人標記（cil-device-owner）。上次的 /api/me 暫存是同一個人就認領，不清掉跑到一半的紀錄；
+//   認不出來就問本人，回答不是才清
+const UPGRADE = (prior) => async (page) => {
+  await page.evaluate(async ({ prior, run }) => {
+    localStorage.removeItem('cil-device-owner');
+    localStorage.setItem('cil-run-session', run);
+    const c = await caches.open('cil-api');
+    await c.delete('/api/me?boot=1');
+    if (prior) await c.put('/api/me?boot=1', new Response(JSON.stringify({ member: { id: prior } }), { headers: { 'content-type': 'application/json' } }));
+  }, { prior, run: JSON.stringify({ status: 'paused', startedAt: Date.now() - 60000, elapsedMs: 60000, resumedAt: null, points: [], dist: 1200, gain: 0, laps: [],
+    useGps: false, gps: 'off', acc: null, goal: null, goalAsked: false, auto: false, lastMoveAt: Date.now(), anchor: null, askedAt: Date.now() }) });
+};
+test('升級後第一次開啟：上次的登入資料是同一個人 → 跑到一半的紀錄保留，不用問', async ({ page }) => {
+  await enter(page);
+  await UPGRADE('t_runner')(page);
+  let asked = 0;
+  page.on('dialog', (d) => { asked++; d.dismiss(); });
+  await page.reload();
+  await expect(tab(page, '/run')).toHaveAttribute('data-live', 'paused');
+  expect(await page.evaluate(() => localStorage.getItem('cil-device-owner'))).toBe('t_runner');
+  expect(asked).toBe(0);
+});
+test('主人不明、上次的登入資料是別人：先問本人，回答不是就清掉跑到一半的紀錄', async ({ page }) => {
+  await enter(page);
+  await UPGRADE('t_other')(page);
+  let msg = '';
+  page.once('dialog', (d) => { msg = d.message(); d.dismiss(); });
+  await page.reload();
+  await expect.poll(() => msg).toMatch(/不確定是誰的/);
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('cil-run-session'))).toBeNull();
+  await expect(tab(page, '/run')).not.toHaveAttribute('data-live', /./);
+  expect(await page.evaluate(() => localStorage.getItem('cil-device-owner'))).toBe('t_runner');
 });

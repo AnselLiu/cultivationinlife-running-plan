@@ -155,10 +155,15 @@ test('訓練紀錄寫入：每天與 10 分鐘的次數限制（離線補傳、�
     const big = await fetch(`${BASE}/api/logs`, { method: 'POST', headers: { cookie: await as('t_staff'), origin: BASE, 'content-type': 'application/json' },
       body: JSON.stringify({ date: today, status: 'skip', plan_text: 'x'.repeat(9000) }) });
     assert.equal(big.status, 413);
-    // 10 分鐘上限
+    // 10 分鐘上限：被擋下的請求不扣每天的次數（剛好滿的那一次還回去，之後只讀不寫）
+    const dayN = async () => (await rate('key=logday:t_staff&get=1')).count;
+    const before = await dayN();
     await rate('key=logw:t_staff&count=300&sec=600');
     const burst = await post({ date: today, status: 'skip' });
     assert.equal(burst.status, 429); assert.match(burst.json.error, /10 分鐘/);
+    assert.equal((await post({ date: today, status: 'skip' })).status, 429);
+    assert.equal(await dayN(), before, '被 10 分鐘上限擋下的請求不用掉每天的次數');
+    assert.equal((await rate('key=logw:t_staff&get=1')).count, 301, '計數停在上限＋1，之後被擋的請求不寫 D1');
     await rate('key=logw:t_staff&clear=1');
     // 每天上限：新增、修改（離線補傳也是同一支 API）共用
     await rate('key=logday:t_staff&count=599&sec=86400');
@@ -172,6 +177,24 @@ test('訓練紀錄寫入：每天與 10 分鐘的次數限制（離線補傳、�
     await call('t_runner', `/logs/${other.json.id}`, { method: 'DELETE' });
   } finally {
     await rate('key=logday:t_staff&clear=1'); await rate('key=logw:t_staff&clear=1');
+    for (const id of ids) await call('t_staff', `/logs/${id}`, { method: 'DELETE' });
+  }
+});
+
+test('訓練紀錄：同一天最多 5 筆，修改時把紀錄搬到已經滿 5 筆的日期也擋下（總數上限不能靠改日期繞過）', async () => {
+  const post = (body) => call('t_staff', '/logs', { method: 'POST', body });
+  const d = plus(-41), e = plus(-42), ids = [];
+  try {
+    for (const date of [d, e]) for (let i = 0; i < 5; i++) { const r = await post({ date, status: 'skip' }); assert.equal(r.status, 200, date); ids.push(r.json.id); }
+    assert.equal((await post({ date: e, status: 'skip' })).status, 400, '新增第 6 筆擋下');
+    const mv = await post({ id: ids[0], date: e, status: 'skip' });
+    assert.equal(mv.status, 400); assert.match(mv.json.error, /同一天最多 5 筆/);
+    assert.equal((await call('t_staff', `/logs?from=${e}&to=${e}`)).json.logs.length, 5, '那一天還是 5 筆');
+    assert.equal((await post({ id: ids[0], date: d, status: 'done', km: 3 })).status, 200, '日期沒改的修改照常');
+    assert.equal((await post({ id: 'nope1234', date: e, status: 'skip' })).status, 404, '找不到的紀錄還是 404');
+    await call('t_staff', `/logs/${ids[5]}`, { method: 'DELETE' });
+    assert.equal((await post({ id: ids[0], date: e, status: 'skip' })).status, 200, '有空位就可以搬過去');
+  } finally {
     for (const id of ids) await call('t_staff', `/logs/${id}`, { method: 'DELETE' });
   }
 });
@@ -1671,6 +1694,23 @@ test('跑者休息站：地點附近只讀範圍內的列、詳情與附近依�
     assert.equal(c1.headers.get('x-rest-cache'), 'miss'); assert.equal(c2.headers.get('x-rest-cache'), 'mem');
     assert.ok(rows(c1) - rows(c2) <= 2 * (c1.json.stops.length + 12), `一格讀了 ${rows(c1) - rows(c2)} 列（${c1.json.stops.length} 處）`);
     t.diagnostic(`一格：未快取 ${rows(c1)} 列、記憶體快取 ${rows(c2)} 列`);
+    // 讀取列數的上限是結構上的：每格 32×32＝1,024 處（超過 CELL_LIMIT 800），地點附近與一格一次最多讀 800 列＋固定的部分
+    assert.equal((await (await fetch(`${BASE}/api/dev/rest-grid?lat=25.07358&lng=121.54011&per=32`)).json()).rows, 9216);
+    const na = await call('t_lead', '/spots/seed07/rest'), nb = await call('t_lead', '/spots/seed07/rest');
+    assert.equal(na.status, 200); assert.equal(na.headers.get('x-rest-cache'), 'miss'); assert.equal(nb.headers.get('x-rest-cache'), 'mem');
+    assert.ok(rows(na) - rows(nb) <= 820, `密集的格子：附近休息站讀了 ${rows(na) - rows(nb)} 列`);
+    assert.ok(Object.values(na.json.groups).some((g) => g.length), '截斷後仍有結果');
+    const ca = await call('t_lead', '/rest/cell/1253_6077'), cb = await call('t_lead', '/rest/cell/1253_6077');
+    assert.equal(ca.headers.get('x-rest-cache'), 'miss');
+    assert.ok(rows(ca) - rows(cb) <= 820, `密集的格子：一格讀了 ${rows(ca) - rows(cb)} 列`);
+    t.diagnostic(`每格 1,024 處：附近休息站 ${rows(na) - rows(nb)} 列、一格 ${rows(ca) - rows(cb)} 列`);
+    // 10 分鐘上限擋下的請求不扣每天的次數（地圖一直移動、一直重試的格子不會把一天的額度用光）
+    const dayN = async () => (await rate('key=restday:t_lead&get=1')).count;
+    const before = await dayN();
+    await rate('key=restc:t_lead&count=150&sec=600');
+    for (let i = 0; i < 3; i++) { const r = await call('t_lead', '/rest/cell/1253_6077'); assert.equal(r.status, 429); assert.match(r.json.error, /頻繁/); }
+    assert.equal(await dayN(), before, '被 10 分鐘上限擋下的格子請求不用掉每天的次數');
+    await rate('key=restc:t_lead&clear=1');
     // 每天上限：格子、詳情、地點附近共用一個計數（24 小時）
     await rate('key=restday:t_lead&count=299&sec=86400');
     assert.equal((await call('t_lead', '/rest/cell/1253_6077')).status, 200, '第 300 次還可以');

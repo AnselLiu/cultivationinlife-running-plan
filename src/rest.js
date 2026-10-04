@@ -716,13 +716,18 @@ export async function sourceState(env) {
   const on = rows.filter((s) => s.enabled);
   return { rows, on: new Set(on.map((s) => s.source)), rev: rows.reduce((n, s) => n + (s.rev || 0), 0) };
 }
-const LIVE = "enabled = 1 AND hidden = 0 AND status != 'paused'";
+// SQL 只放索引（部分索引的條件）用得到的條件；暫停的列與經度範圍在讀出來之後才濾掉（見 cellRows）
+const LIVE = 'enabled = 1 AND hidden = 0';
 const COLS = 'id, source, type, subtype, svc, access, name, place, lat, lng, hours, hours_raw, status, fix, manual';
 // box：只取這個範圍內的列（地點附近、詳情的同一處）。索引 idx_rest_cell_pos（migration 0047）是 (cell, 修正後緯度, 修正後經度)，
-//   條件的運算式要跟索引一字不差，SQLite 才會用「格子＋緯度範圍」去找，只讀範圍內的列（D1 依讀到的列數計費，免費方案每天 500 萬列）
+//   條件的運算式要跟索引一字不差，SQLite 才會用「格子＋緯度範圍」去找，只讀緯度範圍內的列（D1 依讀到的列數計費，免費方案每天 500 萬列）
 //   幹部修正過位置的列用修正後的座標（格子也跟著修正後的位置）
-//   上限 800 列：第一批真實資料最密的一格（北門、大稻埕一帶）189 列，合併＋JSON 暖的時候約 0.3 ms、第一次約 1.5 ms；上限只防資料暴增時 CPU 失控
-const BOX = " AND COALESCE(json_extract(fix, '$.lat'), lat) BETWEEN ? AND ? AND COALESCE(json_extract(fix, '$.lng'), lng) BETWEEN ? AND ?";
+// 讀取列數的上限是結構上的，不靠資料多寡：SQL 裡除了索引的「格子＋緯度範圍」沒有別的條件，所以每讀到一列就算進 LIMIT，
+//   一次最多讀 CELL_LIMIT 列（另加來源狀態、設定等約 18 列）。經度範圍、暫停的列放在 SQL 裡的話，被濾掉的列照樣算讀取、
+//   卻不算進 LIMIT（實測地點附近一次讀約「3 × 每格列數＋18」，一格沒有上限），所以改成讀出來後在這裡濾
+//   上限 800 列：第一批真實資料最密的一格（北門、大稻埕一帶）189 列，地點附近最多約 3 格寬 ≈ 570 列，不會被截掉；
+//   資料暴增到超過時會少列幾處（依格子、緯度的順序截斷），換來讀取量與 CPU 有固定上限
+const BOX = " AND COALESCE(json_extract(fix, '$.lat'), lat) BETWEEN ? AND ?";
 export const boxOf = (p, m) => { const dl = m / 111320, dg = m / (111320 * Math.cos(p.lat * RAD)); return [p.lat - dl, p.lat + dl, p.lng - dg, p.lng + dg]; };
 // 跟範圍重疊的格子（不是固定周圍 3×3 格）：1 公里附近最多 2×3 格、詳情的 80 公尺最多 2×2 格
 export function cellsIn([la0, la1, lo0, lo1]) {
@@ -733,8 +738,9 @@ export function cellsIn([la0, la1, lo0, lo1]) {
 export const CELL_LIMIT = 800;
 async function cellRows(env, cells, on, box = null) {
   const ph = cells.map(() => '?').join(',');
-  const rows = (await env.DB.prepare(`SELECT ${COLS} FROM rest_stops WHERE cell IN (${ph}) AND ${LIVE}${box ? BOX : ''} LIMIT ${CELL_LIMIT}`).bind(...cells, ...(box || [])).all()).results;
-  return rows.filter((r) => on.has(r.source)).map(applyFix);
+  const rows = (await env.DB.prepare(`SELECT ${COLS} FROM rest_stops WHERE cell IN (${ph}) AND ${LIVE}${box ? BOX : ''} LIMIT ${CELL_LIMIT}`).bind(...cells, ...(box ? box.slice(0, 2) : [])).all()).results;
+  const out = rows.filter((r) => on.has(r.source) && r.status !== 'paused').map(applyFix);
+  return box ? out.filter((r) => Number(r.lng) >= box[2] && Number(r.lng) <= box[3]) : out;
 }
 // 結果快取（key 都帶總版本 rev：資料、來源開關或幹部修改都會讓 rev 變，舊的 key 自然用不到）
 //   1. 這個 isolate 的記憶體（workers.dev 上 Cache API 沒有作用，只靠它；最多約 4 MB、600 筆，先放的先清）
