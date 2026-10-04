@@ -657,7 +657,7 @@ const camsCard = () => `<section class="card" id="camSrcCard">
 const FEATURE_GROUPS = [['訓練', ['gps', 'studio', 'health', 'file', 'coach', 'plan_cycle', 'plan_export']], ['活動', ['party']], ['地圖', ['cams', 'rest']]];
 const featuresCard = () => `<section class="card">
     <form id="featForm" class="toggles">
-      ${FEATURE_GROUPS.map(([g, ks]) => `<fieldset class="qset featgrp"><legend>${g}</legend>${ks.map((k) => `<label class="switch"><span>${FEATURE_NAME[k]}${FEATURE_HELP[k] ? `<span class="tiny" style="display:block">${FEATURE_HELP[k]}</span>` : ''}${k === 'cams' || k === 'rest' ? `<a class="tiny tlink" href="#/admin/settings/${k}" style="display:block">設定來源 ›</a>` : ''}</span><input type="checkbox" name="${k}" ${featOn(k) ? 'checked' : ''}><i></i></label>`).join('')}</fieldset>`).join('')}
+      ${FEATURE_GROUPS.map(([g, ks]) => `<fieldset class="qset featgrp"><legend>${g}</legend>${ks.map((k) => `<label class="switch"><span>${FEATURE_NAME[k]}${FEATURE_HELP[k] ? `<span class="tiny" style="display:block">${FEATURE_HELP[k]}</span>` : ''}</span><input type="checkbox" name="${k}" ${featOn(k) ? 'checked' : ''}><i></i></label>${k === 'cams' || k === 'rest' ? `<a class="tiny tlink featsrc" href="#/admin/settings/${k}">${k === 'cams' ? '設定影像來源 ›' : '設定休息站來源 ›'}</a>` : ''}`).join('')}</fieldset>`).join('')}
       <button class="btn">儲存功能開關</button>
     </form>
     <p class="tiny" style="margin:0">關掉後，跑友的畫面上就看不到這個功能；已存的資料不會刪除。</p>

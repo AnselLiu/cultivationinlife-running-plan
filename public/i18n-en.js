@@ -3905,7 +3905,6 @@ export default {
 "儲存團練地點": "Save venue",
 "Apple 健康捷徑": "Apple Health shortcut",
 "團員在「拍照分享」用捷徑帶入 Apple 健康的距離與時間。": "Members use the shortcut in Photo share to bring in distance and time from Apple Health.",
-"設定來源 ›": "Set up sources ›",
 "隱私權政策內容": "Privacy policy text",
 "儲存保存期限": "Save retention",
 "已儲存團練地點": "Venue saved",
@@ -3969,6 +3968,8 @@ export default {
 "也能畫路線、存 GPX、開揪跑。": "draw routes, save GPX, and start social runs.",
 "個人資料、賽事與報名、跑團，": "Profile, races and entries, clubs,",
 "通知、帳號與安全等設定都在這裡。": "plus notifications, account, security, and other settings.",
-"還沒做": "Not done"
+"還沒做": "Not done",
+"設定影像來源 ›": "Set up camera sources ›",
+"設定休息站來源 ›": "Set up rest stop sources ›"
 };
 export const inner = {"團練": "group run", "課表": "training plan", "拍照": "photo", "跑步": "running", "我的": "my", "揪跑": "social run", "分團": "sub-club", "主團": "home club", "報名": "sign up", "幹部": "officers", "團員": "members", "跑友": "runners", "活動": "event", "協會": "Association", "行事曆": "calendar", "地點": "spot", "路線": "route", "天氣": "weather", "通知": "notifications", "賽事": "race", "組別": "group", "訓練紀錄": "training log", "內容": "details", "流程": "process", "選擇": "option", "跑法": "how to run", "起跑": "start", "慢跑": "jog", "小時": "hours", "碳水": "carbs", "熱身": "warm-up", "分段": "segments", "強度": "intensity", "主課": "main set", "前段": "first part", "組數": "sets", "比賽日": "race day", "可在": "can be done on"};
