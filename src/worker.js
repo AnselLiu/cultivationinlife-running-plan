@@ -1503,7 +1503,8 @@ const api = (async function api(req, env, path, method) {
     const stuck = (r) => r.last_error === Rest.SYNCING && r.last_sync_at && Date.parse(`${r.last_sync_at.replace(' ', 'T')}Z`) < Date.now() - 120e3;
     return json({ sources: Object.entries(Rest.SOURCES).map(([k, S]) => {
       const r = srcs.find((x) => x.source === k) || {};
-      return { ...Rest.credit(k, r), manual: !!S.manual, local: !!S.local, enabled: !!r.enabled, every: S.every || null, paged: !!S.pages,
+      // needsKey：要金鑰的來源（第二批，環境部 API）只回環境變數的名稱，不回金鑰本身；後台還沒同步過時說明要先在維護電腦設定
+      return { ...Rest.credit(k, r), manual: !!S.manual, local: !!S.local, enabled: !!r.enabled, every: S.every || null, paged: !!S.pages, needsKey: S.key || null,
         last_sync_at: r.last_sync_at || null, last_count: r.last_count ?? null, page: r.cursor ?? null,
         last_error: stuck(r) ? '上次同步沒有完成（可能超過執行時間上限）' : r.last_error || null, active: cnt[k]?.active || 0, hidden: cnt[k]?.hidden || 0 };
     }), editable: can(member, 'settings'), feature: restOn() });

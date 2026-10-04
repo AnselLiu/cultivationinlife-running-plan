@@ -1682,6 +1682,9 @@ test('跑者休息站（免費方案）：每個來源標明 Worker 能不能同
   // 來源清單的 local 旗標跟程式的登錄表一致；大檔、多檔的都是 local
   const list = (await call('t_chair', '/rest/sources')).json.sources;
   for (const s of list) assert.equal(s.local, !!REST_SOURCES[s.source].local, s.source);
+  // 要金鑰的來源只回環境變數名稱（後台說明用），其他來源是 null
+  for (const s of list) assert.equal(s.needsKey, REST_SOURCES[s.source].key || null, s.source);
+  assert.equal(list.find((s) => s.source === 'cool').needsKey, 'MOENV_KEY');
   for (const k of ['twd', 'tpt', 'tprv', 'cpct', 'sav', 'tbk']) assert.ok(toolOnly.includes(k), `${k} 只由維護工具同步`);
   // 立即同步：只由維護工具同步的來源一律 400，也不連線
   for (const k of toolOnly) {

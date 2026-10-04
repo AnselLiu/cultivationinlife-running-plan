@@ -157,7 +157,11 @@ test('側邊欄：理事長看得到幹部分區，側邊欄可以捲到最後�
   await page.setViewportSize({ width: 1280, height: 800 });
   await enter(page, 't_chair');
   await expect(page.locator('#navStaff')).toBeVisible();
-  for (const p of ['/admin', '/roster', '/logs/team', '/plan/new']) await expect(page.locator(`.navmore a[data-nav="${p}"]`)).toBeVisible();
+  for (const p of ['/admin', '/admin/settings', '/weekly', '/roster', '/logs/team', '/plan/new']) await expect(page.locator(`.navmore a[data-nav="${p}"]`)).toBeVisible();
+  // 系統設定的子頁亮「系統設定」（比管理後台精確）；理事長的週報是協會版（不帶分團）
+  await expect(page.locator('.navmore a[data-nav="/weekly"]')).toHaveAttribute('href', '#/weekly');
+  await page.goto('/#/admin/settings/backup');
+  await expect(page.locator('.navmore a[data-nav="/admin/settings"]')).toHaveAttribute('aria-current', 'true');
   const last = page.locator('.navmore a[data-nav="/plan/new"]');
   await last.scrollIntoViewIfNeeded();
   const b = await box(last), nav = await box(page.locator('#tabs'));
@@ -237,6 +241,8 @@ test('鍵盤：跳到主要分頁', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   await enter(page);
   await page.goto('/#/plan');
+  // 換頁後焦點會移到新頁的大標題（VoiceOver 換頁）：等畫好、焦點到 h1 之後再用跳過連結，不然畫完會把焦點從分頁搶回 h1
+  await expect(page.locator('#view h1')).toBeFocused();
   await page.locator('#skipTabs').focus();
   await expect(page.locator('#skipTabs')).toBeVisible();
   await page.keyboard.press('Enter');

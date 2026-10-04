@@ -928,9 +928,19 @@ function applyFeatures() {
 // 團員訓練：課表教練，或分團團長、幹部（協會層級的名冊權限不算，對齊分享同意書的「教練與分團幹部」）
 const coachTeam = (tid) => teamOf(tid)?.my_status === 'active' && !!TEAM_PERMS[teamOf(tid).my_role]?.includes('roster');
 const canTeamLogs = () => allow('plan') || teams().some((t) => coachTeam(t.id));
+// 週報（#/weekly）：理事長、行政人員（有系統設定權限）看協會版；分團團長看自己帶的第一個分團（有好幾個時頁面上可以切換）；其他人沒有
+//   伺服器另外依身分檢查（/api/ops/reports），這裡只決定要不要放入口
+function weeklyHref() {
+  if (!me) return '';
+  if (allow('settings')) return '#/weekly';
+  const lead = myTeams().find((t) => t.my_role === 'lead');
+  return lead ? `#/weekly?team=${encodeURIComponent(lead.id)}` : '';
+}
 function applyNav() {
   document.querySelector('.navmore a[data-nav="/studio"]').hidden = !(feat('studio') && feat('gps'));
-  const ok = { admin: allow('members') || allow('roles') || allow('settings'), roster: allow('roster'), logs: !!me && canTeamLogs(), publish: !!me && canPublishPlan() };
+  const wk = weeklyHref(), wa = document.querySelector('.navmore a[data-nav="/weekly"]');
+  if (wa && wk) wa.setAttribute('href', wk);
+  const ok = { admin: allow('members') || allow('roles') || allow('settings'), settings: allow('settings'), weekly: !!wk, roster: allow('roster'), logs: !!me && canTeamLogs(), publish: !!me && canPublishPlan() };
   for (const a of document.querySelectorAll('.navmore a[data-perm]')) a.hidden = !ok[a.dataset.perm];
   $('#navStaff').hidden = !document.querySelector('.navmore a[data-perm]:not([hidden])');
   document.documentElement.style.setProperty('--n', document.querySelectorAll('.tabs > a[data-tab]:not([hidden])').length);
@@ -2792,11 +2802,12 @@ async function pushSub() {
 }
 // 分組：跟側邊欄同一套名稱（賽事與報名、跑團、幹部、設定）；常用的在上面，每一項從「我的」最多兩下就到
 //   訓練報表與里程挑戰的上一層是課表，不放這裡（點進去分頁列會跳到課表）
-//   幹部組預留給報表頁（cil-ops）一列的位置：加在「系統設定」後面即可
+//   幹部組的「週報」：理事長、行政人員看協會版（可切換分團），分團團長看自己的分團（weeklyHref）
 async function meHome(welcome) {
   const main = teamOf(me.main_team);
   const admin = allow('members') || allow('roles') || allow('settings');
-  const staff = admin || allow('roster') || canTeamLogs() || canPublishPlan();
+  const weekly = weeklyHref();
+  const staff = admin || allow('roster') || canTeamLogs() || canPublishPlan() || !!weekly;
   view.innerHTML = `
     ${largeTitle('我的')}
     ${mfaBanner()}
@@ -2818,8 +2829,9 @@ async function meHome(welcome) {
       me.membership === 'active' ? row('#/me/card', MI.idcard, '會籍卡', me.paid_until ? `會費繳至 ${esc(me.paid_until)}` : '出示給幹部掃描') : '',
     ])}
     ${staff ? group('幹部', [
-      admin ? row('#/admin', MI.admin, '管理後台', '總覽、會員、權限、分團、稽核') : '',
+      admin ? row('#/admin', MI.admin, '管理後台', allow('settings') ? '總覽、週報、會員、權限、分團、稽核' : '總覽、會員、權限、分團、稽核') : '',
       allow('settings') ? row('#/admin/settings', MI.sliders, '系統設定', '活動報名預設、協會、地圖資料、功能開關') : '',
+      weekly ? row(weekly, MI.trend, '週報', allow('settings') ? '上週的活動、報名、出席與系統健康' : '上週分團的活動、報名與出席') : '',
       allow('roster') ? row('#/roster', MI.roster, '團員名冊') : '',
       canTeamLogs() ? row('#/logs/team', MI.trend, '團員訓練', '分享給教練的團員每週完成率') : '',
       canPublishPlan() ? row('#/plan/new', MI.plan, '發布課表', allow('plan') ? '教練' : '分團團長') : '',
@@ -2848,6 +2860,8 @@ const shareApp = lazy('./me.js', 'shareApp');
 
 // quiet：「開始使用」卡自己更新畫面與播報（不跳提示、不重畫整頁）；成功開啟回傳 true
 async function togglePush(sub, { quiet = false } = {}) {
+  // 說明 sheet 關掉後焦點回到按下的那顆（通知設定的 #pushBtn 或開始使用卡的 #stPush）；Safari 點按鈕不會聚焦，用目前頁面上的那顆
+  const act = document.activeElement, opener = act && act !== document.body ? act : $('#pushBtn') || $('#stPush');
   try {
     await Device.pushReady();
     const reg = await Promise.race([navigator.serviceWorker?.ready, new Promise((r) => setTimeout(() => r(null), 3000))]);
@@ -2859,7 +2873,7 @@ async function togglePush(sub, { quiet = false } = {}) {
       toast('已關閉通知'); render(); return;
     }
     // 第一次開啟前先說明會推播什麼（權限請求要在使用者按下按鈕時發出）
-    const perm = Notification.permission === 'granted' ? 'granted' : await pushExplainer();
+    const perm = Notification.permission === 'granted' ? 'granted' : await pushExplainer(opener);
     if (perm === null) return;
     if (perm !== 'granted') return toast('瀏覽器沒有允許通知');
     const s = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlB64(cfg.vapid) });
@@ -2872,11 +2886,11 @@ async function togglePush(sub, { quiet = false } = {}) {
   return false;
 }
 // 開啟推播前的說明 sheet：回傳權限結果；按「先不要」或關掉回傳 null
-function pushExplainer() {
+function pushExplainer(opener) {
   return new Promise((done) => {
     let picked = false;
-    const s = openSheet('要開啟推播嗎？', `<h3>要開啟推播嗎？</h3><p class="muted" style="margin:0">推播會通知你活動異動、報名提醒和帳號安全，類別可以之後在這裡調整。</p>
-      <div class="choices"><button type="button" class="btn block" data-go>開啟推播</button><button type="button" class="btn ghost block" data-close>先不要</button></div>`, $('#pushBtn'));
+    const s = openSheet('要開啟推播嗎？', `<h3>要開啟推播嗎？</h3><p class="muted" style="margin:0">推播會通知你活動異動、報名提醒和帳號安全。類別與推播時間（即時或每日摘要）可以之後在「我的 › 通知設定」調整。</p>
+      <div class="choices"><button type="button" class="btn block" data-go>開啟推播</button><button type="button" class="btn ghost block" data-close>先不要</button></div>`, opener);
     s.host.addEventListener('click', (e) => {
       if (e.target.closest('[data-go]')) { picked = true; s.close(); Notification.requestPermission().then(done, () => done('denied')); }
     });

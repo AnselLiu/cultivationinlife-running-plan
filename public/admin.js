@@ -61,7 +61,8 @@ async function overviewPanel() {
   const k = (label, v, sub = '') => `<div class="card kpi"><span class="tiny">${label}</span><b class="num">${v ?? '—'}</b><span class="tiny">${sub || '&nbsp;'}</span></div>`;
   const bc = allow('settings') || (allow('members') && me.role !== 'supervisor');
   // 群發通知是「動作」：放在總覽最上面一列，點了直接跳到表單（不用捲到最下面）
-  return `<section class="card opsalert" id="opsTop" role="alert" hidden></section>
+  // 系統狀態卡：不用 role="alert"（每次回到總覽都會被大聲打斷），告警推播一天已經發過一次；用 status 禮貌地唸一次
+  return `<section class="card opsalert" id="opsTop" role="status" hidden></section>
     ${allow('settings') ? '<section class="card" id="weeklyTop" hidden></section>' : ''}
     <section class="card" id="pendingTop" hidden></section>
     ${bc ? group('', [btnRow('bcJump', MI.bell, '群發通知', '推播給全部或指定分團、身分')]) : ''}
@@ -117,7 +118,8 @@ async function loadHealth(days = 7) {
     top.hidden = !on.length;
     top.innerHTML = on.length ? `<div class="row spread" style="gap:10px"><span><b>系統狀態：${on.map((c) => esc(OPS_TEXT[c.cond] || c.cond)).join('；')}</b></span>
       <a class="btn ghost sm" href="#/admin?tab=overview" data-opsgo>查看</a></div>` : '';
-    top.querySelector('[data-opsgo]')?.addEventListener('click', (e) => { e.preventDefault(); $('#opsBox')?.scrollIntoView({ block: 'start' }); });
+    // 查看：焦點移到「系統告警」標題（跟群發通知的捷徑一樣），VoiceOver 與鍵盤從那裡接著讀
+    top.querySelector('[data-opsgo]')?.addEventListener('click', (e) => { e.preventDefault(); $('#opsTitle')?.focus({ preventScroll: true }); $('#opsBox')?.scrollIntoView({ block: 'start' }); });
   }
 }
 // ---------- 系統告警與每日額度（估計）----------
@@ -134,9 +136,11 @@ const opsDetail = (cond, d) => (cond === 'stops' || cond === 'cron' ? String(d).
 function opsHtml(h) {
   if (!h.conditions) return '';
   const u = h.usage || {};
-  return `<div id="opsBox"><h3>系統告警</h3>
+  // 每日備份這一列連到備份子頁（立即備份、逾時提醒都在那裡）：備份告警推播點進總覽後一下就到
+  const bk = allow('settings') ? '<a class="tiny" style="display:block" href="#/admin/settings/backup">每日加密備份設定 ›</a>' : '';
+  return `<div id="opsBox"><h3 id="opsTitle" tabindex="-1">系統告警</h3>
     <div class="itemtable">${h.conditions.map((c) => `<div class="itr"><span><b style="font-weight:600">${OPS_NAME[c.cond] || esc(c.cond)}</b>
-      ${c.on && c.detail ? `<span class="tiny" style="display:block;word-break:break-word">${esc(opsDetail(c.cond, c.detail))}</span>` : ''}</span>
+      ${c.on && c.detail ? `<span class="tiny" style="display:block;word-break:break-word">${esc(opsDetail(c.cond, c.detail))}</span>` : ''}${c.cond === 'backup' ? bk : ''}</span>
       <span class="tiny">${c.on ? `<b style="color:var(--race)">發生中${c.since ? `（今天 ${hm(c.since)} 起）` : ''}</b>` : '正常'}</span></div>`).join('')}</div>
     ${(h.alerts || []).length ? `<h4>最近 14 天的告警</h4><div class="itemtable">${h.alerts.map((a) => `<div class="itr"><span><b class="num" style="font-weight:600">${esc(a.day.slice(5).replace('-', '/'))}</b>
       <span class="tiny" style="display:block;word-break:break-word">${OPS_NAME[a.cond] || esc(a.cond)}${a.detail ? `・${esc(opsDetail(a.cond, a.detail))}` : ''}</span></span><span class="tiny">${hm(a.at)}</span></div>`).join('')}</div>`
@@ -156,7 +160,8 @@ const prevT = (x) => (x == null ? '' : `（前一週 ${x}%）`);
 function reportHtml(r, { scopes = [] } = {}) {
   const d = r.data || {}, p = r.prev || {};
   const sel = (id, label, opts, cur) => `<label class="row" style="gap:8px"><span class="tiny">${label}</span><select id="${id}" style="flex:1">${opts.map(([v, t]) => `<option value="${esc(v)}"${v === cur ? ' selected' : ''}>${esc(t)}</option>`).join('')}</select></label>`;
-  const card = (title, lines) => `<section class="card"><h3>${title}</h3>${lines.filter(Boolean).map((l) => `<p style="margin:0">${l}</p>`).join('')}</section>`;
+  // 卡片標題是 h2（外觀同 h3）：#/weekly 與週報分頁都是 h1 下面直接接卡片，不跳級
+  const card = (title, lines) => `<section class="card"><h2 class="h3">${title}</h2>${lines.filter(Boolean).map((l) => `<p style="margin:0">${l}</p>`).join('')}</section>`;
   const kinds = Object.entries(d.events?.kinds || {}).map(([k, n]) => `${KIND_NAME[k] || k} ${n}`).join('、');
   const head = `<section class="card" style="display:grid;gap:8px">
       ${sel('rptWeek', '週次', (r.weeks || []).map((w) => [w, `${w.slice(5).replace('-', '/')} 那週`]), r.week)}
@@ -223,7 +228,7 @@ async function loadWeeklyTop() {
   const r = await api('/ops/reports?scope=assoc&brief=1').catch(() => null);
   if (!r?.brief || !box.isConnected) return;
   const b = r.brief;
-  box.innerHTML = `<div class="row spread"><h3>上週週報</h3><a class="btn ghost sm" href="#/admin?tab=report">看完整週報</a></div>
+  box.innerHTML = `<div class="row spread"><h2 class="h3">上週週報</h2><a class="btn ghost sm" href="#/admin?tab=report">看完整週報</a></div>
     <p style="margin:0">報名 ${b.signups}、出席率 ${pctT(b.attendance)}、新成員 ${b.newcomers}</p><span class="tiny">${esc(r.week.slice(5).replace('-', '/'))} 那週</span>`;
   box.hidden = false;
 }
@@ -675,7 +680,8 @@ const SET = {
   mfa: { t: '幹部兩步驟驗證', icon: MI.shield, show: () => (me.realRole || me.role) === 'chair', sub: () => (cfg.requireMfa ? '已開啟' : '未開啟'), html: () => mfaCard() },
   backup: { t: '每日加密備份', icon: IC.lock, sub: () => '<span id="bkSub">每天 03:00 自動備份・保留 35 天</span>', badge: '<span id="bkBadge"></span>', html: () => backupCard() },
   privacy: { t: '隱私權政策', icon: MI.eye, sub: () => (cfg.settings?.privacy?.version ? `版本 ${esc(cfg.settings.privacy.version)}` : '個資法第 8 條告知內容'), html: () => privacyCard() },
-  retention: { t: '資料保存期限', icon: IC.trash, sub: () => `活動報名 ${yrs(org().event_data_years)}・訓練紀錄 ${yrs(org().log_years)}・稽核紀錄 ${yrs(org().audit_years || 3)}`, html: () => retentionCard() },
+  // 副標用「項目：期限」：英文逐段換成「Training log: 3 yr」，不會黏成一串
+  retention: { t: '資料保存期限', icon: IC.trash, sub: () => `活動報名：${yrs(org().event_data_years)}・訓練紀錄：${yrs(org().log_years)}・稽核紀錄：${yrs(org().audit_years || 3)}`, html: () => retentionCard() },
 };
 const SET_GROUPS = [['活動與報名', ['signup', 'races', 'holidays', 'seats']], ['協會', ['org', 'docs', 'training']], ['地圖資料', ['rest', 'cams']],
   ['功能與畫面', ['features', 'tabs']], ['安全與隱私', ['mfa', 'backup', 'privacy', 'retention']]];
@@ -899,6 +905,9 @@ function bindSettings() {
   if ($('#camSrcList')) loadCamSrc();
   // 跑者休息站：來源開關、上次同步、筆數、資料日期、錯誤；小來源可以立即同步，大的由維護工具同步（tools/rest-sync.mjs，沒有按鈕）
   const EVERY = { day: 1, week: 7, month: 31 };
+  // 要金鑰、還沒同步過的來源（第二批）：說明要先在維護電腦設定金鑰，開了開關卻沒有資料時才知道原因
+  const KEY_NEED = { MOENV_KEY: '需要環境部開放資料平臺的 API 金鑰（MOENV_KEY），由維護工具在電腦上同步' };
+  const keyNeed = (x) => KEY_NEED[x.needsKey] || '需要 API 金鑰，由維護工具在電腦上同步';
   const loadRestSrc = async (refocus) => {
     const r = await api('/rest/sources').catch(() => null);
     const box = $('#restSrcList');
@@ -911,7 +920,7 @@ function bindSettings() {
         <span class="tiny" style="display:block">${esc(x.attribution)}</span></span>
         <input type="checkbox" data-restsrc="${esc(x.source)}" ${x.enabled ? 'checked' : ''} ${r.editable ? '' : 'disabled'}><i></i></label>
       ${!x.manual ? `<div class="row restsrcrow">${x.dataset ? `<a class="btn ghost sm" href="${esc(x.dataset)}" target="_blank" rel="noopener noreferrer">資料集 ${IC.external}</a>` : ''}
-        ${x.local ? `<span class="tiny">由維護工具同步・${x.last_ok_at ? `上次同步 ${camTime(x.last_ok_at)}` : '還沒有同步過'}${stale(x) ? '・<span class="ostat off">已經很久沒有同步</span>' : ''}</span>`
+        ${x.local ? `<span class="tiny">${x.needsKey && !x.last_ok_at ? keyNeed(x) : `由維護工具同步・${x.last_ok_at ? `上次同步 ${camTime(x.last_ok_at)}` : '還沒有同步過'}`}${stale(x) ? '・<span class="ostat off">已經很久沒有同步</span>' : ''}</span>`
           : x.enabled && r.editable ? `<button type="button" class="btn ghost sm" data-restsync="${esc(x.source)}">立即同步</button>` : ''}</div>` : ''}</div>`).join('');
     for (const c of box.querySelectorAll('[data-restsrc]')) c.onchange = async () => {
       const x = r.sources.find((s) => s.source === c.dataset.restsrc);

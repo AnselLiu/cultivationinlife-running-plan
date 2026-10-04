@@ -130,7 +130,7 @@ const PATTERNS = [
   // 開始使用卡：進度「1 / 3 完成」、完成一步的播報「已開啟推播，還剩 1 步」
   [/^(\d) \/ 3 完成$/, '$1 of 3 done'],
   [/，還剩 (\d+) 步$/, (_, n) => `, ${n} ${n === '1' ? 'step' : 'steps'} left`],
-  [/^確認 (全馬|半馬) ([A-Z]) 組$/, (_, d, g) => `Confirm ${DN[d]} group ${g}`],
+  [/^確認 (全馬|半馬) ([A-Z]) 組$/, (_, d, g) => `Confirm ${d === '半馬' ? 'Half marathon' : 'Marathon'} Group\u00a0${g}`],   // 跟上一行「目前：Half marathon Group C」同一個寫法
   // 系統設定清單的副標：報名開放時間、每日備份
   [/^活動前 (\d+) 天 (\d\d:\d\d) 開放/, (_, n, t) => `Opens ${n} ${n === '1' ? 'day' : 'days'} before the event at ${t}`],
   [/^每天 03:00 自動備份・上次 (\d+)\/(\d+)$/, 'Daily backup at 03:00 · last $1/$2'],
