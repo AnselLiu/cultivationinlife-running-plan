@@ -2,6 +2,8 @@
 // 導覽會實際帶到每個功能（首頁、課表、跑步記錄、拍照分享、我的），結束或略過時回到開始前的頁面，不會新增任何資料。
 // 第一次登入後自動出現一次（localStorage cil-guide）；之後從「我的 → 使用說明」再看。
 
+import { focusAfterRender } from './app.js';
+
 const KEY = 'cil-guide', VER = '2';   // 改版本號時 app.js 的 Guide.maybeStart 也要一起改
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -55,7 +57,7 @@ const STEPS = [
   { id: 'run', icon: I.runner, t: '跑步記錄', l: ['手機計時加上 GPS，跑完算好距離、配速與分段。', '可以邊跑邊看今天的課表。'],
     need: () => shown(tab('/run')), go: () => go('#/run', ['.runstart', '.runlive', '.kpis']), at: () => pick('.runstart', '.runlive', '.kpis'), ring: () => pick('#runGo') },
   { id: 'map', icon: I.map, t: '練跑地圖', l: ['全台常用的田徑場、河濱、公園與步道，可以搜尋、依類型和縣市篩選。', '看現場回報與天氣，也能畫路線、存 GPX、開揪跑。'],
-    need: () => shown(tab('/map')), go: () => go('#/map', ['.mapwrap', '.spotlist']), at: () => pick('.mapwrap'), ring: () => pick(tab('/map')) },
+    need: () => shown(tab('/map')), go: () => go('#/map', ['.msheet', '.amap']), at: () => pick('.msheet', '.amap'), ring: () => pick(tab('/map')) },
   // 拍照分享：GPS 跑步開著時收在「跑步」裡（聚光「拍照分享」那一列），關掉 GPS 時是分頁列的一格
   { id: 'studio', icon: I.camera, t: '拍照分享', l: () => (gpsOn() ? ['跑完在「跑步」裡拍照分享到 IG，', '距離、時間和路線會放進照片。'] : ['把今天的距離、時間和路線放進照片，', '直接分享到 IG 限時動態或 Reels。']),
     need: () => studioOn(), go: () => (gpsOn() ? go('#/run', '.runshare') : go('#/studio', '.stage-card')), at: () => (gpsOn() ? pick('.runshare') : pick(tab('/studio'))) },
@@ -71,10 +73,10 @@ function build() {
   box = document.createElement('div');
   box.id = 'guide'; box.className = 'guide'; box.setAttribute('role', 'dialog'); box.setAttribute('aria-modal', 'true'); box.setAttribute('aria-labelledby', 'gTitle'); box.hidden = true;
   box.innerHTML = `<div class="g-block"></div><div class="g-spot" aria-hidden="true"></div><div class="g-ring" aria-hidden="true"></div>
-    <section class="g-tip" tabindex="-1"><span class="g-caret" aria-hidden="true"></span>
+    <section class="g-tip" tabindex="-1" role="group" aria-labelledby="gTitle" aria-describedby="gBody"><span class="g-caret" aria-hidden="true"></span>
       <div class="g-head"><span class="g-ic" id="gIc" aria-hidden="true"></span><span class="g-count num" id="gCount"></span><button type="button" class="g-skip" id="gSkip">略過</button></div>
       <div class="g-hero" id="gHero" aria-hidden="true"></div>
-      <div class="g-live" id="gLive" aria-live="polite"><h2 id="gTitle"></h2><div class="g-body" id="gBody"></div></div>
+      <div class="g-live" id="gLive"><h2 id="gTitle"></h2><div class="g-body" id="gBody"></div></div>
       <div id="gExtra"></div>
       <div class="g-foot"><div class="g-dots" id="gDots" aria-hidden="true"></div>
         <div class="g-nav"><button type="button" class="btn ghost sm" id="gPrev">上一步</button><button type="button" class="btn sm" id="gNext">下一步</button></div></div>
@@ -195,17 +197,24 @@ async function step(i) {
 }
 export function start() {
   build();
-  T = { on: true, i: 0, steps: STEPS, back: location.hash || '#/' };
+  // 步驟數字只算這次真的會出現的（功能關掉的步驟先拿掉，不會從 6 / 9 跳到 8 / 9）
+  T = { on: true, i: 0, steps: STEPS.filter((s) => !s.need || s.need()), back: location.hash || '#/', opener: document.activeElement };
   box.hidden = false; box.classList.add('in');
   document.documentElement.classList.add('guiding');
+  // 背景設 inert：導覽是 aria-modal，Tab 與 VoiceOver 都不能跑到被蓋住的頁面
+  for (const el of document.querySelectorAll('#view, .top, #tabs')) el.inert = true;
   step(0);
 }
 function end(done) {
   T.on = false; gen++;
   box.hidden = true; box.classList.remove('in');
   document.documentElement.classList.remove('guiding');
+  for (const el of document.querySelectorAll('#view, .top, #tabs')) el.inert = false;
   try { if (done) localStorage.setItem(KEY, VER); } catch {}
-  if (location.hash !== T.back) location.hash = T.back;
+  // 焦點回到打開導覽的地方（「我的 → 使用說明」那一列）；那一列重畫過就找同一個 id，找不到就是新頁面的大標題
+  const back = T.opener, id = back?.id;
+  const restore = () => { const el = back?.isConnected ? back : id && document.getElementById(id); if (el) el.focus(); else document.querySelector('#view h1')?.focus(); };
+  if (location.hash !== T.back) { focusAfterRender(id ? [`#${id}`, 'h1'] : ['h1']); location.hash = T.back; } else restore();
 }
 // 第一次登入後自動開始（只一次）
 export function maybeStart() {

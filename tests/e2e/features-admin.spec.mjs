@@ -22,7 +22,7 @@ test('會員：查詢跑友、掃描會籍卡（手動貼上）', async ({ page,
   await page.locator('.sheet input[name=code]').fill(card.qr);
   await page.locator('.sheet form').getByRole('button').click();
   await expect(page.locator('.scanmsg')).toContainText('有效會員');
-  await page.locator('.sheet [data-close]').click();
+  await page.locator('.sheet button[data-close]').click();
   await expect(page).toHaveURL(/tab=members/);
 });
 

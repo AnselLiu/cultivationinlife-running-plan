@@ -38,7 +38,7 @@ test('沒有 BarcodeDetector（像 iPhone）也能用相機掃會籍卡', async 
   await expect(page.locator('.sheet .scanmsg')).toContainText('這不是有效的會籍卡', { timeout: 15000 });
   expect(await page.evaluate(() => typeof window.jsQR)).toBe('function');
   // 關掉面板後相機也要關掉
-  await page.locator('.sheet [data-close]').click();
+  await page.locator('.sheet button[data-close]').click();
   await expect(page.locator('.sheet')).toHaveCount(0);
   await expect.poll(() => page.evaluate(() => document.querySelectorAll('video').length)).toBe(0);
 });

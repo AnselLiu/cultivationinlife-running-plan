@@ -75,8 +75,8 @@ async function overviewPanel() {
           <div class="chips">${teams().map((t) => `<label class="chip"><input type="checkbox" name="teams" value="${esc(t.id)}"><span><span translate="no">${esc(t.name)}</span></span></label>`).join('')}</div>
           <div class="chips">${Object.entries(ROLE_NAME).filter(([r]) => r !== 'member').map(([r, v]) => `<label class="chip"><input type="checkbox" name="roles" value="${r}"><span>${v}</span></label>`).join('')}
             <label class="chip"><input type="checkbox" name="membership" value="active"><span>協會會員</span></label></div></fieldset>
-        <input name="url" placeholder="點通知後開啟的頁面，例如 /#/e/活動代碼" aria-describedby="bcUrlHint">
-        <span class="tiny" id="bcUrlHint">選填。沒填的話，點通知會打開完整內容</span>
+        <label>點通知後開啟的頁面（選填）<input name="url" placeholder="例如 /#/e/活動代碼" aria-describedby="bcUrlHint"></label>
+        <span class="tiny" id="bcUrlHint">沒填的話，點通知會打開完整內容</span>
         <div class="row"><button type="button" class="btn ghost sm" id="bcCount">算一下人數</button><button class="btn sm">送出</button><span class="tiny" id="bcOut" role="status"></span></div>
       </form>
       <div id="bcPreview" hidden><h3 class="sgt" style="margin:0 0 6px">會員收到的樣子</h3><div class="card setcard"><ul class="nlist" role="list"></ul></div></div>

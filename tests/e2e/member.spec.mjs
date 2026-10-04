@@ -35,8 +35,9 @@ test('報名團練、返回鍵回到上一頁、取消報名', async ({ page }) 
   await page.locator('#backBtn').click();
   await expect(page).toHaveURL(/#\/$/);
   await page.goto(`/#/e/${run.id}`);
-  page.once('dialog', (d) => d.accept());
-  await page.getByRole('button', { name: '取消報名' }).click();
+  // 取消報名用選擇面板（不是 confirm）：選「取消報名」，「保留報名」是不取消
+  await page.locator('#cancel').click();
+  await page.getByRole('dialog').getByRole('button', { name: '取消報名' }).click();
   await expect(page.getByText('已取消報名')).toBeVisible();
 });
 

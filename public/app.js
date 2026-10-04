@@ -219,17 +219,15 @@ document.addEventListener('submit', (e) => {
 }, true);
 // 按鈕版：click 處理期間停用（沒有表單的「我要報名」「確認收款」等）
 const once = (btn, fn) => async (...a) => { if (btn.disabled) return; btn.disabled = true; btn.classList.add('busy'); try { return await fn(...a); } finally { if (btn.isConnected) { btn.disabled = false; btn.classList.remove('busy'); } } };
-// 三選一的確認面板（取代「確定／取消」容易按錯的 confirm）：回傳選到的 value，關掉回傳 null
-function choose(title, message, options) {
+// 三選一的確認面板（取代「確定／取消」容易按錯的 confirm）：回傳選到的 value，關掉（取消、Esc、點背景）回傳 null
+//   用共用的 openSheet：焦點移到第一個選項、Tab 不會跑出去、關掉後焦點回到原本的按鈕
+function choose(title, message, options, { cancel = '取消' } = {}) {
   return new Promise((done) => {
-    const host = document.createElement('div');
-    host.className = 'sheet'; host.setAttribute('role', 'dialog'); host.setAttribute('aria-modal', 'true'); host.setAttribute('aria-label', title);
-    host.innerHTML = `<div class="sheet-bg" data-v=""></div><div class="sheet-card card"><h3>${esc(title)}</h3>${message ? `<p class="muted" style="margin:0">${message}</p>` : ''}
+    let picked = null;
+    const s = openSheet(title, `<h3 id="chooseT">${esc(title)}</h3>${message ? `<p class="muted" style="margin:0">${message}</p>` : ''}
       <div class="choices">${options.map((o) => `<button type="button" class="btn block ${o.danger ? 'danger' : o.primary ? '' : 'ghost'}" data-v="${esc(o.value)}">${esc(o.label)}</button>`).join('')}
-      <button type="button" class="btn ghost block" data-v="">取消</button></div></div>`;
-    document.body.append(host);
-    host.querySelector('.choices button')?.focus();
-    host.addEventListener('click', (e) => { const v = e.target.closest('[data-v]')?.dataset.v; if (v === undefined) return; host.remove(); done(v || null); });
+      <button type="button" class="btn ghost block" data-close>${esc(cancel)}</button></div>`, document.activeElement, '', { onClose: () => done(picked) });
+    s.host.addEventListener('click', (e) => { const v = e.target.closest('[data-v]')?.dataset.v; if (v === undefined) return; picked = v || null; s.close(); });
   });
 }
 // 婉拒原因面板：常用理由 chips＋自由填寫（最多 120 字）；回傳 { note } 或 null（取消）
@@ -451,12 +449,17 @@ function rich(...parts) {
   flush();
   return f;
 }
-function toast(msg, { action, onAction, onExpire, focus = false, ms = 2600 } = {}) {
-  const prev = $('.toast'); if (prev) { prev.remove(); prev.expire?.(); }
+// 提示泡泡：放進常駐的播報區（#toasts，role=status，頁面一載入就在）——iPhone VoiceOver 對「插入時就帶文字的 live region」常常不唸，
+//   放進已經存在的播報區才唸得到。say：只給螢幕閱讀器多唸的補充（例如「6 秒內可以按復原」），畫面上不顯示
+function toast(msg, { action, onAction, onExpire, focus = false, ms = 2600, say = '' } = {}) {
+  const host = $('#toasts') || document.body;
+  const prev = host.querySelector('.toast'); if (prev) { prev.remove(); prev.expire?.(); }
   const el = document.createElement('div');
   el.className = 'toast';
-  el.role = 'status';
-  if (msg instanceof Node) el.append(msg); else el.textContent = msg;
+  const m = document.createElement('span');
+  if (msg instanceof Node) m.append(msg); else m.textContent = msg;
+  el.append(m);
+  if (say) { const sr = document.createElement('span'); sr.className = 'sr'; sr.textContent = say; el.append(sr); }
   let done = false;
   el.expire = () => { if (done) return; done = true; const had = el.contains(document.activeElement); el.remove(); onExpire?.(had); };
   let b;
@@ -466,10 +469,36 @@ function toast(msg, { action, onAction, onExpire, focus = false, ms = 2600 } = {
     b.onclick = () => { if (done) return; done = true; el.remove(); onAction?.(); };
     el.append(b);
   }
-  document.body.append(el);
+  host.append(el);
   if (focus) b?.focus();
   const later = () => { if (done) return; if (el.matches(':hover, :focus-within')) setTimeout(later, 1500); else el.expire(); };
   setTimeout(later, ms);
+}
+// 只給螢幕閱讀器的播報（換頁的頁名、畫路線的說明…）：先清空、稍後再寫，同一句話連續兩次也會唸
+function announce(msg) {
+  const live = $('#nlive'); if (!live) return;
+  live.textContent = '';
+  setTimeout(() => { live.textContent = msg; }, 60);
+}
+// 表單欄位的錯誤：錯誤文字放在欄位下方並用 aria-describedby 綁上、欄位標 aria-invalid、焦點移過去；改了欄位就清掉
+//   el：要拿焦點的欄位；also：同一個錯誤也要標紅的其他欄位（例如距離與時間）；anchor：錯誤文字放在誰後面（預設欄位的 label 或 fieldset）
+function fieldError(el, msg, { also = [], anchor } = {}) {
+  if (!el) { toast(msg); return; }
+  const id = `${el.name || el.dataset.q || 'f'}Err`.replace(/[^\w-]/g, '');
+  const box = anchor || el.closest('fieldset, label') || el;
+  let p = document.getElementById(id);
+  if (!p) { p = document.createElement('p'); p.id = id; p.className = 'ferr'; box.after(p); }
+  p.textContent = msg;
+  const all = [el, ...also].filter(Boolean);
+  for (const x of all) {
+    x.setAttribute('aria-invalid', 'true');
+    const d = (x.getAttribute('aria-describedby') || '').split(' ').filter((v) => v && v !== id);
+    x.setAttribute('aria-describedby', [...d, id].join(' '));
+  }
+  const clear = () => { p.remove(); for (const x of all) { x.removeAttribute('aria-invalid'); const d = (x.getAttribute('aria-describedby') || '').split(' ').filter((v) => v && v !== id); if (d.length) x.setAttribute('aria-describedby', d.join(' ')); else x.removeAttribute('aria-describedby'); } };
+  for (const x of all) x.addEventListener(x.type === 'radio' || x.type === 'checkbox' ? 'change' : 'input', clear, { once: true });
+  el.focus();
+  if (!el.matches(':focus')) el.closest('fieldset')?.querySelector('input')?.focus();
 }
 // 課表設定（只存在這台裝置，不會上傳；登出時清除）：每週天數、週四團練、跑量、成績、身體資料、起跑時間、畫面偏好
 const COACH_DEFAULT = { v: 1, plan: { days: 6, club: true, vol: null }, pb: { dist: '10', time: '' },
@@ -935,49 +964,52 @@ function paintTabs(hash = curHash()) {
 wideNav.addEventListener?.('change', () => paintTabs());
 
 // 倒數：自己的主要賽事 → 最近的自己的賽事 → 協會預設
+//   按鈕的名稱就是畫面上的字（「77天到臺北馬」），後面接一段只給螢幕閱讀器的「，換倒數的比賽」（WCAG 2.5.3：名稱要包含看得到的字）
 function paintCountdown() {
   const r = cfg.race, el = $('#countdown');
   el.hidden = !me;
+  const hint = '<span class="sr">，換倒數的比賽</span>';
   if (!r?.date) { el.innerHTML = me ? '<small>設定倒數</small>' : ''; el.title = I18N.t('選擇要倒數的比賽'); return; }
   const t = new Date(`${r.date}T00:00:00`), now = new Date(); now.setHours(0, 0, 0, 0);
   const days = Math.round((t - now) / 864e5);
   const short = r.name.replace(/^20\d\d\s*/, '').replace('馬拉松', '馬').slice(0, 7);
   // 比賽名稱是使用者或賽事資料的原文：英文介面不翻（translate="no"），只翻固定的字
   const nm = `<span translate="no">${esc(short)}</span>`;
-  $('#countdown').innerHTML = days > 0 ? `<b class="num">${days}</b>天到${nm}` : days === 0 ? `<b>今天</b>${nm}` : '';
-  $('#countdown').title = I18N.lang === 'en' ? `${r.name} (${r.date}). ${I18N.t('點一下可以換')}` : `${r.name}（${r.date}），點一下可以換`;
+  el.innerHTML = days > 0 ? `<b class="num">${days}</b>天到${nm}${hint}` : days === 0 ? `<b>今天</b>${nm}${hint}` : '<small>設定倒數</small>';
+  el.title = I18N.lang === 'en' ? `${r.name} (${r.date}). ${I18N.t('點一下可以換')}` : `${r.name}（${r.date}），點一下可以換`;
 }
 // 點右上角倒數：選要倒數哪一場（自己的賽事、常用賽事清單、協會預設，或不顯示）
+//   共用 openSheet：焦點移到目前倒數的那一場、Tab 不會跑到後面、Esc 關閉，關掉後焦點回到倒數按鈕
 async function countdownPicker() {
   if (!me) return;
   $('#cdSheet')?.remove();
+  const opener = document.activeElement?.closest?.('button, a') || $('#countdown');
   const d = await api('/races');
   const days = (date) => Math.round((new Date(`${date}T00:00:00`) - new Date().setHours(0, 0, 0, 0)) / 864e5);
   const upcoming = d.races.filter((r) => days(r.date) >= 0);
   const mineIds = new Set(d.races.map((r) => `${r.name}|${r.date}`));
-  const sheet = document.createElement('div');
-  sheet.id = 'cdSheet'; sheet.className = 'sheet'; sheet.setAttribute('role', 'dialog'); sheet.setAttribute('aria-label', '選擇倒數的比賽');
-  sheet.innerHTML = `<div class="sheet-bg" data-close></div><section class="card sheet-card">
-    <div class="row spread"><h3>倒數哪一場比賽</h3><button class="btn ghost sm" data-close>完成</button></div>
+  const presets = d.presets.filter((p) => !mineIds.has(`${p.name}|${p.date}`));
+  const on = (x) => (x ? ' on" aria-current="true' : '');
+  const s = openSheet('選擇倒數的比賽', `
+    <div class="row spread"><h3 id="cdT">倒數哪一場比賽</h3><button type="button" class="btn ghost sm" data-close>完成</button></div>
     <div class="cdlist">
-      ${upcoming.map((r) => `<button class="cdopt ${d.mode === 'mine' && r.is_primary ? 'on' : ''}" data-race="${r.id}"><span><b><span translate="no">${esc(r.name)}</span></b><span class="tiny">${esc(r.date)}${r.dist ? `・${esc(r.dist)}` : ''}${r.goal ? `・目標 ${esc(r.goal)}` : ''}</span></span><span class="num">${days(r.date)} 天</span></button>`).join('')}
-      ${d.club ? `<button class="cdopt ${d.mode === 'club' ? 'on' : ''}" data-mode="club"><span><b><span translate="no">${esc(d.club.name)}</span></b><span class="tiny">協會預設・${esc(d.club.date)}</span></span><span class="num">${days(d.club.date)} 天</span></button>` : ''}
-      <button class="cdopt ${d.mode === 'off' ? 'on' : ''}" data-mode="off"><span><b>不顯示倒數</b></span></button>
+      ${upcoming.map((r) => `<button type="button" class="cdopt${on(d.mode === 'mine' && r.is_primary)}" data-race="${r.id}"><span><b><span translate="no">${esc(r.name)}</span></b><span class="tiny">${esc(r.date)}${r.dist ? `・${esc(r.dist)}` : ''}${r.goal ? `・目標 ${esc(r.goal)}` : ''}</span></span><span class="num">${days(r.date)} 天</span></button>`).join('')}
+      ${d.club ? `<button type="button" class="cdopt${on(d.mode === 'club')}" data-mode="club"><span><b><span translate="no">${esc(d.club.name)}</span></b><span class="tiny">協會預設・${esc(d.club.date)}</span></span><span class="num">${days(d.club.date)} 天</span></button>` : ''}
+      <button type="button" class="cdopt${on(d.mode === 'off')}" data-mode="off"><span><b>不顯示倒數</b></span></button>
     </div>
-    ${d.presets.filter((p) => !mineIds.has(`${p.name}|${p.date}`)).length ? `<h3 style="margin-top:6px">常用賽事</h3><div class="cdlist">${d.presets.filter((p) => !mineIds.has(`${p.name}|${p.date}`)).map((p, i) => `<button class="cdopt" data-preset="${i}"><span><b><span translate="no">${esc(p.name)}</span></b><span class="tiny">${esc(p.date)}${p.dist ? `・${esc(p.dist)}` : ''}</span></span><span class="tiny">加入並倒數</span></button>`).join('')}</div>` : ''}
+    ${presets.length ? `<h3 style="margin-top:6px">常用賽事</h3><div class="cdlist">${presets.map((p, i) => `<button type="button" class="cdopt" data-preset="${i}"><span><b><span translate="no">${esc(p.name)}</span></b><span class="tiny">${esc(p.date)}${p.dist ? `・${esc(p.dist)}` : ''}</span></span><span class="tiny">加入並倒數</span></button>`).join('')}</div>` : ''}
     <details><summary class="tiny" style="cursor:pointer">自己新增一場</summary>
       <form id="cdAdd" class="filters" style="margin-top:8px">
         <input name="name" maxlength="30" placeholder="比賽名稱，例如 2027 東京馬拉松" required aria-label="比賽名稱">
         <div class="grid2"><input type="date" name="date" required aria-label="比賽日期"><input name="goal" maxlength="10" placeholder="目標成績（選填）" aria-label="目標成績"></div>
-        <button class="btn sm">加入並倒數</button></form></details>
-  </section>`;
-  document.body.append(sheet);
-  const presets = d.presets.filter((p) => !mineIds.has(`${p.name}|${p.date}`));
-  const done = async (msg) => { const r = await api('/me'); cfg = r; me = r.member; paintCountdown(); toast(msg); sheet.remove(); };
+        <button class="btn sm">加入並倒數</button></form></details>`, opener, 'cdT');
+  const sheet = s.host;
+  sheet.id = 'cdSheet';
+  sheet.querySelector('.cdopt.on')?.focus();
+  const done = async (msg) => { const r = await api('/me'); cfg = r; me = r.member; s.close(); paintCountdown(); toast(msg); };
   sheet.addEventListener('click', async (e) => {
-    const t = e.target.closest('[data-close],[data-race],[data-mode],[data-preset]'); if (!t) return;
+    const t = e.target.closest('[data-race],[data-mode],[data-preset]'); if (!t) return;
     try {
-      if (t.dataset.close != null) { sheet.remove(); return; }
       if (t.dataset.race) { await api(`/races/${t.dataset.race}/primary`, { method: 'POST' }); await api('/me/countdown', { method: 'POST', body: { mode: 'mine' } }); return done('已換成這場比賽'); }
       if (t.dataset.mode) { await api('/me/countdown', { method: 'POST', body: { mode: t.dataset.mode } }); return done(t.dataset.mode === 'off' ? '已關閉倒數' : '已換成協會預設'); }
       if (t.dataset.preset) { const p = presets[Number(t.dataset.preset)]; await api('/races', { method: 'POST', body: { ...p, is_primary: true } }); await api('/me/countdown', { method: 'POST', body: { mode: 'mine' } }); return done(`開始倒數：${p.name}`); }
@@ -988,7 +1020,6 @@ async function countdownPicker() {
     try { await api('/races', { method: 'POST', body: { name: f.name.value, date: f.date.value, goal: f.goal.value, is_primary: true } }); await api('/me/countdown', { method: 'POST', body: { mode: 'mine' } }); done(`開始倒數：${f.name.value}`); }
     catch (err) { toast(err.message); }
   };
-  addEventListener('keydown', function esc0(e) { if (e.key === 'Escape') { sheet.remove(); removeEventListener('keydown', esc0); } });
 }
 $('#countdown').addEventListener('click', countdownPicker);
 
@@ -1465,21 +1496,31 @@ function nDelete(li, viaKey = false) {
 }
 // 共用 sheet：焦點移到第一個動作、Tab 不會跑出去、Esc 關閉，關閉後焦點回到原本的元素
 // labelledby：用 sheet 裡標題的 id 當名稱（標題是作者寫的內容、不翻譯時用這個，不用 aria-label）
-function openSheet(label, inner, opener, labelledby = '') {
+// onClose：關掉時（按鈕、Esc、點背景都算）呼叫一次，例如 choose() 回傳 null、掃碼面板關相機
+const FOCUSABLE = 'button:not([disabled]),a[href],input:not([disabled]):not([type=hidden]),select:not([disabled]),textarea:not([disabled]),summary,[tabindex]:not([tabindex="-1"])';
+function openSheet(label, inner, opener, labelledby = '', { onClose } = {}) {
   const host = document.createElement('div');
   host.className = 'sheet'; host.setAttribute('role', 'dialog'); host.setAttribute('aria-modal', 'true');
   if (labelledby) host.setAttribute('aria-labelledby', labelledby); else host.setAttribute('aria-label', I18N.t(label));
   host.innerHTML = `<div class="sheet-bg" data-close></div><div class="sheet-card card">${inner}</div>`;
   document.body.append(host);
-  const focusables = () => [...host.querySelectorAll('button:not([disabled]),a[href],input:not([disabled])')];
+  // 收合的 <details> 裡的欄位、hidden 的按鈕不算（Tab 本來就到不了，算進來會讓焦點跑出面板）
+  const focusables = () => [...host.querySelectorAll(FOCUSABLE)].filter((x) => x.getClientRects().length && (x.matches('summary') || !x.closest('details:not([open])')));
   focusables()[0]?.focus();
   const key = (e) => {
+    if (!host.isConnected) { document.removeEventListener('keydown', key, true); return; }
     if (e.key === 'Escape') { e.preventDefault(); close(); return; }
     if (e.key !== 'Tab') return;
     const f = focusables(), i = f.indexOf(document.activeElement);
-    if (e.shiftKey && i <= 0) { e.preventDefault(); f[f.length - 1]?.focus(); } else if (!e.shiftKey && i === f.length - 1) { e.preventDefault(); f[0]?.focus(); }
+    if (e.shiftKey && i <= 0) { e.preventDefault(); f[f.length - 1]?.focus(); } else if (!e.shiftKey && (i === f.length - 1 || i < 0)) { e.preventDefault(); f[0]?.focus(); }
   };
-  const close = () => { if (!host.isConnected) return; host.remove(); document.removeEventListener('keydown', key, true); if (opener?.isConnected) opener.focus(); };
+  let closed = false;
+  const close = () => {
+    if (closed) return; closed = true;
+    host.remove(); document.removeEventListener('keydown', key, true);
+    if (opener?.isConnected) opener.focus();
+    onClose?.();
+  };
   document.addEventListener('keydown', key, true);
   host.addEventListener('click', (e) => { if (e.target.closest('[data-close]')) close(); });
   return { host, close };
@@ -1872,30 +1913,27 @@ const setStopScan = (fn) => { stopScan = fn; };   // event.js 的掃碼台：換
 // 掃碼面板（團購領取、會籍卡驗證共用）：打開就啟動相機（第一次會詢問相機權限），也可以手動輸入代碼
 //   onCode(code) 回傳要顯示的結果文字；連續掃描時 1.8 秒內不重複處理
 function scanSheet({ title, hint, placeholder = '手動輸入代碼', onCode }) {
-  const host = document.createElement('div');
-  host.className = 'sheet'; host.setAttribute('role', 'dialog'); host.setAttribute('aria-modal', 'true'); host.setAttribute('aria-label', title);
-  host.innerHTML = `<div class="sheet-bg" data-bg></div><div class="sheet-card card"><div class="row spread"><h3>${esc(title)}</h3><button class="btn ghost sm" data-close>完成</button></div>
+  let stop = null, busy = false;
+  // 共用 openSheet：焦點移進面板、Tab 不跑出去、Esc 關閉（同時關相機），關掉後焦點回到開啟的按鈕
+  const s = openSheet(title, `<div class="row spread"><h3 id="scanT">${esc(title)}</h3><button type="button" class="btn ghost sm" data-close>完成</button></div>
     ${canScan() ? '<video playsinline muted class="cam" aria-label="相機畫面"></video>' : '<p class="notice" style="margin:0">這台裝置沒有可以用的相機，請手動輸入代碼。</p>'}
     <p class="tiny center scanmsg" aria-live="polite">${esc(hint)}</p>
-    <form class="row" style="gap:8px"><input name="code" placeholder="${esc(placeholder)}" style="flex:1" autocomplete="off" aria-label="${esc(placeholder)}"><button class="btn sm">送出</button></form></div>`;
-  document.body.append(host);
-  let stop = null, busy = false;
-  const close = () => { stop?.(); host.remove(); };
+    <form class="row" style="gap:8px"><input name="code" placeholder="${esc(placeholder)}" style="flex:1" autocomplete="off" aria-label="${esc(placeholder)}"><button class="btn sm">送出</button></form>`,
+    document.activeElement, 'scanT', { onClose: () => stop?.() });
+  const host = s.host;
   const msg = host.querySelector('.scanmsg');
   const run = async (code) => {
     if (busy) return; busy = true;
     try { msg.textContent = await onCode(code.trim()); navigator.vibrate?.(30); } catch (e) { msg.textContent = e.message; }
     setTimeout(() => { busy = false; }, 1800);
   };
-  host.querySelector('[data-close]').onclick = close;
-  host.querySelector('[data-bg]').onclick = close;
   host.querySelector('form').onsubmit = (e) => { e.preventDefault(); run(e.target.code.value); e.target.code.value = ''; };
   if (canScan()) {
     msg.textContent = '正在打開相機…';
     scan(host.querySelector('video'), (v) => run(v)).then((s0) => { if (host.isConnected) { stop = s0; msg.textContent = hint; } else s0(); })
       .catch((e) => { msg.textContent = e.message; host.querySelector('video')?.remove(); });
   }
-  return close;
+  return s.close;
 }
 // ---------- photo.js（用到才載入）----------
 const studioView = lazy('./photo.js', 'studioView');
@@ -2085,6 +2123,8 @@ async function planView(n) {
 const LOG_STATUS_NAME = { done: '完成', partial: '部分完成', skip: '沒練', extra: '自主加練' };
 const LOG_ICON = { done: IC.check, partial: IC.half, skip: IC.minus, extra: IC.plus };
 const FEEL = ['', '很累', '有點累', '普通', '不錯', '很好'];
+// RPE 自覺強度的文字（滑桿的 aria-valuetext）
+const RPE_WORD = ['', '很輕鬆', '輕鬆', '輕鬆', '中等', '有點吃力', '有點吃力', '吃力', '很吃力', '非常吃力', '全力'];
 const pad2 = (n) => String(n).padStart(2, '0');
 const ymd = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 // 課表上的「週二」「週五或週六」「週末」→ 那一週實際的日期：P.dayDates（比賽那一列只在比賽日）
@@ -2138,7 +2178,7 @@ async function logView() {
     ${incoming ? `<div class="notice">已帶入${incoming.source === 'health' ? ' Apple 健康' : incoming.source === 'gps' ? '這次 GPS 跑步' : ''}的數據，確認後按儲存。</div>` : ''}
     <section class="card">
       <form id="lf" class="logform">
-        ${statuses.length > 1 ? `<div class="chips status">${statuses.map((k) => `<label class="chip"><input type="radio" name="status" value="${k}" ${v.status === k ? 'checked' : ''}><span>${LOG_ICON[k]} ${LOG_STATUS_NAME[k]}</span></label>`).join('')}</div>`
+        ${statuses.length > 1 ? `<fieldset class="qset"><legend class="sr">狀態</legend><div class="chips status">${statuses.map((k) => `<label class="chip"><input type="radio" name="status" value="${k}" ${v.status === k ? 'checked' : ''}><span>${LOG_ICON[k]} ${LOG_STATUS_NAME[k]}</span></label>`).join('')}</div></fieldset>`
           : '<input type="hidden" name="status" value="extra">'}
         <label>日期<input type="date" name="date" value="${esc(date)}" max="${today}" required></label>
         <div class="grid2" data-run>
@@ -2148,7 +2188,7 @@ async function logView() {
         <p class="tiny pace" data-run id="paceOut"></p>
         <div class="grid2" data-run>
           <label>平均心率（選填）<input name="hr" inputmode="numeric" value="${v.hr ?? ''}" placeholder="152"></label>
-          <label><span class="lrow"><span>RPE 自覺強度</span><b class="num" id="rpeOut">${v.rpe || 5}</b></span><input type="range" name="rpe" min="1" max="10" value="${v.rpe || 5}"></label>
+          <label><span class="lrow"><span>RPE 自覺強度</span><b class="num" id="rpeOut" aria-hidden="true">${v.rpe || 5}</b></span><input type="range" name="rpe" min="1" max="10" value="${v.rpe || 5}"></label>
         </div>
         <fieldset class="qset"><legend>身體感覺</legend><div class="chips feel">${[1, 2, 3, 4, 5].map((n) => `<label class="chip"><input type="radio" name="feel" value="${n}" ${Number(v.feel) === n ? 'checked' : ''}><span>${FEEL[n]}</span></label>`).join('')}</div></fieldset>
         <label>備註（只有你看得到）<input name="note" maxlength="300" value="${esc(v.note || '')}" placeholder="腳踝有點緊、風很大…"></label>
@@ -2166,6 +2206,9 @@ async function logView() {
     const km = parseFloat(f.km.value), sec = parseHMS(f.time.value);
     $('#paceOut').textContent = km > 0 && sec > 0 ? `平均配速 ${fmtDistPace(km * 1000, sec)}` : '';
     $('#rpeOut').textContent = f.rpe.value;
+    // 滑桿只唸數字聽不出強度：加上文字（「5，有點吃力」）
+    const rv = Number(f.rpe.value), word = RPE_WORD[rv] || '';
+    if (f.rpe.dataset.vt !== String(rv)) { f.rpe.dataset.vt = String(rv); f.rpe.setAttribute('aria-valuetext', I18N.lang === 'en' ? `${rv}, ${I18N.t(word)}` : `${rv}，${word}`); }
   };
   f.oninput = sync; sync();
   f.onsubmit = async (e) => {
@@ -2178,17 +2221,20 @@ async function logView() {
       rpe: Number(f.rpe.value), feel: Number(f.querySelector('[name=feel]:checked')?.value) || null, note: f.note.value,
       source: log?.source || incoming?.source || 'manual' };
     // 照課表記錄（完成、部分完成）可以不填距離與時間；自主加練才一定要填
-    if (st === 'extra' && !body.km && !body.seconds) return toast('填一下距離或時間');
+    if (st === 'extra' && !body.km && !body.seconds) return fieldError(f.km, '填一下距離或時間', { also: [f.time], anchor: f.km.closest('.grid2') });
     try {
       await api('/logs', { method: 'POST', body });
       if (body.source === 'gps') { const R = await loadRun().catch(() => null); if (R?.session()?.status === 'done') R.discard(); }   // 已存成紀錄，清掉手機上的這次跑步
       if (st === 'skip' || log) { toast(st === 'skip' ? '已記下，休息也是訓練的一部分' : '已更新'); location.hash = planHref(lc, week); return; }
       // 記完接著拍照分享：把剛記的距離、時間帶到拍照
       const p = new URLSearchParams({ km: String(body.km || 0), sec: String(body.seconds || 0), date: body.date, title: (fromEv?.title || planText || '今天的跑步').slice(0, 20), logged: '1' });
-      view.innerHTML = `<section class="card donecard"><span class="donemark">${IC.check}</span><h2>已記錄，辛苦了</h2>
+      view.innerHTML = `<section class="card donecard"><span class="donemark">${IC.check}</span><h1 class="h2" id="doneH" tabindex="-1">已記錄，辛苦了</h1>
         <p class="muted" style="margin:0">${body.km ? `${body.km} 公里` : ''}${body.km && body.seconds ? '・' : ''}${body.seconds ? fmtDuration(body.seconds) : ''}${body.km && body.seconds ? `・配速 ${fmtDistPace(body.km * 1000, body.seconds)}` : ''}</p>
         ${feat('studio') ? `<a class="btn block iconbtn" href="#/studio?${p}">${ic('<path d="M4 8.2a2 2 0 0 1 2-2h1.9l1.5-2h5.2l1.5 2H18a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2Z"/><circle cx="12" cy="12.6" r="3.6"/>')}拍照分享</a>` : ''}
         <a class="btn ghost block" href="${planHref(lc, week)}">回課表</a></section>`;
+      // 表單換成完成卡：焦點移到完成卡的標題（VoiceOver 唸「已記錄，辛苦了」，不會掉回頁首）
+      document.title = `${I18N.t('已記錄，辛苦了')} – ${I18N.t('耕跑團')}`;
+      $('#doneH').focus();
     }
     catch (err) {
       // 斷線（fetch 本身失敗）：先存在手機，連上網路後自動上傳
@@ -2250,7 +2296,7 @@ async function quickTick(btn, c, n, row, date) {
     const again = view.querySelector(`[data-tick="${i}"]`);
     if (again && !again.disabled) again.focus({ preventScroll: true });
     if (r.existed) { toast('這一天已經記錄過了'); return; }
-    toast(r.qid ? '目前離線，已先存在手機' : '已記錄完成', { action: '復原', ms: 6000, onAction: async () => {
+    toast(r.qid ? '目前離線，已先存在手機' : '已記錄完成', { action: '復原', ms: 6000, say: '要復原，6 秒內按「復原」，或點這一列修改', onAction: async () => {
       try { await undoTick(r); toast('已復原'); } catch (e) { toast(e.message); }
       render();
     } });
@@ -2544,8 +2590,10 @@ const ME_SECTIONS = {
 const ROW_TILE = { '#/report': 'green', '#/challenge': 'orange', '#/me/races': 'red', '#/me/reg': 'indigo', '#/tickets': 'purple', '#/me/teams': 'teal',
   '#/me/notify': 'red', '#/me/calendar': 'orange', '#/me/display': 'indigo', '#/me/security': 'gray', '#/me/privacy': 'blue', '#/me/assoc': 'indigo', '#/me/card': 'teal',
   '#/admin': 'gray', '#/roster': 'blue', '#/logs/team': 'green', '#/plan/new': 'green', '#/plan/season': 'green', '#/plan/race': 'red', '#/plan/guide': 'teal', '#/plan/setup': 'gray' };
-const row = (href, icon, title, sub = '', badge = '') => `<a class="setrow" href="${href}"><span class="sic"${ROW_TILE[href] ? ` style="--sc:var(--tile-${ROW_TILE[href]})"` : ''}>${icon}</span><span class="st"><b>${title}</b>${sub ? `<span class="tiny">${sub}</span>` : ''}</span>${badge}<span class="chev" aria-hidden="true"></span></a>`;
-const btnRow = (id, icon, title, sub = '') => `<button class="setrow" id="${id}"><span class="sic">${icon}</span><span class="st"><b>${title}</b>${sub ? `<span class="tiny">${sub}</span>` : ''}</span><span class="chev" aria-hidden="true"></span></button>`;
+// 標題與副標中間放一個只給螢幕閱讀器的「，」：VoiceOver 唸「通知設定，推播類別」，不會連成一串沒有停頓
+const rowText = (title, sub) => `<span class="st"><b>${title}</b>${sub ? `<span class="sr">，</span><span class="tiny">${sub}</span>` : ''}</span>`;
+const row = (href, icon, title, sub = '', badge = '') => `<a class="setrow" href="${href}"><span class="sic"${ROW_TILE[href] ? ` style="--sc:var(--tile-${ROW_TILE[href]})"` : ''}>${icon}</span>${rowText(title, sub)}${badge}<span class="chev" aria-hidden="true"></span></a>`;
+const btnRow = (id, icon, title, sub = '') => `<button class="setrow" id="${id}"><span class="sic">${icon}</span>${rowText(title, sub)}<span class="chev" aria-hidden="true"></span></button>`;
 const group = (title, rows) => (rows.filter(Boolean).length ? `<section class="setgroup">${title ? `<h2 class="sgt">${title}</h2>` : ''}<div class="card setcard">${rows.filter(Boolean).join('')}</div></section>` : '');
 const subTitle = (title, sub = '') => largeTitle(title, sub);
 const MI = {
@@ -2807,6 +2855,29 @@ async function renderOnce() {
   // 第一個畫面畫好了：記下開啟到可用的時間，20 秒後（或離開時）送出
   if (vitals.ready == null) { vitals.ready = performance.now(); vitals.page = hash.replace(/\/[\w-]{8,}/g, '/:id').slice(0, 40); setTimeout(sendVitals, 20000); }
   $('.top').classList.toggle('titled', false);
+  pageSettled();
+}
+// 換頁後：分頁標題換成這一頁的名稱；使用者自己換頁時，焦點移到新頁面的大標題（VoiceOver 才知道已經換頁、現在在哪一頁）
+//   點分頁列換頁：焦點留在分頁上，只唸一次頁名；第一次打開、資料回來後的重畫（不是使用者換頁）不動焦點
+//   focusAfterRender(selector)：這次重畫完要把焦點放到指定的地方（例如報名後的「我的報名狀態」）
+let navKind = null, focusNext = null;
+const focusAfterRender = (sel) => { focusNext = sel; };
+function focusEl(el) {
+  if (!el) return false;
+  if (!el.matches(FOCUSABLE)) el.setAttribute('tabindex', '-1');
+  el.focus({ preventScroll: el.tagName === 'H1' });
+  return document.activeElement === el;
+}
+function pageSettled() {
+  const h1 = view.querySelector('h1');
+  const name = ($('#ctitle').textContent || h1?.textContent || '').trim();
+  const app = I18N.t('耕跑團');
+  document.title = name && name !== app ? `${name} – ${app}` : app;
+  const kind = navKind, want = focusNext; navKind = null; focusNext = null;
+  if (document.documentElement.classList.contains('guiding')) return;   // 使用說明導覽換頁：焦點留在導覽的說明框
+  if (want && [].concat(want).some((sel) => focusEl(view.querySelector(sel)))) return;
+  if (kind === 'go' && h1 && focusEl(h1)) return;
+  if (kind && name) announce(name);
 }
 
 // 載入中的骨架：照每一頁實際的版面畫灰色輪廓，資料回來時位置不會跳
@@ -2964,6 +3035,7 @@ if (matchMedia('(hover:hover) and (pointer:fine)').matches) {
 // 換頁用 View Transition（支援的瀏覽器才有）
 const go = () => { render(); scrollTo({ top: 0, behavior: 'instant' }); };
 addEventListener('hashchange', () => {
+  navKind = navFromTab ? 'tab' : 'go';
   // 不支援或使用者設定「減少動態效果」：直接換頁，不做轉場；點分頁列換分頁也不做（選取膠囊滑過去，不被整頁淡入淡出蓋掉）
   if (navFromTab || !document.startViewTransition || matchMedia('(prefers-reduced-motion: reduce)').matches) { navFromTab = false; return go(); }
   // 連續換頁時前一個轉場會被中斷；三個 promise 都會 reject，全部接住
@@ -3023,4 +3095,6 @@ export { tilePreload, legacyData, removeLegacy, addrField, bindAddrField, latest
   applyCounts, bellState, canScan, dayPattern, mapsUrl, once, qrSVG, routeSvg, scan, setStopScan, GOOGLE_G, NICON, applyTabs, applyTheme, askLegacyOnLeave,
   bindInstall, clearDeviceData, dropPush, googleHref, iconsOnly, installCard, isStandalone, lsOrNull, pkSupported, reduceMotion, theme, togglePush, setMe,
   // map.js（休息站用到才載入）
-  load };
+  load,
+  // 無障礙共用：播報、表單錯誤、重畫後的焦點
+  announce, fieldError, focusAfterRender };

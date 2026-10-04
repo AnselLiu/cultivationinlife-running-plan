@@ -4,7 +4,7 @@
 import {
   $, addrField, ago, api, applyTabs, applyTheme, askLegacyOnLeave, avatar, bindAddrField, bindInstall, bindStepup, btnRow, camLazy, cfg, choose,
   clearDeviceData, copy, countdownPicker, dropPush, esc, feat, GOOGLE_G, googleHref, group, IC, iconsOnly, installCard, isStandalone, lsOrNull, me,
-  mfaBanner, MI, myCycle, NICON, org, paintCountdown, passkey, pkSupported, qrSVG, reduceMotion, refreshMe, render, ROLE_NAME, row, setMe, subTitle,
+  mfaBanner, MI, myCycle, NICON, openSheet, org, paintCountdown, passkey, pkSupported, qrSVG, reduceMotion, refreshMe, render, ROLE_NAME, row, setMe, subTitle,
   TEAM_ROLE_NAME, teamIcon, teamOf, teams, theme, toast, togglePush, view, ymd
 } from './app.js';
 import * as P from './plan.js';
@@ -49,7 +49,7 @@ function meProfile() {
 async function meRaces() {
   view.innerHTML = `${subTitle('我的賽事與倒數', '右上角倒數主要賽事；點右上角倒數也能直接換')}
     <section class="card"><div id="raceList" class="roster"></div></section>
-    <section class="card"><h3>加一場比賽</h3>
+    <section class="card"><h2 class="h3">加一場比賽</h2>
       <form id="raceForm">
         <div class="grid2"><label>賽事名稱<input name="name" maxlength="30" placeholder="2026 臺北馬拉松" required></label><label>日期<input type="date" name="date" required></label></div>
         <div class="grid2"><label>距離<select name="dist"><option>全馬</option><option>半馬</option><option>10K</option><option>5K</option><option>超馬</option><option>其他</option></select></label>
@@ -138,10 +138,10 @@ function meTeams() {
   const main = teamOf(me.main_team), led = teams().filter((t) => t.id !== me.main_team && (t.my_status === 'active' || t.my_status === 'pending'));
   view.innerHTML = `${subTitle('主團與分團', '主團由管理員設定；想加入其他分團，申請後由該團幹部核准')}
     <section class="card">
-      <h3>主團</h3>
+      <h2 class="h3">主團</h2>
       ${main ? `<a class="teamchip active" href="#/t/${esc(main.id)}" style="--tc:${esc(main.color)}">${teamIcon(main, 'xs')}<span><span translate="no">${esc(main.name)}</span></span><span class="tiny">主團</span></a>`
         : '<p class="notice" style="margin:0">管理員還沒幫你設定主團，設定好之後就會收到分團的活動與公告。</p>'}
-      ${led.length ? `<h3>其他分團</h3><div class="teamrow">${led.map((t) => `<a class="teamchip ${t.my_status}" href="#/t/${esc(t.id)}" style="--tc:${esc(t.color)}">${teamIcon(t, 'xs')}<span><span translate="no">${esc(t.name)}</span></span><span class="tiny">${t.my_status === 'pending' ? '申請中' : esc(t.my_title || TEAM_ROLE_NAME[t.my_role])}</span></a>`).join('')}</div>` : ''}
+      ${led.length ? `<h2 class="h3">其他分團</h2><div class="teamrow">${led.map((t) => `<a class="teamchip ${t.my_status}" href="#/t/${esc(t.id)}" style="--tc:${esc(t.color)}">${teamIcon(t, 'xs')}<span><span translate="no">${esc(t.name)}</span></span><span class="tiny">${t.my_status === 'pending' ? '申請中' : esc(t.my_title || TEAM_ROLE_NAME[t.my_role])}</span></a>`).join('')}</div>` : ''}
     </section>
     <a class="btn ghost block" href="#/teams">看全部分團</a>`;
 }
@@ -205,7 +205,7 @@ async function meNotify() {
 function meCalendar() {
   view.innerHTML = `${subTitle('行事曆訂閱', '團練與賽事自動出現在手機行事曆')}
     <section class="card" id="calCard">
-      <div class="row spread"><h3>訂閱到手機行事曆</h3>${cfg.calendarOn ? '<span class="pill solid">已開啟</span>' : ''}</div>
+      <div class="row spread"><h2 class="h3">訂閱到手機行事曆</h2>${cfg.calendarOn ? '<span class="pill solid">已開啟</span>' : ''}</div>
       <p class="tiny" style="margin:0">團練、揪跑與幹部設定的賽事提醒會自動出現在 iPhone、Google 行事曆，有變動也會跟著更新。訂閱網址等同你的個人鑰匙，不要分享給別人。</p>
       <label class="switch"><span>包含所有開團活動與賽事提醒<span class="tiny" style="display:block">關掉就只有自己報名的</span></span><input type="checkbox" id="calScope" ${cfg.calScope !== 'mine' ? 'checked' : ''}><i></i></label>
       <div id="calBox" class="row" style="gap:8px">${cfg.calendarOn ? '<button class="btn ghost sm" id="calNew">重新產生網址</button><button class="btn ghost sm" id="calOff">停用</button>' : '<button class="btn sm" id="calNew">產生訂閱網址</button>'}</div>
@@ -228,7 +228,7 @@ function meCalendar() {
 function meDisplay() {
   const t = theme.get() || 'auto';
   view.innerHTML = `${subTitle('外觀與語言', '只影響這台裝置')}
-    <section class="card dispcard"><h3>外觀</h3>
+    <section class="card dispcard"><h2 class="h3">外觀</h2>
       <div class="seg themeseg" role="group" aria-label="外觀">${[['auto', '自動'], ['light', '淺色'], ['dark', '深色']].map(([k, v]) => `<button type="button" data-pick-theme="${k}" aria-pressed="${t === k}">${v}</button>`).join('')}</div>
       <p class="tiny" style="margin:0">自動會跟著手機的深淺色設定切換</p>
       <label class="switch"><span>分頁列只顯示圖示<span class="tiny" style="display:block">預設顯示文字；往下捲時也會自動收起文字</span></span><input type="checkbox" id="iconsOnly" ${iconsOnly.get() ? 'checked' : ''}><i></i></label>
@@ -249,10 +249,10 @@ async function meSecurity(googleMsg) {
     ${googleMsg === 'linked' ? '<div class="notice">已綁定 Google，之後可以直接用 Google 登入。</div>' : googleMsg === 'taken' ? '<div class="notice">這個 Google 帳號已經綁定另一個帳號了。如果那個帳號也是你的，請聯絡行政人員合併。</div>'
       : googleMsg === 'stepup' ? '<div class="notice">綁定 Google 前，請先按下方「驗證一次」用通行金鑰確認是你本人，再重新綁定。</div>' : ''}
     ${mfaBanner()}
-    ${cfg.googleLogin ? `<section class="card"><div class="row spread"><div><h3>Google 帳號</h3><span class="tiny">${me.google ? '已綁定，可以用 Google 登入' : '綁定後換手機或清掉瀏覽器資料，也能用 Google 回到同一個帳號'}</span></div>
+    ${cfg.googleLogin ? `<section class="card"><div class="row spread"><div><h2 class="h3">Google 帳號</h2><span class="tiny">${me.google ? '已綁定，可以用 Google 登入' : '綁定後換手機或清掉瀏覽器資料，也能用 Google 回到同一個帳號'}</span></div>
       ${me.google ? '<span class="pill solid">已綁定</span>' : `<a class="btn google sm" href="${googleHref(true)}">${GOOGLE_G}<span>綁定</span></a>`}</div></section>` : ''}
     <section class="card" id="pkCard">
-      <div class="row spread"><h3>通行金鑰</h3>${me.mfa ? `<span class="pill solid">${IC.check}這次已驗證</span>` : ''}</div>
+      <div class="row spread"><h2 class="h3">通行金鑰</h2>${me.mfa ? `<span class="pill solid">${IC.check}這次已驗證</span>` : ''}</div>
       <p class="tiny" style="margin:0">用 Face ID、Touch ID 或手機指紋登入，不用密碼。${['chair', 'director', 'supervisor', 'staff', 'coach'].includes(me.realRole || me.role) ? '幹部建議至少新增一把，協會開啟兩步驟驗證後要用它驗證。' : ''}</p>
       <div id="pkList" class="roster"></div>
       <div class="row" style="gap:8px">${pkSupported() ? `<button class="btn sm" id="pkAdd">${IC.plus}新增通行金鑰</button>` : '<span class="tiny">這個瀏覽器不支援通行金鑰</span>'}
@@ -289,11 +289,11 @@ function mePrivacy() {
       <label class="switch"><span>把訓練完成率、里程與平均強度分享給教練與分團幹部<span class="tiny" style="display:block">每次的時間、心率、強度、感覺與備註永遠只有你看得到</span></span><input type="checkbox" id="shareLogs" ${me.share_logs ? 'checked' : ''}><i></i></label>
       <label class="switch"><span>出現在分團里程排行榜<span class="tiny" style="display:block">只有同分團的人看得到你的名字與里程</span></span><input type="checkbox" id="showRank" ${me.show_rank ? 'checked' : ''}><i></i></label>
     </section>
-    <section class="card"><h3>我們存了什麼</h3>
+    <section class="card"><h2 class="h3">我們存了什麼</h2>
       <p class="tiny" style="margin:0">姓名、暱稱、組別、主團、餐點偏好、報名與訓練紀錄；賽事報名資料加密保存；電話只有行政人員看得到完整號碼。</p>
       <div class="row"><a class="btn ghost sm" href="#/privacy">隱私權政策</a><a class="btn ghost sm" href="/api/me/export" download>下載我的資料</a></div></section>
     ${feat('coach') ? group('', [row('#/plan/setup?go=device', MI.phone, '這台裝置上的課表設定與身體資料', '只存在這台裝置，不會上傳；登出時清除')]) : ''}
-    <section class="card"><h3>刪除帳號</h3><p class="tiny" style="margin:0">報名、入場券、通知與訓練紀錄都會刪除，中獎紀錄只留獎項給協會對帳。</p>
+    <section class="card"><h2 class="h3">刪除帳號</h2><p class="tiny" style="margin:0">報名、入場券、通知與訓練紀錄都會刪除，中獎紀錄只留獎項給協會對帳。</p>
       <button class="btn danger block" id="delAcct">刪除我的帳號</button></section>`;
   $('#showRank').onchange = async (e) => { try { await api('/me/show-rank', { method: 'POST', body: { on: e.target.checked } }); me.show_rank = e.target.checked; toast(e.target.checked ? '已加入排行榜' : '已退出排行榜'); } catch (err) { e.target.checked = !e.target.checked; toast(err.message); } };
   $('#shareLogs').onchange = async (e) => { try { await api('/me/share-logs', { method: 'POST', body: { share: e.target.checked } }); me.share_logs = e.target.checked; toast(e.target.checked ? '已分享給教練' : '已停止分享'); } catch (err) { e.target.checked = !e.target.checked; toast(err.message); } };
@@ -306,18 +306,14 @@ function mePrivacy() {
 export function shareApp() {
   const url = `${location.origin}/`, name = org().short || '耕跑團';
   const text = `一起加入${name}！團練報名、分組課表、GPS 跑步記錄和拍照分享都在這裡。用 Google 帳號登入，加到主畫面就像 App 一樣：${url}`;
-  const host = document.createElement('div');
-  host.className = 'sheet'; host.setAttribute('role', 'dialog'); host.setAttribute('aria-modal', 'true'); host.setAttribute('aria-label', '分享 App');
-  host.innerHTML = `<div class="sheet-bg" data-close></div><div class="sheet-card card shareapp">
-    <div class="row spread"><h3>分享${esc(name)} App</h3><button class="btn ghost sm" data-close>完成</button></div>
-    <div class="shareqr"><div class="qrbox" id="appQR"></div><span class="tiny">請朋友用手機相機掃描</span></div>
-    <div class="${navigator.share ? 'grid2' : 'grid1'}">${navigator.share ? `<button class="btn iconbtn" id="saNative">${MI.share}分享…</button>` : ''}
+  // 共用 openSheet：焦點移進面板、Tab 不跑出去、Esc 關閉，關掉後焦點回到「分享耕跑團 App」
+  const { host } = openSheet('分享 App', `<div class="row spread"><h3 id="saT">分享${esc(name)} App</h3><button type="button" class="btn ghost sm" data-close>完成</button></div>
+    <div class="shareqr"><div class="qrbox" id="appQR" role="img" aria-label="App 網址的 QR Code"></div><span class="tiny">請朋友用手機相機掃描</span></div>
+    <div class="${navigator.share ? 'grid2' : 'grid1'}">${navigator.share ? `<button type="button" class="btn iconbtn" id="saNative">${MI.share}分享…</button>` : ''}
       <a class="btn ${navigator.share ? 'ghost ' : ''}iconbtn" href="https://line.me/R/share?text=${encodeURIComponent(text)}" target="_blank" rel="noopener">分享到 LINE</a></div>
-    <button class="btn ghost block" id="saCopy">複製連結</button>
-    <p class="tiny" style="margin:0">朋友打開後用 Google 帳號登入就能加入成為跑友；要成為協會會員另外申請。</p></div>`;
-  document.body.append(host);
-  const close = () => host.remove();
-  for (const b of host.querySelectorAll('[data-close]')) b.onclick = close;
+    <button type="button" class="btn ghost block" id="saCopy">複製連結</button>
+    <p class="tiny" style="margin:0">朋友打開後用 Google 帳號登入就能加入成為跑友；要成為協會會員另外申請。</p>`, document.activeElement, 'saT');
+  host.querySelector('.sheet-card').classList.add('shareapp');
   qrSVG(url, { size: 220, dark: '#0B1B33', light: '#fff' }).then((svg) => { const q = host.querySelector('#appQR'); if (q) q.innerHTML = svg; }).catch(() => {});
   host.querySelector('#saNative')?.addEventListener('click', async () => { try { await navigator.share({ title: name, text, url }); } catch {} });
   host.querySelector('#saCopy').onclick = () => copy(text);
@@ -340,14 +336,14 @@ async function meCard() {
 function meAssoc() {
   view.innerHTML = `${subTitle(esc(org().name || '台灣耕跑團協會'))}
     <section class="card">
-      <div class="row spread"><h3>會籍</h3><span class="pill ${me.membership === 'active' ? 'solid' : me.membership === 'applied' ? 'wait' : ''}">${esc(me.membershipName || '跑友')}</span></div>
+      <div class="row spread"><h2 class="h3">會籍</h2><span class="pill ${me.membership === 'active' ? 'solid' : me.membership === 'applied' ? 'wait' : ''}">${esc(me.membershipName || '跑友')}</span></div>
       ${me.membership === 'active'
         ? `<p class="muted" style="margin:0">${esc(me.member_type || '會員')}${me.member_no ? `・編號 ${esc(me.member_no)}` : ''}${me.paid_until ? `・會費繳至 ${esc(me.paid_until)}` : ''}</p>`
         : `<p class="muted" style="margin:0">跑友可以報名所有團練；想加入協會，先填官方入會表單，再按下方按鈕通知行政人員。</p>
            ${org().join_form ? `<a class="btn ghost block" href="${esc(org().join_form)}" target="_blank" rel="noopener">開啟入會表單 ${IC.external}</a>` : ''}
            ${me.membership === 'applied' ? '<p class="notice" style="margin:0">已送出申請，等行政人員確認。</p>' : '<button class="btn block" id="applyBtn">我已填表，送出申請</button>'}`}
     </section>
-    ${(cfg.settings?.docs || []).length || org().contact || org().parent ? `<section class="card"><h3>協會資訊</h3>
+    ${(cfg.settings?.docs || []).length || org().contact || org().parent ? `<section class="card"><h2 class="h3">協會資訊</h2>
       ${org().parent ? `<p class="tiny" style="margin:0">所屬企業：${org().parent_url ? `<a href="${esc(org().parent_url)}" target="_blank" rel="noopener">${esc(org().parent)} ${IC.external}</a>` : esc(org().parent)}${org().parent_note ? `・${esc(org().parent_note)}` : ''}</p>` : ''}
       ${org().contact ? `<p class="tiny" style="margin:0">聯絡方式：${esc(org().contact)}</p>` : ''}
       <div class="doclist">${(cfg.settings?.docs || []).map((d) => `<a class="docrow" href="${esc(d.url)}" target="_blank" rel="noopener"><span class="docic">${IC.doc}</span><span><b><span translate="no">${esc(d.title)}</span></b>${d.note ? `<span class="tiny" style="display:block"><span translate="no">${esc(d.note)}</span></span>` : ''}</span><span class="tiny">${IC.external}</span></a>`).join('')}</div>

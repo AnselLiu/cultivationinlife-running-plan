@@ -41,7 +41,7 @@
   </a>
   <span class="ctitle" id="ctitle" aria-hidden="true"></span>
   <span class="topright">
-    <button type="button" class="countdown num" id="countdown" aria-haspopup="dialog" aria-label="倒數賽事，點一下可以換"></button>
+    <button type="button" class="countdown num" id="countdown" aria-haspopup="dialog" hidden><small>設定倒數</small></button>
     <a class="themebtn bell" href="#/notifications" id="bell" title="通知" aria-label="通知">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.4 9.6a5.6 5.6 0 0 1 11.2 0c0 4 1.4 5.4 1.4 5.4H5s1.4-1.4 1.4-5.4Z"/><path d="M10.2 18.4a2 2 0 0 0 3.6 0"/></svg>
       <b id="bellCount" aria-hidden="true" hidden></b></a>
@@ -49,6 +49,8 @@
 </header>
 
 <div id="nlive" class="sr" aria-live="polite"></div>
+<!-- 提示泡泡的播報區：頁面一載入就在，泡泡放進來才唸得到（iPhone VoiceOver 不保證唸「插入時就帶文字」的 live region） -->
+<div id="toasts" role="status" aria-live="polite"></div>
 <main id="view" class="wrap"><div class="skel" aria-label="載入中"><i></i><i></i><i></i></div></main>
 
 <!-- 主要分頁：iPhone／iPad 直向是下方浮動的玻璃膠囊，1024 以上是左側側邊欄（主要 5 項與分頁列共用同一組 a[data-tab]）。
