@@ -51,6 +51,8 @@ export const elapsed = (x = s) => (x ? x.elapsedMs + (x.status === 'running' ? D
 async function lock() {
   try { if (navigator.wakeLock && document.visibilityState === 'visible') wake = await navigator.wakeLock.request('screen'); } catch { wake = null; }
 }
+// 使用者按按鈕（開口袋模式）時再要一次 Wake Lock：有使用者手勢，iPhone 比較願意給
+export const keepAwake = () => { if (active() && s.status === 'running') lock(); };
 const unlock = () => { try { wake?.release(); } catch {} wake = null; };
 // GPS 要繼續接：跑步中，或自動暫停中（等著自動繼續）
 const tracking = () => !!s && s.useGps && (s.status === 'running' || (s.status === 'paused' && s.auto));

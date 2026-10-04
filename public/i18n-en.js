@@ -4127,6 +4127,12 @@ export default {
 "還沒做": "Not done",
 "設定影像來源 ›": "Set up camera sources ›",
 "設定休息站來源 ›": "Set up rest stop sources ›",
-"剛記過一圈，這次不算": "You just marked a lap, so this tap didn’t count"
+"剛記過一圈，這次不算": "You just marked a lap, so this tap didn’t count",
+"開始後直接進入口袋模式": "Go straight to Pocket mode after starting",
+"手機放口袋時畫面全黑、點了沒反應，螢幕保持亮著": "For running with the phone in your pocket: the screen goes black, ignores taps, and stays on",
+"口袋模式": "Pocket mode",
+"目前配速 /km": "Current pace /km",
+"滑到右邊解鎖": "Slide right to unlock",
+"解鎖口袋模式": "Unlock Pocket mode"
 };
 export const inner = {"團練": "group run", "課表": "training plan", "拍照": "photo", "跑步": "running", "我的": "my", "揪跑": "social run", "分團": "sub-club", "主團": "home club", "報名": "sign up", "幹部": "officers", "團員": "members", "跑友": "runners", "活動": "event", "協會": "Association", "行事曆": "calendar", "地點": "spot", "路線": "route", "天氣": "weather", "通知": "notifications", "賽事": "race", "組別": "group", "訓練紀錄": "training log", "內容": "details", "流程": "process", "選擇": "option", "跑法": "how to run", "起跑": "start", "慢跑": "jog", "小時": "hours", "碳水": "carbs", "熱身": "warm-up", "分段": "segments", "強度": "intensity", "主課": "main set", "前段": "first part", "組數": "sets", "比賽日": "race day", "可在": "can be done on"};

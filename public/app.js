@@ -2573,6 +2573,7 @@ async function runView() {
   clearInterval(runTick);
   await loadRun();
   const x = Run.session();
+  if (!Run.active()) pocketOff();
   // 結束後的成績頁
   if (x?.status === 'done') {
     const r = Run.summary(x);
@@ -2621,6 +2622,7 @@ async function runView() {
         <button class="runbtn go" id="runGo" aria-label="開始跑步記錄"><span>開始</span></button>
         <p class="tiny center" style="margin:0">第一次使用會詢問定位權限。跑步時螢幕會保持亮著；如果鎖上螢幕，iPhone 會暫停定位，解鎖後再接著記錄。</p>
         <button class="btn ghost block" id="runNoGps">不用 GPS，只計時（跑步機、操場）</button>
+        <label class="switch pkpref"><span>開始後直接進入口袋模式<span class="tiny" style="display:block">手機放口袋時畫面全黑、點了沒反應，螢幕保持亮著</span></span><input type="checkbox" id="pkPref" ${pocketPref.get() ? 'checked' : ''}><i></i></label>
       </section>
       ${group('跑完之後', [
         feat('studio') ? row('#/studio', MI.camera, '拍照分享', '距離、時間和路線放進照片，分享到 IG').replace('class="setrow"', 'class="setrow runshare"') : '',
@@ -2632,8 +2634,9 @@ async function runView() {
         <p class="tiny" style="margin:0">路線只留在你的手機上，協會只會收到你存下來的距離和時間。</p></section>`;
     const goal = await todayGoal();
     if (goal) $('.runstart').insertAdjacentHTML('afterbegin', `<span class="pill">今天的課表：${esc(goal.text)}</span>`);
-    $('#runGo').onclick = () => { Run.start({ useGps: true, goal }); runView(); };
-    $('#runNoGps').onclick = () => { Run.start({ useGps: false, goal }); runView(); };
+    $('#pkPref').onchange = (e) => pocketPref.set(e.target.checked);
+    $('#runGo').onclick = () => { Run.start({ useGps: true, goal }); runView(); if (pocketPref.get()) pocketOn(); };
+    $('#runNoGps').onclick = () => { Run.start({ useGps: false, goal }); runView(); if (pocketPref.get()) pocketOn(); };
     return;
   }
   // 記錄中
@@ -2651,6 +2654,7 @@ async function runView() {
           : '<button class="runbtn go" id="rResume">繼續</button><button class="runbtn stop" id="rStop">結束</button>'}
       </div>
       ${x.goal ? `<div class="goalbar"><span class="tiny">今天的課表：${esc(x.goal.text)}</span><span class="bar big"><i id="rGoal" style="width:0%"></i></span></div>` : ''}
+      <button type="button" class="btn ghost sm iconbtn" id="rPocket">${IC.lock}口袋模式</button>
       <p class="tiny lapmsg" id="rLapMsg" role="status"></p>
       <div id="rLaps" class="splits"></div>
     </section>
@@ -2689,9 +2693,75 @@ async function runView() {
     clearTimeout(lapMsgT); lapMsgT = setTimeout(() => { msg.textContent = ''; }, 2500);
     paint();
   });
+  $('#rPocket')?.addEventListener('click', pocketOn);
   $('#rPause')?.addEventListener('click', () => { Run.pause(); runView(); });
   $('#rResume')?.addEventListener('click', () => { Run.resume(); runView(); });
   $('#rStop')?.addEventListener('click', () => { Run.finish(); runView(); });
+}
+// 口袋模式：跑步時手機放口袋，全黑畫面只顯示時間、距離、目前配速，點了沒反應（防誤觸），滑到右邊才解鎖
+//   螢幕保持亮著（Wake Lock 不放），黑底在 OLED 螢幕上很省電；VoiceOver 與鍵盤用「解鎖口袋模式」按鈕（看不到、口袋裡也碰不到）
+//   「開始後直接進入口袋模式」記在這台手機
+const pocketPref = { get() { try { return localStorage.getItem('cil-run-pocket') === '1'; } catch { return false; } }, set(v) { try { v ? localStorage.setItem('cil-run-pocket', '1') : localStorage.removeItem('cil-run-pocket'); } catch {} } };
+let pocketTick = null, pocketInert = [];
+function pocketOn() {
+  if (!Run?.active() || document.getElementById('pocket')) return;
+  Run.keepAwake();
+  const el = document.createElement('div');
+  el.id = 'pocket'; el.className = 'pocket';
+  el.setAttribute('role', 'dialog'); el.setAttribute('aria-modal', 'true'); el.setAttribute('aria-labelledby', 'pkT');
+  el.innerHTML = `<h2 id="pkT" class="sr" tabindex="-1">口袋模式</h2>
+    <p class="pkstate" id="pkState"></p>
+    <div class="pktime num" id="pkTime"></div>
+    <div class="pkstats"><div><b class="num" id="pkDist"></b><span>km</span></div><div><b class="num" id="pkPace"></b><span>目前配速 /km</span></div></div>
+    <p class="pkask" id="pkAsk" hidden></p>
+    <div class="pkslide" id="pkSlide" aria-hidden="true"><span>滑到右邊解鎖</span><i id="pkKnob"></i></div>
+    <button type="button" class="sr" id="pkUnlock">解鎖口袋模式</button>`;
+  document.body.append(el);
+  // 後面的畫面不能點、VoiceOver 也不會跑出去
+  pocketInert = [...document.body.children].filter((c) => c !== el && !c.inert);
+  for (const c of pocketInert) c.inert = true;
+  el.addEventListener('contextmenu', (e) => e.preventDefault());
+  $('#pkUnlock').onclick = () => pocketOff(true);
+  // 滑動解鎖：按住圓鈕往右拖到底（90%）才算，中途放開會彈回去
+  const knob = $('#pkKnob'), track = $('#pkSlide');
+  let pid = null, x0 = 0, dx = 0, max = 1;
+  const move = (v) => { dx = Math.min(max, Math.max(0, v)); knob.style.transform = `translateX(${dx}px)`; };
+  knob.addEventListener('pointerdown', (e) => {
+    pid = e.pointerId; x0 = e.clientX; max = Math.max(1, track.clientWidth - knob.offsetWidth - 8);
+    try { knob.setPointerCapture(pid); } catch {}
+    track.classList.add('drag');
+  });
+  knob.addEventListener('pointermove', (e) => { if (e.pointerId === pid) move(e.clientX - x0); });
+  const end = (e) => {
+    if (e.pointerId !== pid) return;
+    pid = null; track.classList.remove('drag');
+    if (e.type === 'pointerup' && dx >= max * 0.9) pocketOff(true); else move(0);
+  };
+  knob.addEventListener('pointerup', end); knob.addEventListener('pointercancel', end);
+  paintPocket();
+  pocketTick = setInterval(paintPocket, 1000);
+  $('#pkT').focus();
+}
+function pocketOff(focus) {
+  clearInterval(pocketTick); pocketTick = null;
+  const el = document.getElementById('pocket'); if (!el) return;
+  el.remove();
+  for (const c of pocketInert) c.inert = false;
+  pocketInert = [];
+  if (focus) $('#rPocket')?.focus();
+}
+function paintPocket() {
+  const el = document.getElementById('pocket'); if (!el) return;
+  const y = Run?.session();
+  if (!y || !Run.active()) { pocketOff(); return; }
+  $('#pkTime').textContent = hms(Run.elapsed() / 1000);
+  $('#pkDist').textContent = (y.dist / 1000).toFixed(2);
+  $('#pkPace').textContent = paceStr(Run.currentPace());
+  $('#pkState').textContent = y.status === 'paused' ? (y.auto ? '停下來了，自動暫停' : '已暫停') : '記錄中';
+  el.classList.toggle('paused', y.status === 'paused');
+  const ask = $('#pkAsk');
+  ask.hidden = !pendingAsk;
+  if (pendingAsk && ask.textContent !== pendingAsk.msg) ask.textContent = pendingAsk.msg;
 }
 // 問「跑完了嗎？」：停太久或課表目標到了；畫面在背景時也用通知提醒
 function askFinish(kind) {

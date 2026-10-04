@@ -891,6 +891,25 @@ div.splits{display:grid;width:100%}
 .splits small{font-weight:500;color:var(--ink-2)}
 .splits div.cur b{color:var(--accent)}
 .lapmsg{min-height:1.5em;margin:-6px 0 0}
+.pkpref{width:100%;text-align:left;border-bottom:0}
+/* 口袋模式：全黑（OLED 省電）、字大、灰階不刺眼；不能捲動、縮放、選字 */
+.pocket{position:fixed;inset:0;z-index:2000;background:#000;color:#e6e6e6;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;
+  padding:calc(env(safe-area-inset-top) + 24px) 16px calc(env(safe-area-inset-bottom) + 28px);touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;overscroll-behavior:contain}
+.pkstate{margin:auto 0 0;font-size:18px;letter-spacing:.04em;color:#9a9a9a}
+.pktime{font-size:clamp(72px,26vw,160px);font-weight:700;letter-spacing:-.03em;line-height:1}
+.pocket.paused .pktime{color:#9a9a9a}
+.pkstats{display:grid;grid-template-columns:1fr 1fr;gap:12px;width:100%;max-width:520px;text-align:center}
+.pkstats div{display:grid;gap:6px}
+.pkstats b{font-size:clamp(40px,13vw,72px);font-weight:700;line-height:1}
+.pkstats span{font-size:15px;color:#9a9a9a}
+.pkask{margin:0;max-width:520px;text-align:center;font-size:18px;line-height:1.5;color:#FFB547}
+.pkslide{position:relative;margin-top:auto;width:min(100%,360px);height:64px;border-radius:32px;background:#141414;border:1px solid #2c2c2c;display:grid;place-items:center}
+.pkslide span{font-size:16px;color:#9a9a9a;padding-left:56px}
+.pkslide i{position:absolute;left:4px;top:4px;width:54px;height:54px;border-radius:50%;background:#3c3c3c;touch-action:none;cursor:grab}
+.pkslide i::after{content:"";position:absolute;inset:0;margin:auto;width:13px;height:13px;border-right:3px solid #cfcfcf;border-top:3px solid #cfcfcf;transform:translateX(-3px) rotate(45deg)}
+.pkslide.drag i{background:#555;cursor:grabbing}
+.pkslide:not(.drag) i{transition:transform .25s}
+@media (prefers-reduced-motion:reduce){.pkslide:not(.drag) i{transition:none}}
 .runbtn.nudge{animation:lapnudge .35s ease}
 @keyframes lapnudge{0%,100%{transform:none}30%{transform:translateX(-5px)}70%{transform:translateX(5px)}}
 @media (prefers-reduced-motion:reduce){.runbtn.nudge{animation:none}}
