@@ -322,7 +322,7 @@ test('首頁：比賽日顯示「今天就是 臺北馬拉松」；週末的課�
   await expect(page.locator('.todaycard h2.long')).toHaveText(sat);
 });
 
-test('契約：課表頁與首頁的導覽選擇器還在；首頁不會載入 coach.js、coachcalc.js、coachpdf.js', async ({ page }) => {
+test('契約：課表頁與首頁的導覽選擇器還在；首頁不會載入 coach.js、coachcalc.js、coachpdf.js；單週課表頁不會載入 coach.js', async ({ page }) => {
   const urls = [];
   page.on('request', (r) => urls.push(new URL(r.url()).pathname));
   await enter(page, 't_other');
@@ -334,6 +334,12 @@ test('契約：課表頁與首頁的導覽選擇器還在；首頁不會載入 c
   for (const f of ['/coach.js', '/coachcalc.js', '/coachpdf.js']) expect(urls).not.toContain(f);
   await page.goto('/#/plan/3');
   for (const s of ['.logsum', '.days .day', '.days .logbtn']) await expect(page.locator(s).first()).toBeVisible();
+  // 單週課表頁：加強功能在 coachweek.js，完整的課表教練（coach.js）要到全季、賽事準備這些頁面才下載
+  await expect(page.locator('.days[data-extras="3"]')).toHaveCount(1);
+  expect(urls).toContain('/coachweek.js');
+  expect(urls).not.toContain('/coach.js');
+  await page.goto('/#/plan/season');
+  await expect.poll(() => urls.includes('/coach.js')).toBe(true);
 });
 
 test('英文介面：課表頁除了 translate=no 以外沒有中文', async ({ page }) => {

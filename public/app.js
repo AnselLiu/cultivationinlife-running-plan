@@ -16,8 +16,9 @@ const scan = (...a) => lazy('./qr.js', 'scan')(...a);
 const canScan = () => !!navigator.mediaDevices?.getUserMedia;
 // 導覽看過就不用下載 guide.js（版本號要跟 guide.js 的 VER 一致）
 const Guide = { start: () => lazy('./guide.js', 'start')(), maybeStart: () => { try { if (localStorage.getItem('cil-guide') === '2') return; } catch { return; } lazy('./guide.js', 'maybeStart')(); } };
-// 課表教練（課表頁的用語說明、詳細內容、提醒、滑動換週）：課表畫好、閒下來才載入，首頁不會下載
-const coachWeekExtras = (...a) => lazy('./coach.js', 'weekExtras')(...a);
+// 課表頁的加強功能（用語說明、詳細內容、提醒、滑動換週）：課表畫好、閒下來才載入，首頁不會下載；
+//   在小的 coachweek.js，完整的課表教練（coach.js）只有全季、賽事準備、配速與用語、課表設定、分享才載入
+const coachWeekExtras = (...a) => lazy('./coachweek.js', 'weekExtras')(...a);
 // 課表的全季、賽事準備、配速與用語、課表設定（回傳離開頁面時要做的清理，例如賽事倒數的計時器）
 const coachView = (...a) => lazy('./coach.js', 'coachView')(...a);
 // 分享與匯出（複製、PDF、行事曆）：按了分享鈕才載入；PDF 的繪製另外放在 coachpdf.js，選 PDF 才下載
