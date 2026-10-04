@@ -12,7 +12,8 @@ const PAGES = [
   { name: '課表', path: '/#/plan', login: true },
   { name: '我的', path: '/#/me', login: true },
   { name: '過去的團練', path: '/#/past', login: true },
-  { name: '地圖', path: '/#/map', login: true },
+  // 地圖只記錄、不擋部署（使用者 2026-10-04 決定）：分數主要看國土測繪中心圖磚的速度，CI 在美國量常在門檻邊緣
+  { name: '地圖', path: '/#/map', login: true, reportOnly: true },
 ];
 
 const sh = (cmd) => execSync(cmd, { stdio: 'inherit' });
@@ -48,15 +49,15 @@ for (const p of PAGES) {
   // Lighthouse 偶爾自己出錯（例如 NO_NAVSTART，訊息會說「請再跑一次」）：重試一次
   let ok = false;
   for (let attempt = 0; attempt < 2 && !ok; attempt++) { try { execFileSync('npx', args, { stdio: ['ignore', 'ignore', 'inherit'] }); ok = true; } catch {} }
-  if (!ok) { console.error(`${p.name}：Lighthouse 執行失敗`); failed++; continue; }
+  if (!ok) { console.error(`${p.name}：Lighthouse 執行失敗${p.reportOnly ? '（只記錄，不擋）' : ''}`); if (!p.reportOnly) failed++; continue; }
   const r = JSON.parse(readFileSync(file, 'utf8'));
   // 量完停在別的頁面（被導去登入或同意頁）：分數不是這一頁的，直接算失敗
   const landed = new URL(r.finalDisplayedUrl || r.finalUrl).hash, want = new URL(base + p.path).hash;
-  if (p.login && landed !== want) { console.error(`${p.name}：最後停在 ${landed || '/'}，不是 ${want}`); failed++; continue; }
+  if (p.login && landed !== want) { console.error(`${p.name}：最後停在 ${landed || '/'}，不是 ${want}${p.reportOnly ? '（只記錄，不擋）' : ''}`); if (!p.reportOnly) failed++; continue; }
   const score = Object.fromEntries(Object.keys(LIMITS).map((k) => [k, r.categories[k]?.score ?? 0]));
   const bad = Object.entries(LIMITS).filter(([k, min]) => score[k] < min);
   if (bad.length) {
-    failed++;
+    if (!p.reportOnly) failed++;
     // 列出拖分數的項目，方便直接修
     for (const [k] of bad) for (const ref of r.categories[k].auditRefs) {
       const a = r.audits[ref.id];
@@ -64,9 +65,9 @@ for (const p of PAGES) {
     }
   }
   rows.push({ 頁面: p.name, 效能: Math.round(score.performance * 100), 無障礙: Math.round(score.accessibility * 100), 最佳做法: Math.round(score['best-practices'] * 100),
-    LCP: r.audits['largest-contentful-paint']?.displayValue, CLS: r.audits['cumulative-layout-shift']?.displayValue, 結果: bad.length ? '未達標' : '通過' });
+    LCP: r.audits['largest-contentful-paint']?.displayValue, CLS: r.audits['cumulative-layout-shift']?.displayValue, 結果: bad.length ? (p.reportOnly ? '未達標（只記錄）' : '未達標') : '通過' });
 }
 console.table(rows);
-console.log(`門檻：效能 ${LIMITS.performance * 100}、無障礙 ${LIMITS.accessibility * 100}、最佳做法 ${LIMITS['best-practices'] * 100}`);
+console.log(`門檻：效能 ${LIMITS.performance * 100}、無障礙 ${LIMITS.accessibility * 100}、最佳做法 ${LIMITS['best-practices'] * 100}（${PAGES.filter((p) => p.reportOnly).map((p) => p.name).join('、')}只記錄、不擋部署）`);
 stop();
 process.exit(failed ? 1 : 0);
