@@ -270,7 +270,7 @@ export async function eventView(id) {
   const goReg = () => {
     const f = $('#pform');
     try { sessionStorage.setItem('cil-after-reg', JSON.stringify({ ev: id, option: f?.querySelector('[name=option]:checked')?.value || null, items: f ? readItems(f) : [], note: f?.note?.value || '' })); } catch {}
-    location.hash = '#/me/reg'; toast('先填好賽事報名資料，填完會帶你回來報名');
+    location.hash = '#/me/reg'; toast('先填好團體報名資料，填完會帶你回來報名');
   };
   $('#goReg')?.addEventListener('click', (e) => { e.preventDefault(); goReg(); });
   $('#pform')?.addEventListener('submit', async (e) => {

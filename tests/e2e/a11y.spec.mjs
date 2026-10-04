@@ -61,7 +61,7 @@ for (const scheme of ['light', 'dark']) test(`無障礙 報名設定與審核（
   await page.emulateMedia({ colorScheme: scheme });
   await page.setViewportSize({ width: 375, height: 812 });
   await login(page, 't_chair'); await acceptPrivacyIfAsked(page);
-  for (const p of ['#/new', `#/e/${ev.id}/stats?f=pending`, '#/admin?tab=settings']) {
+  for (const p of ['#/new', `#/e/${ev.id}/stats?f=pending`, '#/admin?tab=settings', '#/admin/settings/signup', '#/admin/settings/features', '#/admin/settings/retention', '#/admin/settings/races']) {
     await page.goto(`/${p}`);
     await page.waitForTimeout(1200);
     expect(await axeBad(page), p).toEqual([]);

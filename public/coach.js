@@ -241,7 +241,7 @@ async function setupView(q) {
       `<label class="chip"><input type="radio" name="dist" value="${k}" ${k === (me.dist === 'hm' ? 'hm' : 'fm') ? 'checked' : ''}><span>${l} <small class="num">${s}</small></span></label>`).join('')}</div>
     <div class="chips gtiles" role="radiogroup" aria-label="組別" id="gtiles">${tiles(me.dist === 'hm' ? 'hm' : 'fm', me.grp)}</div>
     <button type="button" class="btn block" id="grpSave">儲存</button>
-    <p class="tiny" style="margin:0">跟「我的 → 個人資料」是同一個設定</p>`);
+    <p class="tiny" style="margin:0">存在你的帳號，報名與課表配速都用這個組別。${coachOn ? '<a href="#/plan/setup?go=pb">不知道選哪組？用成績推算 ›</a>' : ''}</p>`);
 
   // 2. 課表週期：跟協會賽季，或跟自己的一場比賽排 20 週
   const pickId = future.some((r) => r.id === q.get('race')) ? q.get('race') : null;
@@ -327,7 +327,7 @@ async function setupView(q) {
   const lg = raw ? await legacySection(raw, { races: data.races || [], startRace: tgt?.race || null }) : null;
 
   view.innerHTML = `${subTitle('課表設定', '課表、賽事準備用到的設定')}
-    ${coachOn ? secGrp : ''}${secCyc}${coachOn ? secPb + secTrain + secRace + secBody + secDev : ''}${lg ? lg.html : ''}`;
+    ${secGrp}${secCyc}${coachOn ? secPb + secTrain + secRace + secBody + secDev : ''}${lg ? lg.html : ''}`;
   lg?.bind();
 
   // #view 是共用的節點：這裡加的監聽在離開頁面時拿掉（回傳的清理函式）
@@ -383,19 +383,20 @@ async function setupView(q) {
     });
   };
 
+  // 項目與組別：不管課表教練開關都有（它是帳號資料，報名與課表配速都用）
+  for (const r of view.querySelectorAll('[name=dist]')) r.onchange = () => {
+    const d = distNow(), keep = Object.keys(P.groups(d)).includes(grpNow()) ? grpNow() : d === 'hm' ? 'C' : 'D';
+    $('#gtiles').innerHTML = tiles(d, keep);
+    if (coachOn) pbPaint();
+  };
+  $('#grpSave').onclick = async (e) => {
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    try { await api('/me/plan', { method: 'PUT', body: { dist: distNow(), grp: grpNow() } }); await refreshMe(); toast('已儲存'); if (coachOn) trainPaint(); }
+    catch (err) { toast(err.message); }
+    btn.disabled = false;
+  };
   if (coachOn) {
-    for (const r of view.querySelectorAll('[name=dist]')) r.onchange = () => {
-      const d = distNow(), keep = Object.keys(P.groups(d)).includes(grpNow()) ? grpNow() : d === 'hm' ? 'C' : 'D';
-      $('#gtiles').innerHTML = tiles(d, keep);
-      pbPaint();
-    };
-    $('#grpSave').onclick = async (e) => {
-      const btn = e.currentTarget;
-      btn.disabled = true;
-      try { await api('/me/plan', { method: 'PUT', body: { dist: distNow(), grp: grpNow() } }); await refreshMe(); toast('已儲存'); trainPaint(); }
-      catch (err) { toast(err.message); }
-      btn.disabled = false;
-    };
     $('#pbTime').oninput = $('#pbDist').onchange = () => { setCoachPrefs({ pb: { dist: $('#pbDist').value, time: $('#pbTime').value.trim() } }); pbPaint(); };
     pbPaint();
     for (const k of ['days', 'club', 'vol']) for (const btn of view.querySelectorAll(`[data-${k}]`)) btn.onclick = () => {

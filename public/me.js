@@ -7,7 +7,6 @@ import {
   mfaBanner, MI, myCycle, NICON, openSheet, org, paintCountdown, passkey, pkSupported, qrSVG, reduceMotion, refreshMe, render, ROLE_NAME, row, setMe, subTitle,
   TEAM_ROLE_NAME, teamIcon, teamOf, teams, theme, toast, togglePush, view, ymd
 } from './app.js';
-import * as P from './plan.js';
 import * as I18N from './i18n.js';
 import * as Device from './device.js';
 import { CATS } from './notif-cats.js';
@@ -19,9 +18,6 @@ function meProfile() {
       <form id="mf">
         <div class="grid2"><label>姓名<input name="name" value="${esc(me.name)}" maxlength="20"></label>
           <label>暱稱<input name="nickname" value="${esc(me.nickname || '')}" maxlength="20" placeholder="團裡怎麼叫你"></label></div>
-        <div class="grid2 g-dist"><label>項目<select name="dist"><option value="fm" ${me.dist === 'fm' ? 'selected' : ''}>全馬</option><option value="hm" ${me.dist === 'hm' ? 'selected' : ''}>半馬</option></select></label>
-          <label>組別<select name="grp"></select></label></div>
-        ${feat('coach') ? '<a class="tiny tlink" href="#/plan/setup?go=pb">不知道選哪組？用成績推算 ›</a>' : ''}
         <div class="field"><span class="flabel">所屬跑團</span><span class="fvalue"><span translate="no">${esc(teamOf(me.main_team)?.name || '等待管理員設定')}</span></span><span class="tiny">跟著主團，由管理員設定</span></div>
         <div class="grid2"><label>餐點偏好<select name="meal_pref"><option value="" ${!me.meal_pref ? 'selected' : ''}>未指定</option>
             <option ${me.meal_pref === '葷食' ? 'selected' : ''}>葷食</option><option ${me.meal_pref === '素食' ? 'selected' : ''}>素食</option></select></label>
@@ -30,18 +26,15 @@ function meProfile() {
         <button class="btn block">儲存</button>
       </form>
     </section>
+    ${group('', [row('#/plan/setup?go=grp', MI.flag, `項目與組別：${me.dist === 'hm' ? '半馬' : '全馬'} ${esc(me.grp)} 組`, '課表的配速照組別換算；只在課表設定改')])}
     ${feat('plan_cycle') || cfg.planCycle?.suspended ? group('', [row('#/plan/setup?go=cycle', MI.cal, myCycle().kind === 'race' ? `課表週期：<span translate="no">${esc(myCycle().name)}</span>` : '課表週期：協會賽季',
       cfg.planCycle?.suspended ? '個人週期目前暫停，課表先照協會賽季' : '跟協會賽季，或跟自己的一場比賽排 20 週')]) : ''}`;
   const f = $('#mf');
-  const sync = () => {
-    f.grp.innerHTML = Object.entries(P.groups(f.dist.value)).map(([g, v]) => `<option value="${g}">${g} 組 ${v[0]}</option>`).join('');
-    f.grp.value = Object.keys(P.groups(f.dist.value)).includes(me.grp) ? me.grp : (f.dist.value === 'hm' ? 'C' : 'D');
-  };
-  f.dist.onchange = sync; sync();
   api('/spots').then(({ spots }) => { f.home_spot.innerHTML += spots.filter((x) => x.status === 'approved').map((x) => `<option value="${esc(x.id)}" ${me.home_spot === x.id ? 'selected' : ''}>${esc(x.name)}</option>`).join(''); }).catch(() => {});
   f.onsubmit = async (e) => {
     e.preventDefault();
-    try { setMe((await api('/me', { method: 'PUT', body: { name: f.name.value, dist: f.dist.value, grp: f.grp.value, nickname: f.nickname.value, meal_pref: f.meal_pref.value, phone: f.phone.value, home_spot: f.home_spot.value || null } })).member);
+    // 項目與組別只在課表設定改（不送，伺服器保留原值）
+    try { setMe((await api('/me', { method: 'PUT', body: { name: f.name.value, nickname: f.nickname.value, meal_pref: f.meal_pref.value, phone: f.phone.value, home_spot: f.home_spot.value || null } })).member);
       refreshMe().catch(() => {}); toast('已儲存'); }
     catch (err) { toast(err.message); }
   };
@@ -93,7 +86,7 @@ async function meReg() {
   const lt = (k, label) => `<span class="lbl">${label || F[k].label}${F[k].req ? '<span class="req">必填</span>' : ''}</span>`;
   const input = (k, type = 'text', extra = '', label = '') => `<label>${lt(k, label)}<input name="${k}" type="${type}" maxlength="${F[k].max}" value="${esc(p[k] || '')}" ${extra}></label>`;
   const select = (k, opts) => `<label>${lt(k)}<select name="${k}"><option value="">請選擇</option>${opts.map((g) => `<option ${p[k] === g ? 'selected' : ''}>${g}</option>`).join('')}</select></label>`;
-  view.innerHTML = `${subTitle('賽事報名資料', '填一次，之後幹部代為團體報名都用這份')}
+  view.innerHTML = `${subTitle('團體報名資料', '填一次，之後幹部代為團體報名馬拉松都用這份')}
     <section class="card notice-card"><b>${IC.lock} 這份資料怎麼保護</b>
       <ul class="steps"><li>加密後才存進資料庫，只有你自己看得到完整內容</li>
         <li>只有在你報名「由幹部代為團體報名」的活動、並勾選同意時，那一場的主辦幹部才能下載</li>
@@ -113,7 +106,7 @@ async function meReg() {
         ${input('emergency_rel', 'text', 'placeholder="配偶、父母…"', '關係')}</fieldset>
       ${input('note', 'text', 'placeholder="外籍、身障組、其他需求"')}
       <button class="btn block">儲存</button>
-      ${d.profile ? '<button type="button" class="btn danger block" id="regDel">刪除我的賽事報名資料</button>' : ''}
+      ${d.profile ? '<button type="button" class="btn danger block" id="regDel">刪除我的團體報名資料</button>' : ''}
       ${d.updated_at ? `<p class="tiny center" style="margin:0">上次更新：${ago(d.updated_at)}</p>` : ''}
     </form>`;
   bindAddrField($('#regForm'), 'address', p.address, p.address_zip);
@@ -258,7 +251,7 @@ async function meSecurity(googleMsg) {
       <div class="row" style="gap:8px">${pkSupported() ? `<button class="btn sm" id="pkAdd">${IC.plus}新增通行金鑰</button>` : '<span class="tiny">這個瀏覽器不支援通行金鑰</span>'}
         <button class="btn ghost sm" data-stepup id="pkTest" hidden>驗證一次</button></div>
     </section>
-    ${me.role !== 'member' ? '' : `<details class="card tight"><summary class="tiny">系統初始設定（只限第一位理事長）</summary>
+    ${me.role !== 'member' || !cfg.bootstrapOpen ? '' : `<details class="card tight"><summary class="tiny">系統初始設定（只限第一位理事長）</summary>
       <p class="tiny">幹部身分一律由理事長在後台指派。這裡只用在系統剛建立、還沒有理事長的時候。</p>
       <form id="af" class="row" style="gap:8px"><input name="code" placeholder="初始設定碼" autocapitalize="none" autocorrect="off" spellcheck="false" type="password" aria-label="初始設定碼" style="flex:1;min-width:140px" autocomplete="off"><button class="btn sm">設定</button></form></details>`}
     ${group('', [btnRow('logout', MI.out, '登出'), btnRow('logoutAll', MI.lock, '登出所有裝置', '手機掉了或懷疑被別人登入時')])}`;

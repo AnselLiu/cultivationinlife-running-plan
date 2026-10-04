@@ -1874,6 +1874,7 @@ async function planNewView() {
 // ---------- admin.js（用到才載入）----------
 const adminView = lazy('./admin.js', 'adminView');
 const rosterView = lazy('./admin.js', 'rosterView');
+const settingsPage = lazy('./admin.js', 'settingsPage');
 // 安裝到主畫面：iPhone 要手動「分享 → 加入主畫面」，Android／桌機用瀏覽器的安裝提示
 const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
 const isIOS = () => /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
@@ -2583,13 +2584,13 @@ const teamsView = lazy('./teams.js', 'teamsView');
 // ---------- 我的 ----------
 // ---------- 我的：像 iPhone 設定一樣分組，每一列點進去是一頁 ----------
 const ME_SECTIONS = {
-  profile: '個人資料', races: '我的賽事與倒數', reg: '賽事報名資料', teams: '主團與分團', notify: '通知設定',
+  profile: '個人資料', races: '我的賽事與倒數', reg: '團體報名資料', teams: '主團與分團', notify: '通知設定',
   calendar: '行事曆訂閱', display: '外觀與語言', security: '帳號與安全', privacy: '隱私', assoc: '協會', card: '會籍卡',
 };
 // 設定列的色磚：跟 iPhone 設定一樣每一項一個顏色（深色模式也不會是一整排亮黃方塊）
 const ROW_TILE = { '#/report': 'green', '#/challenge': 'orange', '#/me/races': 'red', '#/me/reg': 'indigo', '#/tickets': 'purple', '#/me/teams': 'teal',
   '#/me/notify': 'red', '#/me/calendar': 'orange', '#/me/display': 'indigo', '#/me/security': 'gray', '#/me/privacy': 'blue', '#/me/assoc': 'indigo', '#/me/card': 'teal',
-  '#/admin': 'gray', '#/roster': 'blue', '#/logs/team': 'green', '#/plan/new': 'green', '#/plan/season': 'green', '#/plan/race': 'red', '#/plan/guide': 'teal', '#/plan/setup': 'gray' };
+  '#/admin': 'gray', '#/admin/settings': 'gray', '#/roster': 'blue', '#/logs/team': 'green', '#/plan/new': 'green', '#/plan/season': 'green', '#/plan/race': 'red', '#/plan/guide': 'teal', '#/plan/setup': 'gray' };
 // 標題與副標中間放一個只給螢幕閱讀器的「，」：VoiceOver 唸「通知設定，推播類別」，不會連成一串沒有停頓
 const rowText = (title, sub) => `<span class="st"><b>${title}</b>${sub ? `<span class="sr">，</span><span class="tiny">${sub}</span>` : ''}</span>`;
 const row = (href, icon, title, sub = '', badge = '') => `<a class="setrow" href="${href}"><span class="sic"${ROW_TILE[href] ? ` style="--sc:var(--tile-${ROW_TILE[href]})"` : ''}>${icon}</span>${rowText(title, sub)}${badge}<span class="chev" aria-hidden="true"></span></a>`;
@@ -2615,6 +2616,7 @@ const MI = {
   calsub: ic('<rect x="3.2" y="4.8" width="17.6" height="15.4" rx="3.4"/><path d="M3.4 9.6h17.2M8 3.2v3.4M16 3.2v3.4M12 12.5v5M9.8 15.3 12 17.5l2.2-2.2"/>'),
   display: ic('<circle cx="12" cy="12" r="8"/><path d="M12 4v16M12 8h6.5M12 12h8M12 16h6.5"/>'),
   addhome: ic('<rect x="4" y="4" width="16" height="16" rx="4"/><path d="M12 8.5v7M8.5 12h7"/>'),
+  sliders: IC.sliders,
 };
 async function meView(section) {
   const welcome = new URLSearchParams(location.hash.split('?')[1] || '').get('welcome');
@@ -2631,7 +2633,13 @@ function raceSub() {
   if (days < 0) return '選擇右上角倒數哪一場';
   return `倒數：<span translate="no">${esc(r.name.replace(/^20\d\d\s*/, '').replace('馬拉松', '馬'))}</span>・${days ? `${days} 天` : '今天'}`;
 }
-// 分組順序：內容類（賽事、分團、幹部）先列，設定類放最後；訓練報表與里程挑戰的上一層是課表，不放這裡（點進去分頁列會跳到課表）
+// 「通知」的副標：這支手機有沒有開推播（主畫面 App 才看得到真的狀態；讀不到就寫一般說明）
+async function pushSub() {
+  try { const reg = await Promise.race([navigator.serviceWorker?.ready, new Promise((r) => setTimeout(() => r(null), 800))]); return reg ? await reg.pushManager?.getSubscription() : null; } catch { return null; }
+}
+// 分組：跟側邊欄同一套名稱（賽事與報名、跑團、幹部、設定）；常用的在上面，每一項從「我的」最多兩下就到
+//   訓練報表與里程挑戰的上一層是課表，不放這裡（點進去分頁列會跳到課表）
+//   幹部組預留給報表頁（cil-ops）一列的位置：加在「系統設定」後面即可
 async function meHome(welcome) {
   const main = teamOf(me.main_team);
   const admin = allow('members') || allow('roles') || allow('settings');
@@ -2646,27 +2654,28 @@ async function meHome(welcome) {
         <span class="tiny" style="display:block">${me.title ? `<span translate="no">${esc(me.title)}</span>` : esc(me.roleName || ROLE_NAME[me.role] || '團員')}・${me.dist === 'hm' ? '半馬' : '全馬'} ${esc(me.grp)} 組</span></span>
       ${main ? `<span class="pill team" style="--tc:${esc(main.color)}">${teamIcon(main, 'xs')}<span translate="no">${esc(main.name)}</span></span>` : '<span class="pill">主團未設定</span>'}
     </a>
-    ${group('賽事與入場券', [
+    ${group('賽事與報名', [
       row('#/me/races', MI.flag, '我的賽事與倒數', raceSub()),
-      row('#/me/reg', MI.form, '賽事報名資料', '幹部代為團體報名時使用', '<span id="regBadge"></span>'),
       row('#/tickets', MI.ticket, '入場券與團購', '領取 QR Code、中獎紀錄'),
+      row('#/me/reg', MI.form, '團體報名資料', '幹部代為報名馬拉松時使用', '<span id="regBadge"></span>'),
     ])}
-    ${group('分團與協會', [
+    ${group('跑團', [
       row('#/me/teams', MI.team, '主團與分團', main ? `主團：<span translate="no">${esc(main.name)}</span>` : '主團由管理員設定'),
       row('#/me/assoc', MI.building, esc(org().name || '台灣耕跑團協會'), `${esc(me.membershipName || '跑友')}・入會、章程與文件`),
       me.membership === 'active' ? row('#/me/card', MI.idcard, '會籍卡', me.paid_until ? `會費繳至 ${esc(me.paid_until)}` : '出示給幹部掃描') : '',
     ])}
-    ${staff ? group('幹部專區', [
-      admin ? row('#/admin', MI.admin, '管理後台', '總覽、會員、權限、分團、系統設定') : '',
+    ${staff ? group('幹部', [
+      admin ? row('#/admin', MI.admin, '管理後台', '總覽、會員、權限、分團、稽核') : '',
+      allow('settings') ? row('#/admin/settings', MI.sliders, '系統設定', '活動報名預設、協會、地圖資料、功能開關') : '',
       allow('roster') ? row('#/roster', MI.roster, '團員名冊') : '',
       canTeamLogs() ? row('#/logs/team', MI.trend, '團員訓練', '分享給教練的團員每週完成率') : '',
       canPublishPlan() ? row('#/plan/new', MI.plan, '發布課表', allow('plan') ? '教練' : '分團團長') : '',
     ]) : ''}
     ${group('設定', [
-      row('#/me/notify', MI.bell, '通知設定', '推播類別、加到主畫面'),
-      row('#/me/calendar', MI.calsub, '行事曆訂閱', '團練與賽事自動出現在手機行事曆', cfg.calendarOn ? '<span class="pill solid">已開啟</span>' : ''),
-      row('#/me/display', MI.display, '外觀與語言', '深淺色、分頁列、語言 Language'),
+      row('#/me/notify', MI.bell, '通知', `<span id="pushSub">${cfg.vapid ? '推播類別、這支手機的推播' : '推播類別'}</span>`),
       row('#/me/security', MI.shield, '帳號與安全', `${me.google ? 'Google 已綁定' : '綁定 Google'}、通行金鑰、登出`),
+      row('#/me/display', MI.display, '外觀與語言', '深淺色、分頁列、語言 Language'),
+      row('#/me/calendar', MI.calsub, '行事曆訂閱', '團練與賽事自動出現在手機行事曆', cfg.calendarOn ? '<span class="pill solid">已開啟</span>' : ''),
       row('#/me/privacy', MI.eye, '隱私', '分享給教練、排行榜、下載或刪除資料'),
     ])}
     ${group('', [isStandalone() ? '' : btnRow('addHome', MI.addhome, '加到主畫面', '才收得到團練通知，入場券沒網路也能出示'),
@@ -2678,8 +2687,10 @@ async function meHome(welcome) {
     openSheet('加到主畫面', `${installCard('me').replace('class="card tight installcard"', 'class="installcard sheetinstall"')}<button type="button" class="btn ghost block" data-close>關閉</button>`, $('#addHome'));
     bindInstall();
   });
-  // 賽事報名資料填好了沒：畫面先出來，狀態晚一點補上（要解密，不要擋住整頁）
+  // 團體報名資料填好了沒：畫面先出來，狀態晚一點補上（要解密，不要擋住整頁）
   api('/me/race-profile').then((r) => { const b = $('#regBadge'); if (b) b.outerHTML = r?.complete ? '<span class="pill solid">已填好</span>' : r?.profile ? '<span class="pill wait">未填完</span>' : ''; }).catch(() => {});
+  // 通知的副標：這支手機的推播狀態
+  if (cfg.vapid) pushSub().then((sub) => { const el = $('#pushSub'); if (el) el.textContent = sub ? '推播已開啟' : '還沒開推播'; });
 }
 // 「我的」的子頁（me.js，用到才載入）：個人資料、賽事、報名資料、分團、通知、行事曆、外觀、安全、隱私、協會、會籍卡、分享 App
 const meSection = lazy('./me.js', 'meSection');
@@ -2742,6 +2753,8 @@ function parentOf(h) {
   if (h.startsWith('/e/') && p.length > 3) return [`#/e/${p[2]}`, '活動'];
   if (h.startsWith('/edit/')) return [`#/e/${p[2]}`, '活動'];
   if (h.startsWith('/logs/m/')) return ['#/logs/team', '團員訓練'];
+  if (h.startsWith('/admin/settings/')) return ['#/admin/settings', '系統設定'];
+  if (h === '/admin/settings') return ['#/admin', '管理後台'];
   if (['/challenge', '/report', '/log', '/plan/new', '/logs/team'].includes(h) || h.startsWith('/plan/')) return ['#/plan', '課表'];
   if (h.startsWith('/t/')) return ['#/teams', '分團'];
   if (['/teams', '/tickets', '/admin', '/roster'].includes(h) || h.startsWith('/m/')) return ['#/me', '我的'];
@@ -2761,6 +2774,7 @@ function nameOf(h) {
   if (N[h]) return N[h];
   if (h.startsWith('/me/')) return ME_SECTIONS[h.slice(4)] || '我的';
   if (h.startsWith('/e/')) return h.endsWith('/stats') ? '統計' : '活動';
+  if (h.startsWith('/admin/settings')) return '系統設定';
   if (h.startsWith('/t/')) return '分團';
   if (h.startsWith('/plan/')) return '課表';
   return '返回';
@@ -2904,6 +2918,10 @@ async function route(hash) {
     if (hash === '/notifications') return await notificationsView();
     if (hash === '/roster') return await rosterView();
     if (hash === '/admin') return await adminView();
+    // 系統設定：清單（等於 #/admin?tab=settings）與子頁
+    if (hash === '/admin/settings') return await adminView('settings');
+    const aset = hash.match(/^\/admin\/settings\/(\w+)$/);
+    if (aset) return await settingsPage(aset[1]);
     if (hash === '/plan/new') return planNewView();
     if (hash === '/me') return await meView();
     const mesec = hash.match(/^\/me\/(\w+)$/);
@@ -2931,10 +2949,10 @@ async function route(hash) {
     if (sc) return await scanView(sc[1]);
     const ev = hash.match(/^\/e\/([\w-]+)$/);
     if (ev) return await eventView(ev[1]);
-    // 課表的全季、賽事準備、配速與用語、課表設定：課表教練關掉時不開放（課表設定仍可以改課表週期）
+    // 課表的全季、賽事準備、配速與用語：課表教練關掉時不開放；課表設定一律開放（項目與組別是帳號資料，課表週期也在這裡）
     const pc = hash.match(/^\/plan\/(season|race|guide|setup)$/);
     if (pc) {
-      if (feat('coach') || (pc[1] === 'setup' && (feat('plan_cycle') || cfg.planCycle?.suspended))) { viewCleanup = await coachView(pc[1]); return; }
+      if (feat('coach') || pc[1] === 'setup') { viewCleanup = await coachView(pc[1]); return; }
       view.innerHTML = `<div class="card">${emptyState('runner', '這個功能目前沒有開放')}<p class="tiny center" style="margin:0">管理員可以在「功能與畫面」打開課表教練</p></div>`;
       return;
     }

@@ -139,6 +139,9 @@ test('功能關閉：課表教練關掉時四個頁面顯示沒有開放，課�
     await page.goto('/#/plan');
     await expect(page.locator('#view .card h2').first()).toContainText(/W\d+|賽後恢復/);
     await expect(page.locator('.planseg')).toHaveCount(0);
+    // 課表設定一律開放：項目與組別是帳號資料（「我的 → 個人資料」連過來）
+    await page.goto('/#/plan/setup?go=grp');
+    await expect(page.locator('#grp #grpSave')).toBeVisible();
   } finally { await apiAs(request, 't_chair', '/settings/features', { method: 'POST', body: { coach: true } }); }
 });
 

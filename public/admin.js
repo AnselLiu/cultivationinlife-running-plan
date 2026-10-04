@@ -1,7 +1,7 @@
 // 耕跑團 PWA — admin.js：從 app.js 拆出來、用到才載入的畫面（第一次開 App 不用下載）
 import * as Party from './party.js';
 import { defaultWindow, SIGNUP_DEFAULTS, tpText } from './signup-window.js';
-import { $, latest, nowTp, openSheet, scanSheet, ago, allow, api, apiAll, applyFeatures, avatar, barChart, bars, bindStepup, cfg, esc, group, IC, largeTitle, me, mfaBanner, nrow, org, pad2, paintCountdown, passkey, refreshMe, render, ROLE_NAME, row, studio, TAB_DEFAULT, TEAM_PERMS, teamAllow, teamIcon, teamOf, teams, toast, view } from './app.js';
+import { $, latest, nowTp, openSheet, scanSheet, ago, allow, api, apiAll, applyFeatures, avatar, barChart, bars, bindStepup, btnRow, cfg, esc, group, IC, largeTitle, me, mfaBanner, MI, nrow, org, pad2, paintCountdown, passkey, refreshMe, render, ROLE_NAME, row, studio, TAB_DEFAULT, TEAM_PERMS, teamAllow, teamIcon, teamOf, teams, toast, view } from './app.js';
 
 // ---------- 管理介面（RBAC、會籍、座位圖）----------
 let adminSeq = 0;
@@ -57,7 +57,10 @@ async function overviewPanel() {
   const g = Object.fromEntries(o.growth.map((x) => [x.m, x.n]));
     // 沒有副標也留一行空白，同一列的數字才會對齊
   const k = (label, v, sub = '') => `<div class="card kpi"><span class="tiny">${label}</span><b class="num">${v ?? '—'}</b><span class="tiny">${sub || '&nbsp;'}</span></div>`;
+  const bc = allow('settings') || (allow('members') && me.role !== 'supervisor');
+  // 群發通知是「動作」：放在總覽最上面一列，點了直接跳到表單（不用捲到最下面）
   return `<section class="card" id="pendingTop" hidden></section>
+    ${bc ? group('', [btnRow('bcJump', MI.bell, '群發通知', '推播給全部或指定分團、身分')]) : ''}
     <section class="kpis">
       ${k('跑友人數', o.members, `本月新加入 ${o.newThisMonth}`)}${k('30 天內活躍', o.active30, o.members ? `${Math.round(o.active30 / o.members * 100)}%` : '')}
       ${k('協會會員數', o.association, `待審 ${o.applied}・將到期 ${o.expiring}`)}${k('團練出席率', o.attendance == null ? '—' : `${o.attendance}%`, '最近 30 天')}
@@ -67,7 +70,7 @@ async function overviewPanel() {
     ${allow('settings') || allow('audit') ? '<section class="card" id="healthBox"><h3>開啟速度與錯誤</h3><p class="tiny" style="margin:0">載入中…</p></section>' : ''}
     <section class="card"><h3>每月新加入</h3>${barChart(months.map((m) => ({ l: `${Number(m.slice(5))}月`, v: g[m] || 0 })), { unit: ' 人', h: 120 })}</section>
     <section class="card"><h3>分團人數</h3>${bars(o.teamSizes.map((t) => [t.name, t.n]))}</section>
-    ${allow('settings') || (allow('members') && me.role !== 'supervisor') ? `<section class="card"><h3>群發通知</h3>
+    ${bc ? `<section class="card" id="bcCard"><h3 id="bcTitle" tabindex="-1">群發通知</h3>
       <form id="bcForm" class="filters">
         <input name="title" maxlength="60" placeholder="標題，例如：週六團練改到河濱" required>
         <textarea name="body" maxlength="300" placeholder="內容（選填）"></textarea>
@@ -131,6 +134,7 @@ function bindOverview() {
   loadHealth();
   loadPending($('#pendingTop'), { hideEmpty: true });
   const f = $('#bcForm'); if (!f) return;
+  $('#bcJump')?.addEventListener('click', () => { $('#bcCard').scrollIntoView({ block: 'start', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' }); f.title.focus({ preventScroll: true }); });
   const body = () => ({ title: f.title.value, body: f.body.value, url: f.url.value.trim(),
     teams: [...f.querySelectorAll('[name=teams]:checked')].map((x) => x.value), roles: [...f.querySelectorAll('[name=roles]:checked')].map((x) => x.value),
     membership: [...f.querySelectorAll('[name=membership]:checked')].map((x) => x.value) });
@@ -529,54 +533,45 @@ const FEATURE_HELP = { coach: '關閉後所有人都看不到這些頁面；不�
   plan_export: '教練已同意分享，預設開啟；關閉後所有人都看不到分享按鈕' };
 // 預設關閉的功能（要明確打開才有）
 const FEATURE_OFF = new Set(['cams', 'rest']);
+// 系統設定：第一層是分組清單（跟「我的」一樣的列，副標是目前的值），點一列進到子頁才是表單；常用的在前、少用但重要的放最後
+//   網址：#/admin/settings（等於 #/admin?tab=settings）、#/admin/settings/<段>；表單、儲存 API、稽核名稱都跟拆開前一樣
+const yrs = (n, none = '不自動刪除') => (Number(n) ? `${Number(n)} 年` : none);
+const SET = {
+  signup: { t: '活動報名預設', icon: IC.calClock, sub: () => { const sd = { ...SIGNUP_DEFAULTS, ...(cfg.settings?.signup || {}) };
+    return `${sd.open_days == null ? '建立後立即開放' : `活動前 ${sd.open_days} 天 ${esc(sd.open_time || '20:00')} 開放`}${sd.approval ? '・需要審核' : ''}`; }, html: () => signupCard() },
+  races: { t: '倒數與常用賽事', icon: MI.flag, sub: () => (cfg.race && !cfg.race.mine ? `協會預設：<span translate="no">${esc(cfg.race.name)}</span>` : '協會預設賽事、常用賽事清單'), html: () => racesCard() },
+  holidays: { t: '國定假日', icon: IC.calendar, sub: () => '每年匯入一次，行事曆標出放假與補班', html: () => holidayCard() },
+  seats: { t: '座位圖（餐敘）', icon: MI.roster, href: '#/admin?tab=events', show: () => cfg.settings?.features?.party !== false, sub: () => '在「活動」分頁設定' },
+  org: { t: '協會資訊', icon: MI.building, sub: () => (org().name ? `<span translate="no">${esc(org().name)}</span>` : '名稱、所屬企業、入會表單、聯絡方式'), html: () => orgCard() },
+  docs: { t: '協會文件', icon: IC.doc, sub: () => ((cfg.settings?.docs || []).length ? `${cfg.settings.docs.length} 份文件` : '章程、組織說明、會費說明'), html: () => docsCard() },
+  training: { t: '課表與團練', icon: MI.plan, sub: () => (org().thu_venue ? `週四團練：<span translate="no">${esc(org().thu_venue)}</span>` : '週四團練地點、Apple 健康捷徑'), html: () => trainingCard() },
+  rest: { t: '跑者休息站來源', icon: IC.pin, sub: () => (cfg.settings?.features?.rest === true ? '已開啟・資料來源與同步狀態' : '功能關閉・可以先設定來源'), html: () => restCard() },
+  cams: { t: '附近即時影像來源', icon: MI.camera, sub: () => (cfg.settings?.features?.cams === true ? '已開啟・資料來源與同步狀態' : '功能關閉・可以先設定來源'), html: () => camsCard() },
+  features: { t: '功能開關', icon: IC.sliders, sub: () => { const n = Object.keys(FEATURE_NAME).filter((k) => featOn(k)).length; return `${n} / ${Object.keys(FEATURE_NAME).length} 項開啟`; }, html: () => featuresCard() },
+  tabs: { t: '分頁列名稱', icon: MI.display, sub: () => { const t = cfg.settings?.tabs || {}; return Object.keys(t).length ? Object.entries(t).map(([k, v]) => `<span translate="no">${esc(v)}</span>`).join('・') : '使用預設名稱'; }, html: () => tabsCard() },
+  mfa: { t: '幹部兩步驟驗證', icon: MI.shield, show: () => (me.realRole || me.role) === 'chair', sub: () => (cfg.requireMfa ? '已開啟' : '關閉'), html: () => mfaCard() },
+  backup: { t: '每日加密備份', icon: IC.lock, sub: () => '每天 03:00 自動備份・保留 35 天', html: () => backupCard() },
+  privacy: { t: '隱私權政策', icon: MI.eye, sub: () => (cfg.settings?.privacy?.version ? `版本 ${esc(cfg.settings.privacy.version)}` : '個資法第 8 條告知內容'), html: () => privacyCard() },
+  retention: { t: '資料保存期限', icon: IC.trash, sub: () => `活動報名 ${yrs(org().event_data_years)}・訓練紀錄 ${yrs(org().log_years)}・稽核紀錄 ${yrs(org().audit_years || 3)}`, html: () => retentionCard() },
+};
+const SET_GROUPS = [['活動與報名', ['signup', 'races', 'holidays', 'seats']], ['協會', ['org', 'docs', 'training']], ['地圖資料', ['rest', 'cams']],
+  ['功能與畫面', ['features', 'tabs']], ['安全與隱私', ['mfa', 'backup', 'privacy', 'retention']]];
+const groupOf = (k) => SET_GROUPS.find(([, ks]) => ks.includes(k))?.[0] || '';
+const featOn = (k) => (FEATURE_OFF.has(k) ? cfg.settings?.features?.[k] === true : cfg.settings?.features?.[k] !== false);
 function settingsPanel() {
-  const o = org(), f = cfg.settings?.features || {}, docs = cfg.settings?.docs || [], pv = cfg.settings?.privacy || {};
-  const sd = { ...SIGNUP_DEFAULTS, ...(cfg.settings?.signup || {}) };
-  return `
-  <h3 class="sgt">協會</h3>
-  <section class="card">
-    <h3>協會資訊</h3>
-    <form id="orgForm">
-      <div class="grid2">
-        <label>協會名稱<input name="name" maxlength="40" value="${esc(o.name || '')}" required></label>
-        <label>簡稱<input name="short" maxlength="12" value="${esc(o.short || '')}"></label>
-      </div>
-      <div class="grid2">
-        <label>所屬企業<input name="parent" maxlength="30" value="${esc(o.parent || '')}" placeholder="耕建築"></label>
-        <label>企業網站<input name="parent_url" type="url" value="${esc(o.parent_url || '')}" placeholder="https://"></label>
-      </div>
-      <label>企業說明（登入頁與「我的」會顯示）<input name="parent_note" maxlength="80" value="${esc(o.parent_note || '')}" placeholder="耕建築企業支持的跑團"></label>
-      <label>入會表單連結<input name="join_form" type="url" value="${esc(o.join_form || '')}" placeholder="https://docs.google.com/forms/…"></label>
-      <label>聯絡方式<input name="contact" maxlength="200" value="${esc(o.contact || '')}" placeholder="Email 或 LINE 官方帳號"></label>
-      <label>週四團練地點（課表的週四備註會顯示）<input name="thu_venue" maxlength="20" value="${esc(o.thu_venue || '')}" placeholder="例如：大佳河濱公園"></label>
-      <label>個資保存期限（寫進隱私權政策的文字）<input name="retention" maxlength="200" value="${esc(o.retention || '')}"></label>
-      <fieldset class="group"><legend>自動清理（每天 03:00 執行）</legend>
-        <div class="grid3">
-          <label>活動報名資料保存<select name="event_data_years">${[0, 1, 2, 3, 5].map((y) => `<option value="${y}" ${Number(o.event_data_years || 0) === y ? 'selected' : ''}>${y ? `${y} 年` : '不自動刪除'}</option>`).join('')}</select></label>
-          <label>訓練紀錄保存<select name="log_years">${[0, 1, 2, 3, 5].map((y) => `<option value="${y}" ${Number(o.log_years || 0) === y ? 'selected' : ''}>${y ? `${y} 年` : '不自動刪除'}</option>`).join('')}</select></label>
-          <label>稽核紀錄保存<select name="audit_years">${[1, 2, 3, 5, 7].map((y) => `<option value="${y}" ${Number(o.audit_years || 3) === y ? 'selected' : ''}>${y} 年</option>`).join('')}</select></label>
-        </div>
-        <p class="tiny" style="margin:0">活動超過保存年限後，報名、入場券與受邀名單會刪除，中獎紀錄只留獎項不留姓名。過期的登入工作階段、180 天前的通知每天都會清掉。</p>
-      </fieldset>
-      <button class="btn">儲存協會資訊</button>
-    </form>
-  </section>
-  <section class="card">
-    <div class="row spread"><h3>協會文件</h3><button class="btn ghost sm" id="addDoc">${IC.plus}新增</button></div>
-    <p class="tiny" style="margin:0">章程、組織說明、會費說明等，跑友在「我的 → 協會」看得到。連結要是 https:// 開頭。</p>
-    <div id="docRows" class="docedit">${docs.map(docRow).join('')}</div>
-    <button class="btn" id="saveDocs" ${docs.length ? '' : 'hidden'}>儲存文件清單</button>
-  </section>
-  <h3 class="sgt">功能與畫面</h3>
-  <section class="card">
-    <h3>功能開關</h3>
-    <form id="featForm" class="toggles">
-      ${Object.entries(FEATURE_NAME).map(([k, v]) => `<label class="switch"><span>${v}${FEATURE_HELP[k] ? `<span class="tiny" style="display:block">${FEATURE_HELP[k]}</span>` : ''}</span><input type="checkbox" name="${k}" ${(FEATURE_OFF.has(k) ? f[k] === true : f[k] !== false) ? 'checked' : ''}><i></i></label>`).join('')}
-      <button class="btn">儲存功能開關</button>
-    </form>
-    <p class="tiny" style="margin:0">關掉後，跑友的畫面上就看不到這個功能；已存的資料不會刪除。</p>
-  </section>
-  <section class="card"><h3>活動報名預設</h3>
+  return SET_GROUPS.map(([g, ks]) => group(g, ks.filter((k) => !SET[k].show || SET[k].show()).map((k) => row(SET[k].href || `#/admin/settings/${k}`, SET[k].icon, SET[k].t, SET[k].sub())))).join('');
+}
+// 子頁：#/admin/settings/<段>，大標題是這一項、副標是分組；返回鍵回到系統設定清單
+async function settingsPage(seg) {
+  if (me.mfaPending) { view.innerHTML = `${largeTitle('系統設定')}${mfaBanner()}`; bindStepup(); return; }
+  const S = SET[seg];
+  if (!allow('settings')) { view.innerHTML = `${largeTitle('系統設定')}<div class="card"><p class="muted" style="margin:0">只有理事長與行政人員可以修改系統設定。</p></div>`; return; }
+  if (!S || S.href || (S.show && !S.show())) { location.replace('#/admin/settings'); return; }
+  view.innerHTML = `${largeTitle(S.t, groupOf(seg))}${S.html()}`;
+  bindSettings();
+}
+const signupCard = () => { const sd = { ...SIGNUP_DEFAULTS, ...(cfg.settings?.signup || {}) };
+  return `<section class="card">
     <form id="signupDefForm" class="toggles">
       <label class="switch"><span>新活動預設需要審核<span class="tiny" style="display:block">報名後由主辦幹部核准；問卷不適用</span></span><input type="checkbox" name="approval" ${sd.approval ? 'checked' : ''}><i></i></label>
       <label class="switch"><span>新活動預設通知報名者<span class="tiny" style="display:block">報名成功、排入候補、確認收款時推播給本人</span></span><input type="checkbox" name="notify" ${sd.notify ? 'checked' : ''}><i></i></label>
@@ -590,71 +585,125 @@ function settingsPanel() {
       <button class="btn">儲存報名預設</button>
     </form>
     <p class="tiny" style="margin:0">只影響之後新增的活動；已建立的活動不會改，幹部建立時也可以逐場調整。</p>
-  </section>
-  <section class="card" id="camSrcCard">
-    <h3>附近即時影像</h3>
-    <p class="tiny" style="margin:0">地點卡會列出 1.5 公里內的政府公開攝影機（沒有就列 3 公里內最近一支），畫面由本站轉送、不保存，跑友的 IP 不會送到影像來源。功能開關打開後，水利署與水利處的鏡頭清單每天清晨 04:00 起自動同步（每小時只同步一個來源）；公路局的清單由電腦上的同步工具更新。關掉來源後立即不再顯示，也不再連線。</p>
-    <div id="camSrcList" class="toggles"><p class="tiny" style="margin:0">載入中…</p></div>
-  </section>
-  <section class="card" id="restSrcCard">
-    <h3>休息站資料來源</h3>
-    <p class="tiny" style="margin:0">練跑地圖的「休息站」圖層與地點卡的「附近休息站」：政府開放資料加上幹部整理的清單，每筆都標出處與授權。小的來源由排程在清晨自動同步；檔案大或很多檔的來源（Workers 免費方案每次執行只有 10 ms CPU，跑不完）由維護工具在電腦上同步，這裡只顯示上次同步的時間。關掉來源後立即不再顯示，也不再連線。</p>
-    <div id="restSrcList" class="toggles"><p class="tiny" style="margin:0">載入中…</p></div>
-  </section>
-  <section class="card">
-    <h3>分頁列名稱</h3>
-    <form id="tabsForm" class="grid3">${Object.entries(TAB_DEFAULT).map(([k, v]) => `<label>${v}<input name="${k}" maxlength="4" placeholder="${v}" value="${esc(cfg.settings?.tabs?.[k] || '')}"></label>`).join('')}
-      <button class="btn" style="grid-column:1/-1">儲存名稱</button></form>
-    <p class="tiny" style="margin:0">名稱會顯示在下方分頁列與 iPad／電腦的側邊欄，每個最多 4 個字，留空就用預設。「拍照」只有在關閉 GPS 跑步時才會出現在分頁列。</p>
-  </section>
-  <section class="card">
-    <h3>倒數與捷徑</h3>
+  </section>`; };
+const racesCard = () => `<section class="card">
+    <h2 class="h3">協會預設倒數</h2>
     <form id="clubRace2" class="grid2">
       <label>協會預設賽事<input name="name" maxlength="30" value="${esc(cfg.race && !cfg.race.mine ? cfg.race.name : '')}"></label>
       <label>日期<input type="date" name="date" value="${esc(cfg.race && !cfg.race.mine ? cfg.race.date : '')}"></label>
       <button class="btn" style="grid-column:1/-1">儲存預設倒數</button>
     </form>
-    <details id="presetBox"><summary class="setsum">常用賽事清單<span class="tiny">團員點右上角倒數就能直接挑</span></summary>
-      <div id="presetRows" class="docedit" style="margin-top:8px"></div>
-      <div class="row" style="gap:8px"><button type="button" class="btn ghost sm" id="presetAdd">${IC.plus}新增一場</button><button type="button" class="btn sm" id="presetSave">儲存清單</button></div>
-    </details>
-    <form id="scForm2" class="row" style="gap:8px">
-      <input name="url" placeholder="Apple 健康捷徑 iCloud 連結" aria-label="Apple 健康捷徑 iCloud 連結" value="${esc(cfg.shortcut || '')}" style="flex:1;min-width:200px">
-      <button class="btn ghost sm">儲存捷徑</button>
-    </form>
+    <p class="tiny" style="margin:0">團員自己沒有設定賽事時，右上角倒數這一場。</p>
   </section>
-  <section class="card" id="holCard">
-    <h3>國定假日</h3>
+  <section class="card">
+    <h2 class="h3">常用賽事清單</h2>
+    <p class="tiny" style="margin:0">團員點右上角倒數就能直接挑。</p>
+    <div id="presetRows" class="docedit"><p class="tiny" style="margin:0">載入中…</p></div>
+    <div class="row" style="gap:8px"><button type="button" class="btn ghost sm" id="presetAdd">${IC.plus}新增一場</button><button type="button" class="btn sm" id="presetSave">儲存清單</button></div>
+  </section>`;
+const holidayCard = () => `<section class="card" id="holCard">
     <p class="tiny" style="margin:0">從新北市政府資料開放平台「政府行政機關辦公日曆表」匯入，行事曆會標出放假與補班，定期揪跑可以選擇遇到國定假日不開。每年公告後（通常前一年 6 月）手動匯入一次。</p>
     <div id="holYears" class="lstats"><span class="tiny">載入中…</span></div>
     <div class="row" style="gap:8px">${[new Date().getFullYear(), new Date().getFullYear() + 1].map((y) => `<button type="button" class="btn ghost sm" data-holy="${y}">匯入 ${y} 年</button>`).join('')}</div>
     <div id="holOut"></div>
+  </section>`;
+const orgCard = () => { const o = org();
+  return `<section class="card">
+    <form id="orgForm">
+      <div class="grid2">
+        <label>協會名稱<input name="name" maxlength="40" value="${esc(o.name || '')}" required></label>
+        <label>簡稱<input name="short" maxlength="12" value="${esc(o.short || '')}"></label>
+      </div>
+      <div class="grid2">
+        <label>所屬企業<input name="parent" maxlength="30" value="${esc(o.parent || '')}" placeholder="耕建築"></label>
+        <label>企業網站<input name="parent_url" type="url" value="${esc(o.parent_url || '')}" placeholder="https://"></label>
+      </div>
+      <label>企業說明（登入頁與「我的」會顯示）<input name="parent_note" maxlength="80" value="${esc(o.parent_note || '')}" placeholder="耕建築企業支持的跑團"></label>
+      <label>入會表單連結<input name="join_form" type="url" value="${esc(o.join_form || '')}" placeholder="https://docs.google.com/forms/…"></label>
+      <label>聯絡方式<input name="contact" maxlength="200" value="${esc(o.contact || '')}" placeholder="Email 或 LINE 官方帳號"></label>
+      <button class="btn">儲存協會資訊</button>
+    </form>
+    <p class="tiny" style="margin:0">週四團練地點在「課表與團練」，個資保存期限與自動清理在「資料保存期限」。</p>
+  </section>`; };
+const docsCard = () => { const docs = cfg.settings?.docs || [];
+  return `<section class="card">
+    <div class="row spread"><p class="tiny" style="margin:0;flex:1">章程、組織說明、會費說明等，跑友在「我的 → 協會」看得到。連結要是 https:// 開頭。</p><button class="btn ghost sm" id="addDoc">${IC.plus}新增</button></div>
+    <div id="docRows" class="docedit">${docs.map(docRow).join('')}</div>
+    <button class="btn" id="saveDocs" ${docs.length ? '' : 'hidden'}>儲存文件清單</button>
+  </section>`; };
+const trainingCard = () => `<section class="card">
+    <form id="venueForm">
+      <label>週四團練地點（課表的週四備註會顯示）<input name="thu_venue" maxlength="20" value="${esc(org().thu_venue || '')}" placeholder="例如：大佳河濱公園"></label>
+      <button class="btn">儲存團練地點</button>
+    </form>
   </section>
-  <h3 class="sgt">安全與隱私</h3>
-  <section class="card" id="bkCard"><div class="row spread"><h3>每日加密備份</h3><button type="button" class="btn ghost sm" id="bkNow">立即備份</button></div>
-    <p class="tiny" style="margin:0">每天凌晨 3 點起自動把資料庫加密備份（AES-GCM），保留 35 天；資料多時分成好幾段，在接下來的整點陸續做完。還原用 tools/restore-backup.mjs，金鑰另外保存在理事長的電腦與密碼管理器。</p>
-    <div id="bkList" class="roster"><p class="tiny" style="margin:0">載入中…</p></div></section>
-  ${(me.realRole || me.role) === 'chair' ? `<section class="card">
-    <h3>幹部兩步驟驗證</h3>
+  <section class="card">
+    <h2 class="h3">Apple 健康捷徑</h2>
+    <p class="tiny" style="margin:0">團員在「拍照分享」用捷徑帶入 Apple 健康的距離與時間。</p>
+    <form id="scForm2" class="row" style="gap:8px">
+      <input name="url" placeholder="Apple 健康捷徑 iCloud 連結" aria-label="Apple 健康捷徑 iCloud 連結" value="${esc(cfg.shortcut || '')}" style="flex:1;min-width:200px">
+      <button class="btn ghost sm">儲存捷徑</button>
+    </form>
+  </section>`;
+const restCard = () => `<section class="card" id="restSrcCard">
+    <p class="tiny" style="margin:0">練跑地圖的「休息站」圖層與地點卡的「附近休息站」：政府開放資料加上幹部整理的清單，每筆都標出處與授權。小的來源由排程在清晨自動同步；檔案大或很多檔的來源（Workers 免費方案每次執行只有 10 ms CPU，跑不完）由維護工具在電腦上同步，這裡只顯示上次同步的時間。關掉來源後立即不再顯示，也不再連線。</p>
+    <div id="restSrcList" class="toggles"><p class="tiny" style="margin:0">載入中…</p></div>
+  </section>`;
+const camsCard = () => `<section class="card" id="camSrcCard">
+    <p class="tiny" style="margin:0">地點卡會列出 1.5 公里內的政府公開攝影機（沒有就列 3 公里內最近一支），畫面由本站轉送、不保存，跑友的 IP 不會送到影像來源。功能開關打開後，水利署與水利處的鏡頭清單每天清晨 04:00 起自動同步（每小時只同步一個來源）；公路局的清單由電腦上的同步工具更新。關掉來源後立即不再顯示，也不再連線。</p>
+    <div id="camSrcList" class="toggles"><p class="tiny" style="margin:0">載入中…</p></div>
+  </section>`;
+// 功能開關分三組：訓練、活動、地圖（地圖的兩項旁邊有「設定來源 ›」）
+const FEATURE_GROUPS = [['訓練', ['gps', 'studio', 'health', 'file', 'coach', 'plan_cycle', 'plan_export']], ['活動', ['party']], ['地圖', ['cams', 'rest']]];
+const featuresCard = () => `<section class="card">
+    <form id="featForm" class="toggles">
+      ${FEATURE_GROUPS.map(([g, ks]) => `<fieldset class="qset featgrp"><legend>${g}</legend>${ks.map((k) => `<label class="switch"><span>${FEATURE_NAME[k]}${FEATURE_HELP[k] ? `<span class="tiny" style="display:block">${FEATURE_HELP[k]}</span>` : ''}${k === 'cams' || k === 'rest' ? `<a class="tiny tlink" href="#/admin/settings/${k}" style="display:block">設定來源 ›</a>` : ''}</span><input type="checkbox" name="${k}" ${featOn(k) ? 'checked' : ''}><i></i></label>`).join('')}</fieldset>`).join('')}
+      <button class="btn">儲存功能開關</button>
+    </form>
+    <p class="tiny" style="margin:0">關掉後，跑友的畫面上就看不到這個功能；已存的資料不會刪除。</p>
+  </section>`;
+const tabsCard = () => `<section class="card">
+    <form id="tabsForm" class="grid3">${Object.entries(TAB_DEFAULT).map(([k, v]) => `<label>${v}<input name="${k}" maxlength="4" placeholder="${v}" value="${esc(cfg.settings?.tabs?.[k] || '')}"></label>`).join('')}
+      <button class="btn" style="grid-column:1/-1">儲存名稱</button></form>
+    <p class="tiny" style="margin:0">名稱會顯示在下方分頁列與 iPad／電腦的側邊欄，每個最多 4 個字，留空就用預設。「拍照」只有在關閉 GPS 跑步時才會出現在分頁列。</p>
+  </section>`;
+const mfaCard = () => `<section class="card">
     <label class="switch"><span>幹部要用通行金鑰驗證才能使用管理功能<span class="tiny" style="display:block">理事、監事、行政人員、教練都適用；一般跑友不受影響</span></span>
       <input type="checkbox" id="mfaToggle" ${cfg.requireMfa ? 'checked' : ''}><i></i></label>
     <p class="tiny" style="margin:0">開啟前請先在「我的 → 帳號與安全」新增通行金鑰並驗證一次，也請其他幹部先新增，否則他們會暫時只能用一般跑友的功能。</p>
-  </section>` : ''}
-  <section class="card">
-    <h3>隱私權政策</h3>
+  </section>`;
+const backupCard = () => `<section class="card" id="bkCard"><div class="row spread"><p class="tiny" style="margin:0;flex:1">每天凌晨 3 點起自動把資料庫加密備份（AES-GCM），保留 35 天；資料多時分成好幾段，在接下來的整點陸續做完。還原用 tools/restore-backup.mjs，金鑰另外保存在理事長的電腦與密碼管理器。</p><button type="button" class="btn ghost sm" id="bkNow">立即備份</button></div>
+    <div id="bkList" class="roster"><p class="tiny" style="margin:0">載入中…</p></div></section>`;
+const privacyCard = () => { const pv = cfg.settings?.privacy || {};
+  return `<section class="card">
     <p class="tiny" style="margin:0">目前版本：${esc(pv.version || '')}。留空就使用系統預設的個資法第 8 條告知內容。<b>內容一改就會自動升版，所有人下次開啟都要重新同意。</b></p>
     <form id="pvForm">
-      <textarea name="body" style="min-height:240px" placeholder="## 一、蒐集目的&#10;…&#10;&#10;- 清單項目">${esc(pv.body || '')}</textarea>
+      <textarea name="body" style="min-height:240px" aria-label="隱私權政策內容" placeholder="## 一、蒐集目的&#10;…&#10;&#10;- 清單項目">${esc(pv.body || '')}</textarea>
       <p class="tiny" style="margin:0">格式：「## 」開頭是標題、「- 」開頭是清單、空一行分段。</p>
       <div class="sheetacts"><a class="btn ghost" href="#/privacy">預覽</a><button class="btn">儲存並升版</button></div>
     </form>
-  </section>`;
-}
+  </section>`; };
+const retentionCard = () => { const o = org();
+  return `<section class="card">
+    <form id="retForm">
+      <label>個資保存期限（寫進隱私權政策的文字）<input name="retention" maxlength="200" value="${esc(o.retention || '')}"></label>
+      <fieldset class="group"><legend>自動清理（每天 03:00 執行）</legend>
+        <div class="grid3">
+          <label>活動報名資料保存<select name="event_data_years">${[0, 1, 2, 3, 5].map((y) => `<option value="${y}" ${Number(o.event_data_years || 0) === y ? 'selected' : ''}>${y ? `${y} 年` : '不自動刪除'}</option>`).join('')}</select></label>
+          <label>訓練紀錄保存<select name="log_years">${[0, 1, 2, 3, 5].map((y) => `<option value="${y}" ${Number(o.log_years || 0) === y ? 'selected' : ''}>${y ? `${y} 年` : '不自動刪除'}</option>`).join('')}</select></label>
+          <label>稽核紀錄保存<select name="audit_years">${[1, 2, 3, 5, 7].map((y) => `<option value="${y}" ${Number(o.audit_years || 3) === y ? 'selected' : ''}>${y} 年</option>`).join('')}</select></label>
+        </div>
+        <p class="tiny" style="margin:0">活動超過保存年限後，報名、入場券與受邀名單會刪除，中獎紀錄只留獎項不留姓名。過期的登入工作階段、180 天前的通知每天都會清掉。</p>
+      </fieldset>
+      <button class="btn">儲存保存期限</button>
+    </form>
+  </section>`; };
 const docRow = (d = {}) => `<div class="drow">
   <input data-k="title" placeholder="文件名稱" maxlength="40" value="${esc(d.title || '')}">
   <input data-k="url" type="url" placeholder="https://" value="${esc(d.url || '')}">
   <input data-k="note" placeholder="說明（選填）" maxlength="80" value="${esc(d.note || '')}">
   <button type="button" class="iconx rm" data-rmdoc aria-label="移除">${IC.minus}</button></div>`;
+// 子頁的綁定：每一段只有在畫面上才綁（一次只畫一段）
 function bindSettings() {
   const loadBk = async () => {
     const r = await api('/backups').catch(() => null);
@@ -665,7 +714,7 @@ function bindSettings() {
       : r.list.length ? r.list.slice(0, 7).map((b) => `<div class="r"><span class="av num" style="font-size:10px">${esc(String(b.key).slice(11, 16).replace('-', '/'))}</span><span><b>${esc(String(b.key).replace('daily/', '').replace('.bin', ''))}</b><span class="tiny" style="display:block">${b.tables || '—'} 張表・${b.rows || '—'} 筆・${Math.round((Number(b.bytes) || b.size || 0) / 1024)} KB・存在 ${esc(r.where || '')}</span></span></div>`).join('')
       : '<p class="tiny" style="margin:0">還沒有備份，今晚 3 點會自動執行第一次。</p>');
   };
-  loadBk();
+  if ($('#bkList')) loadBk();
   $('#bkNow')?.addEventListener('click', async (e) => {
     e.target.disabled = true;
     try { const r = await api('/backups', { method: 'POST', body: {} }); toast(r.started ? '資料較多，備份會在接下來的整點分段做完' : `已備份 ${r.tables} 張表、${r.rows} 筆`); loadBk(); } catch (err) { toast(err.message); }
@@ -675,7 +724,7 @@ function bindSettings() {
     const { years } = await api('/holidays').catch(() => ({ years: [] }));
     if ($('#holYears')) $('#holYears').innerHTML = years.length ? years.map((y) => `<span>${y.year} 年 <b class="num">${y.named}</b> 個節日</span>`).join('') : '<span class="tiny">還沒有匯入任何一年</span>';
   };
-  loadHol();
+  if ($('#holYears')) loadHol();
   for (const b of document.querySelectorAll('[data-holy]')) b.onclick = async () => {
     b.disabled = true; const t = b.textContent; b.textContent = '匯入中…';
     try {
@@ -715,7 +764,7 @@ function bindSettings() {
     };
     if (refocus) (box.querySelector(refocus) || box.querySelector('[data-camsrc]'))?.focus();
   };
-  loadCamSrc();
+  if ($('#camSrcList')) loadCamSrc();
   // 跑者休息站：來源開關、上次同步、筆數、資料日期、錯誤；小來源可以立即同步，大的由維護工具同步（tools/rest-sync.mjs，沒有按鈕）
   const EVERY = { day: 1, week: 7, month: 31 };
   const loadRestSrc = async (refocus) => {
@@ -744,19 +793,23 @@ function bindSettings() {
     };
     if (refocus) (box.querySelector(refocus) || box.querySelector('[data-restsrc]'))?.focus();
   };
-  loadRestSrc();
-  const reload = async (msg) => { await refreshMe(); toast(msg); applyFeatures(); paintCountdown(); adminView('settings'); };
+  if ($('#restSrcList')) loadRestSrc();
+  // 存好後只更新共用狀態（分頁列名稱、功能開關、倒數），不重畫子頁：焦點留在剛按的儲存鍵
+  const reload = async (msg) => { await refreshMe(); toast(msg); applyFeatures(); paintCountdown(); };
   const save = async (key, body, msg) => { try { await api(`/settings/${key}`, { method: 'POST', body }); await reload(msg); } catch (e) { toast(e.message); } };
-  $('#orgForm').onsubmit = (e) => { e.preventDefault(); const f = e.target;
-    save('org', { name: f.name.value, short: f.short.value, join_form: f.join_form.value.trim(), contact: f.contact.value, retention: f.retention.value, thu_venue: f.thu_venue.value.trim(),
-      parent: f.parent.value, parent_url: f.parent_url.value.trim(), parent_note: f.parent_note.value,
-      event_data_years: Number(f.event_data_years.value), log_years: Number(f.log_years.value), audit_years: Number(f.audit_years.value) }, '已儲存協會資訊'); };
+  // 協會資訊拆成三張表單（協會資訊、課表與團練、資料保存期限），每張只送自己的欄位（伺服器沒送的欄位保留原值）
+  $('#orgForm')?.addEventListener('submit', (e) => { e.preventDefault(); const f = e.target;
+    save('org', { name: f.name.value, short: f.short.value, join_form: f.join_form.value.trim(), contact: f.contact.value,
+      parent: f.parent.value, parent_url: f.parent_url.value.trim(), parent_note: f.parent_note.value }, '已儲存協會資訊'); });
+  $('#venueForm')?.addEventListener('submit', (e) => { e.preventDefault(); save('org', { thu_venue: e.target.thu_venue.value.trim() }, '已儲存團練地點'); });
+  $('#retForm')?.addEventListener('submit', (e) => { e.preventDefault(); const f = e.target;
+    save('org', { retention: f.retention.value, event_data_years: Number(f.event_data_years.value), log_years: Number(f.log_years.value), audit_years: Number(f.audit_years.value) }, '已儲存保存期限'); });
   $('#mfaToggle')?.addEventListener('change', async (e) => {
     try { await api('/settings/security', { method: 'POST', body: { require_mfa: e.target.checked } }); await reload(e.target.checked ? '已開啟幹部兩步驟驗證' : '已關閉幹部兩步驟驗證'); }
     catch (err) { e.target.checked = !e.target.checked; toast(err.message); }
   });
-  $('#tabsForm').onsubmit = (e) => { e.preventDefault(); const f = e.target;
-    save('tabs', Object.fromEntries(Object.keys(TAB_DEFAULT).map((k) => [k, f[k].value.trim()])), '已儲存分頁列名稱'); };
+  $('#tabsForm')?.addEventListener('submit', (e) => { e.preventDefault(); const f = e.target;
+    save('tabs', Object.fromEntries(Object.keys(TAB_DEFAULT).map((k) => [k, f[k].value.trim()])), '已儲存分頁列名稱'); });
   // 活動報名預設：即時預覽「下個週六 07:00 的團練」會怎麼算
   const sdf = $('#signupDefForm');
   if (sdf) {
@@ -773,41 +826,38 @@ function bindSettings() {
     sdf.addEventListener('input', preview); sdf.addEventListener('change', preview); preview();
     sdf.onsubmit = (e) => { e.preventDefault(); save('signup', readSd(), '已儲存活動報名預設'); };
   }
-  $('#featForm').onsubmit = (e) => { e.preventDefault(); const f = e.target, body = {};
+  $('#featForm')?.addEventListener('submit', (e) => { e.preventDefault(); const f = e.target, body = {};
     for (const k of Object.keys(FEATURE_NAME)) body[k] = f[k].checked;
-    save('features', body, '已儲存功能開關'); };
+    save('features', body, '已儲存功能開關'); });
   const bindRm = () => { for (const b of document.querySelectorAll('[data-rmdoc]')) b.onclick = () => { b.closest('.drow').remove(); $('#saveDocs').hidden = false; }; };
   bindRm();
-  $('#addDoc').onclick = () => { $('#docRows').insertAdjacentHTML('beforeend', docRow()); $('#saveDocs').hidden = false; bindRm(); };
-  $('#saveDocs').onclick = () => {
+  if ($('#addDoc')) $('#addDoc').onclick = () => { $('#docRows').insertAdjacentHTML('beforeend', docRow()); $('#saveDocs').hidden = false; bindRm(); $('#docRows .drow:last-child input')?.focus(); };
+  if ($('#saveDocs')) $('#saveDocs').onclick = () => {
     const docs = [...document.querySelectorAll('.drow')].map((r) => Object.fromEntries([...r.querySelectorAll('input')].map((i) => [i.dataset.k, i.value.trim()])))
       .filter((d) => d.title || d.url);
     if (docs.some((d) => !/^https:\/\//.test(d.url) || !d.title)) return toast('每份文件都要有名稱，連結要是 https:// 開頭');
     save('docs', { docs }, '已儲存文件清單');
   };
-  $('#pvForm').onsubmit = (e) => { e.preventDefault();
+  $('#pvForm')?.addEventListener('submit', (e) => { e.preventDefault();
     if (!confirm('儲存後政策會升版，所有人下次開啟都要重新同意。確定嗎？')) return;
-    save('privacy', { body: e.target.body.value, bump: true }, '已儲存隱私權政策'); };
-  $('#clubRace2').onsubmit = async (e) => { e.preventDefault(); const f = e.target;
-    try { await api('/settings/club-race', { method: 'POST', body: { name: f.name.value, date: f.date.value } }); await reload('已更新預設倒數'); } catch (err) { toast(err.message); } };
+    save('privacy', { body: e.target.body.value, bump: true }, '已儲存隱私權政策'); });
+  $('#clubRace2')?.addEventListener('submit', async (e) => { e.preventDefault(); const f = e.target;
+    try { await api('/settings/club-race', { method: 'POST', body: { name: f.name.value, date: f.date.value } }); await reload('已更新預設倒數'); } catch (err) { toast(err.message); } });
   // 常用賽事清單
   const presetRow = (p = {}) => `<div class="drow"><input data-k="name" placeholder="比賽名稱" maxlength="40" aria-label="比賽名稱" value="${esc(p.name || '')}">
     <input data-k="date" type="date" aria-label="比賽日期" value="${esc(p.date || '')}"><input data-k="dist" placeholder="全馬／半馬／10K" maxlength="10" aria-label="距離" value="${esc(p.dist || '')}">
     <button type="button" class="iconx rm" data-rmpre aria-label="移除">${IC.minus}</button></div>`;
   const bindPre = () => { for (const b of document.querySelectorAll('[data-rmpre]')) b.onclick = () => b.closest('.drow').remove(); };
-  $('#presetBox').addEventListener('toggle', async (e) => {
-    if (!e.target.open || $('#presetRows').dataset.loaded) return;
-    const r = await api('/races'); $('#presetRows').dataset.loaded = '1';
-    $('#presetRows').innerHTML = r.presets.map(presetRow).join(''); bindPre();
-  });
-  $('#presetAdd').onclick = () => { $('#presetRows').insertAdjacentHTML('beforeend', presetRow()); bindPre(); };
-  $('#presetSave').onclick = async () => {
+  // 常用賽事清單：子頁打開就載入（以前收在 details 裡）
+  if ($('#presetRows')) api('/races').then((r) => { const box = $('#presetRows'); if (!box) return; box.innerHTML = r.presets.map(presetRow).join('') || ''; bindPre(); }).catch((e) => toast(e.message));
+  if ($('#presetAdd')) $('#presetAdd').onclick = () => { $('#presetRows').insertAdjacentHTML('beforeend', presetRow()); bindPre(); $('#presetRows .drow:last-child input')?.focus(); };
+  if ($('#presetSave')) $('#presetSave').onclick = async () => {
     const presets = [...document.querySelectorAll('#presetRows .drow')].map((r) => Object.fromEntries([...r.querySelectorAll('input')].map((i) => [i.dataset.k, i.value.trim()]))).filter((p) => p.name || p.date);
     if (presets.some((p) => !p.name || !p.date)) return toast('每一場都要有名稱和日期');
     try { const r = await api('/settings/race-presets', { method: 'POST', body: { presets } }); toast(`已儲存 ${r.presets.length} 場`); } catch (err) { toast(err.message); }
   };
-  $('#scForm2').onsubmit = async (e) => { e.preventDefault();
-    try { await api('/settings/shortcut', { method: 'POST', body: { url: e.target.url.value.trim() } }); await reload('已儲存捷徑連結'); } catch (err) { toast(err.message); } };
+  $('#scForm2')?.addEventListener('submit', async (e) => { e.preventDefault();
+    try { await api('/settings/shortcut', { method: 'POST', body: { url: e.target.url.value.trim() } }); await reload('已儲存捷徑連結'); } catch (err) { toast(err.message); } });
 }
 
 // ---------- 名冊與角色 ----------
@@ -840,4 +890,4 @@ function roleDialog(id, name, cur) {
   };
 }
 
-export { adminView, rosterView };
+export { adminView, rosterView, settingsPage };

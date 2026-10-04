@@ -47,12 +47,21 @@ test('權限：搜尋跑友指派身分，分頁停在權限', async ({ page }) 
 
 test('系統設定：功能開關、分頁名稱、立即備份；稽核查詢與完整性檢查；名冊查詢', async ({ page }) => {
   await enter(page, 't_chair');
+  // 系統設定是清單：每一列的副標是目前的值，點進去才是表單（#/admin/settings/<段>）
   await page.goto('/#/admin?tab=settings');
+  await expect(page.locator('#panel .setgroup .sgt')).toHaveText(['活動與報名', '協會', '地圖資料', '功能與畫面', '安全與隱私']);
+  await page.locator('#panel a[href="#/admin/settings/tabs"]').click();
+  await expect(page.locator('#view h1')).toHaveText('分頁列名稱');
+  await expect(page.locator('#backLabel')).toHaveText('管理後台');
   await page.locator('#tabsForm [name=home]').fill('揪跑');
   await page.locator('#tabsForm').getByRole('button').click();
   await expect(page.locator('.tabs')).toContainText('揪跑');
   await page.locator('#tabsForm [name=home]').fill('');
   await page.locator('#tabsForm').getByRole('button').click();
+  // 從「我的 → 系統設定」捷徑兩下就到控制項
+  await page.goto('/#/me');
+  await page.locator('#view a[href="#/admin/settings"]').click();
+  await page.locator('#panel a[href="#/admin/settings/backup"]').click();
   await page.locator('#bkNow').click();
   await expect(page.getByText(/已備份/)).toBeVisible();
   await expect(page.locator('#bkList')).toContainText('manual');
@@ -119,7 +128,7 @@ test('群發：標題用了系統安全通知的保留字會就近顯示錯誤�
 
 test('活動報名預設：設定活動前 7 天 20:00，預覽跟著更新', async ({ page, request }) => {
   await enter(page, 't_chair');
-  await page.goto('/#/admin?tab=settings');
+  await page.goto('/#/admin/settings/signup');
   const f = page.locator('#signupDefForm');
   const before = await page.locator('#sdPreview').innerText();
   await f.locator('[name=open_days]').selectOption('7');
@@ -134,11 +143,30 @@ test('活動報名預設：設定活動前 7 天 20:00，預覽跟著更新', as
 test('系統設定：休息站資料來源，只由維護工具同步的來源沒有「立即同步」，顯示上次同步的時間；小來源有按鈕', async ({ page, request }) => {
   await request.get('/api/dev/rest-sync?source=twd');   // 代替維護工具寫入（REST_MOCK 不連外）
   await enter(page, 't_chair');
-  await page.goto('/#/admin?tab=settings');
+  await page.goto('/#/admin/settings/rest');
   const row = (k) => page.locator('#restSrcList .camsrc').filter({ has: page.locator(`[data-restsrc="${k}"]`) });
   await expect(row('twd')).toContainText('由維護工具同步');
   await expect(row('twd')).toContainText('上次同步');
   for (const k of ['twd', 'tpt', 'tprv', 'cpct', 'sav', 'tbk']) await expect(row(k).locator('[data-restsync]')).toHaveCount(0);
   await expect(row('tpbk').locator('[data-restsync="tpbk"]')).toBeVisible();
   await expect(row('ntrv').locator('[data-restsync="ntrv"]')).toBeVisible();
+});
+
+test('系統設定：協會資訊拆成三張表單，各自儲存不會清掉其他欄位', async ({ page, request }) => {
+  await enter(page, 't_chair');
+  const before = (await apiAs(request, 't_chair', '/me')).settings.org;
+  await page.goto('/#/admin/settings/training');
+  await page.locator('#venueForm [name=thu_venue]').fill('E2E 田徑場');
+  await page.locator('#venueForm').getByRole('button', { name: '儲存團練地點' }).click();
+  await expect(page.getByText('已儲存團練地點')).toBeVisible();
+  await page.goto('/#/admin/settings/retention');
+  await page.locator('#retForm [name=log_years]').selectOption('2');
+  await page.locator('#retForm').getByRole('button', { name: '儲存保存期限' }).click();
+  await expect(page.getByText('已儲存保存期限')).toBeVisible();
+  const after = (await apiAs(request, 't_chair', '/me')).settings.org;
+  expect(after.name).toBe(before.name);
+  expect(after.contact).toBe(before.contact);
+  expect(after.thu_venue).toBe('E2E 田徑場');
+  expect(after.log_years).toBe(2);
+  await apiAs(request, 't_chair', '/settings/org', { method: 'POST', body: { thu_venue: before.thu_venue || '', log_years: before.log_years || 0 } });
 });
