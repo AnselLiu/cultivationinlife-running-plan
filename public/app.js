@@ -8,6 +8,7 @@ import * as Guide from './guide.js';
 import { quote, charges } from './pricing.js';
 import * as I18N from './i18n.js';
 import { CATS, CHIPS } from './notif-cats.js';
+import * as Device from './device.js';
 import { tpNow, signupState, signupEnd, evStart, tpText, tpShort, STATE_LABEL, SIGNUP_DEFAULTS } from './signup-window.js';
 // 用到才下載的模組：管理後台、拍照、報表、活動表單與統計、分團
 // 剛部署的那幾秒可能拿到舊檔：載入失敗就等一下、加版本參數再試一次，仍失敗才顯示錯誤
@@ -307,22 +308,22 @@ document.addEventListener('visibilitychange', () => { if (document.visibilitySta
 // 登出、刪除帳號：清掉這台裝置暫存的個人資料
 const clearDeviceData = () => {
   navigator.serviceWorker?.controller?.postMessage({ type: 'CLEAR_DATA' });
+  // 還沒有 Service Worker 控制這一頁（第一次開、強制重新整理）也要清：頁面直接刪
+  for (const c of [Device.API_CACHE, Device.SHARE_CACHE]) globalThis.caches?.delete(c).catch(() => {});
   try { localStorage.removeItem('cil-log-queue'); localStorage.removeItem('cil-coach'); localStorage.removeItem(OWNER_KEY); } catch {}
   navigator.clearAppBadge?.().catch(() => {});
   bellAt = 0; bellFor = null; bellState = { badge: 0, unread: 0 };
 };
-// 這台裝置的課表設定（身體資料）與離線暫存屬於哪個帳號：登入狀態過期、從別台裝置登出所有裝置後，
-//   換另一個人在這台登入時，先清掉上一位的資料（不只靠按「登出」）
-const OWNER_KEY = 'cil-device-owner';
-function bindDeviceData(id) {
-  if (!id) return;
-  try {
-    const cur = localStorage.getItem(OWNER_KEY);
-    if (cur === id) return;
-    if (cur) { localStorage.removeItem('cil-log-queue'); localStorage.removeItem('cil-coach'); }
-    localStorage.setItem(OWNER_KEY, id);
-  } catch {}
+// 這台裝置的課表設定（身體資料）、離線暫存與推播訂閱屬於哪個帳號：登入狀態過期、被撤銷後，
+//   換另一個人在這台登入時，先清掉上一位的資料並取消推播訂閱（不只靠按「登出」，見 device.js）
+const OWNER_KEY = Device.OWNER_KEY;
+const deviceDeps = () => { let storage = null; try { storage = localStorage; } catch {} return { storage, caches: globalThis.caches, dropPush: () => dropPush(false) }; };
+// guest：伺服器明確回覆「沒有登入」（不是斷線）時才清 API 暫存，一次載入只清一次
+function bindDeviceData(id, guest = false) {
+  if (id) Device.bindOwner(id, deviceDeps()).catch(() => {});
+  else if (guest && !sessionPurged) { sessionPurged = true; Device.sessionEnded(deviceDeps()).catch(() => {}); }
 }
+let sessionPurged = false;
 // 登出前：這台裝置的推播訂閱先從伺服器刪掉，再取消瀏覽器端的訂閱（登出後不再收到這個帳號的推播）
 async function dropPush(server = true) {
   try {
@@ -511,8 +512,9 @@ let me = null, cfg = {};
 let bootData = null;
 const takeBoot = (k) => { if (!bootData || bootData.today !== ymd(new Date()) || bootData[k] == null) return null; const v = bootData[k]; bootData[k] = null; return v; };
 // 先畫後抓：上次的 /api/me?boot=1 還在手機裡（Service Worker 暫存）就先用它畫，網路回來再悄悄更新
+//   只用屬於這台裝置目前主人的那份（上一位的登入狀態過期後，不會用他的首頁先畫出來）
 async function peekBoot() {
-  try { const hit = await (await caches.open('cil-api')).match('/api/me?boot=1'); return hit ? await hit.json() : null; } catch { return null; }
+  try { const hit = await (await caches.open(Device.API_CACHE)).match('/api/me?boot=1'); return hit ? Device.bootFor(await hit.json(), localStorage) : null; } catch { return null; }
 }
 // 管理者在後台設定的內容（協會資訊、功能開關、文件、隱私權政策）
 const org = () => cfg.settings?.org || {};
@@ -3731,10 +3733,11 @@ async function renderOnce() {
       try { const r = await fresh; me = r.member; cfg = r; bootData = r.boot || null; } catch { me = null; }
     }
   }
+  let guest = false;
   if (!me) {
-    try { const r = await api('/me'); me = r.member; cfg = r; } catch { me = null; }
+    try { const r = await api('/me'); me = r.member; cfg = r; guest = !me; } catch { me = null; }
   }
-  bindDeviceData(me?.id);
+  bindDeviceData(me?.id, guest);
   paintCountdown();
   applyFeatures();
   $('#bell').hidden = !me;
