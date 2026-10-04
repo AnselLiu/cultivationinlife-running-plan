@@ -6,6 +6,13 @@ const enter = async (page, id = 't_runner') => { await login(page, id); await ac
 const tab = (page, t) => page.locator(`.tabs > a[data-tab="${t}"]`);
 const visibleTabs = (page) => page.locator('.tabs > a[data-tab]:visible');
 const box = (loc) => loc.evaluate((el) => { const r = el.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height, r: r.right, b: r.bottom }; });
+// 捲到 y，等這次的 scroll 事件處理完才回來：瀏覽器在下一個畫面才送 scroll 事件，同一個畫面裡連續捲兩次只會送一次
+//   （例如捲到 400 的事件還沒送、又捲到 340，App 只看到 200 → 340，以為是往下捲）；監聽在 App 之後加，觸發時 App 已經處理過
+const scrollSettled = (page, y) => page.evaluate((y) => new Promise((ok) => {
+  if (Math.round(scrollY) === y) { ok(); return; }
+  addEventListener('scroll', () => ok(), { once: true });
+  scrollTo(0, y);
+}), y);
 
 for (const vp of [{ width: 393, height: 852 }, { width: 375, height: 667 }]) test(`分頁列 ${vp.width}×${vp.height}：5 格都有文字、沒有超出畫面、可以點的範圍至少 44×44`, async ({ page }) => {
   await page.setViewportSize(vp);
@@ -110,13 +117,13 @@ test('往下捲分頁列縮小、往上捲展開；地圖頁不縮小', async ({
   await enter(page);
   await page.goto('/#/me');
   await page.evaluate(() => { document.body.style.minHeight = '4000px'; });
-  await page.evaluate(() => scrollTo(0, 200)); await page.waitForTimeout(50);
-  await page.evaluate(() => scrollTo(0, 400));
+  await scrollSettled(page, 200);
+  await scrollSettled(page, 400);
   await expect(page.locator('.tabs.mini')).toHaveCount(1);
   // 縮小時可以點的範圍仍然至少 44×44
   const b = await box(tab(page, '/plan'));
   expect(b.w).toBeGreaterThanOrEqual(44); expect(b.h).toBeGreaterThanOrEqual(44);
-  await page.evaluate(() => scrollTo(0, 340));
+  await scrollSettled(page, 340);   // 從 400 往上捲 60（超過 24）
   await expect(page.locator('.tabs.mini')).toHaveCount(0);
   await page.goto('/#/map');
   await page.evaluate(() => { dispatchEvent(new Event('scroll')); });
@@ -258,8 +265,8 @@ test('iPhone 橫向（852×393）記錄中往下捲：縮小的分頁列不變�
   await page.goto('/#/me');
   await page.evaluate(() => { document.body.style.minHeight = '4000px'; });
   const h0 = (await box(page.locator('#tabs'))).h;
-  await page.evaluate(() => scrollTo(0, 200)); await page.waitForTimeout(50);
-  await page.evaluate(() => scrollTo(0, 400));
+  await scrollSettled(page, 200);
+  await scrollSettled(page, 400);
   await expect(page.locator('.tabs.mini')).toHaveCount(1);
   await page.waitForTimeout(500);
   const t = await box(page.locator('#tabs')), r = await box(page.locator('#runbar'));
