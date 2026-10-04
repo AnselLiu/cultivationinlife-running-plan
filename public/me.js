@@ -151,13 +151,43 @@ const NPREF = [
   ['signup', '前一晚與集合前提醒、天氣、到貨、中獎'], ['event', '新團練、揪跑、問卷、邀請與賽事提醒'],
   ['training', '新課表、教練回饋、跑後記錄提醒、每月里程'], ['membership', '入團結果、主團、入會與會費到期'],
   ['announce', '協會與分團公告'], ['todo', '入團入會申請、繳費確認、地點審核、天氣調整'],
+  ['ops', '備份、每日額度、前端錯誤、推播與排程異常'], ['report', '每週一的報名、出席、訓練完成率與系統健康'],
 ];
-const prefRows = (p) => NPREF.filter(([k]) => k !== 'todo' || p.officer).map(([k, desc]) => {
+// 待辦：幹部才有；系統狀態與幹部週報：理事長與行政人員才有（伺服器回 ops）
+const prefRows = (p) => NPREF.filter(([k]) => (k !== 'todo' || p.officer) && (!['ops', 'report'].includes(k) || p.ops)).map(([k, desc]) => {
   const locked = p.locked.includes(k);
   return `<label class="setrow nprefrow" id="pref-${k}"><span class="ntile n-${k}" aria-hidden="true">${NICON[k]}</span>
     <span class="st"><b>${CATS[k].zh}</b><span class="tiny">${desc}</span>${locked ? '<span class="tiny">一律推播</span>' : ''}${k === 'todo' && p.reviewForced ? '<span class="tiny">每季權限檢視一律推播</span>' : ''}</span>
     <span class="switch"><input type="checkbox" data-pref="${k}" ${locked || !p.mute.includes(k) ? 'checked' : ''}${locked ? ' disabled' : ''}><i></i></span></label>`;
 });
+// 推播時間：即時（預設）或每日摘要（07:00–22:00 的整點，切到摘要時預選 20:00）；團長多一列「每週一收到分團週報」
+const DG_HOURS = Array.from({ length: 16 }, (_, i) => i + 7);
+const timingCard = (p) => `<section class="setgroup"><h2 class="sgt">推播時間</h2><div class="card" style="display:grid;gap:10px">
+    <div class="seg" role="group" aria-label="推播時間"><button type="button" data-dg="now" aria-pressed="${p.digest == null}">即時</button><button type="button" data-dg="daily" aria-pressed="${p.digest != null}">每日摘要</button></div>
+    <label class="row" id="dgRow" style="gap:8px"${p.digest == null ? ' hidden' : ''}><span>摘要時間</span><select id="dgHour" style="flex:0 0 auto;width:auto">${DG_HOURS.map((h) => `<option value="${h}"${(p.digest ?? 20) === h ? ' selected' : ''}>${String(h).padStart(2, '0')}:00</option>`).join('')}</select></label>
+    <p class="tiny" style="margin:0">帳號安全、系統狀態、幹部待辦、當天與明天的活動異動、集合前提醒一律即時推播。其他通知會先放在通知中心，每天在你選的時間推一則摘要。</p>
+    ${p.teamReport != null ? `<label class="switch"><span>每週一收到分團週報<span class="tiny" style="display:block">只有數字，沒有名字；沒打開也能在分團頁看</span></span><input type="checkbox" id="teamReport" ${p.teamReport ? 'checked' : ''}><i></i></label>` : ''}
+  </div></section>`;
+function bindTiming(p) {
+  let cur = p.digest ?? null;
+  const paint = (v) => {
+    for (const b of document.querySelectorAll('[data-dg]')) b.setAttribute('aria-pressed', String((b.dataset.dg === 'daily') === (v != null)));
+    const r = $('#dgRow'); if (r) r.hidden = v == null;
+    if (v != null && $('#dgHour')) $('#dgHour').value = String(v);
+  };
+  const save = async (v) => {
+    const prev = cur; cur = v; paint(v);
+    try { await api('/me/notify-prefs', { method: 'PUT', body: { digest: v } }); } catch { cur = prev; paint(prev); toast('設定沒有存成功'); }
+  };
+  for (const b of document.querySelectorAll('[data-dg]')) b.onclick = () => {
+    const v = b.dataset.dg === 'daily' ? Number($('#dgHour')?.value) || 20 : null;
+    if ((v == null) !== (cur == null)) save(v);
+  };
+  $('#dgHour')?.addEventListener('change', (e) => save(Number(e.target.value)));
+  $('#teamReport')?.addEventListener('change', async (e) => {
+    try { await api('/me/notify-prefs', { method: 'PUT', body: { teamReport: e.target.checked } }); } catch { e.target.checked = !e.target.checked; toast('設定沒有存成功'); }
+  });
+}
 async function meNotify() {
   // 換人時正在取消上一位的推播訂閱：等它做完再讀，不會把上一位的訂閱當成這個人的
   await Device.pushReady();
@@ -175,11 +205,13 @@ async function meNotify() {
         : '<p class="muted" style="margin:0">推播功能尚未啟用。</p>'}
     </section>
     ${prefs ? `${!sub && cfg.vapid ? '<p class="tiny" style="margin:0 6px">這支手機還沒開啟推播，設定會在開啟後生效</p>' : ''}
+      ${timingCard(prefs)}
       ${group('推播哪些通知', prefRows(prefs))}
       <p class="tiny" style="margin:-4px 6px 0">關掉的類別仍會留在通知中心，只是不推播到手機。設定跟著帳號，換手機也一樣。</p>` : ''}
     ${installCard('me')}`;
   $('#pushBtn')?.addEventListener('click', () => togglePush(sub));
   $('#pushTest')?.addEventListener('click', async () => { try { await api('/push/test', { method: 'POST' }); toast('已送出測試通知'); } catch (e) { toast(e.message); } });
+  if (prefs) bindTiming(prefs);
   // 切換時先改畫面再存；失敗就切回去
   for (const inp of document.querySelectorAll('[data-pref]')) inp.onchange = async () => {
     const mute = [...document.querySelectorAll('[data-pref]:not(:checked):not(:disabled)')].map((x) => x.dataset.pref);

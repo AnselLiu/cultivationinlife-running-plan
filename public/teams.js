@@ -72,6 +72,7 @@ async function teamView(tid, q = '') {
       <p class="tiny" style="margin:0" id="lbHint"></p></section>` : ''}
     </div>
     <a class="card" href="#/plan/new?team=${esc(tid)}" ${teamAllow(tid, 'appoint') ? '' : 'hidden'}><div class="row spread"><h3>發布分團課表</h3><span class="tiny">團長 ›</span></div></a>
+    ${t.my_status === 'active' && t.my_role === 'lead' ? `<a class="card" href="#/weekly?team=${esc(tid)}"><div class="row spread"><h3>上週分團週報</h3><span class="tiny">團長 ›</span></div></a>` : ''}
     ${manage ? teamRosterCard(t, roster, q) : ''}`;
   loadBoard(t); if (inTeam || manage) loadBoardRank(tid, 'week');
 

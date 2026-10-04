@@ -1308,7 +1308,7 @@ const dayPattern = (date) => { const w = d2(date).getDay(); return w === 0 || w 
 // ---------- 通知中心 ----------
 // 分類由伺服器寫入（notif-cats.js 共用登記表）；每類一個實心色磚＋線條圖示＋文字，顏色不是唯一的辨識方式
 const NICON = { security: IC.shieldAlert, change: IC.calAlert, signup: IC.ticket, event: IC.calClock, training: IC.runner,
-  membership: IC.idcard, announce: IC.megaphone, todo: IC.clipCheck, other: IC.bell };
+  membership: IC.idcard, announce: IC.megaphone, todo: IC.clipCheck, other: IC.bell, ops: ic('<path d="M3 12h4l2.5-6 4 12 2.5-6H21"/>'), report: ic('<path d="M4 20V10M10 20V4M16 20v-8M22 20H2"/>') };
 // 整句都是伺服器範本的標題：英文介面可以翻；夾帶活動或分團名稱的標題、內文一律不翻
 const NFIXED = new Set(['新裝置登入', '新增了一把通行金鑰', '移除了一把通行金鑰', '已登出所有裝置', '幹部需要兩步驟驗證', '你已成為理事長', '你已卸任理事長',
   '身分更新', '候補遞補成功', '入會完成', '會籍已到期', '會費今天到期', '有人申請入會', '練跑地圖：有新的地點提議', '每季權限檢視', '跑完了嗎？', '這週練得很兇，注意恢復', '教練回饋了你的訓練', '每日備份還沒做完']);
@@ -2833,6 +2833,7 @@ async function route(hash) {
     if (hash === '/notifications') return await notificationsView();
     if (hash === '/roster') return await rosterView();
     if (hash === '/admin') return await adminView();
+    if (hash === '/weekly') return await lazy('./admin.js', 'weeklyView')();   // 分團頁的「上週分團週報」（畫面在 admin.js）
     if (hash === '/plan/new') return planNewView();
     if (hash === '/me') return await meView();
     const mesec = hash.match(/^\/me\/(\w+)$/);

@@ -1,7 +1,7 @@
 // 耕跑團 PWA — admin.js：從 app.js 拆出來、用到才載入的畫面（第一次開 App 不用下載）
 import * as Party from './party.js';
 import { defaultWindow, SIGNUP_DEFAULTS, tpText } from './signup-window.js';
-import { $, latest, nowTp, openSheet, scanSheet, ago, allow, api, apiAll, applyFeatures, avatar, barChart, bars, bindStepup, cfg, esc, group, IC, largeTitle, me, mfaBanner, nrow, org, pad2, paintCountdown, passkey, refreshMe, render, ROLE_NAME, row, studio, TAB_DEFAULT, TEAM_PERMS, teamAllow, teamIcon, teamOf, teams, toast, view } from './app.js';
+import { $, latest, nowTp, openSheet, scanSheet, ago, allow, api, apiAll, applyFeatures, avatar, barChart, bars, bindStepup, cfg, esc, group, IC, KIND_NAME, largeTitle, me, mfaBanner, nrow, org, pad2, paintCountdown, passkey, refreshMe, render, ROLE_NAME, row, studio, TAB_DEFAULT, TEAM_PERMS, teamAllow, teamIcon, teamOf, teams, toast, view } from './app.js';
 
 // ---------- 管理介面（RBAC、會籍、座位圖）----------
 let adminSeq = 0;
@@ -10,7 +10,7 @@ async function adminView(tab) {
   tab ||= new URLSearchParams(location.hash.split('?')[1] || '').get('tab') || 'overview';
   if (me.mfaPending) { view.innerHTML = `${largeTitle('管理後台')}${mfaBanner()}`; bindStepup(); return; }
   if (!allow('members') && !allow('roles') && !allow('settings')) { view.innerHTML = '<div class="card"><p class="muted">沒有管理權限。</p></div>'; return; }
-  const tabs = [['overview', '總覽'], ['members', '會員'], ['roles', '權限'], ['teams', '分團'], ['events', '活動'], ...(allow('settings') ? [['settings', '設定']] : []), ...(allow('audit') ? [['audit', '稽核']] : [])];
+  const tabs = [['overview', '總覽'], ['members', '會員'], ['roles', '權限'], ['teams', '分團'], ['events', '活動'], ...(allow('settings') ? [['report', '週報'], ['settings', '設定']] : []), ...(allow('audit') ? [['audit', '稽核']] : [])];
   // 只拿統計數字，名單要下條件才查
   const my = ++adminSeq;
   const meta = await api('/members?role=officers');
@@ -37,6 +37,7 @@ async function adminView(tab) {
     : tab === 'teams' ? adminTeamsPanel()
     : tab === 'audit' ? auditPanel()
     : tab === 'settings' ? settingsPanel()
+    : tab === 'report' && allow('settings') ? '<div id="rptBox"><section class="card"><p class="tiny" style="margin:0">載入中…</p></section></div>'
     : await eventsPanel();
   if (my !== adminSeq || !panel.isConnected) return;
   panel.innerHTML = html;
@@ -48,6 +49,7 @@ async function adminView(tab) {
   if (tab === 'audit') bindAudit();
   if (tab === 'events') bindEventsPanel();
   if (tab === 'settings') bindSettings();
+  if (tab === 'report' && allow('settings')) loadReport($('#rptBox'), { scope: 'assoc' });
 }
 
 // 總覽：只有統計數字，不列名單
@@ -57,7 +59,9 @@ async function overviewPanel() {
   const g = Object.fromEntries(o.growth.map((x) => [x.m, x.n]));
     // 沒有副標也留一行空白，同一列的數字才會對齊
   const k = (label, v, sub = '') => `<div class="card kpi"><span class="tiny">${label}</span><b class="num">${v ?? '—'}</b><span class="tiny">${sub || '&nbsp;'}</span></div>`;
-  return `<section class="card" id="pendingTop" hidden></section>
+  return `<section class="card opsalert" id="opsTop" role="alert" hidden></section>
+    ${allow('settings') ? '<section class="card" id="weeklyTop" hidden></section>' : ''}
+    <section class="card" id="pendingTop" hidden></section>
     <section class="kpis">
       ${k('跑友人數', o.members, `本月新加入 ${o.newThisMonth}`)}${k('30 天內活躍', o.active30, o.members ? `${Math.round(o.active30 / o.members * 100)}%` : '')}
       ${k('協會會員數', o.association, `待審 ${o.applied}・將到期 ${o.expiring}`)}${k('團練出席率', o.attendance == null ? '—' : `${o.attendance}%`, '最近 30 天')}
@@ -101,14 +105,113 @@ async function loadHealth(days = 7) {
     ${h.errors.length ? `<div class="roster">${h.errors.map((e) => `<div class="r"><span class="av num" style="font-size:12px">${e.n}</span><span><b style="word-break:break-word">${esc(e.message)}</b>
       <span class="tiny" style="display:block">${esc(e.page || '')}${e.source ? `・${esc(e.source)}:${e.line}` : ''}・${esc(e.device || '')}・${ago(e.last_at)}</span></span></div>`).join('')}</div>`
       : '<p class="tiny" style="margin:0">這段期間沒有錯誤。</p>'}
-    ${budgetHtml(h)}`;
+    ${budgetHtml(h)}
+    ${opsHtml(h)}`;
   for (const b of box.querySelectorAll('[data-hd]')) b.onclick = () => loadHealth(Number(b.dataset.hd));
+  // 總覽最上方：今天有發生中的告警就顯示一張卡（文字，不只靠顏色）
+  const top = $('#opsTop'), on = (h.conditions || []).filter((c) => c.on);
+  if (top) {
+    top.hidden = !on.length;
+    top.innerHTML = on.length ? `<div class="row spread" style="gap:10px"><span><b>系統狀態：${on.map((c) => esc(OPS_TEXT[c.cond] || c.cond)).join('；')}</b></span>
+      <a class="btn ghost sm" href="#/admin?tab=overview" data-opsgo>查看</a></div>` : '';
+    top.querySelector('[data-opsgo]')?.addEventListener('click', (e) => { e.preventDefault(); $('#opsBox')?.scrollIntoView({ block: 'start' }); });
+  }
+}
+// ---------- 系統告警與每日額度（估計）----------
+const OPS_NAME = { backup: '每日備份', quota: '每日額度', stops: '排程工作停下', errors: '前端錯誤', push: '推播', cron: '排程工作失敗' };
+const OPS_TEXT = { backup: '每日備份超過 26 小時沒有完成', quota: '今天的額度用量接近上限', stops: '有排程工作連續因額度停下', errors: '今天的前端錯誤比平常多很多',
+  push: '推播送不出去的比例偏高', cron: '有排程工作連續失敗 3 次、已停止重試' };
+const QUOTA_NAME = { req: 'Worker 請求', d1_read: 'D1 讀取', d1_write: 'D1 寫入', kv_read: 'KV 讀取', kv_write: 'KV 寫入', kv_list: 'KV 列出', kv_del: 'KV 刪除' };
+const big = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(n >= 1e7 ? 0 : 1)}M` : n >= 1e4 ? `${Math.round(n / 1e3)}K` : String(n));
+const hm = (at) => (at ? new Date(`${at.replace(' ', 'T')}Z`).toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Taipei' }) : '');
+function opsHtml(h) {
+  if (!h.conditions) return '';
+  const u = h.usage || {};
+  return `<div id="opsBox"><h3>系統告警</h3>
+    <div class="itemtable">${h.conditions.map((c) => `<div class="itr"><span><b style="font-weight:600">${OPS_NAME[c.cond] || esc(c.cond)}</b>
+      ${c.on && c.detail ? `<span class="tiny" style="display:block;word-break:break-word">${esc(c.detail)}</span>` : ''}</span>
+      <span class="tiny">${c.on ? `<b style="color:var(--race)">發生中${c.since ? `（今天 ${hm(c.since)} 起）` : ''}</b>` : '正常'}</span></div>`).join('')}</div>
+    ${(h.alerts || []).length ? `<h4>最近 14 天的告警</h4><div class="itemtable">${h.alerts.map((a) => `<div class="itr"><span><b class="num" style="font-weight:600">${esc(a.day.slice(5).replace('-', '/'))}</b>
+      <span class="tiny" style="display:block;word-break:break-word">${OPS_NAME[a.cond] || esc(a.cond)}${a.detail ? `・${esc(a.detail)}` : ''}</span></span><span class="tiny">${hm(a.at)}</span></div>`).join('')}</div>`
+      : '<p class="tiny" style="margin:0">最近 14 天沒有告警。</p>'}
+    <p class="tiny" style="margin:0">同一個條件一天最多通知一次，理事長與行政人員不能關這類推播。</p>
+    <h3>今天的額度用量（估計）</h3>
+    ${u.quota ? `<div class="itemtable">${Object.keys(QUOTA_NAME).map((k) => `<div class="itr"><span>${QUOTA_NAME[k]}</span>
+      <span class="num">${big(u.values?.[k] || 0)}／${big(u.quota[k])}（${u.pct[k]}%）${u.pct[k] >= 80 ? ' <b>接近上限</b>' : ''}</span></div>`).join('')}</div>`
+      : '<p class="tiny" style="margin:0">付費方案：不檢查每日額度。</p>'}
+    <p class="tiny" style="margin:0">UTC 日（台北 08:00 重置）。這是估計的下限：每台伺服器最多每 10 分鐘寫一次，電腦上的維護工具直接寫資料庫的不算。</p></div>`;
+}
+
+// ---------- 幹部週報（後台「週報」分頁與分團頁共用）----------
+//   伺服器依身分剝掉看不到的區塊（例如行政人員沒有訓練完成率），這裡只照有的欄位畫；百分比與狀態一律用文字
+const pctT = (x) => (x == null ? '—' : `${x}%`);
+const prevT = (x) => (x == null ? '' : `（前一週 ${x}%）`);
+function reportHtml(r, { scopes = [] } = {}) {
+  const d = r.data || {}, p = r.prev || {};
+  const sel = (id, label, opts, cur) => `<label class="row" style="gap:8px"><span class="tiny">${label}</span><select id="${id}" style="flex:1">${opts.map(([v, t]) => `<option value="${esc(v)}"${v === cur ? ' selected' : ''}>${esc(t)}</option>`).join('')}</select></label>`;
+  const card = (title, lines) => `<section class="card"><h3>${title}</h3>${lines.filter(Boolean).map((l) => `<p style="margin:0">${l}</p>`).join('')}</section>`;
+  const kinds = Object.entries(d.events?.kinds || {}).map(([k, n]) => `${KIND_NAME[k] || k} ${n}`).join('、');
+  const out = [`<section class="card" style="display:grid;gap:8px">
+      ${sel('rptWeek', '週次', (r.weeks || []).map((w) => [w, `${w.slice(5).replace('-', '/')} 那週`]), r.week)}
+      ${scopes.length > 1 ? sel('rptScope', '對象', scopes, r.scope) : ''}
+      <p class="tiny" style="margin:0">上週一到週日的聚合數字，不含任何人的名字與金額。</p></section>`,
+    card('活動', [`${d.events?.n ?? 0} 場（取消 ${d.events?.cancelled ?? 0} 場）`, kinds ? `<span class="tiny">${esc(kinds)}</span>` : '']),
+    card('報名', [`新增 ${d.signups?.new ?? 0}${p.signups != null ? `（前一週 ${p.signups}）` : ''}、取消 ${d.signups?.cancel ?? 0}、候補轉正 ${d.signups?.promoted ?? 0}`]),
+    card('出席', [`出席率 ${pctT(d.attendance?.pct)}${prevT(p.attendance)}`, `<span class="tiny">報到 ${d.attendance?.came ?? 0}／正取 ${d.attendance?.in ?? 0}（不含餐敘與問卷）</span>`,
+      d.party ? `餐敘報到率 ${pctT(d.party.pct)}（${d.party.in}／${d.party.n}）` : '']),
+    card(d.scope === 'assoc' ? '新成員' : '新團員', [d.scope === 'assoc' ? `新跑友 ${d.newcomers?.runners ?? 0}、新協會會員 ${d.newcomers?.assoc ?? 0}` : `新團員 ${d.newcomers?.members ?? 0}`])];
+  if ('training' in d) {
+    const t = d.training;
+    out.push(card('訓練完成率', t ? [`完成率 ${pctT(t.pct)}${prevT(p.training)}`, `<span class="tiny">完成 ${t.done}、部分 ${t.partial}、跳過 ${t.skip}・分享紀錄的 ${t.share} 人中 ${t.who} 人有記錄・共 ${t.km} 公里</span>`]
+      : ['分享的人太少，不顯示', '<span class="tiny">只算同意分享訓練紀錄的人</span>']));
+  }
+  if (d.health) {
+    const hh = d.health, top = Object.entries(hh.quota || {}).sort((a, b) => b[1] - a[1])[0];
+    const al = Object.entries(hh.alerts || {});
+    out.push(card('系統健康', [
+      hh.backup ? `備份：${hh.backup.days >= 7 ? '7 天都完成' : `${hh.backup.days}／7 天完成`}${hh.backup.latest ? `・最新一份 ${esc(hh.backup.latest)}` : ''}${hh.backup.stalled ? `・卡住 ${hh.backup.stalled} 次` : ''}` : '備份：還沒設定',
+      top ? `額度：最高單日 ${QUOTA_NAME[top[0]] || top[0]} ${top[1]}%${top[1] >= 80 ? ' <b>接近上限</b>' : ''}（估計）` : '',
+      `執行額度：停下 ${hh.budget?.stopped ?? 0} 次、超過 ${hh.budget?.over ?? 0} 次${(hh.budget?.top || []).length ? `<span class="tiny" style="display:block">${esc(hh.budget.top.join('、'))}</span>` : ''}`,
+      `前端錯誤率：${hh.errors?.rate == null ? '—' : `${hh.errors.rate}%`}${hh.errors?.prev != null ? `（前一週 ${hh.errors.prev}%）` : ''}`,
+      `推播：送出 ${hh.push?.sent ?? 0}、失敗 ${hh.push?.err ?? 0}、失效 ${hh.push?.gone ?? 0}、丟棄 ${hh.push?.drop ?? 0}`,
+      `告警：${al.length ? al.map(([c, n]) => `${OPS_NAME[c] || esc(c)} ${n} 天`).join('、') : '沒有'}`]));
+  }
+  return out.join('');
+}
+async function loadReport(box, { scope = '', week = '' } = {}) {
+  if (!box) return;
+  const q = new URLSearchParams(); if (scope) q.set('scope', scope); if (week) q.set('week', week);
+  let r;
+  try { r = await api(`/ops/reports?${q}`); } catch (e) { if (box.isConnected) box.innerHTML = `<section class="card"><p class="muted" style="margin:0">${esc(e.status === 404 ? '還沒有週報：每週一 09:00 產生上週的週報' : e.message)}</p></section>`; return; }
+  if (!box.isConnected) return;
+  // 對象：理事長與行政人員是協會版與每個分團；團長是自己的分團
+  const scopes = r.teams ? r.teams.map((t) => [`team:${t}`, teamOf(t)?.name || t]) : [['assoc', '協會'], ...teams().map((t) => [`team:${t.id}`, t.name])];
+  box.innerHTML = reportHtml(r, { scopes });
+  $('#rptWeek')?.addEventListener('change', (e) => loadReport(box, { scope: r.scope, week: e.target.value }));
+  $('#rptScope')?.addEventListener('change', (e) => loadReport(box, { scope: e.target.value }));
+}
+// 分團頁的「上週分團週報」（#/weekly?team=）：畫面和後台同一份程式
+async function weeklyView() {
+  const tid = new URLSearchParams(location.hash.split('?')[1] || '').get('team') || '';
+  view.innerHTML = `${largeTitle('週報', tid ? esc(teamOf(tid)?.name || '') : '')}<div id="rptBox"><section class="card"><p class="tiny" style="margin:0">載入中…</p></section></div>`;
+  await loadReport($('#rptBox'), { scope: /^[\w-]{1,16}$/.test(tid) ? `team:${tid}` : '' });
+}
+// 總覽最上方的「上週週報」小卡：三個數字（不寫查看稽核；完整週報才寫）
+async function loadWeeklyTop() {
+  const box = $('#weeklyTop'); if (!box) return;
+  const r = await api('/ops/reports?scope=assoc&brief=1').catch(() => null);
+  if (!r?.brief || !box.isConnected) return;
+  const b = r.brief;
+  box.innerHTML = `<div class="row spread"><h3>上週週報</h3><a class="btn ghost sm" href="#/admin?tab=report">看完整週報</a></div>
+    <p style="margin:0">報名 ${b.signups}、出席率 ${pctT(b.attendance)}、新成員 ${b.newcomers}</p><span class="tiny">${esc(r.week.slice(5).replace('-', '/'))} 那週</span>`;
+  box.hidden = false;
 }
 // 執行額度（免費方案一次執行 50 個子請求）：排程工作的狀態、推播佇列、最常碰到上限的功能。狀態一律用文字
 const JOB_NAME = { backup: '每日備份', retention: '資料清理', month_summary: '每月總結', quarterly_review: '每季權限檢視', fatigue: '疲勞提醒',
   signup_review_digest: '待審核整理', 'cams.wra': '鏡頭清單（水利署）', 'cams.heo': '鏡頭清單（水利處）', 'cams.thb': '鏡頭狀態重設（公路局）',
   backup_manual: '手動備份', events: '活動提醒', signupOpen: '開放報名通知', followups: '跑完接續', weather: '壞天氣提醒', signupReviews: '待審核失效',
   promoteSweep: '候補遞補', renewals: '會費到期提醒', auditDigest: '稽核摘要', monthSummary: '每月總結', review: '每季權限檢視', push: '推播佇列', cams: '鏡頭清單',
+  opsAlerts: '系統告警', digest: '推播摘要', weeklyReport: '幹部週報', weekly_report: '幹部週報',
   rest: '跑者休息站同步', 'rest.tpbk': '休息站（臺北市河濱自行車租借站）', 'rest.ntrv': '休息站（新北市河濱景觀廁所）' };
 function budgetHtml(h) {
   if (!h.jobs) return '';
@@ -129,6 +232,7 @@ function budgetHtml(h) {
 }
 function bindOverview() {
   loadHealth();
+  loadWeeklyTop();
   loadPending($('#pendingTop'), { hideEmpty: true });
   const f = $('#bcForm'); if (!f) return;
   const body = () => ({ title: f.title.value, body: f.body.value, url: f.url.value.trim(),
@@ -370,7 +474,8 @@ const AUDIT_NAME = {
   'signup.expire': '待審核逾期失效', 'event.orders_export': '下載訂購單',
   'google.link': '綁定 Google', 'login.denied': '登入驗證失敗', 'team.post': '發布分團公告', 'team.post_delete': '刪除分團公告', 'privacy.show_rank': '排行榜設定', broadcast: '群發通知', 'retention.cleanup': '資料保存期限清理', 'event.invite_denied': '邀請連結無效', 'privacy.share_logs': '訓練紀錄分享設定', 'settings.shortcut': '修改捷徑連結',
   'backup.daily': '每日備份', 'backup.manual': '手動備份', 'calendar.add': '加入行事曆', 'calendar.delete': '刪除行事曆項目', 'event.arrived': '通知到貨',
-  'event.notice': '發布活動異動', 'event.reconcile': '對帳', 'holiday.import': '匯入國定假日', 'member.verify': '驗證會籍卡', 'notif.prefs': '修改推播設定',
+  'event.notice': '發布活動異動', 'event.reconcile': '對帳', 'holiday.import': '匯入國定假日', 'member.verify': '驗證會籍卡', 'notif.prefs': '修改推播設定', 'notif.digest': '修改推播摘要時間', 'notif.team_report': '分團週報推播',
+  'ops.report': '產生幹部週報', 'ops.report_view': '查看幹部週報', 'ops.alert': '系統告警',
   'push.subscribe': '開啟推播', 'push.unsubscribe': '關閉推播', 'push.truncated': '推播分批送出', 'role.handover': '移交理事長', 'route.delete': '刪除路線',
   'spot.add': '新增地點', 'spot.propose': '提議地點', 'spot.approve': '核准地點', 'spot.update': '修改地點', 'spot.delete': '刪除地點', 'spot.report_delete': '刪除現場回報',
   'settings.cams': '附近即時影像來源開關', 'settings.cams_sync': '同步攝影機清單', 'cam.link.add': '新增直播連結', 'cam.link.delete': '刪除直播連結',
@@ -840,4 +945,4 @@ function roleDialog(id, name, cur) {
   };
 }
 
-export { adminView, rosterView };
+export { adminView, rosterView, weeklyView };

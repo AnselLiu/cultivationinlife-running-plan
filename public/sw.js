@@ -4,7 +4,7 @@
 //   更新：新版本裝好後先等待，畫面提示「有新版本」，使用者按下才切換（不會在填表單時突然重整）
 //   推播：顯示通知並更新主畫面圖示的未讀數字
 //   分享：從其他 App 分享 GPX／TCX 檔過來，暫存後打開拍照分享
-const CACHE = 'cil-v63';
+const CACHE = 'cil-v64';
 const API_CACHE = 'cil-api';
 const SHARE_CACHE = 'cil-share';
 // 地圖圖磚：看過的與「下載離線地圖」存的都在這裡，最多約 3000 張，先存的先清
@@ -119,21 +119,22 @@ self.addEventListener('push', (e) => {
     await self.registration.showNotification(d.title || '耕跑團', {
       body: d.body || '', icon: '/icons/icon-192.png', badge: '/icons/icon-192.png',
       tag: d.tag || undefined, renotify: !!(d.tag && d.re), timestamp: d.ts || Date.now(), lang: 'zh-Hant-TW',
-      data: { url: d.url || '/', id: d.id || null },
+      data: { url: d.url || '/', id: d.id || null, nr: !!d.nr },
     });
     await refreshBadge();
     // 開著的 App 只拿到「去重抓」的訊號，不帶通知內容
     for (const c of await clients.matchAll({ type: 'window', includeUncontrolled: true })) c.postMessage({ type: 'notif', cat: d.cat || null });
   })());
 });
-// 點推播：只接受站內網址（不能被拿來做開放式轉址）；標為已讀；已開著的 App 用 postMessage 導頁（不受控制的視窗 navigate() 會失敗）
+// 點推播：只接受站內網址（不能被拿來做開放式轉址）；標為已讀（每日摘要 nr 不標：它借用的是最新那一則的 id，點摘要不代表看過那一則）；
+//   已開著的 App 用 postMessage 導頁（不受控制的視窗 navigate() 會失敗）
 const SAFE_URL = /^\/(#\/[\w/?=&.%-]*)?$/;
 self.addEventListener('notificationclick', (e) => {
   e.notification.close();
-  const { url: raw, id } = e.notification.data || {};
+  const { url: raw, id, nr } = e.notification.data || {};
   const url = SAFE_URL.test(raw || '') ? raw : '/#/notifications';
   e.waitUntil((async () => {
-    if (id) await fetch('/api/notifications/read', { method: 'POST', credentials: 'same-origin', keepalive: true,
+    if (id && !nr) await fetch('/api/notifications/read', { method: 'POST', credentials: 'same-origin', keepalive: true,
       headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id }) }).catch(() => {});
     const w = (await clients.matchAll({ type: 'window', includeUncontrolled: true })).find((x) => new URL(x.url).origin === location.origin);
     if (w) { await w.focus().catch(() => {}); w.postMessage({ type: 'go', url }); } else await clients.openWindow(url);
