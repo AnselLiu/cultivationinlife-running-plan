@@ -31,11 +31,14 @@ const ACCESS = { public: '免費公共', paid: '付費入場', customer: '店家
 // 服務標籤（地點卡、休息站卡）
 const SVC = [[1, '飲水'], [2, '廁所'], [4, '淋浴'], [8, '置物櫃'], [16, '補給'], [32, '無障礙'], [64, '親子'], [128, '座位'], [256, '打氣維修'], [512, '24 小時']];
 const subOf = (t, s) => SUB[t]?.[s] || TYPE[t] || '';
+// 店家（超商、店家奉茶、店家廁所）：Cool map 標的店家飲水與廁所是「待確認」，跟一般店家一樣用白底圖示
+const STORE_SUB = new Set(['store', 'shop']);
+const isShop = (x) => x.access === 'customer' || (x.access === 'unverified' && STORE_SUB.has(x.subtype));
 // 使用說明：依使用方式與細項
 function usage(x) {
   const sub = subOf(x.type, x.subtype);
   if (x.access === 'paid') return '付費入場後可用';
-  if (x.access === 'unverified') return `${sub}（待確認），請先詢問`;
+  if (x.access === 'unverified') return STORE_SUB.has(x.subtype) ? '店家・待確認，建議先詢問' : `${sub}（待確認），請先詢問`;
   if (x.access === 'customer') return x.type === 'toilet' ? '店家廁所，依營業時間，建議先詢問' : x.type === 'water' ? '店家提供，依營業時間，建議先詢問' : '店家，依營業時間，建議先詢問';
   return { fountain: '免費・公共直飲臺', indoor: '免費・室內飲水機', public: '免費・公共廁所', river: '免費・河濱公園廁所', station: x.type === 'toilet' ? '免費・加油站廁所' : '免費・補給站',
     bike: '免費補水與打氣・河濱自行車租借站', locker: '寄物服務' }[x.subtype] || `免費・${sub}`;
@@ -182,7 +185,7 @@ const match = (s) => (!types.size || [...types].some((k) => s[3] & GROUPS[k])) &
 // ---- 地圖針 ----
 const pinHtml = (s, sel) => {
   const o = openOf(s[8]);
-  return `<div class="rpin t-${s[1]}${s[4] === 'customer' ? ' cust' : ''}${s[4] === 'unverified' ? ' unv' : ''}${o?.open === false ? ' closed' : ''}${sel ? ' sel' : ''}" data-rid="${esc(s[0])}">${rglyph(s[1])}</div>`;
+  return `<div class="rpin t-${s[1]}${isShop({ access: s[4], subtype: s[2] }) ? ' cust' : ''}${s[4] === 'unverified' ? ' unv' : ''}${o?.open === false ? ' closed' : ''}${sel ? ' sel' : ''}" data-rid="${esc(s[0])}">${rglyph(s[1])}</div>`;
 };
 // 正在看的那一處：不管類型 chip、「現在開放」、縮放程度，甚至圖層關著，都畫出來（從地點卡打開時才看得到在哪）
 const curPin = () => (cur?.s ? cur.s : null);
@@ -253,7 +256,7 @@ function credits(x) {
 // 開放時間那一行：看得懂就顯示開放狀態，看不懂只顯示原文；店家、場館沒有時間時寫「依…」
 function hoursLine(x) {
   const o = openOf(x.hours), raw = x.hours_raw || (x.hours && !o ? x.hours : '');
-  const fallback = x.access === 'customer' ? '依店家營業時間' : x.type === 'shower' && ['center', 'pool'].includes(x.subtype) ? '依場館公告' : '';
+  const fallback = isShop(x) ? '依店家營業時間' : x.type === 'shower' && ['center', 'pool'].includes(x.subtype) ? '依場館公告' : '';
   if (!o && !raw && !fallback) return '';
   return `<p class="ohours"><span class="ostat ${o ? (o.open ? 'on' : 'off') : ''}">${o ? esc(o.label) : raw ? '開放時間' : fallback}</span>${o && x.hours ? `<span class="tiny">${esc(x.hours)}</span>` : ''}${raw ? `<span class="tiny"><span translate="no">${esc(raw)}</span></span>` : ''}</p>`;
 }
@@ -284,7 +287,7 @@ export async function openStop(id, opt = {}) {
   ctx.panel().innerHTML = `<section class="card spotcard restcard" aria-labelledby="restName">
       <div class="resthead">${backTo(from)}
       <div class="row spread" style="flex-wrap:nowrap;align-items:flex-start"><div class="row" style="gap:12px;align-items:center;flex-wrap:nowrap;min-width:0">
-        <span class="rtile t-${x.type}${x.access === 'customer' ? ' cust' : ''}" aria-hidden="true">${rglyph(x.type)}</span>
+        <span class="rtile t-${x.type}${isShop(x) ? ' cust' : ''}" aria-hidden="true">${rglyph(x.type)}</span>
         <div style="min-width:0"><span class="tiny">${TYPE[x.type]}・${subOf(x.type, x.subtype)}</span>${e?.hidden ? ' <span class="pill wait">已隱藏</span>' : ''}${e && !e.enabled ? ' <span class="pill wait">來源已停用</span>' : ''}
           <h2 id="restName" tabindex="-1" style="margin:2px 0 0"><span translate="no">${esc(x.name)}</span></h2></div></div>
         <button class="xbtn" id="restClose" aria-label="關閉，回地點清單">${X_SVG}</button></div></div>
@@ -376,7 +379,7 @@ async function nearLoad(s, editor) {
   if (document.querySelector('.infochips') && !document.querySelector('.infochips > span')) document.querySelector('.infochips').remove();
   // 分隔點用 .rsep（CSS 畫，中文「・」、英文「 · 」）：文字節點各自翻譯時前後的空白會被修掉，點不能跟文字黏在同一個節點
   const sep = '<span class="rsep" aria-hidden="true"></span>';
-  const row = (x) => { const o = openOf(x.hours), a = { customer: '店家', paid: '付費', unverified: '待確認' }[x.access]; return `<button type="button" class="rnitem" data-rest="${esc(x.id)}"><span class="rnname"><span>${subOf(x.type, x.subtype)}</span>${sep}<span translate="no">${esc(x.name)}${x.place ? ` ${esc(x.place)}` : ''}</span></span>
+  const row = (x) => { const o = openOf(x.hours), a = x.access === 'unverified' && STORE_SUB.has(x.subtype) ? `店家</span>${sep}<span>待確認` : { customer: '店家', paid: '付費', unverified: '待確認' }[x.access]; return `<button type="button" class="rnitem" data-rest="${esc(x.id)}"><span class="rnname"><span>${subOf(x.type, x.subtype)}</span>${sep}<span translate="no">${esc(x.name)}${x.place ? ` ${esc(x.place)}` : ''}</span></span>
       <span class="tiny"><span>${distTxt(x.dist)}</span>${o ? `${sep}<span class="ostat ${o.open ? 'on' : 'off'}">${o.open ? '開放中' : '目前未開放'}</span>` : ''}${a ? `${sep}<span>${a}</span>` : ''}</span></button>`; };
   box.innerHTML = `<div class="rngroups">${Object.entries(TYPE).map(([k, v]) => `<div class="rng"><span class="rtile t-${k}" aria-hidden="true">${rglyph(k)}</span><div class="rngbody"><b>${v}</b>
       ${(g[k] || []).length ? (g[k] || []).map(row).join('') : '<p class="tiny" style="margin:0">1 公里內沒有資料</p>'}

@@ -4,11 +4,12 @@
 
 // 狀態：shrink＝直飲臺只剩 1 筆（完整性檢查要擋下）；drop＝直飲臺少 D4、騎跡少「末段補給站」（要停用）；
 //   failPage＝騎跡第幾頁的路線檔回 500（測中斷續跑）；change＝臺北公廁的資料變了（測幹部修正不被覆蓋）；
-//   big＝租借站回應超過 Worker 來源的 64 KB 上限；kill＝排程拿到這個來源後當成被平台強制中斷（測隔天重試）；hits＝每個網址被抓了幾次
-export const state = { shrink: false, drop: false, failPage: 0, change: false, big: false, kill: '', hits: {} };
+//   big＝租借站回應超過 Worker 來源的 64 KB 上限；kill＝排程拿到這個來源後當成被平台強制中斷（測隔天重試）；hits＝每個網址被抓了幾次（金鑰換成 ***）
+//   nokey＝沒有設定環境部的金鑰（第二批來源要跳過、不連線）
+export const state = { shrink: false, drop: false, failPage: 0, change: false, big: false, nokey: false, kill: '', hits: {} };
 export function control(q) {
-  if (q.has('reset')) Object.assign(state, { shrink: false, drop: false, failPage: 0, change: false, big: false, kill: '', hits: {} });
-  for (const k of ['shrink', 'drop', 'change', 'big']) if (q.has(k)) state[k] = q.get(k) === '1';
+  if (q.has('reset')) Object.assign(state, { shrink: false, drop: false, failPage: 0, change: false, big: false, nokey: false, kill: '', hits: {} });
+  for (const k of ['shrink', 'drop', 'change', 'big', 'nokey']) if (q.has(k)) state[k] = q.get(k) === '1';
   if (q.has('kill')) state.kill = /^[a-z]{2,6}$/.test(q.get('kill')) ? q.get('kill') : '';
   if (q.has('failPage')) state.failPage = Number(q.get('failPage')) || 0;
   return { ...state };
@@ -105,10 +106,72 @@ const SAV = [SAV_HEAD,
   sav('測試籃球場', '籃球場', SINGLE, '免費對外開放使用', 25.034, 121.535),
 ].join('\r\n');
 
+// 第二批：環境部開放資料 API（欄位名稱與值的寫法照 2026-10-04 抓的真實資料）
+//   Cool map：有無欄位是 '1'／'0'；coolingtype 是店家或機關名（統一超商、全家便利商店、台北市政府、第一銀行）；
+//     stationtype 是公有涼爽點、合作涼爽點、遮蔭空間；營業時間最常見的是「24小時營業」
+//   環境部公廁：一列一間廁間，名稱帶廁間與樓層（「博愛公園-女廁」「耐斯王子大飯店1F女廁」）；縣市是代碼（63000＝臺北市）；
+//     評等只有特優級、優等級、普通級、不合格；公廁類別沒有「加油站」（加油站在「商業營業場所」），飯店放在「其他」；管理單位是機關名
+//   跑點：板橋第二運動場（seed050：25.013897, 121.457759）、苓雅運動園區（seed36：22.62544, 120.33483）、大佳河濱公園（seed07）
+//   遠方（24.30, 121.30）1 公里內沒有跑點：半徑篩選要丟掉
+const cool = (recordid, placename, city, coolingtype, lat, lng, f = {}) => ({ datasetid: f.ds || '室內', recordid, coolingtype, stationtype: f.st || '公有涼爽點', placename, city,
+  district: '測試區', address: `${city}測試路${recordid}號`, phone: '(02)2960-3456', twd97tm2_x: '', twd97tm2_y: '', longitude: String(lng), latitude: String(lat),
+  openinghours: f.hours ?? '08:00~17:00', airconditioning: f.ac ?? '1', restroom: f.wc ?? '0', seats: f.seats ?? '1', waterdispenser: f.water ?? '0', isoutdoor: '0', isaccessible: f.acc ?? '0' });
+const COOP = '合作涼爽點';
+const COOL = () => [
+  cool('C1', '新北市板橋區測試公所', '新北市', '新北市政府', 25.0142, 121.4580, { water: '1', wc: '1', acc: '1' }),
+  cool('C2', '板橋測試公園涼亭', '新北市', '新北市政府', 25.0135, 121.4572, { wc: '1', ds: '戶外', st: '遮蔭空間', hours: '' }),
+  cool('C3', '全家便利商店板橋二運店', '新北市', '全家便利商店', 25.0145, 121.4590, { water: '1', wc: '1', st: COOP, hours: '24小時營業' }),
+  cool('C4', '臺灣測試銀行板橋分行', '新北市', '第一銀行', 25.0130, 121.4590, { water: '1', st: COOP, hours: '9:00~15:30' }),
+  cool('C5', '臺北市中山區測試公所', '臺北市', '台北市政府', 25.0740, 121.5405, { water: '1', wc: '1' }),     // 臺北市的公有點：不收
+  cool('C6', '萊爾富大直測試店', '臺北市', '萊爾富', 25.0730, 121.5410, { wc: '1', st: COOP, hours: '24 小時營業' }),
+  cool('C7', '遠方測試公所', '新竹縣', '新竹縣政府', 24.30, 121.30, { water: '1' }),                     // 1 公里內沒有跑點
+  cool('C8', '板橋測試活動中心', '新北市', '新北市政府', 25.0138, 121.4585),                             // 只有冷氣座位：不收
+  cool('C9', '苓雅測試圖書館', '高雄市', '高雄市政府', 22.6260, 120.3350, { water: '1', hours: '週二至週日 08:30–21:00' }),
+  // 「東門市場」含「門市」：公有點要先判斷，不能當成店家（臺北市的公有點不收）
+  cool('C10', '東門測試市場', '臺北市', '台北市政府', 25.0735, 121.5400, { water: '1', wc: '1' }),
+  // 合作涼爽點的大學：不算公有，標待確認
+  cool('C11', '板橋測試大學', '新北市', '板橋測試大學', 25.0120, 121.4560, { water: '1', st: COOP }),
+  // 括號裡的星期：parseHours 會當成每天開放，只存原文
+  cool('C12', '板橋測試圖書館', '新北市', '新北市政府', 25.0160, 121.4600, { water: '1', hours: '(二)~(六) 08:00-17:00' }),
+];
+// 環境部公廁：同一處的男廁、女廁、無障礙廁所各一列（同一個地址）
+const toiletMo = (number, name, county, lat, lng, f = {}) => ({ county, areacode: `${county}010`, village: '測試里', number, name, address: f.addr || `${f.town || '新北市板橋區'}測試路${number}號`,
+  administration: f.adm || '測試區公所', latitude: String(lat), longitude: String(lng), grade: f.grade || '特優級', type2: f.kind || '公園', type: f.type || '男廁所',
+  exec: f.exec || '測試區公所', diaper: f.diaper ?? '0' });
+const PARK = '新北市板橋區測試公園路1號', SHOP = '商業營業場所';
+const MOENV = () => [
+  toiletMo('M1', '板橋測試公園-男廁', '65000', 25.0139, 121.4577, { addr: PARK }),
+  toiletMo('M2', '板橋測試公園-無障礙廁所', '65000', 25.01392, 121.45772, { addr: PARK, type: '無障礙廁所' }),        // 同一處的另一種廁間：合併
+  toiletMo('M2B', '板橋測試公園1F女廁', '65000', 25.01391, 121.45770, { addr: PARK, type: '女廁所' }),
+  toiletMo('M3', '台灣中油板橋測試加油站-男廁', '65000', 25.0150, 121.4560, { kind: SHOP, exec: '台灣中油股份有限公司' }),   // 中油：cpct 已有
+  toiletMo('M4', '板橋測試公廁-女廁', '65000', 25.0125, 121.4560, { grade: '不合格', type: '女廁所' }),                   // 評等不合格
+  toiletMo('M5', '大佳測試公廁-男廁', '63000', 25.0745, 121.5395, { town: '中山區' }),                                   // 縣市代碼 63000＝臺北市：tpt 已有
+  toiletMo('M6', '台塑石油板橋測試加油站-混合廁所', '65000', 25.0128, 121.4595, { kind: SHOP, type: '混合廁所' }),       // 加油站看名稱
+  toiletMo('M7', '苓雅測試公園親子廁', '64000', 22.6250, 120.3340, { type: '親子廁所', diaper: '1', town: '高雄市苓雅區' }),
+  toiletMo('M8', '遠方測試公園-男廁', '10004', 24.30, 121.30, { town: '新竹縣竹東鎮' }),
+  toiletMo('M9', '全聯板橋測試店-無障礙廁所', '65000', 25.0148, 121.4570, { kind: SHOP, type: '無障礙廁所' }),
+  toiletMo('M10', '板橋測試大飯店1F女廁', '65000', 25.0132, 121.4583, { kind: '其他', type: '女廁所' }),                  // 飯店放在「其他」：店家
+  // Cool map 的「全家便利商店板橋二運店」同一間店（約 8 公尺）：讀取時合併成一處
+  toiletMo('M11', '全家板橋二運店-性別友善廁', '65000', 25.01445, 121.45893, { kind: SHOP, type: '性別友善廁所' }),
+];
+// 環境部 API：金鑰不對回 200＋純文字（真實的寫法）；一頁只給 3 筆，測分頁要依 total 抓完
+const MO_PAGE = 3;
+function moenv(u) {
+  const key = u.searchParams.get('api_key') || '';
+  if (!/^[\w-]{8,64}$/.test(key) || key === 'bad-key-0000') return new Response('api_key 不存在。', { headers: { 'content-type': 'text/html; charset=UTF-8' } });
+  const all = u.pathname.endsWith('/gis_p_82') ? COOL() : u.pathname.endsWith('/fac_p_07') ? MOENV() : null;
+  if (!all) return new Response('not found', { status: 404 });
+  const off = Number(u.searchParams.get('offset')) || 0;
+  return json({ fields: [], resource_id: 'x', __extras: { api_key: key }, include_total: true, total: String(all.length), resource_format: 'object', limit: String(MO_PAGE), offset: String(off),
+    records: all.slice(off, off + MO_PAGE) });
+}
+
 const json = (v) => new Response(typeof v === 'string' ? v : JSON.stringify(v), { headers: { 'content-type': 'application/json' } });
 export function fetchMock(url) {
-  state.hits[url] = (state.hits[url] || 0) + 1;
-  const u = new URL(url), off = Number(u.searchParams.get('offset')) || 0;
+  const u = new URL(url);
+  const hk = u.searchParams.has('api_key') ? url.replace(/api_key=[^&]*/, 'api_key=***') : url;
+  state.hits[hk] = (state.hits[hk] || 0) + 1;
+  const off = Number(u.searchParams.get('offset')) || 0;
   if (u.hostname === 'data.taipei') {
     const rid = u.pathname.split('/').pop();
     if (rid.startsWith('181097e0')) return json(page(twd(), off));
@@ -125,6 +188,7 @@ export function fetchMock(url) {
     if (state.failPage && Math.ceil(i / 10) === state.failPage) return new Response('error', { status: 500 });
     return json(route(i));
   }
+  if (u.hostname === 'data.moenv.gov.tw') return moenv(u);
   if (u.hostname === 'ws.sports.gov.tw') return new Response(SAV, { headers: { 'content-type': 'application/vnd.ms-excel', 'last-modified': 'Sat, 08 Aug 2026 11:32:21 GMT' } });
   return new Response('not found', { status: 404 });
 }
