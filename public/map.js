@@ -6,14 +6,34 @@
 //   附近即時影像：1.5 公里內（沒有就 3 公里內最近一支）的政府公開攝影機，畫面由本站轉送、不保存；幹部可以加官方直播的外連；功能開關預設關閉
 //   跑者休息站：飲水、廁所、淋浴置物、補給（reststops.js）；開關收在底圖選單，功能開關預設關閉
 //   底圖：內政部國土測繪中心電子地圖與正射影像（政府資料開放授權）、OpenStreetMap；Leaflet 放在 /vendor（不從外部載入程式）
-import { $, allow, api, camLazy, cfg, esc, IC, largeTitle, openSheet, teamAllow, teams, tilePreload, toast, view } from './app.js';
+import { $, allow, api, camLazy, cfg, esc, IC, largeTitle, load, openSheet, teamAllow, teams, tilePreload, toast, view } from './app.js';
 // 開揪跑要有建立活動的權限（協會或分團幹部）；團員改成在 LINE 揪人、請幹部開團
 const canCreate = () => allow('event') || teams().some((t) => teamAllow(t.id, 'event'));
 const lineShare = (text) => `https://line.me/R/share?text=${encodeURIComponent(text)}`;
 import * as W from './weather.js';
 import { lang, t } from './i18n.js';
-import { hoursNow } from './hours.js';
-import * as RS from './reststops.js';
+import { hoursNow, yesNo } from './hours.js';
+// 跑者休息站（reststops.js）：功能開關打開才有；圖層開著、從網址打開休息站、點了選單裡的休息站、地點卡要列附近休息站時才下載
+//   載入前 RS 是 null：取消選取、抽屜高度變了這些通知直接略過（圖層還沒畫，沒有東西要更新）
+let RS = null, rsP = null, rsCtx = null, rsMap = null;
+const restFeat = () => cfg.settings?.features?.rest === true;
+// 掛到目前這張地圖（mapView 每次重畫都是新的地圖）
+const attachRS = () => { if (RS && rsCtx && rsMap !== rsCtx.map) { rsMap = rsCtx.map; RS.attach(rsCtx); } };
+const useRS = async () => {
+  if (!RS) await (rsP ??= load('./reststops.js', 'attach').then((m) => { RS = m; }, (e) => { rsP = null; throw e; }));
+  attachRS();
+  return RS;
+};
+// 底圖選單裡休息站的項目（分隔線、圖層開關、資料來源；幹部多一個新增），點了才載入 reststops.js
+const restMenuHtml = () => (restFeat() ? `<div class="msep" role="separator"></div>
+  <button role="menuitemcheckbox" id="restTog" aria-checked="${pref.get('rest', '0') === '1'}">休息站</button>
+  <button role="menuitem" id="restSrc">休息站資料來源</button>
+  <button role="menuitem" id="restAdd" hidden>新增休息站</button>` : '');
+// 地點卡的「附近休息站」外框：內容由 reststops.js 的 loadNear 填
+const restNearHtml = () => (restFeat() ? `<section class="card restnear" id="restNear" aria-labelledby="restNearH" hidden>
+    <div class="row spread"><h3 id="restNearH" tabindex="-1">附近休息站</h3><button type="button" class="btn ghost sm" id="restShow" hidden>在地圖上顯示</button></div>
+    <div id="restNearBox"><p class="tiny" style="margin:0">載入中…</p></div>
+  </section>` : '');
 // 標記加到地圖時標成不翻譯（i18n.js 的 MutationObserver 在之後才處理新節點）
 const noTr = (e) => e.target.getElement()?.setAttribute('translate', 'no');
 
@@ -37,7 +57,7 @@ const kindTile = (k, extra = '') => `<span class="ktile k-${k} ${extra}" aria-hi
 const CITIES = ['臺北市', '新北市', '基隆市', '桃園市', '新竹市', '新竹縣', '苗栗縣', '臺中市', '彰化縣', '南投縣', '雲林縣', '嘉義市', '嘉義縣', '臺南市', '高雄市', '屏東縣', '宜蘭縣', '花蓮縣', '臺東縣', '澎湖縣', '金門縣', '連江縣'];
 const INFO = { lap: '一圈', surface: '路面', light: '夜間照明', water: '飲水', toilet: '廁所', parking: '停車', hours: '開放時間' };
 // 資訊值是團員寫的，不翻譯；只有「有／無」這種值換成介面文字（字典裡單獨的「有」是句子片段，翻出來會變成怪字）
-const infoVal = (x) => { const yn = RS.yesNo(x); return yn === null ? `<b translate="no">${esc(x)}</b>` : `<b translate="no">${yn ? (lang === 'en' ? 'Yes' : '有') : (lang === 'en' ? 'No' : '無')}</b>`; };
+const infoVal = (x) => { const yn = yesNo(x); return yn === null ? `<b translate="no">${esc(x)}</b>` : `<b translate="no">${yn ? (lang === 'en' ? 'Yes' : '有') : (lang === 'en' ? 'No' : '無')}</b>`; };
 const REP = { crowd: ['人潮', ['少', '普通', '多']], surface: ['路況', ['乾燥', '濕滑', '積水', '施工', '封閉']], light: ['照明', ['充足', '偏暗', '沒有']], weather: ['天氣', ['晴', '陰', '小雨', '大雨', '悶熱', '強風']] };
 const BASES = {
   emap: ['電子地圖', 'https://wmts.nlsc.gov.tw/wmts/EMAP/default/GoogleMapsCompatible/{z}/{y}/{x}', 18, '© 內政部國土測繪中心'],
@@ -103,8 +123,7 @@ async function mapView() {
           <button class="fab" id="addBtn" disabled aria-label="新增地點">${svg('<path d="M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0C18.5 15.4 12 21 12 21Z"/><path d="M12 7.5v5M9.5 10h5"/>')}</button>
         </div>
       </div>
-      <div class="basemenu" id="baseMenu" role="menu" aria-label="底圖" hidden>${Object.entries(BASES).map(([k, v]) => `<button role="menuitemradio" data-base="${k}" aria-checked="${pref.get('base', 'emap') === k}">${v[0]}</button>`).join('')}${RS.menuHtml()}</div>
-      ${RS.barHtml()}
+      <div class="basemenu" id="baseMenu" role="menu" aria-label="底圖" hidden>${Object.entries(BASES).map(([k, v]) => `<button role="menuitemradio" data-base="${k}" aria-checked="${pref.get('base', 'emap') === k}">${v[0]}</button>`).join('')}${restMenuHtml()}</div>
       <div class="drawbar dbar" id="drawBar" role="toolbar" aria-label="畫路線" hidden>
         <span class="dlen"><b class="num" id="drawLen">0.00 公里</b><span class="tiny" id="drawPts">點地圖加上路線的點</span></span>
         <span class="dmain"><button class="btn ghost sm" id="drawCancel">取消</button><button class="btn sm" id="drawDone">完成</button></span>
@@ -130,8 +149,10 @@ async function mapView() {
   setBase(pref.get('base', 'emap'));
   spotsLayer = L.layerGroup().addTo(map); routeLayer = L.layerGroup().addTo(map); drawLayer = L.layerGroup().addTo(map);
   // 跑者休息站圖層（獨立的圖層與群集，不跟練跑地點合併）
-  RS.attach({ map, L, pref, focusOn, setDetent, visRect, fitVisible, drawLayer, startPick, openSpot, closeCard, panel: () => $('#panel'),
-    leave: () => { camReset(); selected = null; paintPins(); }, selected: () => selected, mode: () => mode, mapClick: onMapClick, myPos: () => myPos, editor: () => data.editor });
+  rsCtx = { map, L, pref, focusOn, setDetent, visRect, fitVisible, drawLayer, startPick, openSpot, closeCard, panel: () => $('#panel'),
+    leave: () => { camReset(); selected = null; paintPins(); }, selected: () => selected, mode: () => mode, mapClick: onMapClick, myPos: () => myPos, editor: () => data.editor };
+  // 已經載入過（換頁回來）就直接掛上；圖層開著或網址要打開休息站才在這時下載
+  if (RS) attachRS(); else if (restFeat() && (pref.get('rest', '0') === '1' || q.get('rest'))) useRS().catch(() => {});
   map.on('moveend', () => { const c = map.getCenter(); pref.set('view', JSON.stringify([+c.lat.toFixed(4), +c.lng.toFixed(4), map.getZoom()])); });
   map.on('zoomend', paintPins);
   map.on('click', (e) => onMapClick([+e.latlng.lat.toFixed(6), +e.latlng.lng.toFixed(6)]));
@@ -142,7 +163,7 @@ async function mapView() {
   for (const b of menu.querySelectorAll('[data-base]')) b.onclick = () => { setBase(b.dataset.base); for (const x of menu.querySelectorAll('[data-base]')) x.setAttribute('aria-checked', String(x === b)); closeMenu(); baseBtn.focus(); };
   menu.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closeMenu(); baseBtn.focus(); } });
   map.on('movestart', closeMenu);
-  RS.bindMenu(() => { closeMenu(); baseBtn.focus(); });
+  for (const b of menu.querySelectorAll('#restTog, #restSrc, #restAdd')) b.onclick = () => useRS().then((m) => m.menuAct(b.id, () => { closeMenu(); baseBtn.focus(); })).catch((e) => toast(e.message));
   $('#locBtn').onclick = locate;
   // 地圖準備好才能按（載入 Leaflet 前點了不會有反應，所以先停用）；新增地點、畫路線要等地點資料回來（才知道是不是幹部）
   $('#baseBtn').disabled = false; $('#locBtn').disabled = false;
@@ -157,13 +178,13 @@ async function mapView() {
   $('#pickCancel').onclick = endPick;
   await loadSpots();
   if (!el.isConnected) return;
-  RS.ready();
+  if ($('#restAdd')) $('#restAdd').hidden = !data.editor;   // 地點資料回來後才知道是不是幹部
   $('#drawBtn').disabled = false; $('#addBtn').disabled = false;
   // 載入期間已經打開新增地點或路線的表單（手快的人）：不要用清單把表單蓋掉
   if ($('#panel form')) return;
   if (q.get('spot')) openSpot(q.get('spot'), 'jump');
   else if (q.get('route')) showRoute(q.get('route'), 'jump');
-  else if (q.get('rest')) RS.openStop(q.get('rest'), { fly: 'jump', focus: false });
+  else if (q.get('rest') && restFeat()) useRS().then((m) => m.openStop(q.get('rest'), { fly: 'jump', focus: false })).catch(() => listPanel());
   else listPanel();
 }
 
@@ -236,7 +257,7 @@ function setDetent(d, opt = {}) {
   sh.style.setProperty('--hid', `${sheetH.full - sheetH[d]}px`);   // 抽屜在畫面外的高度：內容在分頁列上方淡出（style.css）
   coverCtl(sheetH.full - sheetH[d]);
   if (d !== 'full') $('#msheetScroll').scrollTop = 0;
-  if (map && map.getContainer() === $('#map')) RS.viewChanged();   // 抽屜收起來露出的地圖：休息站補抓那幾格（畫面重建時舊的地圖不算）
+  if (map && map.getContainer() === $('#map')) RS?.viewChanged();   // 抽屜收起來露出的地圖：休息站補抓那幾格（畫面重建時舊的地圖不算）
 }
 function bindSheet() {
   const sh = $('#msheet'), sc = $('#msheetScroll');
@@ -363,17 +384,17 @@ function onMapClick(pt) {
   if (mode === 'draw') { if (Date.now() < quietUntil) return; strokes.push(draft.length); draft.push(pt); paintDraft(); return; }
   if (mode === 'pick') { const cb = pickCb; endPick(); cb?.(pt); return; }
   // 一般瀏覽：點空白處關掉地點卡或休息站卡（像 Apple 地圖），清單收合讓地圖露出來
-  if (RS.isOpen() && !$('#panel form')) { RS.close(); closeCard(); }
+  if (RS?.isOpen() && !$('#panel form')) { RS.close(); closeCard(); }
   else if (selected && !$('#panel form')) closeCard();
   else if (!wide() && detent !== 'peek' && !$('#panel form')) setDetent('peek');
 }
 // 關掉地點或路線卡，回到清單
 function closeCard() {
-  camReset(); RS.deselect();
+  camReset(); RS?.deselect();
   selected = null; history.replaceState(null, '', '#/map');
   paintPins(); listPanel(); setDetent(wide() ? 'half' : 'peek');
 }
-function startPick(cb) { endDraw(); RS.deselect(); mode = 'pick'; pickCb = cb; $('#pickBar').hidden = false; $('#map').classList.add('picking'); tasking(true); setDetent('peek'); toast('點地圖選位置'); }
+function startPick(cb) { endDraw(); RS?.deselect(); mode = 'pick'; pickCb = cb; $('#pickBar').hidden = false; $('#map').classList.add('picking'); tasking(true); setDetent('peek'); toast('點地圖選位置'); }
 function endPick() { mode = 'browse'; pickCb = null; $('#pickBar').hidden = true; $('#map')?.classList.remove('picking'); tasking(false); }
 // 畫路線、選地點時收起分頁列（body.tasking 用 transform 收到畫面下方，measure() 量得到）；收起或恢復後重新量抽屜
 function tasking(on) {
@@ -426,7 +447,7 @@ function simplify(from) {
   draft = out;
 }
 function startDraw(seed = []) {
-  endPick(); RS.deselect(); mode = 'draw'; draft = [...seed]; strokes = []; routeLayer.clearLayers();
+  endPick(); RS?.deselect(); mode = 'draw'; draft = [...seed]; strokes = []; routeLayer.clearLayers();
   $('#drawBar').hidden = false; $('#map').classList.add('picking'); tasking(true); paintDraft(); setDetent('peek');
   $('#panel').innerHTML = `<section class="card"><h3>畫路線</h3><p class="tiny" style="margin:0">沿著要跑的路依序點地圖，轉彎處多點幾下比較準；iPad 可以用 Apple Pencil 直接畫，或打開「手繪」用手指畫。完成後可以存起來分享、下載 GPX，或直接開揪跑。</p></section>`;
 }
@@ -522,7 +543,7 @@ function bindSpotFilters() {
 
 // 地點卡片：說明、天氣、現場回報、路線、接下來在這裡的活動
 async function openSpot(id, fly) {
-  endDraw(); endPick(); camReset(); RS.deselect();
+  endDraw(); endPick(); camReset(); RS?.deselect();
   const d = await api(`/spots/${id}`).catch((e) => { toast(e.message); return null; });
   if (!d) return listPanel();
   const s = d.spot;
@@ -546,7 +567,7 @@ async function openSpot(id, fly) {
       ${Object.keys(s.info || {}).length ? `<div class="infochips">${Object.entries(INFO).filter(([k]) => k !== 'hours' && s.info[k]).map(([k, v]) => `<span data-info="${k}"><span class="tiny">${v}</span>${infoVal(s.info[k])}</span>`).join('')}</div>` : ''}
     </section>
     <section class="card"><h3>天氣</h3><div id="wxBox"><p class="tiny" style="margin:0">載入中…</p></div></section>
-    ${RS.nearHtml()}
+    ${restNearHtml()}
     ${s.status === 'approved' ? `<section class="card"><div class="row spread"><h3>現場回報</h3><button class="btn sm" id="repBtn">回報現場</button></div>
       <div id="repForm"></div>
       ${d.reports.length ? `<div class="reports">${d.reports.map((r) => `<div class="rep"><div>${Object.keys(REP).filter((k) => r[k]).map((k) => `<span class="pill ${['積水', '施工', '封閉', '多', '大雨', '沒有'].includes(r[k]) ? 'wait' : ''}">${REP[k][0]} ${esc(r[k])}</span>`).join('')}</div>
@@ -567,7 +588,7 @@ async function openSpot(id, fly) {
   for (const b of document.querySelectorAll('[data-route]')) b.onclick = () => showRoute(b.dataset.route, true);
   $('#drawHere').onclick = () => { startDraw([[s.lat, s.lng]]); spotForRoute = s.id; };
   bindCams(s, d.editor);
-  RS.loadNear(s, d.editor);
+  if (restFeat()) useRS().then((m) => m.loadNear(s, d.editor)).catch(() => {});
   W.load(s.lat, s.lng).then((w) => { if ($('#wxBox')) $('#wxBox').innerHTML = W.strip(w); }).catch((e) => { if ($('#wxBox')) $('#wxBox').innerHTML = `<p class="tiny" style="margin:0">${esc(e.message)}</p>`; });
 }
 // ---- 附近即時影像 ----
@@ -835,7 +856,7 @@ async function saveOffline(s) {
       done++; if (btn.isConnected) btn.textContent = `下載中 ${Math.round((done / urls.length) * 100)}%`;
     }));
   }
-  await RS.prefetchNear(s.id);   // 附近休息站也存一份（Service Worker 的離線資料）
+  if (restFeat()) await api(`/spots/${encodeURIComponent(s.id)}/rest`).catch(() => {});   // 附近休息站也存一份（Service Worker 的離線資料）
   if (btn.isConnected) { btn.textContent = fail ? `完成（${fail} 張失敗）` : '已存離線地圖'; }
   toast(`已存 ${urls.length - fail} 張地圖，沒有網路也看得到這附近`);
 }
@@ -915,7 +936,7 @@ function routeForm() {
 }
 
 async function showRoute(id, fly) {
-  endDraw(); RS.deselect();
+  endDraw(); RS?.deselect();
   const { route: r } = await api(`/routes/${id}`).catch((e) => { toast(e.message); return {}; });
   if (!r) return listPanel();
   history.replaceState(null, '', `#/map?route=${id}`);

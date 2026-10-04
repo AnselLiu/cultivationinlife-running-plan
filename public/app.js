@@ -3012,4 +3012,6 @@ addEventListener('appinstalled', () => { installEvt = null; try { localStorage.s
 export { tilePreload, legacyData, removeLegacy, addrField, bindAddrField, latest, $, cfg, downloadAuthed, scanSheet, FEEL, IC, KIND_NAME, LOG_ICON, LOG_STATUS_NAME, MI, PAID_NAME, ROLE_NAME, TAB_DEFAULT, TEAM_PERMS, coachTeam, TEAM_ROLE_NAME, ago, allow, api, applyFeatures, avatar, barChart, bars, bindComments, bindStepup, btnRow, choose, coachPrefs, copy, countdownPicker, dayLabel, dstr, emptyState, esc, eventCard, feat, fixText, group, ic, largeTitle, me, mfaBanner, money, myCycle, nrow, org, pad2, paintCountdown, passkey, planSeg, queueLog, raceTarget, refreshMe, render, route, row, setCoachPrefs, squareIcon, startKey, studio, subTitle, teamAllow, teamIcon, teamOf, teams, toast, rich, keep, names, view, ymd, askReason, isOffline, nowTp, signupDefaults, submitLabel, camLazy, openSheet, apiAll, fmtDuration, fmtDistPace, parseHMS,
   // event.js、me.js
   applyCounts, bellState, canScan, dayPattern, mapsUrl, once, qrSVG, routeSvg, scan, setStopScan, GOOGLE_G, NICON, applyTabs, applyTheme, askLegacyOnLeave,
-  bindInstall, clearDeviceData, dropPush, googleHref, iconsOnly, installCard, isStandalone, lsOrNull, pkSupported, reduceMotion, theme, togglePush, setMe };
+  bindInstall, clearDeviceData, dropPush, googleHref, iconsOnly, installCard, isStandalone, lsOrNull, pkSupported, reduceMotion, theme, togglePush, setMe,
+  // map.js（休息站用到才載入）
+  load };

@@ -6,7 +6,7 @@
 //   幹部（權限同地點管理）：官方資料可以修正、補充說明、隱藏；自己新增的可以整筆修改或刪除，選位置的方式跟新增地點一樣
 //   功能開關 features.rest 預設關閉；關閉時這裡什麼都不顯示、也不連線
 import { api, cfg, esc, IC, openSheet, toast } from './app.js';
-import { hoursNow, parseHours } from './hours.js';
+import { hoursNow, parseHours, yesNo } from './hours.js';
 import { lang, t } from './i18n.js';
 
 // 線條圖示（跟地點針同一個 24×24、圓頭線條風格）
@@ -65,14 +65,9 @@ const readPrefs = () => {
 };
 const savePrefs = () => ctx.pref.set('rest-types', [...types, ...(openNow ? ['open'] : [])].join(','));
 
-// ---- 給 map.js 用的 HTML 片段 ----
-// 底圖選單裡的項目（分隔線、圖層開關、資料來源；幹部多一個新增）
-export const menuHtml = () => (feat() ? `<div class="msep" role="separator"></div>
-  <button role="menuitemcheckbox" id="restTog" aria-checked="false">休息站</button>
-  <button role="menuitem" id="restSrc">休息站資料來源</button>
-  <button role="menuitem" id="restAdd" hidden>新增休息站</button>` : '');
-// 地圖上方的類型 chip（打開圖層才出現）
-export const barHtml = () => (feat() ? `<div class="restbar" id="restBar" hidden>
+// ---- 地圖上方的類型 chip（打開圖層才出現；attach 時放到底圖選單後面）----
+// 底圖選單裡的項目（休息站開關、資料來源、新增）由 map.js 畫，點了才載入這個檔、呼叫 menuAct
+const barHtml = () => (feat() ? `<div class="restbar" id="restBar" hidden>
   <div class="restchips" id="restChips" role="group" aria-label="休息站類型">${Object.entries(TYPE).map(([k, v]) => `<button type="button" class="rchip" data-rt="${k}" aria-pressed="false">${rglyph(k)}<span>${v}</span></button>`).join('')}<button type="button" class="rchip" data-rt="open" aria-pressed="false">${rglyph('open')}<span>只看開放中</span></button></div>
   <p class="resthint" id="restHint" role="status" hidden>放大地圖看休息站</p></div>` : '');
 
@@ -80,6 +75,7 @@ export const barHtml = () => (feat() ? `<div class="restbar" id="restBar" hidden
 export function attach(c) {
   ctx = c; cells.clear(); loading.clear(); meta = null; metaP = null; cur = null; kept = null;
   if (!feat()) return;
+  if (!document.getElementById('restBar')) document.getElementById('baseMenu')?.insertAdjacentHTML('afterend', barHtml());
   readPrefs();
   layer = c.L.layerGroup().addTo(c.map);
   const tog = document.getElementById('restTog');
@@ -95,18 +91,11 @@ export function attach(c) {
   c.map.on('zoomend', schedule);
   if (on) { show(true); schedule(); }
 }
-// 底圖選單的項目（map.js 的 closeMenu 關掉選單、焦點回到底圖按鈕）
-export function bindMenu(close) {
-  const tog = document.getElementById('restTog');
-  if (!tog) return;
-  tog.onclick = () => { setOn(!on); close(); };
-  document.getElementById('restSrc').onclick = () => { close(); sourcesSheet(document.getElementById('baseBtn')); };
-  document.getElementById('restAdd').onclick = () => { close(); ctx.startPick((pt) => stopForm(null, pt)); };
-}
-// 地點資料回來後才知道是不是幹部
-export function ready() {
-  const add = document.getElementById('restAdd');
-  if (add) add.hidden = !ctx?.editor();
+// 底圖選單的項目（map.js 綁定；close 關掉選單、焦點回到底圖按鈕）
+export function menuAct(id, close) {
+  if (id === 'restTog') { setOn(!on); close(); }
+  if (id === 'restSrc') { close(); sourcesSheet(document.getElementById('baseBtn')); }
+  if (id === 'restAdd') { close(); ctx.startPick((pt) => stopForm(null, pt)); }
 }
 export function setOn(v) {
   if (!feat() || !ctx) return;
@@ -357,17 +346,8 @@ async function back() {
   (document.querySelector(`#restNear [data-rest="${CSS.escape(c.id)}"]`) || document.getElementById('restNearH'))?.focus();
 }
 
-// ---- 地點卡的「附近休息站」----
-export const nearHtml = () => (feat() ? `<section class="card restnear" id="restNear" aria-labelledby="restNearH" hidden>
-    <div class="row spread"><h3 id="restNearH" tabindex="-1">附近休息站</h3><button type="button" class="btn ghost sm" id="restShow" hidden>在地圖上顯示</button></div>
-    <div id="restNearBox"><p class="tiny" style="margin:0">載入中…</p></div>
-  </section>` : '');
-// 只有「有／沒有」意思的值（有、是、無、yes、true、✓…）：不是補充說明；「有，在 9 號水門旁」只留後面的說明（已經放在這一類底下）
-const YES = /^(?:有|是|有的|對|可|可以|可用|提供|有提供|y|yes|true|ok|available|[1✓✔☑vo○◯])$/i;
-const NO = /^(?:無|沒有|否|不|不可|無提供|未提供|n|no|false|none|n\/a|na|[0✗✘×x-])$/i;
-const bareOf = (v) => String(v ?? '').trim().replace(/[\s。．.!！~～]+$/u, '');
-// 地點卡的資訊小標籤用：只有「有／沒有」意思的值回傳 true／false，其他（有寫說明）回傳 null
-export const yesNo = (v) => { const t = bareOf(v); return YES.test(t) ? true : NO.test(t) ? false : null; };
+// ---- 地點卡的「附近休息站」（卡片的外框 #restNear 由 map.js 畫）----
+// 只有「有／沒有」意思的值（yesNo，在 hours.js）不是補充說明；「有，在 9 號水門旁」只留後面的說明（已經放在這一類底下）
 const noteOf = (v) => {
   const t = String(v ?? '').trim();
   if (!t || yesNo(t) !== null) return '';
@@ -414,8 +394,6 @@ async function nearLoad(s, editor) {
   for (const b of box.querySelectorAll('[data-rest]')) b.onclick = () => openStop(b.dataset.rest, { from: { id: s.id, name: s.name, lat: s.lat, lng: s.lng }, opener: null, fly: 'pan' });
   document.getElementById('restAddNear')?.addEventListener('click', () => ctx.startPick((pt) => stopForm(null, pt)));
 }
-// 離線地圖：附近休息站一起先抓（Service Worker 會存起來）
-export const prefetchNear = (id) => (feat() ? api(`/spots/${encodeURIComponent(id)}/rest`).catch(() => {}) : null);
 
 // ---- 資料來源清單（地圖選單）----
 async function sourcesSheet(opener) {

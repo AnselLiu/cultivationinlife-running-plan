@@ -363,8 +363,13 @@ test('跑者休息站：底圖選單打開圖層、13 級以下不抓、類型 c
   await enter(page);
   const cells = [];
   page.on('request', (r) => { if (r.url().includes('/api/rest/cell/')) cells.push(r.url()); });
+  // 圖層關著：地圖打開時不下載 reststops.js，打開圖層才下載
+  const mods = [];
+  page.on('request', (r) => { if (new URL(r.url()).pathname === '/reststops.js') mods.push(r.url()); });
   await page.goto('/#/map');
   await expect(page.locator('#baseBtn')).toBeEnabled();
+  await expect(page.locator('#addBtn')).toBeEnabled();
+  expect(mods).toEqual([]);
   // 預設關閉；開關收在底圖選單（menuitemcheckbox），不另外加浮動按鈕
   await page.locator('#baseBtn').click();
   await expect(page.locator('#restTog')).toHaveAttribute('role', 'menuitemcheckbox');
@@ -373,6 +378,7 @@ test('跑者休息站：底圖選單打開圖層、13 級以下不抓、類型 c
   await page.locator('#restTog').click();
   await expect(page.locator('#baseMenu')).toBeHidden();
   await expect(page.locator('#baseBtn')).toBeFocused();
+  expect(mods).toHaveLength(1);
   // 12 級：只顯示提示，不抓任何格子
   await expect(page.locator('#restHint')).toBeVisible();
   await expect(page.locator('#restChips')).toBeHidden();

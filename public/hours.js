@@ -86,3 +86,10 @@ export function hoursNow(text, now = new Date()) {
   }
   return { open: false, label: '目前未開放' };
 }
+
+// 地點與休息站的資訊值：只有「有／沒有」意思的值（有、是、無、yes、true、✓…）回傳 true／false，其他（有寫說明）回傳 null
+//   地點卡（map.js）與休息站（reststops.js）共用；放在這裡，地圖開機不用為了它下載 reststops.js
+const YES = /^(?:有|是|有的|對|可|可以|可用|提供|有提供|y|yes|true|ok|available|[1✓✔☑vo○◯])$/i;
+const NO = /^(?:無|沒有|否|不|不可|無提供|未提供|n|no|false|none|n\/a|na|[0✗✘×x-])$/i;
+const bareOf = (v) => String(v ?? '').trim().replace(/[\s。．.!！~～]+$/u, '');
+export const yesNo = (v) => { const t = bareOf(v); return YES.test(t) ? true : NO.test(t) ? false : null; };
