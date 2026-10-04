@@ -2,7 +2,7 @@
 // 導覽會實際帶到每個功能（首頁、課表、跑步記錄、拍照分享、我的），結束或略過時回到開始前的頁面，不會新增任何資料。
 // 第一次登入後自動出現一次（localStorage cil-guide）；之後從「我的 → 使用說明」再看。
 
-const KEY = 'cil-guide', VER = '2';
+const KEY = 'cil-guide', VER = '2';   // 改版本號時 app.js 的 Guide.maybeStart 也要一起改
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const ic = (d) => `<svg class="ic" viewBox="0 0 24 24" aria-hidden="true">${d}</svg>`;

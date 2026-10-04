@@ -1,17 +1,18 @@
 // 上線前品質檢查：用 Lighthouse 量主要畫面的效能、無障礙、最佳做法，低於門檻就失敗（CI 會擋下部署）
 // 用法：npm run test:lh（需要 Chrome；GitHub Actions 的 ubuntu-latest 已內建）
-// 測的是本機 wrangler dev（沒有 CDN 壓縮），效能分數會比正式站低一些，門檻已經考慮進去
+// 測的是本機 wrangler dev（有 gzip，但沒有 CDN 的 brotli 與邊緣快取），效能分數會比正式站低一些，門檻已經考慮進去
 import { spawn, execSync, execFileSync } from 'node:child_process';
 import { rmSync, readFileSync, mkdirSync } from 'node:fs';
 
-const PORT = 8797, STATE = '.wrangler/lh-state', OUT = '.wrangler/lighthouse';
+const PORT = 8797, STATE = '.wrangler/lh-state', OUT = process.env.LH_OUT || '.wrangler/lighthouse';
 const LIMITS = { performance: 0.8, accessibility: 0.95, 'best-practices': 0.95 };
 const PAGES = [
   { name: '登入頁', path: '/', login: false },
   { name: '團練（首頁）', path: '/#/', login: true },
   { name: '課表', path: '/#/plan', login: true },
   { name: '我的', path: '/#/me', login: true },
-  { name: '活動詳情', path: '/#/past', login: true },
+  { name: '過去的團練', path: '/#/past', login: true },
+  { name: '地圖', path: '/#/map', login: true },
 ];
 
 const sh = (cmd) => execSync(cmd, { stdio: 'inherit' });
@@ -33,6 +34,9 @@ for (let i = 0; ; i++) {
 }
 // 測試帳號的登入 cookie（只存在這個暫時的測試資料庫）
 const cookie = (await fetch(`${base}/api/dev/login?id=t_runner`, { redirect: 'manual' })).headers.get('set-cookie').split(';')[0];
+// 先同意目前版本的隱私權政策：不然每一頁都會被導到重新同意的畫面，量到的是同意頁，不是要測的頁面
+const consent = await fetch(`${base}/api/me/consent`, { method: 'POST', headers: { Cookie: cookie, origin: base, 'content-type': 'application/json' }, body: '{}' });
+if (!consent.ok) { console.error(`同意隱私權政策失敗（${consent.status}）`); stop(); process.exit(1); }
 
 let failed = 0;
 const rows = [];
@@ -46,6 +50,9 @@ for (const p of PAGES) {
   for (let attempt = 0; attempt < 2 && !ok; attempt++) { try { execFileSync('npx', args, { stdio: ['ignore', 'ignore', 'inherit'] }); ok = true; } catch {} }
   if (!ok) { console.error(`${p.name}：Lighthouse 執行失敗`); failed++; continue; }
   const r = JSON.parse(readFileSync(file, 'utf8'));
+  // 量完停在別的頁面（被導去登入或同意頁）：分數不是這一頁的，直接算失敗
+  const landed = new URL(r.finalDisplayedUrl || r.finalUrl).hash, want = new URL(base + p.path).hash;
+  if (p.login && landed !== want) { console.error(`${p.name}：最後停在 ${landed || '/'}，不是 ${want}`); failed++; continue; }
   const score = Object.fromEntries(Object.keys(LIMITS).map((k) => [k, r.categories[k]?.score ?? 0]));
   const bad = Object.entries(LIMITS).filter(([k, min]) => score[k] < min);
   if (bad.length) {

@@ -6,7 +6,7 @@
 //   附近即時影像：1.5 公里內（沒有就 3 公里內最近一支）的政府公開攝影機，畫面由本站轉送、不保存；幹部可以加官方直播的外連；功能開關預設關閉
 //   跑者休息站：飲水、廁所、淋浴置物、補給（reststops.js）；開關收在底圖選單，功能開關預設關閉
 //   底圖：內政部國土測繪中心電子地圖與正射影像（政府資料開放授權）、OpenStreetMap；Leaflet 放在 /vendor（不從外部載入程式）
-import { $, allow, api, camLazy, cfg, esc, IC, largeTitle, openSheet, teamAllow, teams, toast, view } from './app.js';
+import { $, allow, api, camLazy, cfg, esc, IC, largeTitle, openSheet, teamAllow, teams, tilePreload, toast, view } from './app.js';
 // 開揪跑要有建立活動的權限（協會或分團幹部）；團員改成在 LINE 揪人、請幹部開團
 const canCreate = () => allow('event') || teams().some((t) => teamAllow(t.id, 'event'));
 const lineShare = (text) => `https://line.me/R/share?text=${encodeURIComponent(text)}`;
@@ -51,16 +51,19 @@ const km = (m) => `${(m / 1000).toFixed(2)} 公里`;
 const pref = { get(k, d) { try { return localStorage.getItem(`cil-map-${k}`) || d; } catch { return d; } }, set(k, v) { try { localStorage.setItem(`cil-map-${k}`, v); } catch {} } };
 
 // Leaflet 第一次用到才載入
-let leaflet = null;
+let leaflet = null, gated = false;
 function loadLeaflet() {
   if (window.L) return Promise.resolve(window.L);
   leaflet ||= new Promise((ok, no) => {
     const css = document.createElement('link'); css.rel = 'stylesheet'; css.href = '/vendor/leaflet.css'; document.head.append(css);
-    const js = document.createElement('script'); js.src = '/vendor/leaflet.js'; js.onload = () => ok(window.L); js.onerror = () => { leaflet = null; no(new Error('地圖載入失敗，請檢查網路')); };
+    const js = document.createElement('script'); js.src = '/vendor/leaflet.js'; js.fetchPriority = 'high'; js.onload = () => ok(window.L); js.onerror = () => { leaflet = null; no(new Error('地圖載入失敗，請檢查網路')); };
     document.head.append(js);
   });
   return leaflet;
 }
+
+// 直接打開地圖頁：模組一載入就開始抓 Leaflet（app.js 在等登入資料時就先 import 這個檔）
+if (location.hash.startsWith('#/map')) loadLeaflet().catch(() => {});
 
 // GPX：只有路線的點（沒有時間），Garmin、Strava、手錶都讀得到
 export function gpx(name, pts) {
@@ -120,7 +123,7 @@ async function mapView() {
   try { L = await loadLeaflet(); } catch (e) { if (el.isConnected) $('#panel').innerHTML = `<section class="card"><p class="notice" style="margin:0">${esc(e.message)}</p></section>`; return; }
   if (!el.isConnected) return;
   try { map?.remove(); } catch {}
-  map = L.map(el, { zoomControl: false, attributionControl: false, tap: true }).setView(JSON.parse(pref.get('view', '[25.05,121.54,12]')).slice(0, 2), JSON.parse(pref.get('view', '[25.05,121.54,12]'))[2]);
+  map = L.map(el, { zoomControl: false, attributionControl: false, tap: true, fadeAnimation: false }).setView(JSON.parse(pref.get('view', '[25.05,121.54,12]')).slice(0, 2), JSON.parse(pref.get('view', '[25.05,121.54,12]'))[2]);
   // 手機用雙指縮放（不放 ± 按鈕）；圖資版權放在不會被抽屜蓋住的地方
   if (wide()) L.control.zoom({ position: 'bottomright' }).addTo(map);
   L.control.attribution({ position: wide() ? 'bottomright' : 'topleft', prefix: '<a href="https://leafletjs.com" target="_blank" rel="noopener">Leaflet</a>' }).addTo(map);
@@ -287,7 +290,21 @@ function setBase(k) {
   const b = BASES[k] || BASES.emap;
   if (layer) map.removeLayer(layer);
   // crossOrigin：圖磚用 CORS 抓，Service Worker 才能存起來離線用
-  layer = window.L.tileLayer(b[1], { maxNativeZoom: b[2], maxZoom: 20, attribution: b[3], crossOrigin: 'anonymous', className: `base-${k in BASES ? k : 'emap'}` }).addTo(map);
+  const L = window.L, opts = { maxNativeZoom: b[2], maxZoom: 20, attribution: b[3], crossOrigin: 'anonymous', className: `base-${k in BASES ? k : 'emap'}` };
+  // 直接打開地圖頁：app.js 已經先抓中間那幾張；其他圖磚等它們到了才開始抓，不搶頻寬（畫面中間先出來）
+  //   做法同 Leaflet 1.9 的 TileLayer.createTile，只是 src 晚一點設
+  const gate = !gated && tilePreload.urls.size ? tilePreload.ready : null;
+  gated = true;
+  layer = gate ? new (L.TileLayer.extend({ createTile(c, done) {
+    const img = document.createElement('img');
+    L.DomEvent.on(img, 'load', L.Util.bind(this._tileOnLoad, this, done, img));
+    L.DomEvent.on(img, 'error', L.Util.bind(this._tileOnError, this, done, img));
+    img.crossOrigin = 'anonymous'; img.alt = '';
+    const url = this.getTileUrl(c);
+    if (tilePreload.urls.has(url)) img.src = url; else gate.then(() => { img.src = url; });
+    return img;
+  } }))(b[1], opts) : L.tileLayer(b[1], opts);
+  layer.addTo(map);
   pref.set('base', k);
 }
 function locate() {

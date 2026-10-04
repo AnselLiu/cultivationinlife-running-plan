@@ -1,10 +1,8 @@
 // 耕跑團 PWA — 畫面：團練列表、活動詳情與報名、我的課表、課表教練、幹部的新增活動與公告產生器
 import * as P from './plan.js';
 import * as Party from './party.js';
-import { qrSVG, canScan, scan } from './qr.js';
 import * as S from './studio.js';
 import * as Run from './run.js';
-import * as Guide from './guide.js';
 import { quote, charges } from './pricing.js';
 import * as I18N from './i18n.js';
 import { CATS, CHIPS } from './notif-cats.js';
@@ -15,6 +13,12 @@ import { tpNow, signupState, signupEnd, evStart, tpText, tpShort, STATE_LABEL, S
 const calendarView = (...a) => lazy('./calendar.js', 'calendarView')(...a);
 const mapView = (...a) => lazy('./map.js', 'mapView')(...a);
 const challengeView = (...a) => lazy('./challenge.js', 'challengeView')(...a);
+// QR code 與掃描（入場券、報到、App 連結）、使用說明導覽：第一次開 App 用不到，畫面要用時才下載
+const qrSVG = (...a) => lazy('./qr.js', 'qrSVG')(...a);
+const scan = (...a) => lazy('./qr.js', 'scan')(...a);
+const canScan = () => !!navigator.mediaDevices?.getUserMedia;
+// 導覽看過就不用下載 guide.js（版本號要跟 guide.js 的 VER 一致）
+const Guide = { start: () => lazy('./guide.js', 'start')(), maybeStart: () => { try { if (localStorage.getItem('cil-guide') === '2') return; } catch { return; } lazy('./guide.js', 'maybeStart')(); } };
 // 課表教練（課表頁的用語說明、詳細內容、提醒、滑動換週）：課表畫好、閒下來才載入，首頁不會下載
 const coachWeekExtras = (...a) => lazy('./coach.js', 'weekExtras')(...a);
 // 課表的全季、賽事準備、配速與用語、課表設定（回傳離開頁面時要做的清理，例如賽事倒數的計時器）
@@ -44,6 +48,33 @@ const lazy = (file, name) => async (...a) => {
 
 // 對外公開的乾淨網址（Google 同意畫面等會連到這裡）：/privacy → #/privacy
 if (location.pathname === '/privacy' && !location.hash) history.replaceState(null, '', '/#/privacy');
+// 地圖：先連到圖磚主機、下載地圖模組（map.js 一載入就開始抓 Leaflet），跟登入資料同時進行，不用等 /api/me 回來才開始
+let mapWarm = false;
+// 先抓的圖磚：map.js 讓其他圖磚等這幾張到了（或最多 1.2 秒）才開始抓，畫面中間先出來
+const tilePreload = { urls: new Set(), ready: Promise.resolve() };
+const warmMap = () => {
+  if (mapWarm) return; mapWarm = true;
+  const l = document.createElement('link'); l.rel = 'preconnect'; l.href = 'https://wmts.nlsc.gov.tw'; l.crossOrigin = 'anonymous'; document.head.append(l);
+  import('./map.js').catch(() => { mapWarm = false; });
+};
+if (location.hash.startsWith('#/map')) {
+  warmMap();
+  // 直接打開地圖：上次位置的中心那幾張圖磚先抓（不用等 Leaflet 載完才知道要哪幾張）；網址格式跟 map.js 的 BASES 一樣
+  try {
+    const base = localStorage.getItem('cil-map-base') || 'emap', layerId = { emap: 'EMAP', photo: 'PHOTO2' }[base];
+    const [lat, lng, z0] = JSON.parse(localStorage.getItem('cil-map-view') || '[25.05,121.54,12]'), z = Math.min(Math.round(z0), base === 'emap' ? 18 : 19), n = 2 ** z;
+    const fx = (lng + 180) / 360 * n, fy = (1 - Math.log(Math.tan(lat * Math.PI / 180) + 1 / Math.cos(lat * Math.PI / 180)) / Math.PI) / 2 * n;
+    const x0 = Math.floor(fx), y0 = Math.floor(fy), sx = fx - x0 < 0.5 ? -1 : 1, sy = fy - y0 < 0.5 ? -1 : 1;   // 中心那張，加上離中心最近的三張
+    const waits = [];
+    if (layerId && Number.isFinite(fx + fy)) for (const [x, y] of [[x0, y0], [x0 + sx, y0], [x0, y0 + sy], [x0 + sx, y0 + sy]]) {
+      const t = document.createElement('link'); t.rel = 'preload'; t.as = 'image'; t.crossOrigin = 'anonymous'; t.fetchPriority = 'high';
+      t.href = `https://wmts.nlsc.gov.tw/wmts/${layerId}/default/GoogleMapsCompatible/${z}/${y}/${x}`;
+      waits.push(new Promise((ok) => { t.onload = t.onerror = ok; }));
+      tilePreload.urls.add(t.href); document.head.append(t);
+    }
+    tilePreload.ready = Promise.race([Promise.all(waits), new Promise((ok) => setTimeout(ok, 1200))]);
+  } catch {}
+}
 const $ = (sel, root = document) => root.querySelector(sel);
 const view = $('#view');
 // 分頁按鈕（.seg）多到要左右滑時：加上 .scrolls 讓兩側淡出，並把選中的那一個捲到中間（不會被切一半）
@@ -3963,6 +3994,10 @@ addEventListener('scroll', () => {
   lastY = y;
 }, { passive: true });
 // 鍵盤焦點進到分頁列就展開（點擊造成的焦點不算，不然點過分頁後就再也不會縮小）
+$('#tabs').addEventListener('scroll', fitTabs, { passive: true });
+// 手指按下地圖分頁就先連線、下載地圖模組（放開才換頁）
+$('#tabs').addEventListener('pointerdown', (e) => { if (e.target.closest('a[data-tab="/map"]')) warmMap(); }, { passive: true });
+addEventListener('resize', fitTabs, { passive: true });
 $('#tabs').addEventListener('focusin', (e) => { if (e.target.matches(':focus-visible')) $('#tabs').classList.remove('mini'); });
 // 點分頁：換分頁不做整頁轉場（選取膠囊滑過去）；再點一次目前的分頁，在子頁就回到這個分頁的第一層、在第一層就捲回頂端（地圖收回抽屜）
 let navFromTab = false;
@@ -4067,4 +4102,4 @@ addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvt 
 addEventListener('appinstalled', () => { installEvt = null; try { localStorage.setItem('cil-installed', '1'); } catch {} document.querySelectorAll('.installcard').forEach((c) => c.remove()); });
 
 // 拆出去的模組（admin.js、photo.js…）從這裡拿共用的工具與狀態
-export { legacyData, removeLegacy, addrField, bindAddrField, latest, $, cfg, downloadAuthed, scanSheet, FEEL, IC, KIND_NAME, LOG_ICON, LOG_STATUS_NAME, MI, PAID_NAME, ROLE_NAME, TAB_DEFAULT, TEAM_PERMS, coachTeam, TEAM_ROLE_NAME, ago, allow, api, applyFeatures, avatar, barChart, bars, bindComments, bindStepup, btnRow, choose, coachPrefs, copy, countdownPicker, dayLabel, dstr, emptyState, esc, eventCard, feat, fixText, group, ic, largeTitle, me, mfaBanner, money, myCycle, nrow, org, pad2, paintCountdown, passkey, planSeg, queueLog, raceTarget, refreshMe, render, route, row, setCoachPrefs, squareIcon, startKey, studio, subTitle, teamAllow, teamIcon, teamOf, teams, toast, rich, keep, names, view, ymd, askReason, isOffline, nowTp, signupDefaults, submitLabel, camLazy, openSheet, apiAll };
+export { tilePreload, legacyData, removeLegacy, addrField, bindAddrField, latest, $, cfg, downloadAuthed, scanSheet, FEEL, IC, KIND_NAME, LOG_ICON, LOG_STATUS_NAME, MI, PAID_NAME, ROLE_NAME, TAB_DEFAULT, TEAM_PERMS, coachTeam, TEAM_ROLE_NAME, ago, allow, api, applyFeatures, avatar, barChart, bars, bindComments, bindStepup, btnRow, choose, coachPrefs, copy, countdownPicker, dayLabel, dstr, emptyState, esc, eventCard, feat, fixText, group, ic, largeTitle, me, mfaBanner, money, myCycle, nrow, org, pad2, paintCountdown, passkey, planSeg, queueLog, raceTarget, refreshMe, render, route, row, setCoachPrefs, squareIcon, startKey, studio, subTitle, teamAllow, teamIcon, teamOf, teams, toast, rich, keep, names, view, ymd, askReason, isOffline, nowTp, signupDefaults, submitLabel, camLazy, openSheet, apiAll };
