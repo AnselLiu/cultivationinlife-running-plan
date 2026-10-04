@@ -891,6 +891,9 @@ div.splits{display:grid;width:100%}
 .splits small{font-weight:500;color:var(--ink-2)}
 .splits div.cur b{color:var(--accent)}
 .lapmsg{min-height:1.5em;margin:-6px 0 0}
+.wakenote{display:grid;gap:4px;text-align:left;width:100%}
+.wakenote p{margin:0}
+.wakenote .linkbtn{justify-self:start;color:inherit;font-weight:700;text-decoration:underline;text-underline-offset:2px}
 .pkpref{width:100%;text-align:left;border-bottom:0}
 /* 口袋模式：全黑（OLED 省電）、字大、灰階不刺眼；不能捲動、縮放、選字 */
 .pocket{position:fixed;inset:0;z-index:2000;background:#000;color:#e6e6e6;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;

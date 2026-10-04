@@ -48,21 +48,37 @@ const save = (force) => {
 // 經過時間：累計的＋這一段跑步中的
 export const elapsed = (x = s) => (x ? x.elapsedMs + (x.status === 'running' ? Date.now() - x.resumedAt : 0) : 0);
 
+// Wake Lock（螢幕保持亮著）：iPhone 鎖定螢幕時網頁會停住、收不到定位，所以跑步中一直要著
+//   系統可能拒絕（低電量模式）或中途放掉（切到背景）：聽 release，狀態給畫面顯示提醒，回到前景再要一次
+//   wakeState：'on' 亮著、'pending' 要求中、'off' 沒有（被放掉）、'denied' 被拒絕、'unsupported' 這個瀏覽器不支援
+let wakeState = 'off';
+export const awake = () => wakeState;
 async function lock() {
-  try { if (navigator.wakeLock && document.visibilityState === 'visible') wake = await navigator.wakeLock.request('screen'); } catch { wake = null; }
+  if (!navigator.wakeLock) { wakeState = 'unsupported'; emit(); return; }
+  if (document.visibilityState !== 'visible' || wakeState === 'pending') return;
+  if (wake && !wake.released) { wakeState = 'on'; return; }
+  wakeState = 'pending';
+  let w = null;
+  try { w = await navigator.wakeLock.request('screen'); } catch { wake = null; wakeState = 'denied'; emit(); return; }
+  if (!live()) { try { w.release(); } catch {} wakeState = 'off'; return; }   // 要到的時候已經暫停或結束了
+  wake = w; wakeState = 'on';
+  w.addEventListener?.('release', () => { if (wake === w) { wake = null; wakeState = 'off'; emit(); } });
+  emit();
 }
 // 使用者按按鈕（開口袋模式）時再要一次 Wake Lock：有使用者手勢，iPhone 比較願意給
-export const keepAwake = () => { if (active() && s.status === 'running') lock(); };
-const unlock = () => { try { wake?.release(); } catch {} wake = null; };
+export const keepAwake = () => { if (live()) lock(); };
+const unlock = () => { const w = wake; wake = null; wakeState = 'off'; try { w?.release(); } catch {} };
 // GPS 要繼續接：跑步中，或自動暫停中（等著自動繼續）
-const tracking = () => !!s && s.useGps && (s.status === 'running' || (s.status === 'paused' && s.auto));
+const live = () => !!s && (s.status === 'running' || (s.status === 'paused' && s.auto));   // 計時中或自動暫停中：螢幕要亮著
+const tracking = () => live() && s.useGps;
 // 切到背景、鎖定螢幕：記下時間；回來時離開超過 5 秒就是空檔（這段收不到定位），重新要 Wake Lock、重設 GPS
 document.addEventListener('visibilitychange', () => {
   if (!active()) return;
   if (document.visibilityState === 'hidden') { s.hiddenAt = Date.now(); save(true); return; }
   if (s.hiddenAt && Date.now() - s.hiddenAt > FREEZE_MS) woke();
   s.hiddenAt = 0;
-  if (tracking()) { lock(); unwatch(); watch(); }
+  if (live()) lock();
+  if (tracking()) { unwatch(); watch(); }
 });
 // 從凍結回來：跑步中就開一段空檔，等下一個好的定位點再決定怎麼補
 function woke() {
@@ -253,8 +269,9 @@ export function dismissAsk() { if (s) { s.askedAt = Date.now(); save(true); } }
 
 // 沒有 GPS（跑步機、操場）時，結束後手動填距離
 export function setDistance(m) { if (s) { s.manualDist = m > 0 ? m : null; save(true); emit(); } }
-// 重新整理後回到記錄中（或自動暫停中）：繼續接 GPS
-if (tracking()) { watch(); lock(); }
+// 重新整理後回到記錄中（或自動暫停中）：繼續接 GPS、螢幕保持亮著
+if (tracking()) watch();
+if (live()) lock();
 
 // 目前配速：最近 30 秒的距離換算（秒／公里）
 export function currentPace() {

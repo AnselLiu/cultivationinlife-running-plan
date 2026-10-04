@@ -2557,7 +2557,7 @@ function bindComments() {
 const hms = (sec) => { sec = Math.max(0, Math.round(sec)); const h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60), x = sec % 60; return `${h ? `${h}:` : ''}${h ? pad2(m) : m}:${pad2(x)}`; };
 const paceStr = (secPerKm) => (secPerKm && secPerKm < 1800 ? `${Math.floor(secPerKm / 60)}'${pad2(Math.round(secPerKm % 60))}"` : '—');
 const GPS_NAME = { waiting: '正在定位…', good: 'GPS 良好', ok: 'GPS 普通', weak: 'GPS 訊號弱', denied: '沒有定位權限', off: '只計時' };
-let runTick = null, lapMsgT = 0;
+let runTick = null, lapMsgT = 0, wakeBadAt = 0;
 // 路線預覽（SVG，不載地圖圖資，路線不離開手機）
 function routeSvg(route) {
   if (route.length < 2) return '';
@@ -2620,7 +2620,7 @@ async function runView() {
     view.innerHTML = `${largeTitle('跑步', '計時加上 GPS，跑完自動算出今天的成績')}
       <section class="card runstart">
         <button class="runbtn go" id="runGo" aria-label="開始跑步記錄"><span>開始</span></button>
-        <p class="tiny center" style="margin:0">第一次使用會詢問定位權限。跑步時螢幕會保持亮著；如果鎖上螢幕，iPhone 會暫停定位，解鎖後再接著記錄。</p>
+        <p class="tiny center" style="margin:0">第一次使用會詢問定位權限。跑步時螢幕會保持亮著；iPhone 鎖定螢幕時會停止記錄，解鎖後空白的那段用直線估算（路線畫成虛線）。手機放口袋可以開「口袋模式」防誤觸。</p>
         <button class="btn ghost block" id="runNoGps">不用 GPS，只計時（跑步機、操場）</button>
         <label class="switch pkpref"><span>開始後直接進入口袋模式<span class="tiny" style="display:block">手機放口袋時畫面全黑、點了沒反應，螢幕保持亮著</span></span><input type="checkbox" id="pkPref" ${pocketPref.get() ? 'checked' : ''}><i></i></label>
       </section>
@@ -2654,6 +2654,9 @@ async function runView() {
           : '<button class="runbtn go" id="rResume">繼續</button><button class="runbtn stop" id="rStop">結束</button>'}
       </div>
       ${x.goal ? `<div class="goalbar"><span class="tiny">今天的課表：${esc(x.goal.text)}</span><span class="bar big"><i id="rGoal" style="width:0%"></i></span></div>` : ''}
+      <div class="notice wakenote" id="rWake" role="status" hidden><b>螢幕可能會自動關掉</b>
+        <p>iPhone 鎖定螢幕時網頁會停住、收不到定位，解鎖後空白的那段只能用直線估算。想記完整，跑步時讓螢幕保持亮著：放口袋時開口袋模式，或把「設定 › 螢幕顯示與亮度 › 自動鎖定」暫時設為「永不」（低電量模式下 iPhone 會 30 秒就鎖定）。</p>
+        <button type="button" class="linkbtn" id="rWakeRetry">再試一次讓螢幕保持亮著</button></div>
       <button type="button" class="btn ghost sm iconbtn" id="rPocket">${IC.lock}口袋模式</button>
       <p class="tiny lapmsg" id="rLapMsg" role="status"></p>
       <div id="rLaps" class="splits"></div>
@@ -2672,6 +2675,14 @@ async function runView() {
     $('#rLaps').innerHTML = (cur ? `<div class="cur"><span>第 ${cur.n} 圈・進行中</span><b class="num">${hms(cur.sec)}</b></div>` : '')
       + y.laps.map((l, i) => `<div><span>第 ${i + 1} 圈</span><b class="num">${hms((l.at - (i ? y.laps[i - 1].at : 0)) / 1000)}</b></div>`).reverse().join('');
     if (y.goal && $('#rGoal')) $('#rGoal').style.width = `${Math.min(100, y.goal.km ? d / (y.goal.km * 10) : sec / (y.goal.min * 0.6))}%`;
+    // 螢幕保持亮著要不到、或被系統放掉：跑步中超過 2 秒就提醒（不擋畫面）
+    const wk = $('#rWake');
+    if (wk) {
+      const bad = y.status === 'running' && ['off', 'denied', 'unsupported'].includes(Run.awake()) && document.visibilityState === 'visible';
+      wakeBadAt = bad ? wakeBadAt || Date.now() : 0;
+      wk.hidden = !(wakeBadAt && Date.now() - wakeBadAt >= 2000);
+      $('#rWakeRetry').hidden = Run.awake() === 'unsupported';
+    }
     // 自動暫停或自動繼續時，按鈕要跟著換
     if ((y.status === 'paused') !== !!$('#rResume')) { runView(); return; }
     if ($('#rState')) $('#rState').textContent = y.status === 'paused' ? (y.auto ? '停下來了，自動暫停' : '已暫停') : '記錄中';
@@ -2694,6 +2705,7 @@ async function runView() {
     paint();
   });
   $('#rPocket')?.addEventListener('click', pocketOn);
+  $('#rWakeRetry')?.addEventListener('click', () => Run.keepAwake());
   $('#rPause')?.addEventListener('click', () => { Run.pause(); runView(); });
   $('#rResume')?.addEventListener('click', () => { Run.resume(); runView(); });
   $('#rStop')?.addEventListener('click', () => { Run.finish(); runView(); });

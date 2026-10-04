@@ -12,9 +12,17 @@ const store = new Map();
 globalThis.localStorage = { getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)), removeItem: (k) => store.delete(k) };
 const docListeners = [];
 globalThis.document = { visibilityState: 'visible', addEventListener: (t, f) => docListeners.push([t, f]) };
-let geoCb = null, wakeReqs = 0;
+let geoCb = null, wakeDeny = false;
 const geo = { watchPosition(ok) { geoCb = ok; return 1; }, clearWatch() { geoCb = null; } };
-Object.defineProperty(globalThis, 'navigator', { value: { geolocation: geo, wakeLock: { request: async () => { wakeReqs++; return { release() {}, addEventListener() {} }; } } }, configurable: true });
+// 假的 Wake Lock：release() 會通知 release 事件（系統放掉時也一樣）；wakeDeny 時拒絕（像低電量模式）
+const sentinels = [];
+const wakeLock = { request: async () => {
+  if (wakeDeny) throw new DOMException('denied', 'NotAllowedError');
+  const w = { released: false, fns: [], addEventListener(t, f) { if (t === 'release') this.fns.push(f); }, release() { if (this.released) return; this.released = true; for (const f of this.fns) f(); } };
+  sentinels.push(w); return w;
+} };
+Object.defineProperty(globalThis, 'navigator', { value: { geolocation: geo, wakeLock }, configurable: true });
+const flush = () => new Promise((r) => setImmediate(r));
 
 let seed = 7;
 const rnd = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648);
@@ -187,4 +195,24 @@ test('(d) 0.6 秒內連按兩次計圈：只算一圈，進行中的這一圈即
   assert.equal(Run.lap(), true, '超過 3 秒可以再記');
   Run.finish();
   assert.deepEqual(Run.summary().laps.map((l) => l.n), [1, 2], '成績只留完成的圈');
+});
+
+test('Wake Lock：被系統放掉時狀態變成 off，回到前景再要一次；被拒絕時是 denied', async () => {
+  const Run = await load(); Run.start({ useGps: true });
+  const w = world(Run);
+  await flush();
+  assert.equal(Run.awake(), 'on');
+  sentinels.at(-1).release();                // 系統放掉（切到背景、省電）
+  assert.equal(Run.awake(), 'off');
+  document.visibilityState = 'hidden'; w.wake();
+  document.visibilityState = 'visible'; w.wake();
+  await flush();
+  assert.equal(Run.awake(), 'on', '回到前景再要一次');
+  wakeDeny = true;
+  sentinels.at(-1).release();
+  Run.keepAwake(); await flush();
+  assert.equal(Run.awake(), 'denied');
+  wakeDeny = false;
+  Run.pause();
+  assert.equal(Run.awake(), 'off', '暫停時放掉');
 });
