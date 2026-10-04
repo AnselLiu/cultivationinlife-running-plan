@@ -13,7 +13,8 @@
 //   用法（在專案根目錄）：
 //     node tools/rest-sync.mjs                                   預設只試跑：抓全部只由維護工具同步的來源、產生 SQL、印出筆數，不寫資料庫
 //     node tools/rest-sync.mjs twd tpt                           只處理這幾個來源
-//     MOENV_KEY=… node tools/rest-sync.mjs cool moenv            第二批（環境部的金鑰；不要寫進檔案或指令紀錄，見 docs/FLOWS.md）
+//     MOENV_KEY="$(security find-generic-password -s cil-moenv -w)" node tools/rest-sync.mjs cool moenv
+//                                                                第二批（環境部的金鑰從鑰匙圈讀，不寫進檔案或指令紀錄，見 docs/FLOWS.md）
 //     node tools/rest-sync.mjs --apply --env staging             產生後寫進測試站（cil-run-staging）
 //     node tools/rest-sync.mjs --apply --env production          產生後寫進正式站（cil-run）；wrangler 要先登入（npx wrangler login）
 //     node tools/rest-sync.mjs --apply=local [--persist-to=.wrangler/state]   寫進本機開發用的資料庫
@@ -74,7 +75,7 @@ export function coverage(spots, rows) {
 export const GROUP_LABEL = { water: '飲水', toilet: '廁所', shower: '淋浴置物', supply: '補給' };
 // 要金鑰的來源：環境變數有設才回 { 變數名: 值 }；值只交給抓資料的程式，不印、不寫檔
 export const keyEnv = (k, penv = process.env) => { const n = SOURCES[k]?.key; return n && penv[n] ? { [n]: penv[n] } : null; };
-export const KEY_HELP = '到環境部環境資料開放平臺（data.moenv.gov.tw）註冊會員、申請 API 金鑰，再用 MOENV_KEY=… node tools/rest-sync.mjs cool moenv（見 docs/FLOWS.md）';
+export const KEY_HELP = '到環境部環境資料開放平臺（data.moenv.gov.tw）註冊會員、申請 API 金鑰，存進鑰匙圈後用 MOENV_KEY="$(security find-generic-password -s cil-moenv -w)" node tools/rest-sync.mjs cool moenv（見 docs/FLOWS.md「跑者休息站的維護工具」）';
 
 // 抓＋解析一個來源（不碰資料庫）：回 { rows, tag, date, dropped }；tag 是解析後各列雜湊的摘要（來源每天換匯入時間也不會被當成有變）
 //   有半徑的來源要給 spots（核准的跑點）
