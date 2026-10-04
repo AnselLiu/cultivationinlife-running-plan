@@ -1237,6 +1237,7 @@ const api = (async function api(req, env, path, method) {
     // 附近休息站：周圍 3×3 格、1 公里內每類最多 2 處（距離 × 權重排序）；功能開關關閉時 404
     if (sub === 'rest' && method === 'GET' && !msp[3]) {
       if (!restOn()) return fail(404, '找不到休息站');
+      if (await limited(env, `restd:${member.id}`, REST_DETAIL_LIMIT, 600)) return fail(429, '查詢太頻繁，請稍後再試');
       return json(await Rest.nearSpot(env, sp), 200, { 'cache-control': 'private, max-age=300' });
     }
     if (!sub && method === 'GET') {
@@ -1412,13 +1413,14 @@ const api = (async function api(req, env, path, method) {
     // 內容依身分不同（editor）：不讓瀏覽器快取（共用裝置換人登入、幹部改完重新讀都要拿到新的）
     return json({ enabled: true, rev: st.rev, editor: canEditSpots(), sources: st.rows.filter((s) => s.enabled).map((s) => Rest.credit(s.source, s)) });
   }
-  // 一格（0.02 度）的休息站：精簡陣列；Cache API 用格子＋版本當 key；每位跑友 10 分鐘最多 300 次
+  // 一格（0.02 度）的休息站：精簡陣列；Cache API 用格子＋版本當 key（workers.dev 上 Cache API 可能沒有作用，每次都讀 D1）；
+  //   每位跑友 10 分鐘最多 150 次（一個畫面最多 16 格，瀏覽器另外快取一天），不讓一個帳號用光每天的 D1 讀取額度
   const mrcell = path.match(/^\/api\/rest\/cell\/([^/]{1,20})$/);
   if (mrcell && method === 'GET') {
     const g = need(); if (g) return g;
     if (!restOn()) return fail(404, '找不到休息站');
     if (!Rest.CELL_RE.test(mrcell[1])) return fail(400, '格子代碼不正確');
-    if (await limited(env, `restc:${member.id}`, 300, 600)) return fail(429, '查詢太頻繁，請稍後再試');
+    if (await limited(env, `restc:${member.id}`, 150, 600)) return fail(429, '查詢太頻繁，請稍後再試');
     const r = await Rest.cellStops(env, mrcell[1]);
     return new Response(r.body, { headers: { ...SEC_HEADERS, 'content-type': 'application/json; charset=utf-8', 'cache-control': 'private, max-age=86400', 'x-rest-cache': r.hit ? 'hit' : 'miss' } });
   }
@@ -1490,6 +1492,8 @@ const api = (async function api(req, env, path, method) {
     const editor = canEditSpots();
     if (method === 'GET') {
       if (!restOn()) return fail(404, '找不到休息站');
+      // 一次讀周圍 3×3 格（市區約 800 列）而且沒有快取：每位跑友 10 分鐘最多 60 次（和地點的附近休息站共用）
+      if (await limited(env, `restd:${member.id}`, REST_DETAIL_LIMIT, 600)) return fail(429, '查詢太頻繁，請稍後再試');
       const d = await Rest.detail(env, mrs[1], editor);
       // 幹部多看得到建立者、修正前的值與隱藏的列：不讓瀏覽器快取（json 預設 no-store）
       return d ? json(d) : fail(404, '找不到休息站');
@@ -4317,6 +4321,7 @@ const BACKUP_FILTER = { cams: 'manual = 1', rest_stops: 'manual = 1 OR fix IS NO
 // 每筆可能很大的表（路線最多 3000 點約 66 KB、分團小圖最多 80 KB）：第一次只讀幾筆，之後照平均大小調整，一段的 CPU 才不會爆
 const BACKUP_FIRST = { routes: 5, teams: 5, plan_posts: 50, team_posts: 50 };
 const ROUTE_MAX = 100;
+const REST_DETAIL_LIMIT = 60;   // 休息站詳細與地點的附近休息站：每位跑友 10 分鐘最多幾次   // 每人最多存幾條路線（見 POST /api/routes）
 // 加密一個備份物件：'CILB2'＋IV＋AES-GCM(gzip(text))；AAD 綁住日期與第幾段（manifest 是 'manifest'），段落不能被換位置或拿去拼別份
 async function sealBackup(env, text, aad) {
   const gz = await new Response(new Blob([text]).stream().pipeThrough(new CompressionStream('gzip'))).arrayBuffer();

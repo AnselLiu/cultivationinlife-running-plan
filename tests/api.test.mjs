@@ -1574,6 +1574,20 @@ test('跑者休息站（免費方案）：每個來源標明 Worker 能不能同
   await mock('reset=1');
 });
 
+test('跑者休息站：詳細與地點附近一次讀周圍 9 格，每位跑友 10 分鐘最多 60 次（不讓一個帳號用光 D1 讀取額度）', async () => {
+  assert.equal((await call('t_chair', '/settings/features', { method: 'POST', body: { rest: true } })).status, 200);
+  try {
+    const st = [];
+    for (let i = 0; i < 60; i++) st.push((await call('t_other', '/rest/twd:D1')).status);
+    assert.ok(st.every((x) => x === 200), JSON.stringify(st));
+    assert.equal((await call('t_other', '/rest/twd:D1')).status, 429, '第 61 次擋下');
+    assert.equal((await call('t_other', '/spots/seed07/rest')).status, 429, '地點附近休息站共用同一個上限');
+    assert.equal((await call('t_runner', '/rest/twd:D1')).status, 200, '別人不受影響');
+  } finally {
+    await call('t_chair', '/settings/features', { method: 'POST', body: { rest: false } });
+  }
+});
+
 test('路線：每人最多存 100 條（不讓一個帳號把資料庫與每日備份灌爆）', async () => {
   const pts = [[25.07, 121.53], [25.08, 121.53]];
   const had = (await call('t_other', '/routes')).json.routes.filter((r) => r.mine).length;
