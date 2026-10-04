@@ -1619,7 +1619,8 @@ const api = (async function api(req, env, path, method) {
       if (r.created_by !== member.id && !canEditSpots()) return fail(403, '只能刪除自己畫的路線');
       await env.DB.prepare('DELETE FROM routes WHERE id = ?').bind(r.id).run();
       await env.DB.prepare('UPDATE events SET route_id = NULL WHERE route_id = ?').bind(r.id).run();
-      if (r.created_by !== member.id) await audit(env, req, member, 'route.delete', 'route', r.id, r.name);
+      // 自己刪自己的路線也寫稽核（不記名稱）：還原備份或 Time Travel 後才能再刪一次（tools/restore-sql.mjs）
+      await audit(env, req, member, 'route.delete', 'route', r.id, r.created_by !== member.id ? r.name : '');
       return json({ ok: true });
     }
   }
@@ -3116,7 +3117,9 @@ const api = (async function api(req, env, path, method) {
   const mlog = path.match(/^\/api\/logs\/([\w-]{1,32})$/);
   if (mlog && method === 'DELETE') {
     const g = need(); if (g) return g;
-    await env.DB.prepare('DELETE FROM training_logs WHERE id = ? AND member_id = ?').bind(mlog[1], member.id).run();
+    const r = await env.DB.prepare('DELETE FROM training_logs WHERE id = ? AND member_id = ?').bind(mlog[1], member.id).run();
+    // 寫稽核（只有紀錄 id）：還原備份或 Time Travel 後，刪掉的紀錄（備註、心率、強度）才不會跟著回來（tools/restore-sql.mjs 重做）
+    if (r.meta.changes) await audit(env, req, member, 'log.delete', 'log', mlog[1], '');
     return json({ ok: true });
   }
   // 教練看某位團員的紀錄（本人要有打開分享）；以及教練留言
@@ -3132,6 +3135,18 @@ const api = (async function api(req, env, path, method) {
     const shared = (await env.DB.prepare("SELECT team_id FROM team_members WHERE member_id = ? AND status = 'active'").bind(mid).all()).results;
     return shared.some((t) => coachOf(t.team_id)) ? m : null;
   };
+  // 平均強度（RPE）：只算整週（週一到週日，跟協會週次同一個起點），而且那一週至少 RPE_MIN 筆有填強度才計入。
+  //   查詢區間碰到的週一律整週算，所以把 from、to 縮到一天也拿不到單次的 RPE；不足 RPE_MIN 筆的週整週不算，
+  //   兩個區間相減也推不回來（分享同意書：「每次的強度只有本人看得到」）
+  const RPE_MIN = 3;
+  const rpeByWeek = async (whoSql, binds, [from, to]) => {
+    const rows = (await env.DB.prepare(`SELECT member_id, SUM(rpe) AS s, COUNT(*) AS n FROM training_logs
+       WHERE ${whoSql} AND date BETWEEN date(?, 'weekday 0', '-6 days') AND date(?, 'weekday 0') AND rpe IS NOT NULL
+       GROUP BY member_id, date(date, 'weekday 0', '-6 days') HAVING COUNT(*) >= ${RPE_MIN}`).bind(...binds, from, to).all()).results;
+    const by = new Map();
+    for (const r of rows) { const a = by.get(r.member_id) || { s: 0, n: 0 }; a.s += r.s; a.n += r.n; by.set(r.member_id, a); }
+    return new Map([...by].map(([k, a]) => [k, Math.round((a.s / a.n) * 10) / 10]));
+  };
   const mlm = path.match(/^\/api\/logs\/member\/([\w-]{1,32})$/);
   if (mlm && method === 'GET') {
     const g = need(); if (g) return g;
@@ -3143,12 +3158,13 @@ const api = (async function api(req, env, path, method) {
       `SELECT id, date, week_no, plan_day, cycle_week, (cycle_anchor IS NOT NULL) AS personal, kind, plan_text, status, km,
               (SELECT COUNT(*) FROM log_comments c WHERE c.log_id = training_logs.id) AS comments
        FROM training_logs WHERE member_id = ? AND date BETWEEN ? AND ? ORDER BY date DESC LIMIT 200`).bind(who.id, ...r).all()).results;
-    // 區間合計：完成次數、里程、平均強度（跟 /api/logs/team 同一套算法；只有平均，不給每一筆的 RPE）
-    const sum = await env.DB.prepare(`SELECT SUM(status != 'skip') AS runs, ROUND(SUM(COALESCE(km, 0)), 1) AS km, ROUND(AVG(rpe), 1) AS rpe
+    // 區間合計：完成次數、里程（每一筆本來就看得到）；平均強度照 rpeByWeek（整週、每週至少 RPE_MIN 筆），跟 /api/logs/team 同一套
+    const sum = await env.DB.prepare(`SELECT SUM(status != 'skip') AS runs, ROUND(SUM(COALESCE(km, 0)), 1) AS km
        FROM training_logs WHERE member_id = ? AND date BETWEEN ? AND ?`).bind(who.id, ...r).first();
+    const rpe = (await rpeByWeek('member_id = ?', [who.id], r)).get(who.id) ?? null;
     // 個人週期只給週次與「個人」標記，不給比賽日與比賽名稱
     return json({ member: { id: who.id, name: who.name, nickname: who.nickname, dist: who.dist, grp: who.grp, plan_cycle: who.plan_cycle === 'race' ? 'race' : 'club' }, logs: rows,
-      summary: { runs: sum?.runs || 0, km: sum?.km || 0, rpe: sum?.rpe ?? null }, from: r[0], to: r[1] });
+      summary: { runs: sum?.runs || 0, km: sum?.km || 0, rpe }, from: r[0], to: r[1] });
   }
   const mlc = path.match(/^\/api\/logs\/([\w-]{1,32})\/comments$/);
   if (mlc) {
@@ -3193,11 +3209,14 @@ const api = (async function api(req, env, path, method) {
     const rows = (await env.DB.prepare(
       `SELECT m.id, m.name, m.nickname, m.avatar, m.dist, m.grp, m.plan_cycle,
               SUM(l.status = 'done') AS done, SUM(l.status = 'partial') AS partial, SUM(l.status = 'skip') AS skip, SUM(l.status = 'extra') AS extra,
-              ROUND(SUM(COALESCE(l.km, 0)), 1) AS km, ROUND(AVG(l.rpe), 1) AS rpe, MAX(l.date) AS last
+              ROUND(SUM(COALESCE(l.km, 0)), 1) AS km, MAX(l.date) AS last
        FROM members m LEFT JOIN training_logs l ON l.member_id = m.id AND l.date BETWEEN ? AND ?
        WHERE m.share_logs = 1 ${team ? "AND m.id IN (SELECT member_id FROM team_members WHERE team_id = ? AND status = 'active')" : ''}
        GROUP BY m.id ORDER BY km DESC, m.name LIMIT 200`).bind(...r, ...(team ? [team] : [])).all()).results;
-    return json({ members: rows, from: r[0], to: r[1] });
+    // 平均強度：整週、每週至少 RPE_MIN 筆（rpeByWeek）；區間縮到一天也拿不到單次的 RPE
+    const rpe = rows.length ? await rpeByWeek(`member_id IN (SELECT id FROM members WHERE share_logs = 1${team ? " AND id IN (SELECT member_id FROM team_members WHERE team_id = ? AND status = 'active')" : ''})`,
+      team ? [team] : [], r) : new Map();
+    return json({ members: rows.map((m) => ({ ...m, rpe: rpe.get(m.id) ?? null })), from: r[0], to: r[1] });
   }
 
   // ---- 通知中心 ----
@@ -3995,7 +4014,8 @@ const api = (async function api(req, env, path, method) {
       if (action === 'remove') {
         if (!(await canManageMembers(tid, target.role === 'member' ? 'approve' : 'appoint'))) return fail(403, '沒有移除的權限');
         await env.DB.prepare('DELETE FROM team_members WHERE team_id = ? AND member_id = ?').bind(tid, mid).run();
-        await audit(env, req, member, target.status === 'pending' ? 'team.reject' : 'team.remove', 'member', mid, team.name);
+        // 結尾的 ｜team=分團 id：還原備份或 Time Travel 後靠它把這個人再移出一次（tools/restore-sql.mjs）
+        await audit(env, req, member, target.status === 'pending' ? 'team.reject' : 'team.remove', 'member', mid, `${team.name}｜team=${tid}`);
         if (target.status === 'pending') {
           await settleTodo(env, `join:${tid}:${mid}`);
           if (mid !== member.id) await notify(env, [mid], 'membership', { kind: 'system', title: `${team.name}：這次沒有通過申請`, body: '可以看看其他分團，或之後再申請一次', url: '/#/teams', ref: `t:${tid}` });
@@ -4009,7 +4029,8 @@ const api = (async function api(req, env, path, method) {
         if (await limited(env, `teamrole:${tid}:${mid}`, 5, 3600)) return fail(429, '操作太頻繁，請稍後再試');
         await env.DB.prepare("UPDATE team_members SET role = ?, title = ?, status = 'active' WHERE team_id = ? AND member_id = ?")
           .bind(role, str(b.title, 12) || null, tid, mid).run();
-        await audit(env, req, member, 'team.role', 'member', mid, `${team.name}／${TEAM_ROLES[role]}${b.title ? `／${str(b.title, 12)}` : ''}`);
+        // 結尾的 ｜team=分團 id｜role=代碼：還原後照最後一次重設分團身分（降級不會跟著倒回去；tools/restore-sql.mjs）
+        await audit(env, req, member, 'team.role', 'member', mid, `${team.name}／${TEAM_ROLES[role]}${b.title ? `／${str(b.title, 12)}` : ''}｜team=${tid}｜role=${role}`);
         if (target.role !== role || (target.title || null) !== (str(b.title, 12) || null)) await securityNotify(env, [mid], { title: `${team.name}：身分改為${TEAM_ROLES[role]}`, body: `你在${team.name}的身分是${str(b.title, 12) || TEAM_ROLES[role]}`, url: `/#/t/${tid}`, ref: `t:${tid}`,
           push: { title: `${team.name}：身分更新`, body: '點開查看' } });
         return json({ ok: true });
@@ -4129,7 +4150,8 @@ const api = (async function api(req, env, path, method) {
     ]);
     await revokeSessions(env, target.id);
     await revokeSessions(env, member.id);
-    await audit(env, req, member, 'role.handover', 'member', target.id, `理事長移交給 ${target.name}；原理事長改為${ROLES[myRole]}`);
+    // 結尾的 ｜role=代碼：還原後照這筆重設雙方身分（tools/restore-sql.mjs）
+    await audit(env, req, member, 'role.handover', 'member', target.id, `理事長移交給 ${target.name}；原理事長改為${ROLES[myRole]}｜role=${myRole}`);
     // 鎖定畫面不放人名與新身分，詳細內容只在通知中心
     await securityNotify(env, [target.id], { title: '你已成為理事長', body: '理事長已移交給你，請重新登入後到管理後台確認幹部名單', url: '/#/admin',
       push: { title: '身分更新', body: '你的身分已變更，請重新登入' } });
@@ -4147,7 +4169,8 @@ const api = (async function api(req, env, path, method) {
     if (mr[1] === member.id && role !== 'chair') return fail(400, '不能把自己降級，請先指派新的理事長');
     await env.DB.prepare('UPDATE members SET role = ?, title = ? WHERE id = ?').bind(role, str(b.title, 20) || null, mr[1]).run();
     await revokeSessions(env, mr[1]);
-    await audit(env, req, member, 'role.change', 'member', mr[1], `${ROLES[role]}${b.title ? `／${str(b.title, 20)}` : ''}`);
+    // 結尾的 ｜role=代碼：還原後照最後一次重設身分（降級不會跟著倒回去；tools/restore-sql.mjs）
+    await audit(env, req, member, 'role.change', 'member', mr[1], `${ROLES[role]}${b.title ? `／${str(b.title, 20)}` : ''}｜role=${role}`);
     await securityNotify(env, [mr[1]], { title: '身分更新', body: `你的身分已設定為${ROLES[role]}`, url: '/#/me', push: { body: '你的身分已變更，請重新登入' } });
     return json({ ok: true });
   }
@@ -5140,6 +5163,9 @@ async function devRoute(req, env, ctx, url, path) {
     if (q.get('waititems')) stmts.push(env.DB.prepare(`INSERT OR IGNORE INTO signups (id, event_id, member_id, name, grp, dist, status, items, created_at)
       SELECT printf('bw%04d%s', value, substr(?1, 1, 8)), ?1, printf('b_%04d', value), printf('大量測試%04d', value), 'D', 'fm', 'wait', '[{"id":"a","qty":1}]', datetime('now', printf('-%d seconds', 1000 - value))
       FROM json_each(?2)`).bind(str(q.get('waititems'), 32), seq(Math.min(Number(q.get('n')) || 0, 500))));
+    // ?droplogs=id1,id2,…：測試收尾一次刪掉大量訓練紀錄（不經過 API，不寫 log.delete 稽核，測試資料庫才不會因為收尾而變大）
+    const drop = (q.get('droplogs') || '').split(',').filter((x) => /^[\w-]{1,32}$/.test(x)).slice(0, 1000);
+    if (drop.length) stmts.push(env.DB.prepare('DELETE FROM training_logs WHERE id IN (SELECT value FROM json_each(?))').bind(JSON.stringify(drop)));
     if (/^\d{4}-\d{2}$/.test(q.get('logs') || '') && nm) stmts.push(env.DB.prepare(`INSERT OR IGNORE INTO training_logs (id, member_id, date, status, km)
       SELECT printf('blg%s%04d', replace(?1, '-', ''), value), printf('b_%04d', value), ?1 || '-10', 'done', 10 FROM json_each(?2)`).bind(q.get('logs'), seq(nm)));
     if (stmts.length) await env.DB.batch(stmts);

@@ -92,6 +92,7 @@ async function memberLogsView(mid) {
       <div class="card kpi"><span class="tiny">總里程</span><b class="num">${Number(sm.km || 0).toFixed(1)}<small> km</small></b></div>
       <div class="card kpi"><span class="tiny">平均強度（RPE）</span><b class="num">${sm.rpe != null ? Number(sm.rpe).toFixed(1) : '—'}</b></div>
     </section>
+    <p class="tiny" style="margin:0 0 8px">平均強度以週計算，一週至少 3 筆有填強度才算進來。</p>
     <section class="card"><div class="roster">${r.logs.map((l) => `<div class="mlog">
       <div class="row spread"><b>${dstr(l.date)}${wk(l) ? ` <span class="tiny">${wk(l)}</span>` : ''}</b>
         <span class="pill ${l.status === 'done' ? 'solid' : l.status === 'skip' ? '' : 'wait'}">${LOG_STATUS_NAME[l.status]}</span></div>
@@ -118,6 +119,7 @@ async function logsTeamView(week, team) {
       <div class="row spread"><div class="row" style="gap:6px"><button class="btn ghost sm navbtn" id="wprev" ${week === 1 ? 'disabled' : ''} aria-label="上一週">‹</button><b>W${week}</b><button class="btn ghost sm navbtn" id="wnext" ${week === 21 ? 'disabled' : ''} aria-label="下一週">›</button></div>
         <select id="tsel" style="width:auto">${allow('plan') ? '<option value="">全部（有分享的人）</option>' : ''}${(allow('plan') ? teams() : lead).map((t) => `<option value="${esc(t.id)}" ${team === t.id ? 'selected' : ''}>${esc(t.name)}</option>`).join('')}</select></div>
       <p class="tiny" style="margin:0">只列出自己打開「分享給教練」的團員，看不到備註。完成率以每週 ${planned} 堂課計算。</p>
+      <p class="tiny" style="margin:0">平均強度以週計算，一週至少 3 筆有填強度才算進來。</p>
     </section>
     <section class="card"><div class="roster">${r.members.map((m) => {
       const p = Math.min(100, Math.round(((m.done || 0) + (m.partial || 0) * 0.5) / planned * 100));

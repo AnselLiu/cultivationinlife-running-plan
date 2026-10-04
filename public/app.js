@@ -893,8 +893,10 @@ function paintCountdown() {
   const t = new Date(`${r.date}T00:00:00`), now = new Date(); now.setHours(0, 0, 0, 0);
   const days = Math.round((t - now) / 864e5);
   const short = r.name.replace(/^20\d\d\s*/, '').replace('馬拉松', '馬').slice(0, 7);
-  $('#countdown').innerHTML = days > 0 ? `<b class="num">${days}</b>天到${esc(short)}` : days === 0 ? `<b>今天</b>${esc(short)}` : '';
-  $('#countdown').title = I18N.t(`${r.name}（${r.date}），點一下可以換`);
+  // 比賽名稱是使用者或賽事資料的原文：英文介面不翻（translate="no"），只翻固定的字
+  const nm = `<span translate="no">${esc(short)}</span>`;
+  $('#countdown').innerHTML = days > 0 ? `<b class="num">${days}</b>天到${nm}` : days === 0 ? `<b>今天</b>${nm}` : '';
+  $('#countdown').title = I18N.lang === 'en' ? `${r.name} (${r.date}). ${I18N.t('點一下可以換')}` : `${r.name}（${r.date}），點一下可以換`;
 }
 // 點右上角倒數：選要倒數哪一場（自己的賽事、常用賽事清單、協會預設，或不顯示）
 async function countdownPicker() {

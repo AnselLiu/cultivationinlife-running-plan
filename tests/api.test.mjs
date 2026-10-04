@@ -130,7 +130,10 @@ test('訓練紀錄：不能記未來、查詢有上限、教練要本人分享�
 });
 
 test('分享給教練的訓練只有同意範圍：完成、里程、平均強度；時間、心率、RPE、感覺、備註只有本人看得到，回饋照常', async () => {
-  const d = plus(-3), q = `?from=${d}&to=${d}`;
+  // 用三週前那一週（週一到週日），只有這個測試會在那一週替 t_runner 記錄
+  const monOf = (iso) => { const t = Date.parse(`${iso}T00:00:00Z`); return new Date(t - ((new Date(t).getUTCDay() + 6) % 7) * 864e5).toISOString().slice(0, 10); };
+  const day = (mon, k) => new Date(Date.parse(`${mon}T00:00:00Z`) + k * 864e5).toISOString().slice(0, 10);
+  const mon = monOf(plus(-21)), d = day(mon, 3), q = `?from=${d}&to=${d}`;
   await call('t_runner', '/me/share-logs', { method: 'POST', body: { share: true } });
   const a = await call('t_runner', '/logs', { method: 'POST', body: { date: d, status: 'done', km: 12.3, seconds: 3987, hr: 163, rpe: 8, feel: 2, note: '膝蓋有點痛只給自己看' } });
   const b = await call('t_runner', '/logs', { method: 'POST', body: { date: d, status: 'partial', km: 4, seconds: 1500, hr: 141, rpe: 4, feel: 4 } });
@@ -144,13 +147,29 @@ test('分享給教練的訓練只有同意範圍：完成、里程、平均強�
     for (const l of mine) for (const k of HIDDEN) assert.ok(!(k in l), `${who} 不該拿到 ${k}`);
     assert.deepEqual(mine.map((l) => [l.status, l.km]).sort(), [['done', 12.3], ['partial', 4]]);
     assert.ok(!seen.text.includes('膝蓋') && !seen.text.includes('3987') && !seen.text.includes('163'), `${who} 回應裡沒有備註、時間、心率`);
-    assert.deepEqual(seen.json.summary, { runs: 2, km: 16.3, rpe: 6 }, '只有區間的平均強度');
+    assert.deepEqual(seen.json.summary, { runs: 2, km: 16.3, rpe: null }, '那一週不到 3 筆有強度：不給平均（不然兩筆就推得回來）');
     const team = await call(who, `/logs/team${q}${who === 't_lead' ? '&team=youth' : ''}`);
     const row = team.json.members.find((m) => m.id === 't_runner');
-    assert.equal(row.rpe, 6); assert.equal(row.km, 16.3);
+    assert.equal(row.rpe, null); assert.equal(row.km, 16.3);
     for (const k of ['seconds', 'hr', 'feel', 'note']) assert.ok(!(k in row), `團員總表不該有 ${k}`);
     assert.ok(!team.text.includes('膝蓋'));
   }
+  // 同一週第 3 筆（另一天）：平均以整週算，查哪一天都是整週的平均 (8 + 4 + 9) / 3 = 7，拿不到某一天或某一筆的 RPE
+  const c = await call('t_runner', '/logs', { method: 'POST', body: { date: day(mon, 5), status: 'done', km: 10, rpe: 9 } });
+  assert.equal(c.status, 200);
+  for (const qq of [q, `?from=${day(mon, 5)}&to=${day(mon, 5)}`, `?from=${mon}&to=${day(mon, 6)}`]) {
+    assert.equal((await call('t_coach', `/logs/member/t_runner${qq}`)).json.summary.rpe, 7, qq);
+    assert.equal((await call('t_lead', `/logs/team${qq}&team=youth`)).json.members.find((m) => m.id === 't_runner').rpe, 7, qq);
+  }
+  // 另一週只有一筆：一天的區間、整週的區間都拿不到那一筆的 RPE；跨兩週時只算夠 3 筆的那一週（相減也推不回來）
+  const lone = await call('t_runner', '/logs', { method: 'POST', body: { date: day(mon, -5), status: 'done', km: 6, rpe: 3 } });
+  assert.equal(lone.status, 200);
+  const one1 = `?from=${day(mon, -5)}&to=${day(mon, -5)}`;
+  assert.equal((await call('t_coach', `/logs/member/t_runner${one1}`)).json.summary.rpe, null, '一筆一天的查詢不給 RPE');
+  assert.equal((await call('t_coach', `/logs/team${one1}`)).json.members.find((m) => m.id === 't_runner').rpe, null);
+  assert.equal((await call('t_coach', `/logs/member/t_runner?from=${day(mon, -5)}&to=${d}`)).json.summary.rpe, 7, '不足 3 筆的那一週不算進去');
+  await call('t_runner', `/logs/${c.json.id}`, { method: 'DELETE' });
+  await call('t_runner', `/logs/${lone.json.id}`, { method: 'DELETE' });
   // 本人照舊看得到完整資料
   const own = (await call('t_runner', `/logs${q}`)).json.logs.find((l) => l.id === a.json.id);
   assert.deepEqual([own.seconds, own.hr, own.rpe, own.feel, own.note], [3987, 163, 8, 2, '膝蓋有點痛只給自己看']);
@@ -213,7 +232,8 @@ test('訓練紀錄寫入：每天與 10 分鐘的次數限制（離線補傳、�
     await call('t_runner', `/logs/${other.json.id}`, { method: 'DELETE' });
   } finally {
     await rate('key=logday:t_staff&clear=1'); await rate('key=logw:t_staff&clear=1');
-    for (const id of ids) await call('t_staff', `/logs/${id}`, { method: 'DELETE' });
+    // 收尾：一百多筆一次刪（經過 API 每筆都會寫一列 log.delete 稽核，測試資料庫會大到後面的備份測試要分段）
+    for (let i = 0; i < ids.length; i += 200) await call(null, `/dev/seed-bulk?droplogs=${ids.slice(i, i + 200).join(',')}`);
   }
 });
 
@@ -1803,4 +1823,21 @@ test('登出所有裝置寫稽核 session.revoke_all（還原備份或 Time Trav
   assert.equal((await fetch(`${BASE}/api/members`, { headers: { cookie } })).status, 401, '登出所有裝置後原本的登入失效');
   const au = (await call(CHAIR, `/audit?from=${plus(-1)}&to=${plus(1)}&action=session.revoke&target=${id}`)).json.items;
   assert.ok(au.some((x) => x.action === 'session.revoke_all' && x.target_id === id));
+});
+
+test('還原後要能重做的動作都寫稽核：刪除自己的訓練紀錄、自己的路線；分團身分與移出記下分團 id 與身分代碼', async () => {
+  const au = async (action, target) => (await call(CHAIR, `/audit?from=${plus(-1)}&to=${plus(1)}&action=${action}&target=${target}`)).json.items;
+  const lg = await call('t_runner', '/logs', { method: 'POST', body: { date: plus(-1), status: 'done', km: 3, rpe: 4, note: '刪掉' } });
+  assert.equal((await call('t_runner', `/logs/${lg.json.id}`, { method: 'DELETE' })).status, 200);
+  const ld = await au('log.delete', lg.json.id);
+  assert.ok(ld.some((x) => x.action === 'log.delete' && x.target_id === lg.json.id && x.actor_name === '測試跑友'), '刪除自己的紀錄寫稽核');
+  assert.ok(!ld.some((x) => (x.detail || '').includes('刪掉')), '稽核不記備註');
+  const rt = await call('t_runner', '/routes', { method: 'POST', body: { name: '自己的路線', points: [[25.07, 121.53], [25.08, 121.53]], shared: false } });
+  assert.equal((await call('t_runner', `/routes/${rt.json.id}`, { method: 'DELETE' })).status, 200);
+  const rd = await au('route.delete', rt.json.id);
+  assert.ok(rd.some((x) => x.target_id === rt.json.id && x.actor_name === '測試跑友' && !x.detail), '自己刪自己的路線也寫稽核（不記名稱）');
+  await call('t_lead', '/teams/youth/members', { method: 'POST', body: { member_id: 't_runner', action: 'role', role: 'officer', title: '活動組' } });
+  await call('t_lead', '/teams/youth/members', { method: 'POST', body: { member_id: 't_runner', action: 'role', role: 'member' } });
+  const tr = (await au('team.role', 't_runner')).map((x) => x.detail);
+  assert.ok(tr.some((d) => d.endsWith('／活動組｜team=youth｜role=officer')) && tr.some((d) => d.endsWith('｜team=youth｜role=member')), tr.join(' / '));
 });

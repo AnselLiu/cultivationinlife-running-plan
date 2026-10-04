@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { DatabaseSync } from 'node:sqlite';
-import { toSql, erasedFrom, erasedQuery, auditRowsFrom, replayQuery, replaySql, REPLAY_ACTIONS } from '../tools/restore-sql.mjs';
+import { toSql, erasedFrom, erasedQuery, auditRowsFrom, replayQuery, replaySql, planSummary, REPLAY_ACTIONS, ROLE_LABELS, TEAM_ROLE_LABELS } from '../tools/restore-sql.mjs';
 
 const dir = new URL('../migrations/', import.meta.url);
 function freshDb() {
@@ -144,7 +144,12 @@ test('D1 Time Travel 之後：重做撤回、撤銷的登入失效、清掉倒�
 test('撤回紀錄：讀得懂新備份的 audit_log、舊的 --erased 格式；欄位被改過就擋下；查詢只讀', () => {
   const newer = { format: 'cil-backup', tables: { audit_log: WITHDRAWALS } };
   assert.deepEqual(auditRowsFrom(JSON.stringify(newer), '2026-10-01T19:00:00.000Z').map((r) => r.id), ['a1', 'a2', 'a3', 'a4', 'a5', 'a6', 'a7', 'a8', 'a9', 'b1', 'b2']);
-  assert.deepEqual(auditRowsFrom(JSON.stringify([{ results: [{ target_id: 'x1' }] }])).map((r) => [r.action, r.target_id]), [['privacy.delete', 'x1']]);
+  assert.deepEqual(auditRowsFrom(JSON.stringify([{ results: [{ target_id: 'x1' }], success: true }])).map((r) => [r.action, r.target_id]), [['privacy.delete', 'x1']]);
+  // 抓取失敗（wrangler 印出錯誤、success 不是 true、沒有 results）：整份擋下，不能當成「沒有撤回」
+  for (const bad of ['{"error":"Authentication error"}', '[{"success":false}]', '[{"results":[]}]', '[{"results":[],"success":true},{"success":false}]', '[]', '{}']) {
+    assert.throws(() => auditRowsFrom(bad), /抓取撤回紀錄失敗/, bad);
+  }
+  assert.deepEqual(auditRowsFrom('[{"results":[],"success":true}]'), [], '成功但真的沒有撤回');
   assert.throws(() => auditRowsFrom(wranglerJson([A('z', '2026-10-02 08:00:00', 'privacy.share_logs', "x2' OR 1=1 --", '關閉')])));
   assert.throws(() => auditRowsFrom(wranglerJson([A('z', "2026-10-02'; DROP TABLE members; --", 'privacy.share_logs', 'x2', '關閉')])));
   assert.throws(() => auditRowsFrom(wranglerJson([A('z', '2026-10-02 08:00:00', 'notif.prefs', 'x2', 'x'.repeat(301))])));
@@ -169,6 +174,7 @@ test('Time Travel 工具模式：--query 只印唯讀查詢；--replay 從抓下
   assert.equal(q.status, 0, q.stderr);
   assert.ok(q.stdout.includes("npx wrangler d1 execute cil-run --remote --json --command \"SELECT id, at,"));
   assert.ok(q.stdout.includes("at >= '2026-10-01 18:50:00'"), '往前多抓 10 分鐘');
+  assert.ok(q.stdout.includes('--command "SELECT COUNT(*) AS n FROM audit_log WHERE action IN ('), '另外印出筆數查詢，跟 --replay 讀到的筆數比對');
   assert.notEqual(run('--query', '2026-10-01 19:00:00').status, 0, '沒有時區要擋');
   const dir = mkdtempSync(join(tmpdir(), 'cil-restore-'));
   try {
@@ -177,6 +183,12 @@ test('Time Travel 工具模式：--query 只印唯讀查詢；--replay 從抓下
     const r = run('--replay', f, '--since', '2026-10-02T03:00:00+08:00');
     assert.equal(r.status, 0, r.stderr);
     assert.ok(!r.stdout.includes('x2') && !r.stdout.includes('某人'), '摘要不印帳號 id 與姓名');
+    assert.ok(r.stdout.includes('讀到 11 筆撤回紀錄'), r.stdout);
+    // 抓取失敗的檔案：不產生重做 SQL
+    const badf = join(dir, 'failed.json');
+    writeFileSync(badf, '{"error":"Authentication error"}');
+    const fr = run('--replay', badf, '--since', '2026-10-02T03:00:00+08:00');
+    assert.notEqual(fr.status, 0); assert.match(fr.stderr, /抓取撤回紀錄失敗/);
     const sql = readFileSync(join(dir, 'withdrawals-replay.sql'), 'utf8').split('\n');
     assert.equal(sql[0], 'PRAGMA defer_foreign_keys = true;');
     assert.ok(sql.includes("UPDATE members SET share_logs = 0 WHERE id = 'x2';") && sql.includes('DELETE FROM push_queue;'));
@@ -188,4 +200,75 @@ test('Time Travel 工具模式：--query 只印唯讀查詢；--replay 從抓下
     assert.equal(one(db, "SELECT share_logs FROM members WHERE id = 'x2'").share_logs, 0);
     assert.notEqual(run('--replay', f).status, 0, '沒有 --since 要擋');
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+// ---- 分團、身分、行事曆訂閱、自己刪掉的紀錄：還原後也要重做 ----
+function backupWithTeams() {
+  const db = freshDb();
+  db.exec(`INSERT INTO members (id, name, role, title, cal_token_hash) VALUES ('y1', '退團的人', 'member', NULL, NULL), ('y2', '被移出的人', 'member', NULL, NULL),
+      ('y3', '被降級的幹部', 'staff', '總務', NULL), ('y4', '舊理事長', 'chair', NULL, NULL), ('y5', '新理事長', 'director', '理事', 'oldcalhash'), ('y6', '舊紀錄的人', 'coach', NULL, NULL);
+    INSERT INTO teams (id, name) VALUES ('tA', '青年團'), ('tB', '親子團');
+    INSERT INTO team_members (team_id, member_id, role, title, status) VALUES ('tA', 'y1', 'member', NULL, 'active'), ('tA', 'y2', 'member', NULL, 'active'),
+      ('tB', 'y2', 'member', NULL, 'active'), ('tA', 'y3', 'officer', '活動組', 'active'), ('tB', 'y6', 'officer', NULL, 'active'), ('tB', 'y1', 'member', NULL, 'active');
+    INSERT INTO training_logs (id, member_id, date, km, rpe, note) VALUES ('g1', 'y1', '2026-10-01', 5, 8, '膝蓋痛'), ('g2', 'y1', '2026-10-01', 3, 4, '留著');
+    INSERT INTO routes (id, name, points, distance, created_by) VALUES ('rt1', '刪掉的路線', '[]', 100, 'y1'), ('rt2', '留著的路線', '[]', 100, 'y1');
+    INSERT INTO events (id, kind, title, date, route_id) VALUES ('ev1', 'track', '團練', '2026-10-10', 'rt1');
+    INSERT INTO team_posts (id, team_id, author_id, author_name, title) VALUES ('po1', 'tA', 'y3', '幹部', '刪掉的公告'), ('po2', 'tA', 'y3', '幹部', '留著的公告');`);
+  const tables = {};
+  for (const t of ['members', 'teams', 'team_members', 'training_logs', 'routes', 'events', 'team_posts']) tables[t] = db.prepare(`SELECT * FROM "${t}"`).all().map((r) => ({ ...r }));
+  return { format: 'cil-backup', version: 2, at: '2026-10-01T19:00:00.000Z', tables };
+}
+const B = (id, at, action, actor_id, target_type, target_id, detail = null) => ({ id, at, actor_id, actor_name: '某人', actor_role: 'member', action, target_type, target_id, detail, ip_hash: 'h', mac: `mac-${id}` });
+const LATER = [
+  B('t1', '2026-10-02 08:00:00', 'team.leave', 'y1', 'team', 'tA', '青年團'),
+  B('t2', '2026-10-02 08:01:00', 'team.remove', 'y4', 'member', 'y2', '青年團｜team=tA'),
+  B('t3', '2026-10-02 08:02:00', 'team.role', 'y4', 'member', 'y3', '青年團／幹部／活動組｜team=tA｜role=officer'),
+  B('t4', '2026-10-02 08:03:00', 'team.role', 'y4', 'member', 'y3', '青年團／團員｜team=tA｜role=member'),    // 最後一次：降為團員
+  B('t5', '2026-10-02 08:04:00', 'role.change', 'y4', 'member', 'y3', '團員｜role=member'),
+  B('t6', '2026-10-02 08:05:00', 'role.handover', 'y4', 'member', 'y5', '理事長移交給 新理事長；原理事長改為理事｜role=director'),
+  B('t7', '2026-10-02 08:06:00', 'calendar.off', 'y5', 'member', 'y5', ''),
+  B('t8', '2026-10-02 08:07:00', 'log.delete', 'y1', 'log', 'g1', ''),
+  B('t9', '2026-10-02 08:08:00', 'route.delete', 'y1', 'route', 'rt1', ''),
+  B('u1', '2026-10-02 08:09:00', 'team.post_delete', 'y3', 'team', 'tA', 'po1'),
+  B('u2', '2026-10-02 08:10:00', 'team.remove', 'y4', 'member', 'y6', '親子團'),                              // 舊紀錄：只有分團名稱
+  B('u3', '2026-10-02 08:11:00', 'role.change', 'y4', 'member', 'y6', '行政人員／秘書'),                        // 舊紀錄：只有中文名稱
+  B('u4', '2026-10-02 08:12:00', 'role.change', 'y4', 'member', 'y1', '教練／x｜role=chair'),                   // 職稱偽造代碼：看不懂，不自動做
+];
+
+test('還原後重做：退出與移出分團、分團與協會身分（照最後一次）、行事曆訂閱、自己刪掉的訓練紀錄、路線與公告', () => {
+  const rows = auditRowsFrom(wranglerJson(LATER), '2026-10-01T19:00:00.000Z');
+  assert.equal(rows.length, LATER.length);
+  const { plan } = replaySql(rows);
+  assert.equal(plan.unresolved.length, 1, '偽造的身分代碼列出來請人工確認');
+  assert.match(planSummary(plan), /要人工確認的身分或分團紀錄 1/);
+  for (let i = 0; i < 2; i++) {   // 跑兩次結果一樣
+    const db = freshDb();
+    db.exec(`BEGIN;\n${toSql(backupWithTeams(), { audit: rows }).join('\n')}\nCOMMIT;`);
+    if (i) db.exec(`BEGIN;\n${['PRAGMA defer_foreign_keys = true;', ...replaySql(rows, { timeTravel: true }).lines].join('\n')}\nCOMMIT;`);
+    const tm = db.prepare('SELECT team_id, member_id, role, title FROM team_members ORDER BY team_id, member_id').all().map((r) => [r.team_id, r.member_id, r.role, r.title]);
+    assert.deepEqual(tm, [['tA', 'y3', 'member', null], ['tB', 'y1', 'member', null], ['tB', 'y2', 'member', null]],
+      'y1 只退出青年團、y2 只被移出青年團、y6 照名稱移出親子團、y3 降為團員且職稱清掉');
+    const m = (id) => ({ ...one(db, `SELECT role, title, cal_token_hash FROM members WHERE id = '${id}'`) });
+    assert.deepEqual(m('y3'), { role: 'member', title: null, cal_token_hash: null }, '協會身分照最後一次（降級）');
+    assert.deepEqual(m('y5'), { role: 'chair', title: null, cal_token_hash: null }, '移交：新理事長；停用的行事曆訂閱網址不會復活');
+    assert.equal(m('y4').role, 'director', '移交：原理事長改為理事');
+    assert.deepEqual(m('y6'), { role: 'staff', title: '秘書', cal_token_hash: null }, '舊紀錄照中文名稱');
+    assert.equal(m('y1').role, 'member', '看不懂的不動');
+    assert.deepEqual(db.prepare("SELECT id FROM training_logs ORDER BY id").all().map((r) => r.id), ['g2'], '刪掉的訓練紀錄（含備註、強度）不會回來');
+    assert.deepEqual(db.prepare('SELECT id FROM routes ORDER BY id').all().map((r) => r.id), ['rt2']);
+    assert.equal(one(db, "SELECT route_id FROM events WHERE id = 'ev1'").route_id, null);
+    assert.deepEqual(db.prepare('SELECT id FROM team_posts ORDER BY id').all().map((r) => r.id), ['po2']);
+  }
+  // 沒有做這件事的人（actor_id）的退團、刪紀錄：看起來被改過，整份擋下
+  assert.throws(() => auditRowsFrom(wranglerJson([{ ...LATER[0], actor_id: null }])));
+  assert.throws(() => auditRowsFrom(wranglerJson([{ ...LATER[7], actor_id: null }])));
+  // 公告 id 不是安全字元：不產生 SQL
+  assert.ok(!replaySql([B('u9', '2026-10-02 08:00:00', 'team.post_delete', 'y3', 'team', 'tA', "po1' OR 1=1 --")]).lines.some((l) => l.startsWith('DELETE FROM team_posts')));
+});
+
+test('身分名稱對照跟 src/worker.js 的 ROLES、TEAM_ROLES 一致', () => {
+  const src = readFileSync(new URL('../src/worker.js', import.meta.url), 'utf8');
+  const obj = (name) => Object.fromEntries([...new RegExp(`export const ${name} = \\{([^}]*)\\}`).exec(src)[1].matchAll(/(\w+): '([^']+)'/g)].map((m) => [m[2], m[1]]));
+  assert.deepEqual(obj('ROLES'), ROLE_LABELS);
+  assert.deepEqual(obj('TEAM_ROLES'), TEAM_ROLE_LABELS);
 });

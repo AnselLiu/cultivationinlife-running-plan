@@ -401,7 +401,8 @@ function auditPanel() {
 }
 // 稽核細節：JSON 轉成「開：A、B；關：C」，ISO 時間轉成「10/5 22:25」
 function auditDetail(d) {
-  let t = String(d);
+  // 結尾的 ｜team=…｜role=… 是給還原工具看的代碼（tools/restore-sql.mjs），畫面上不顯示
+  let t = String(d).replace(/(｜(team|role)=[\w-]+)+$/, '');
   if (/^\{.*\}$/.test(t)) {
     try {
       const o = JSON.parse(t), on = [], off = [], rest = [];

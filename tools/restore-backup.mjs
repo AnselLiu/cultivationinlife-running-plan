@@ -9,7 +9,8 @@
 //            node tools/restore-backup.mjs 2026-10-04.bin --sql      → 2026-10-04.sql（INSERT OR REPLACE，可指定 --table 名稱只還原一張表）
 //      金鑰預設讀 ~/.config/cil-run/backup-key（測試環境 --staging 讀 backup-key-staging），也可以用 BACKUP_KEY 環境變數；
 //      檔名不是日期時用 --label 2026-10-04 指定（AAD 綁住日期與第幾段，對不上就解不開）
-//   3. 備份之後本人做的撤回（刪除帳號、刪除賽事報名資料、停止分享訓練、退出排行榜、通知分類、取消推播、移除通行金鑰、登出所有裝置）
+//   3. 備份之後本人做的撤回（刪除帳號、刪除賽事報名資料、停止分享訓練、退出排行榜、通知分類、取消推播、移除通行金鑰、登出所有裝置、
+//      退出分團、停用行事曆訂閱、刪除訓練紀錄、路線與分團公告），以及身分與分團身分的變更（降級不能跟著倒回去）
 //      要在匯入後重做，不然會跟著舊備份回來（PDPA／A.5.34；重做什麼見 tools/restore-sql.mjs）：
 //        --sql 一定要帶 --withdrawals <檔案>（或確定沒有時帶 --no-withdrawals）；工具會印出查詢指令（唯讀）：
 //        npx wrangler d1 execute cil-run --remote --json --command "SELECT … FROM audit_log WHERE action IN (…) AND at >= '<備份時間>' ORDER BY at, id" > withdrawals.json
@@ -37,7 +38,7 @@ import { webcrypto as crypto } from 'node:crypto';
 import { homedir } from 'node:os';
 import { dirname, basename, join } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { toSql, auditRowsFrom, replayQuery, replaySql, planSummary } from './restore-sql.mjs';
+import { toSql, auditRowsFrom, replayQuery, replayCountQuery, replaySql, planSummary } from './restore-sql.mjs';
 
 const argv = process.argv.slice(2), file = argv[0] && !argv[0].startsWith('--') ? argv[0] : null, flags = file ? argv.slice(1) : argv;
 const opt = (k) => (flags.includes(k) ? flags[flags.indexOf(k) + 1] : null);
@@ -57,6 +58,8 @@ if (flags.includes('--query')) {
   const at = sinceOf(opt('--query'));
   console.log(`還原「之前」先抓 ${at} 之後的撤回（唯讀，存成檔案；檔案有會員 id 與幹部姓名，用完刪掉）：`);
   console.log(`  ${captureCmd(at)} > withdrawals.json`);
+  console.log('再查一次筆數（唯讀），等一下跟 --replay 印出來的「讀到幾筆」比對，對不上就不要還原：');
+  console.log(`  npx wrangler d1 execute ${DB} --remote --json --command "${replayCountQuery(at)}"`);
   process.exit(0);
 }
 if (flags.includes('--replay')) {
@@ -65,10 +68,12 @@ if (flags.includes('--replay')) {
   let rows;
   try { rows = auditRowsFrom(readFileSync(src, 'utf8'), sinceOf(opt('--since'))); } catch (e) { console.error(e.message); process.exit(1); }
   const { lines, plan } = replaySql(rows, { timeTravel: true });
+  console.log(`讀到 ${rows.length} 筆撤回紀錄（跟 --query 的筆數查詢比對）`);
   const out = join(dirname(src), `${basename(src).replace(/\.json$/, '')}-replay.sql`);
   writeFileSync(out, ['PRAGMA defer_foreign_keys = true;', ...lines].join('\n'));
   console.log(`重做：${planSummary(plan)}；補回稽核紀錄 ${rows.filter((r) => r.id && r.mac).length} 筆`);
   if (plan.passkeyUnknown.length) console.log(`有 ${plan.passkeyUnknown.length} 位移除通行金鑰的紀錄沒有金鑰 id（舊版）：已讓他們的登入失效，請通知本人到「帳號與安全」確認通行金鑰`);
+  if (plan.unresolved.length) console.log(`有 ${plan.unresolved.length} 筆身分或分團紀錄看不懂，沒有自動重做：照 docs/RESTORE.md 第 5 步到管理後台的稽核紀錄逐筆確認`);
   console.log(`已輸出 ${out}；檢查後匯入：npx wrangler d1 execute ${DB} --remote --file ${out}`);
   process.exit(0);
 }
@@ -137,7 +142,8 @@ let audit = [];
 try { audit = wArg ? auditRowsFrom(existsSync(wArg) ? readFileSync(wArg, 'utf8') : wArg, data.at) : []; } catch (e) { console.error(e.message); process.exit(1); }
 const lines = toSql(data, { only, audit });
 const { plan } = replaySql(audit);
-console.log(`匯入後重做：${planSummary(plan)}`);
+console.log(`讀到 ${audit.length} 筆撤回紀錄；匯入後重做：${planSummary(plan)}`);
+if (plan.unresolved.length) console.log(`有 ${plan.unresolved.length} 筆身分或分團紀錄看不懂，沒有自動重做：照 docs/RESTORE.md 第 5 步到管理後台的稽核紀錄逐筆確認`);
 if (plan.passkeyUnknown.length) console.log(`有 ${plan.passkeyUnknown.length} 位移除通行金鑰的紀錄沒有金鑰 id（舊版）：已讓他們的登入失效，請通知本人到「帳號與安全」確認通行金鑰`);
 writeFileSync(`${out}.sql`, lines.join('\n'));
 console.log(`已輸出 SQL：${lines.length - 1} 筆`);

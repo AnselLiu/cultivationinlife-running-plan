@@ -3833,6 +3833,8 @@ export default {
 "網域不符": "Domain mismatch",
 "沒有完成使用者確認": "User presence wasn’t confirmed",
 "通行金鑰計數異常，請重新登入": "Passkey counter mismatch. Please sign in again.",
-"已刪除帳號": "Deleted account"
+"已刪除帳號": "Deleted account",
+"點一下可以換": "Tap to change",
+"平均強度以週計算，一週至少 3 筆有填強度才算進來。": "Average intensity is calculated by week and only counts weeks with at least 3 rated workouts."
 };
 export const inner = {"團練": "group run", "課表": "training plan", "拍照": "photo", "跑步": "running", "我的": "my", "揪跑": "social run", "分團": "sub-club", "主團": "home club", "報名": "sign up", "幹部": "officers", "團員": "members", "跑友": "runners", "活動": "event", "協會": "Association", "行事曆": "calendar", "地點": "spot", "路線": "route", "天氣": "weather", "通知": "notifications", "賽事": "race", "組別": "group", "訓練紀錄": "training log", "內容": "details", "流程": "process", "選擇": "option", "跑法": "how to run", "起跑": "start", "慢跑": "jog", "小時": "hours", "碳水": "carbs", "熱身": "warm-up", "分段": "segments", "強度": "intensity", "主課": "main set", "前段": "first part", "組數": "sets", "比賽日": "race day", "可在": "can be done on"};
