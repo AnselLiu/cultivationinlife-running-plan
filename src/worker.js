@@ -651,7 +651,8 @@ async function doSignup(env, ev, member, b, { by = null, manager = false, req = 
   const full = !!ev.capacity && (cnt.n >= ev.capacity || cnt.w > 0);
   // 決定狀態
   const needReview = !!ev.require_approval && ev.kind !== 'survey';
-  const approver = by || (manager ? member : null);
+  // 監事（READONLY）唯讀：不論代為報名、本人報名或其他路徑，都不能把報名變成核准（職責分離，A.5.3）
+  const approver = READONLY[norm((by || member).role)] ? null : by || (manager ? member : null);
   let status;
   if (was === 'in' || was === 'wait') status = was;                 // 改內容不改狀態，候補改內容也不會插隊
   else if (approver) status = full ? 'wait' : 'in';                  // 幹部代報、主辦本人報名＝核准
@@ -2269,7 +2270,7 @@ const api = (async function api(req, env, path, method) {
     const ev = await evById(m2[1]);
     if (!ev || !(await canSee(ev))) return fail(404, '找不到這個活動');
     if ((method === 'POST' || method === 'DELETE') && await limited(env, `signup:${member.id}`, 30, 600)) return fail(429, '操作太頻繁，請稍後再試');
-    if (method === 'POST') return doSignup(env, ev, member, await body(), { manager: canManage(ev), req });
+    if (method === 'POST') return doSignup(env, ev, member, await body(), { manager: canManage(ev) && !READONLY[norm(member.role)], req });
     if (method === 'DELETE') return cancelSignup(env, ev, member);
   }
 

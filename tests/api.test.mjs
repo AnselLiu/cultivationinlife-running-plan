@@ -925,6 +925,28 @@ test('審核：待審核不佔名額也不公開；核准照報名順序；婉�
   assert.equal((await signup('t_staff', sid, { answers: { q1: 'ok' } })).json.status, 'in');
 });
 
+test('監事兼分團幹部：代為報名與本人報名都不能把待審核變成核准（職責分離）', async () => {
+  assert.equal((await call('t_chair', '/teams/youth/members', { method: 'POST', body: { member_id: 't_super', action: 'add', role: 'officer' } })).status, 200);
+  try {
+    const id = await mkEvent({ title: '監事不審核', team_id: 'youth', require_approval: true }, 't_lead');
+    assert.equal((await signup('t_runner', id)).json.status, 'pending');
+    assert.equal((await review('t_super', id, { action: 'approve', member_ids: ['t_runner'] })).status, 403);
+    // 代為報名（bulk）：待審核的人仍是待審核，不會被記成監事核准
+    const bk = await call('t_super', `/events/${id}/bulk`, { method: 'POST', body: { action: 'signup', names: ['測試跑友'] } });
+    assert.equal(bk.status, 200, bk.text);
+    assert.equal(await stOf('t_runner', id), 'pending', '監事代為報名不能核准待審核');
+    // 本人報名：不是「幹部本人報名＝核准」
+    assert.equal((await signup('t_super', id)).json.status, 'pending', '監事本人報名也要等審核');
+    const st = (await call('t_lead', `/events/${id}/stats`)).json;
+    assert.equal(st.total.pending, 2);
+    assert.equal(st.total.in, 0);
+    // 一般幹部的權限不受影響：團長本人報名仍是核准
+    assert.equal((await signup('t_lead', id)).json.status, 'in');
+  } finally {
+    await call('t_chair', '/teams/youth/members', { method: 'POST', body: { member_id: 't_super', action: 'remove' } });
+  }
+});
+
 test('名單不洩漏：非管理者的 GET、列表、統計、CSV 都看不到待審核或婉拒的姓名；統計與 CSV 分開計算', async () => {
   const id = await mkEvent({ title: '名單測試', capacity: 1, require_approval: true });
   await review('t_chair', id, { action: 'approve', member_ids: [] });   // 空清單：400，不影響
