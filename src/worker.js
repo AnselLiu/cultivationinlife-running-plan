@@ -17,6 +17,7 @@ import { tpNow, shiftDays, daysBetween, evStart, signupEnd, signupState, STATE_T
 import * as Cams from './cams.js';
 import * as Rest from './rest.js';
 import { fold, b64bytes } from './ics.js';
+import { ERASE_MEMBER } from './erase.js';
 import { WorkerEntrypoint } from 'cloudflare:workers';
 import { Budget, invocationEnv, logBudget, settled, strictViolations, xfetch, planOf, cacheOf } from './budget.js';
 
@@ -2804,24 +2805,8 @@ const api = (async function api(req, env, path, method) {
     // 刪除後空出的正取名額要遞補：先記下還沒舉行、本人是正取的活動
     const freed = (await env.DB.prepare(`SELECT s.event_id FROM signups s JOIN events e ON e.id = s.event_id
       WHERE s.member_id = ? AND s.status = 'in' AND e.date >= ?`).bind(member.id, today()).all()).results.map((r) => r.event_id);
-    // 得獎紀錄要留給協會對帳，所以只匿名化，不刪除
-    await env.DB.batch([
-      env.DB.prepare("UPDATE draws SET name = '已刪除帳號', member_id = NULL WHERE member_id = ?").bind(member.id),
-      env.DB.prepare('DELETE FROM member_private WHERE member_id = ?').bind(member.id),
-      env.DB.prepare('UPDATE events SET created_by = NULL WHERE created_by = ?').bind(member.id),
-      env.DB.prepare('UPDATE plan_posts SET author_id = NULL WHERE author_id = ?').bind(member.id),
-      env.DB.prepare("UPDATE log_comments SET author_name = '已刪除帳號' WHERE author_id = ?").bind(member.id),
-      env.DB.prepare("UPDATE team_posts SET author_name = '已刪除帳號' WHERE author_id = ?").bind(member.id),
-      env.DB.prepare('DELETE FROM routes WHERE created_by = ?').bind(member.id),
-      env.DB.prepare('DELETE FROM spot_reports WHERE member_id = ?').bind(member.id),
-      env.DB.prepare('UPDATE spots SET created_by = NULL WHERE created_by = ?').bind(member.id),
-      env.DB.prepare('UPDATE cams SET created_by = NULL WHERE created_by = ?').bind(member.id),
-      env.DB.prepare('UPDATE rest_stops SET created_by = NULL WHERE created_by = ?').bind(member.id),
-      env.DB.prepare('UPDATE rest_stops SET updated_by = NULL WHERE updated_by = ?').bind(member.id),
-      env.DB.prepare('UPDATE rest_reports SET member_id = NULL WHERE member_id = ?').bind(member.id),
-      env.DB.prepare('UPDATE calendar_items SET created_by = NULL WHERE created_by = ?').bind(member.id),
-      env.DB.prepare('DELETE FROM members WHERE id = ?').bind(member.id),
-    ]);
+    // 每一句見 erase.js（還原備份後也用同一份重做刪除）；得獎紀錄只匿名化，不刪除
+    await env.DB.batch(ERASE_MEMBER.map((q) => env.DB.prepare(q).bind(member.id)));
     // 遞補：額度夠的場次現在處理，剩下的由每小時的 promoteSweep 在下個整點遞補
     for (const eid of freed) { if (!env.budget.room(1 + PROMOTE_ROUND + PROMOTE_TAIL + 2)) { env.budget.stop('delete:promote'); break; } await promote(env, await evById(eid), { rounds: 1, reserve: 2 }); }
     await audit(env, req, member, 'privacy.delete', 'member', member.id, '本人刪除帳號');

@@ -9,7 +9,11 @@
 //            node tools/restore-backup.mjs 2026-10-04.bin --sql      → 2026-10-04.sql（INSERT OR REPLACE，可指定 --table 名稱只還原一張表）
 //      金鑰預設讀 ~/.config/cil-run/backup-key（測試環境 --staging 讀 backup-key-staging），也可以用 BACKUP_KEY 環境變數；
 //      檔名不是日期時用 --label 2026-10-04 指定（AAD 綁住日期與第幾段，對不上就解不開）
-//   3. 匯入（先在測試環境試）：npx wrangler d1 execute cil-run-staging --env staging --remote --file 2026-10-04.sql
+//   3. 備份之後刪除的帳號（本人刪除帳號）要在匯入後重做，不然會跟著舊備份回來（PDPA／A.5.34）：
+//        --sql 一定要帶 --erased <檔案或 id,id>（或確定沒有時帶 --no-erased）；工具會印出查詢指令（唯讀）：
+//        npx wrangler d1 execute cil-run --remote --json --command "SELECT target_id FROM audit_log WHERE action IN ('privacy.delete') AND at >= '<備份時間>'" > erased.json
+//        正式資料庫整個不見時，改用比這份新的備份解出來的 JSON 裡的 audit_log（--erased 新備份.json 也讀得懂）
+//   4. 匯入（先在測試環境試）：npx wrangler d1 execute cil-run-staging --env staging --remote --file 2026-10-04.sql
 // 還原後：
 //   - 附近即時影像：水利署、水利處在管理後台「立即同步」一次；公路局的清單要在電腦上執行 node tools/cams-sync.mjs thb，
 //     再照工具印出的 wrangler d1 execute 指令匯入（備份只有幹部手動新增的鏡頭連結）
@@ -26,13 +30,14 @@ import { webcrypto as crypto } from 'node:crypto';
 import { homedir } from 'node:os';
 import { dirname, basename, join } from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { toSql, erasedFrom, erasedQuery } from './restore-sql.mjs';
 
 const [file, ...flags] = process.argv.slice(2);
 const opt = (k) => (flags.includes(k) ? flags[flags.indexOf(k) + 1] : null);
 const staging = flags.includes('--staging');
 const keyFile = `${homedir()}/.config/cil-run/backup-key${staging ? '-staging' : ''}`;
 const KEY = process.env.BACKUP_KEY || (() => { try { return readFileSync(keyFile, 'utf8').trim(); } catch { return ''; } })();
-if (!file || !KEY) { console.error(`用法：node tools/restore-backup.mjs <備份檔> [--sql] [--table 名稱] [--label 日期] [--fetch] [--r2] [--staging]（金鑰：${keyFile} 或 BACKUP_KEY）`); process.exit(1); }
+if (!file || !KEY) { console.error(`用法：node tools/restore-backup.mjs <備份檔> [--sql --erased <檔案或 id,id>｜--no-erased] [--table 名稱] [--label 日期] [--fetch] [--r2] [--staging]（金鑰：${keyFile} 或 BACKUP_KEY）`); process.exit(1); }
 const key = await crypto.subtle.importKey('raw', Buffer.from(KEY.replace(/-/g, '+').replace(/_/g, '/'), 'base64'), 'AES-GCM', false, ['decrypt']);
 async function open(buf, aad) {
   const magic = buf.subarray(0, 5).toString();
@@ -82,13 +87,17 @@ const counts = Object.fromEntries(Object.entries(data.tables).map(([k, v]) => [k
 console.log(`備份時間 ${data.at}${data.done_at ? `（做完 ${data.done_at}）` : ''}，${Object.keys(counts).length} 張表`, counts);
 const out = join(dirname(file), basename(file).replace(/\.bin$/, ''));
 if (!flags.includes('--sql')) { writeFileSync(`${out}.json`, JSON.stringify(data, null, 1)); console.log('已輸出 JSON'); process.exit(0); }
-const lit = (v) => (v == null ? 'NULL' : typeof v === 'number' ? String(v) : `'${String(v).replace(/'/g, "''")}'`);
-const lines = ['PRAGMA defer_foreign_keys = true;'];
-for (const [t, rows] of Object.entries(data.tables)) {
-  if (only && t !== only) continue;
-  for (const r of rows) { const cols = Object.keys(r); lines.push(`INSERT OR REPLACE INTO "${t}" (${cols.map((c) => `"${c}"`).join(', ')}) VALUES (${cols.map((c) => lit(r[c])).join(', ')});`); }
+// 備份之後刪除的帳號：檔案（wrangler --json 輸出、新備份解出來的 JSON、一行一個 id）或逗號分隔的 id
+const erasedArg = opt('--erased');
+if (!erasedArg && !flags.includes('--no-erased')) {
+  console.error('要先查備份之後刪除的帳號，匯入後才能重做刪除（不然被刪除的帳號會跟著備份回來）。到正式資料庫查（唯讀）：');
+  console.error(`  npx wrangler d1 execute cil-run --remote --json --command "${erasedQuery(data.at)}" > erased.json`);
+  console.error('再加 --erased erased.json；確定沒有人刪除帳號時加 --no-erased');
+  process.exit(1);
 }
-// 跑者休息站：備份只有幹部整理、新增、修正、隱藏或補充說明過的列；把來源的版本標記清掉，下次同步（維護工具與排程）才會整份重寫官方資料
-if (data.tables.rest_sources && (!only || only === 'rest_sources' || only === 'rest_stops')) lines.push('UPDATE rest_sources SET etag = NULL, cursor = NULL;');
+let erased = [];
+try { erased = erasedArg ? erasedFrom(existsSync(erasedArg) ? readFileSync(erasedArg, 'utf8') : erasedArg, data.at) : []; } catch (e) { console.error(e.message); process.exit(1); }
+const lines = toSql(data, { only, erased });
+if (erased.length) console.log(`匯入後重做 ${erased.length} 個帳號的刪除`);
 writeFileSync(`${out}.sql`, lines.join('\n'));
 console.log(`已輸出 SQL：${lines.length - 1} 筆`);
