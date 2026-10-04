@@ -76,7 +76,7 @@ async function formView(id) {
         <label class="switch" data-when="!survey"><span>需要審核<span class="tiny" style="display:block">報名後由主辦幹部核准才算數；核准前不佔名額、不用繳費</span></span><input type="checkbox" name="require_approval" ${d.require_approval ? 'checked' : ''}><i></i></label>
         <label class="switch" data-when="!survey"><span>通知報名者<span class="tiny" style="display:block">報名成功、排入候補、確認收款時推播給本人；審核結果一律會通知</span></span><input type="checkbox" name="notify_signup" ${d.notify_signup ? 'checked' : ''}><i></i></label>
         ${id && d.cancelled ? `<label class="switch"><span>恢復這場活動<span class="tiny" style="display:block">這場已取消；打開後儲存會重新開放</span></span><input type="checkbox" name="reopen" ${qp.get('reopen') === '1' ? 'checked' : ''}><i></i></label>` : ''}
-        ${allow('settings') ? '<a class="tiny" href="#/admin?tab=settings">預設值在後台「活動報名預設」設定 ›</a>' : ''}
+        ${allow('settings') ? '<a class="tiny" href="#/admin/settings/signup">預設值在後台「活動報名預設」設定 ›</a>' : ''}
       </fieldset>
       ${id ? ((d.series || []).length > 1 ? `<p class="tiny" style="margin:0">這是定期揪跑的其中一場，這裡只會改這一場。</p>` : '') : `<details class="group" data-when="!survey" id="repBox">
         <summary>重複（定期揪跑）</summary>
@@ -364,11 +364,11 @@ async function statsView(id) {
   view.innerHTML = `
     ${largeTitle('統計', `<span translate="no">${esc(st.title)}</span>・${dstr(st.date)}`)}
     <section class="kpis">${kpi.map(([k, v]) => `<div class="card kpi"><span class="tiny">${k}</span><b class="num">${v}</b></div>`).join('')}</section>
-    ${st.capacity ? `<section class="card"><div class="row spread"><h3>名額</h3><span class="tiny num">${t.in}/${st.capacity}・剩 ${st.seatsLeft} 名額</span></div>
+    ${st.capacity ? `<section class="card"><div class="row spread"><h2 class="h3">名額</h2><span class="tiny num">${t.in}/${st.capacity}・剩 ${st.seatsLeft} 名額</span></div>
       <span class="bar big"><i style="width:${Math.min(100, Math.round(t.in / st.capacity * 100))}%"></i></span>
       ${t.pending && st.seatsLeft ? `<p class="tiny" style="margin:0">尚有 ${st.seatsLeft} 個名額可核准</p>` : ''}</section>` : ''}
     ${st.payDuePassed && t.pending ? '<p class="notice">繳費期限已過，核准的人可能來不及繳費，請另外告知期限</p>' : ''}
-    ${money ? `<section class="card"><div class="row spread"><h3>收款</h3>${money.payInfo?.due ? `<span class="tiny">繳費期限 ${esc(money.payInfo.due)}</span>` : ''}</div>
+    ${money ? `<section class="card"><div class="row spread"><h2 class="h3">收款</h2>${money.payInfo?.due ? `<span class="tiny">繳費期限 ${esc(money.payInfo.due)}</span>` : ''}</div>
       <div class="moneygrid">
         <div><span class="tiny">應收</span><b class="num">${money2(money.expected)}</b></div>
         <div class="ok"><span class="tiny">已收</span><b class="num">${money2(money.collected)}</b></div>
@@ -381,7 +381,7 @@ async function statsView(id) {
         <label class="btn ghost sm filebtn">匯入銀行明細對帳<input type="file" accept=".csv,text/csv,.txt" id="bankCsv" hidden></label></div>
       <div id="reconOut"></div>
       <p class="tiny" style="margin:0">從網路銀行下載入帳明細（CSV），系統用「金額＋轉帳後五碼」比對團員回報的資料，先預覽再確認標記已繳。檔案只在你的手機裡讀取，只送出金額與數字。</p></section>` : ''}
-    ${(st.items || []).length ? `<section class="card"><div class="row spread"><h3>團購數量</h3>${st.minQty ? `<span class="tiny">成團門檻 ${st.minQty} 件</span>` : ''}</div>
+    ${(st.items || []).length ? `<section class="card"><div class="row spread"><h2 class="h3">團購數量</h2>${st.minQty ? `<span class="tiny">成團門檻 ${st.minQty} 件</span>` : ''}</div>
       ${st.minQty ? (() => { const sum = st.items.reduce((n, i) => n + i.total, 0); return `<div class="row spread"><span>${sum >= st.minQty ? `${IC.check} 已成團` : `還差 ${st.minQty - sum} 件成團`}</span><span class="tiny num">${sum}/${st.minQty}</span></div>
         <span class="bar big"><i style="width:${Math.min(100, Math.round(sum / st.minQty * 100))}%"></i></span>`; })() : ''}
       <div class="itemtable">${st.items.map((i) => `<div class="itr"><b><span translate="no">${esc(i.name)}</span></b><span class="tiny">${money2(i.price)}${i.stock ? `・庫存 ${i.stock}，剩 ${Math.max(0, i.stock - i.total)}` : ''}</span>
@@ -392,26 +392,26 @@ async function statsView(id) {
         <p class="tiny" style="margin:0">通知後，每位訂購的人會有自己的領取 QR；現場用下面的按鈕掃描就會記錄已領取。</p>
         <button class="btn ghost sm iconbtn" id="pickScan" type="button">${IC.check}掃描領取 QR</button>
       </details></section>` : ''}
-    ${st.groupReg ? `<section class="card"><div class="row spread"><h3>團體報名資料</h3><span class="tiny">${st.regReady}/${t.in} 人已同意提供</span></div>
+    ${st.groupReg ? `<section class="card"><div class="row spread"><h2 class="h3">團體報名資料</h2><span class="tiny">${st.regReady}/${t.in} 人已同意提供</span></div>
       <span class="bar big"><i style="width:${t.in ? Math.round(st.regReady / t.in * 100) : 0}%"></i></span>
       <button class="btn ghost sm" id="regCsv">下載團體報名資料（含身分證字號）</button>
       <p class="tiny" style="margin:0">只包含已同意提供的人。檔案含身分證字號等個資，送出報名後請立刻刪除，下載紀錄會寫進稽核。</p></section>` : ''}
     <div class="statgrid">
-      ${st.byOption ? `<section class="card"><h3>報名組別</h3>${bars(Object.entries(st.byOption), t.in, true)}</section>` : ''}
-      <section class="card"><h3>各分團</h3>${bars(st.byTeam.map((x) => [x.k, x.n]).sort((a, b) => b[1] - a[1]), t.in, true)}
+      ${st.byOption ? `<section class="card"><h2 class="h3">報名組別</h2>${bars(Object.entries(st.byOption), t.in, true)}</section>` : ''}
+      <section class="card"><h2 class="h3">各分團</h2>${bars(st.byTeam.map((x) => [x.k, x.n]).sort((a, b) => b[1] - a[1]), t.in, true)}
         <p class="tiny" style="margin:0">同時在兩個分團的人，兩邊都會算到。</p></section>
-      ${st.byMeal ? `<section class="card"><h3>餐點</h3>${bars(Object.entries(st.byMeal), t.in, true)}</section>` : ''}
-      ${survey ? '' : `<section class="card"><h3>組別</h3>${bars(Object.entries(st.byGroup).sort(), t.in)}</section>`}
-      <section class="card"><h3>每天新增${survey ? '回覆' : '報名'}</h3>${bars(st.byDay.slice(-14).map(([d, n]) => [d.slice(5).replace('-', '/'), n]))}</section>
+      ${st.byMeal ? `<section class="card"><h2 class="h3">餐點</h2>${bars(Object.entries(st.byMeal), t.in, true)}</section>` : ''}
+      ${survey ? '' : `<section class="card"><h2 class="h3">組別</h2>${bars(Object.entries(st.byGroup).sort(), t.in)}</section>`}
+      <section class="card"><h2 class="h3">每天新增${survey ? '回覆' : '報名'}</h2>${bars(st.byDay.slice(-14).map(([d, n]) => [d.slice(5).replace('-', '/'), n]))}</section>
     </div>
     ${st.questions.map((q) => `<section class="card">
-      <div class="row spread"><h3><span translate="no">${esc(q.label)}</span></h3><span class="tiny">${Q_TYPE_NAME[q.type]}${q.type === 'text' ? `・${q.answers.length} 則` : `・${q.answered}/${t.in} 人回答`}</span></div>
+      <div class="row spread"><h2 class="h3"><span translate="no">${esc(q.label)}</span></h2><span class="tiny">${Q_TYPE_NAME[q.type]}${q.type === 'text' ? `・${q.answers.length} 則` : `・${q.answered}/${t.in} 人回答`}</span></div>
       ${q.type === 'text'
         ? `<div class="answers">${q.answers.map((a) => `<div><b><span translate="no">${esc(a.name)}</span></b><span>${esc(a.text)}</span></div>`).join('') || '<p class="muted" style="margin:0">還沒有回答</p>'}</div>`
         : bars(q.counts.map((c) => [c.o, c.n]), q.answered, true)}
     </section>`).join('')}
     ${survey ? '' : `<section class="card">
-      <div class="row spread"><h3>名單</h3><span class="tiny" id="pcount">${st.people.length} 人</span></div>
+      <div class="row spread"><h2 class="h3">名單</h2><span class="tiny" id="pcount">${st.people.length} 人</span></div>
       ${st.canReview ? `<div class="chips" role="group" aria-label="名單篩選">${FILTERS.map(([k, v]) => `<button type="button" class="chip" data-f="${k}" aria-pressed="${k === filt}">${v} <span class="num">${countOf(k)}</span></button>`).join('')}</div>` : ''}
       <input id="pq" placeholder="搜尋姓名" aria-label="搜尋名單" autocomplete="off">
       <div class="roster" id="plist">${st.people.map(prow).join('')}</div>
@@ -422,7 +422,7 @@ async function statsView(id) {
         <div class="row" id="allPendingRow" hidden><button type="button" class="btn sm" id="approveAll"></button></div>` : ''}
     </section>`}
     <section class="card">
-      <h3>匯出</h3>
+      <h2 class="h3">匯出</h2>
       <p class="tiny" style="margin:0">Excel 可以直接開啟的 CSV，含每個人的問卷回答${allow('members') && me.role !== 'supervisor' ? '與電話' : ''}。匯出會留下稽核紀錄，檔案請妥善保管、用完刪除。</p>
       <div class="row"><a class="btn ghost sm" href="/api/events/${id}/export.csv" download>下載 CSV</a>
         <button class="btn ghost sm" id="copyRoster2">複製名單（貼 LINE）</button></div>

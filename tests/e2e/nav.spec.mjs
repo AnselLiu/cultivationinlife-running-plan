@@ -182,7 +182,7 @@ test('外觀：深色、自動；上方列沒有深淺色按鈕', async ({ page 
 test('「我的」分組順序；訓練報表與里程挑戰不在這裡', async ({ page }) => {
   await enter(page);
   await page.goto('/#/me');
-  await expect(page.locator('.setgroup .sgt')).toHaveText(['賽事與入場券', '分團與協會', '設定']);
+  await expect(page.locator('.setgroup .sgt')).toHaveText(['賽事與報名', '跑團', '設定']);
   await expect(page.locator('#view a[href="#/report"]')).toHaveCount(0);
   await expect(page.locator('#view a[href="#/challenge"]')).toHaveCount(0);
   for (const h of ['#/me/notify', '#/me/calendar', '#/me/display']) await expect(page.locator(`#view a[href="${h}"]`)).toHaveCount(1);
@@ -191,10 +191,12 @@ test('「我的」分組順序；訓練報表與里程挑戰不在這裡', async
   await expect(page.locator('#backLabel')).toHaveText('我的');
 });
 
-test('「我的」：幹部看得到幹部專區（排在設定前面），含團員訓練', async ({ page }) => {
+test('「我的」：幹部看得到「幹部」組（排在設定前面），含團員訓練與系統設定捷徑；設定組的通知排第一', async ({ page }) => {
   await enter(page, 't_chair');
   await page.goto('/#/me');
-  await expect(page.locator('.setgroup .sgt')).toHaveText(['賽事與入場券', '分團與協會', '幹部專區', '設定']);
+  await expect(page.locator('.setgroup .sgt')).toHaveText(['賽事與報名', '跑團', '幹部', '設定']);
+  await expect(page.locator('#view a[href="#/admin/settings"]')).toHaveCount(1);
+  await expect(page.locator('.setgroup', { has: page.locator('.sgt', { hasText: /^設定$/ }) }).locator('.setrow').first()).toHaveAttribute('href', '#/me/notify');
   await expect(page.locator('#view a[href="#/logs/team"]')).toHaveCount(1);
 });
 

@@ -235,23 +235,32 @@ test('通知全部已讀、入場券與領取、每月挑戰、使用說明導�
   await expect(page.locator('h1')).toContainText('入場券');
   await page.goto('/#/challenge');
   await expect(page.locator('.badges .badge')).toHaveCount(6);
+  // 使用說明：重新打開「開始使用」卡；三步都略過後問要不要看五個分頁的導覽
   await page.goto('/#/me');
   await page.locator('#openGuide').click();
+  await expect(page.locator('#startCard')).toBeVisible();
+  await expect(page.locator('#startTitle')).toBeFocused();
+  for (const k of ['install', 'push', 'group']) if (await page.locator(`[data-stskip="${k}"]`).count()) await page.locator(`[data-stskip="${k}"]`).click();
+  await expect(page.locator('#startTitle')).toHaveText('都設定好了');
+  await page.locator('#startTour').click();
   await expect(page.locator('#gTitle')).toBeVisible();
-  let sawStudio = false;
-  for (let i = 0; i < 12 && await page.locator('#guide').isVisible(); i++) {
+  const titles = [];
+  for (let i = 0; i < 10 && await page.locator('#guide').isVisible(); i++) {
     const t = await page.locator('#gTitle').innerText();
-    // 總步數 12 步以內（「1 / N」的 N 不含開頭與結尾）
+    titles.push(t);
+    // 步數對齊下方 5 格分頁（「1 / N」的 N 不含開頭與結尾）
     const n = Number((await page.locator('#gCount').innerText()).split('/')[1] || 0);
-    expect(n + 2).toBeLessThanOrEqual(12);
-    // GPS 開著時，拍照步驟帶到「跑步」並聚光「拍照分享」那一列
-    if (t === '拍照分享') { sawStudio = true; await expect(page).toHaveURL(/#\/run$/); await expect(page.locator('.runshare')).toBeVisible(); }
+    if (n) expect(n).toBe(5);
+    // 背景是 inert：Tab 不會跑出說明框
+    await page.keyboard.press('Tab');
+    expect(await page.evaluate(() => !!document.activeElement?.closest('#guide'))).toBe(true);
     await page.locator('#gNext').click();
     if (t === '準備好了') break;
     await page.waitForTimeout(600);
   }
   await expect(page.locator('#guide')).toBeHidden();
-  expect(sawStudio, '拍照分享那一步有出現').toBe(true);
+  // GPS 跑步開著：第 3 格是跑步；地圖那一步不會被跳過
+  expect(titles).toEqual(['歡迎來到耕跑團', '團練', '課表', '跑步', '地圖', '我的', '準備好了']);
 });
 
 test('練跑地圖：搜尋、類型、縣市篩選，地圖上的針跟著篩', async ({ page }) => {

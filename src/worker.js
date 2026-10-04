@@ -2077,14 +2077,17 @@ const api = (async function api(req, env, path, method) {
     const boot = !!member && url0(req).searchParams.get('boot') === '1';
     // 這週一（臺北時間）到今天的紀錄：首頁「今天」卡片的擇一天課（週五或週六、週末）要看前幾天記過沒，不用再多等一輪
     const t0 = today(), monday = new Date(Date.parse(`${t0}T00:00:00Z`) - ((new Date(`${t0}T00:00:00Z`).getUTCDay() + 6) % 7) * 864e5).toISOString().slice(0, 10);
-    const [race, teamList, events, weekLogs, planCycle] = await Promise.all([
+    // 系統初始設定（CHAIR_CODE）：只有系統還沒有理事長時，「帳號與安全」才顯示那一格（一般跑友看不到無關的欄位）
+    const bootstrapQ = member && norm(member.role) === 'member' && env.CHAIR_CODE
+      ? env.DB.prepare("SELECT 1 FROM members WHERE role = 'chair' LIMIT 1").first().then((r) => !r) : false;
+    const [race, teamList, events, weekLogs, planCycle, bootstrapOpen] = await Promise.all([
       countdownTarget(env, member, settingRows), member ? listTeams() : [],
       boot ? listEvents(false, [today(), new Date(Date.now() + 180 * 864e5).toISOString().slice(0, 10)]) : null,
       boot ? env.DB.prepare(`SELECT id, date, week_no, plan_day, cycle_anchor, cycle_week, kind, plan_text, status, km, seconds, hr, rpe, feel, note, source, 0 AS comments, 0 AS unread
         FROM training_logs WHERE member_id = ? AND date BETWEEN ? AND ? ORDER BY created_at`).bind(member.id, monday, t0).all().then((r) => r.results) : null,
-      planCycleOf(member),
+      planCycleOf(member), bootstrapQ,
     ]);
-    return json({ member: member ? pub(member) : null, vapid: env.VAPID_PUBLIC_KEY || null, googleLogin: !!(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET),
+    return json({ member: member ? pub(member) : null, bootstrapOpen, vapid: env.VAPID_PUBLIC_KEY || null, googleLogin: !!(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET),
       settings: st, privacyVersion: st.privacy.version, needConsent: !!member && member.consent_version !== st.privacy.version,
       race, planCycle, teams: teamList, calendarOn: !!member?.cal_token_hash, calScope: member?.cal_scope || 'all', requireMfa: !!security.require_mfa, shortcut: setting('health_shortcut') || null,
       homeSpot: member?.home_spot ? await env.DB.prepare("SELECT id, name, lat, lng FROM spots WHERE id = ? AND status = 'approved'").bind(member.home_spot).first() : null,
@@ -3045,13 +3048,14 @@ const api = (async function api(req, env, path, method) {
     const has = (k) => Object.prototype.hasOwnProperty.call(b, k);
     let value;
     if (key === 'org') {
-      value = { name: str(b.name, 40), short: str(b.short, 12), contact: str(b.contact, 200), retention: str(b.retention, 200), join_form: httpsUrl(b.join_form),
-        parent: str(b.parent, 30), parent_url: httpsUrl(b.parent_url), parent_note: str(b.parent_note, 80),
-        thu_venue: has('thu_venue') ? str(b.thu_venue, 20) : str(cur.thu_venue, 20),   // 週四團練地點（課表備註用；沒送就保留）
-        event_data_years: Math.max(0, Math.min(Math.round(Number(b.event_data_years) || 0), 20)),
-        log_years: Math.max(0, Math.min(Math.round(Number(b.log_years) || 0), 20)),
-        audit_years: Math.max(1, Math.min(Math.round(Number(b.audit_years) || 3), 10)) };
-      if (!value.name) return fail(400, '請填協會名稱');
+      // 後台把協會資訊拆成三張表單（協會資訊、課表與團練、資料保存期限）各自儲存：每個欄位都是「有送才改，沒送就保留原值」
+      const pick = (k, f) => (has(k) ? f(b[k]) : f(cur[k]));
+      const years = (lo, hi, d) => (v) => Math.max(lo, Math.min(Math.round(Number(v) || d), hi));
+      value = { name: pick('name', (v) => str(v, 40)), short: pick('short', (v) => str(v, 12)), contact: pick('contact', (v) => str(v, 200)), retention: pick('retention', (v) => str(v, 200)),
+        join_form: pick('join_form', httpsUrl), parent: pick('parent', (v) => str(v, 30)), parent_url: pick('parent_url', httpsUrl), parent_note: pick('parent_note', (v) => str(v, 80)),
+        thu_venue: pick('thu_venue', (v) => str(v, 20)),   // 週四團練地點（課表備註用）
+        event_data_years: pick('event_data_years', years(0, 20, 0)), log_years: pick('log_years', years(0, 20, 0)), audit_years: pick('audit_years', years(1, 10, 3)) };
+      if (has('name') && !value.name) return fail(400, '請填協會名稱');
       if (b.join_form && !value.join_form) return fail(400, '入會表單連結要是 https:// 開頭的網址');
       if (b.parent_url && !value.parent_url) return fail(400, '企業網站要是 https:// 開頭的網址');
     } else if (key === 'features') {

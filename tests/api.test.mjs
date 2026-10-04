@@ -697,6 +697,18 @@ test('功能開關：分享匯出與個人週期預設開，只有明確關掉�
   const { thu_venue, ...noVenue } = o1.json.value;
   const o2 = await call(CHAIR, '/settings/org', { method: 'POST', body: noVenue });
   assert.equal(o2.json.value.thu_venue, '臺北田徑場', '舊版後台沒送地點時保留');
+  // 後台拆成三張表單：只送保存期限，協會名稱、聯絡方式、團練地點都保留
+  const o3 = await call(CHAIR, '/settings/org', { method: 'POST', body: { retention: '帳號存續期間', log_years: 2 } });
+  assert.equal(o3.status, 200, o3.text);
+  assert.equal(o3.json.value.name, o2.json.value.name, '沒送名稱就保留');
+  assert.equal(o3.json.value.contact, o2.json.value.contact);
+  assert.equal(o3.json.value.thu_venue, '臺北田徑場');
+  assert.equal(o3.json.value.log_years, 2);
+  assert.equal(o3.json.value.audit_years, o2.json.value.audit_years, '沒送稽核年限就保留');
+  const o4 = await call(CHAIR, '/settings/org', { method: 'POST', body: { name: '' } });
+  assert.equal(o4.status, 400, '有送名稱但是空白：要擋');
+  // 系統初始設定：已經有理事長，跑友的 /me 不會說可以設定
+  assert.equal((await call('t_other', '/me')).json.bootstrapOpen, false);
 });
 
 test('個人課表週期：儲存、記錄、去重、修改保留週期、教練看不到比賽', async () => {

@@ -1,8 +1,9 @@
-// 使用說明導覽（聚光）：參照潛圖的做法——在真正的畫面上一步一步介紹，畫面變暗、只亮出要介紹的地方，旁邊一個玻璃說明框。
-// 導覽會實際帶到每個功能（首頁、課表、跑步記錄、拍照分享、我的），結束或略過時回到開始前的頁面，不會新增任何資料。
-// 第一次登入後自動出現一次（localStorage cil-guide）；之後從「我的 → 使用說明」再看。
+// 五個分頁的導覽（聚光）：參照潛圖的做法——在真正的畫面上一步一步介紹，畫面變暗、只亮出要介紹的地方，旁邊一個玻璃說明框。
+// 導覽會實際帶到每個分頁（團練、課表、跑步或拍照、地圖、我的），結束或略過時回到開始前的頁面，不會新增任何資料。
+// 不會自動跳出來：「開始使用」卡做完三步後問要不要看，或從「我的 → 使用說明」打開。
 
-const KEY = 'cil-guide', VER = '2';   // 改版本號時 app.js 的 Guide.maybeStart 也要一起改
+import { focusAfterRender, focusEl } from './app.js';
+
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const ic = (d) => `<svg class="ic" viewBox="0 0 24 24" aria-hidden="true">${d}</svg>`;
@@ -26,9 +27,6 @@ const pick = (...sels) => sels.map((s) => (typeof s === 'string' ? document.quer
 const tab = (t) => document.querySelector(`.tabs a[data-tab="${t}"]`);
 // 功能開關看分頁列就知道（app.js 的 applyFeatures 設好的）：GPS 開著時跑步分頁看得到；拍照開著時，不是分頁就是側邊欄的「拍照分享」
 const gpsOn = () => !tab('/run')?.hidden;
-const studioOn = () => !tab('/studio')?.hidden || !document.querySelector('.navmore a[data-nav="/studio"]')?.hidden;
-const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
-const isIOS = () => /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 
 // 換頁後等畫面畫好（找得到目標或最多 3 秒）
 async function go(hash, ready) {
@@ -39,28 +37,23 @@ async function go(hash, ready) {
 const scrollInto = (el) => { if (!el) return; const r = el.getBoundingClientRect(); if (r.top < 70 || r.bottom > innerHeight - 110) scrollBy({ top: r.top - Math.max(80, (innerHeight - r.height) / 3), behavior: 'instant' }); };
 
 // ---------- 步驟 ----------
-// t 標題｜l 說明（每個元素一行）｜go 要準備的畫面｜at 要聚光的元素（找不到就略過）｜ring 聚光裡再圈起來的重點
+// 對齊下方 5 格分頁：歡迎 → 團練 → 課表 → 跑步（GPS 關掉時這格是拍照）→ 地圖 → 我的 → 完成；每一步圈出那一格分頁
+// t 標題｜l 說明（每個元素一行）｜go 要準備的畫面｜at 要聚光的元素（找不到就略過）｜ring 聚光裡再圈起來的重點｜tab 這一步對應的分頁
 const STEPS = [
-  { id: 'hello', center: true, hero: true, t: '歡迎來到耕跑團', l: ['一分鐘帶你看過真正的畫面：', '團練報名、課表、跑步記錄與拍照分享。'] },
-  { id: 'today', icon: I.sun, t: '今天要練什麼', l: ['打開 App 第一眼就是今天的課表與配速，', '練完按一下就記錄。'],
-    go: () => go('#/', '.todaycard'), at: () => pick('.todaycard'), ring: () => pick('.todaycard .btn') },
-  { id: 'events', icon: I.megaphone, t: '團練與報名', l: ['幹部發布的團練、揪跑、團購都在這裡，點進去就能報名。', '上方可以只看自己的分團，下方有行事曆。'],
-    go: () => go('#/', ['.card.hero', '.evgrid']), at: () => [pick('.chipbar'), pick('a.card.hero', '.evgrid .card')].filter(Boolean) },
-  { id: 'countdown', icon: I.flag, t: '倒數你的比賽', l: ['右上角倒數到你報名的比賽，', '點一下就能換一場，或從常用賽事挑。'],
-    go: () => go('#/', '#countdown'), at: () => pick('#countdown') },
-  { id: 'bell', icon: I.bell, t: '通知', l: ['新團練、候補遞補、教練回饋都會通知你。', '加到主畫面後，手機也收得到推播。'],
-    at: () => pick('#bell') },
-  { id: 'plan', icon: I.plan, t: '課表與訓練紀錄', l: ['照你的組別換算配速；每天練完按「記錄」，', '本週完成率、里程與強度自動算好。'],
-    go: () => go('#/plan', ['.logsum', '.days']), at: () => [pick('.logsum'), pick('.days .day')].filter(Boolean), ring: () => pick('.days .logbtn') },
-  { id: 'run', icon: I.runner, t: '跑步記錄', l: ['手機計時加上 GPS，跑完算好距離、配速與分段。', '可以邊跑邊看今天的課表。'],
-    need: () => shown(tab('/run')), go: () => go('#/run', ['.runstart', '.runlive', '.kpis']), at: () => pick('.runstart', '.runlive', '.kpis'), ring: () => pick('#runGo') },
-  { id: 'map', icon: I.map, t: '練跑地圖', l: ['全台常用的田徑場、河濱、公園與步道，可以搜尋、依類型和縣市篩選。', '看現場回報與天氣，也能畫路線、存 GPX、開揪跑。'],
-    need: () => shown(tab('/map')), go: () => go('#/map', ['.mapwrap', '.spotlist']), at: () => pick('.mapwrap'), ring: () => pick(tab('/map')) },
-  // 拍照分享：GPS 跑步開著時收在「跑步」裡（聚光「拍照分享」那一列），關掉 GPS 時是分頁列的一格
-  { id: 'studio', icon: I.camera, t: '拍照分享', l: () => (gpsOn() ? ['跑完在「跑步」裡拍照分享到 IG，', '距離、時間和路線會放進照片。'] : ['把今天的距離、時間和路線放進照片，', '直接分享到 IG 限時動態或 Reels。']),
-    need: () => studioOn(), go: () => (gpsOn() ? go('#/run', '.runshare') : go('#/studio', '.stage-card')), at: () => (gpsOn() ? pick('.runshare') : pick(tab('/studio'))) },
-  { id: 'me', icon: I.person, t: '我的', l: ['個人資料、賽事報名資料、主團、通知與安全，', '分組放在這裡，點一列就進去設定。'],
-    go: () => go('#/me', '.setgroup'), at: () => [pick('.mecard'), pick('.setgroup')].filter(Boolean) },
+  { id: 'hello', center: true, hero: true, t: '歡迎來到耕跑團', l: ['一分鐘看過下方的五個分頁，', '之後在「我的 → 使用說明」可以再看一次。'] },
+  { id: 'home', tab: '/', icon: I.sun, t: '團練', l: ['今天的課表與配速、接下來的團練與報名。', '右上角倒數你的比賽，鈴鐺看通知。'],
+    go: () => go('#/', ['.todaycard', '.card.hero']), at: () => pick('.todaycard', '.card.hero'), ring: () => pick(tab('/')) },
+  { id: 'plan', tab: '/plan', icon: I.plan, t: '課表', l: ['照你的組別換算配速；練完按一下就記錄，', '本週完成率、里程與強度自動算好。'],
+    go: () => go('#/plan', ['.logsum', '.days']), at: () => [pick('.logsum'), pick('.days .day')].filter(Boolean), ring: () => pick(tab('/plan')) },
+  { id: 'run', tab: '/run', icon: I.runner, t: '跑步', l: ['手機計時加上 GPS，跑完算好距離、配速與分段，', '存成訓練紀錄，或拍照分享到 IG。'],
+    need: () => gpsOn(), go: () => go('#/run', ['.runstart', '.runlive', '.kpis']), at: () => pick('.runstart', '.runlive', '.kpis'), ring: () => pick(tab('/run')) },
+  // GPS 跑步關掉時，第 3 格是拍照
+  { id: 'studio', tab: '/studio', icon: I.camera, t: '拍照', l: ['把今天的距離、時間和路線放進照片，', '直接分享到 IG 限時動態或 Reels。'],
+    need: () => !gpsOn() && shown(tab('/studio')), go: () => go('#/studio', '.stage-card'), at: () => pick('.stage-card'), ring: () => pick(tab('/studio')) },
+  { id: 'map', tab: '/map', icon: I.map, t: '地圖', l: ['田徑場、河濱、公園與步道，看天氣、現場回報與休息站，', '也能畫路線、存 GPX、開揪跑。'],
+    need: () => shown(tab('/map')), go: () => go('#/map', ['.msheet', '.amap']), at: () => pick('.msheet', '.amap'), ring: () => pick(tab('/map')) },
+  { id: 'me', tab: '/me', icon: I.person, t: '我的', l: ['個人資料、賽事與報名、跑團，', '通知、帳號與安全等設定都在這裡。'],
+    go: () => go('#/me', '.setgroup'), at: () => [pick('.mecard'), pick('.setgroup')].filter(Boolean), ring: () => pick(tab('/me')) },
   { id: 'done', center: true, icon: I.check, t: '準備好了', l: ['之後可以在「我的 → 使用說明」再看一次。'] },
 ];
 
@@ -71,23 +64,23 @@ function build() {
   box = document.createElement('div');
   box.id = 'guide'; box.className = 'guide'; box.setAttribute('role', 'dialog'); box.setAttribute('aria-modal', 'true'); box.setAttribute('aria-labelledby', 'gTitle'); box.hidden = true;
   box.innerHTML = `<div class="g-block"></div><div class="g-spot" aria-hidden="true"></div><div class="g-ring" aria-hidden="true"></div>
-    <section class="g-tip" tabindex="-1"><span class="g-caret" aria-hidden="true"></span>
+    <section class="g-tip" tabindex="-1" role="group" aria-labelledby="gTitle" aria-describedby="gBody"><span class="g-caret" aria-hidden="true"></span>
       <div class="g-head"><span class="g-ic" id="gIc" aria-hidden="true"></span><span class="g-count num" id="gCount"></span><button type="button" class="g-skip" id="gSkip">略過</button></div>
       <div class="g-hero" id="gHero" aria-hidden="true"></div>
-      <div class="g-live" id="gLive" aria-live="polite"><h2 id="gTitle"></h2><div class="g-body" id="gBody"></div></div>
+      <div class="g-live" id="gLive"><h2 id="gTitle"></h2><div class="g-body" id="gBody"></div></div>
       <div id="gExtra"></div>
       <div class="g-foot"><div class="g-dots" id="gDots" aria-hidden="true"></div>
         <div class="g-nav"><button type="button" class="btn ghost sm" id="gPrev">上一步</button><button type="button" class="btn sm" id="gNext">下一步</button></div></div>
     </section>`;
   document.body.append(box);
   tip = box.querySelector('.g-tip'); spot = box.querySelector('.g-spot'); ring = box.querySelector('.g-ring');
-  $('#gSkip').onclick = () => end(true);
+  $('#gSkip').onclick = () => end();
   $('#gPrev').onclick = () => step(T.i - 1);
-  $('#gNext').onclick = () => (T.i >= T.steps.length - 1 ? end(true) : step(T.i + 1));
+  $('#gNext').onclick = () => (T.i >= T.steps.length - 1 ? end() : step(T.i + 1));
   box.querySelector('.g-block').onclick = () => tip.animate?.([{ transform: tip.style.transform + ' scale(1)' }, { transform: tip.style.transform + ' scale(1.02)' }, { transform: tip.style.transform + ' scale(1)' }], 260);
   addEventListener('keydown', (e) => {
     if (!T.on) return;
-    if (e.key === 'Escape') end(true);
+    if (e.key === 'Escape') end();
     else if (e.key === 'ArrowRight') $('#gNext').click();
     else if (e.key === 'ArrowLeft' && T.i > 0) $('#gPrev').click();
   });
@@ -152,10 +145,6 @@ function layout() {
 
 // ---------- 顯示 ----------
 const HERO = '<span class="g-app"><img src="/icons/icon-192.png" alt="" width="76" height="76"></span>';
-function installTip() {
-  if (isStandalone()) return '';
-  return `<p class="g-note">${I.plus}<span>${isIOS() ? '在 Safari 按「分享」→「加入主畫面」，像 App 一樣打開，也收得到通知。' : '在瀏覽器選單選「安裝應用程式」，像 App 一樣打開，也收得到通知。'}</span></p>`;
-}
 function render() {
   const s = T.steps[T.i], n = T.steps.length, last = T.i === n - 1;
   tip.className = `g-tip${s.center ? ' center' : ''}`;
@@ -164,7 +153,7 @@ function render() {
   $('#gCount').textContent = s.center ? '' : `${T.i} / ${n - 2}`;
   $('#gTitle').textContent = s.t;
   $('#gBody').innerHTML = (typeof s.l === 'function' ? s.l() : s.l).map((x) => `<p>${esc(x)}</p>`).join('');
-  $('#gExtra').innerHTML = s.id === 'done' ? installTip() : '';
+  $('#gExtra').innerHTML = '';
   $('#gDots').innerHTML = T.steps.map((_, k) => `<i class="${k === T.i ? 'on' : ''}"></i>`).join('');
   $('#gPrev').hidden = T.i === 0;
   $('#gNext').textContent = T.i === 0 ? '開始看看' : last ? '開始使用' : '下一步';
@@ -195,21 +184,21 @@ async function step(i) {
 }
 export function start() {
   build();
-  T = { on: true, i: 0, steps: STEPS, back: location.hash || '#/' };
+  // 步驟數字只算這次真的會出現的（功能關掉的步驟先拿掉，不會從 6 / 9 跳到 8 / 9）
+  T = { on: true, i: 0, steps: STEPS.filter((s) => !s.need || s.need()), back: location.hash || '#/', opener: document.activeElement };
   box.hidden = false; box.classList.add('in');
   document.documentElement.classList.add('guiding');
+  // 背景設 inert：導覽是 aria-modal，Tab 與 VoiceOver 都不能跑到被蓋住的頁面
+  for (const el of document.querySelectorAll('#view, .top, #tabs')) el.inert = true;
   step(0);
 }
-function end(done) {
+function end() {
   T.on = false; gen++;
   box.hidden = true; box.classList.remove('in');
   document.documentElement.classList.remove('guiding');
-  try { if (done) localStorage.setItem(KEY, VER); } catch {}
-  if (location.hash !== T.back) location.hash = T.back;
-}
-// 第一次登入後自動開始（只一次）
-export function maybeStart() {
-  try { if (localStorage.getItem(KEY) === VER) return; } catch { return; }
-  if (T.on) return;
-  setTimeout(() => { if (!T.on && (location.hash === '' || location.hash === '#/')) start(); }, 900);
+  for (const el of document.querySelectorAll('#view, .top, #tabs')) el.inert = false;
+  // 焦點回到打開導覽的地方（「我的 → 使用說明」那一列）；那一列重畫過就找同一個 id，找不到就是新頁面的大標題
+  const back = T.opener, id = back?.id;
+  const restore = () => { const el = back?.isConnected ? back : id && document.getElementById(id); if (!(el && focusEl(el))) focusEl(document.querySelector('#view h1')); };
+  if (location.hash !== T.back) { focusAfterRender(id ? [`#${id}`, 'h1'] : ['h1']); location.hash = T.back; } else restore();
 }

@@ -6,7 +6,7 @@
 //   附近即時影像：1.5 公里內（沒有就 3 公里內最近一支）的政府公開攝影機，畫面由本站轉送、不保存；幹部可以加官方直播的外連；功能開關預設關閉
 //   跑者休息站：飲水、廁所、淋浴置物、補給（reststops.js）；開關收在底圖選單，功能開關預設關閉
 //   底圖：內政部國土測繪中心電子地圖與正射影像（政府資料開放授權）、OpenStreetMap；Leaflet 放在 /vendor（不從外部載入程式）
-import { $, allow, api, camLazy, cfg, esc, IC, largeTitle, load, openSheet, teamAllow, teams, tilePreload, toast, view } from './app.js';
+import { $, allow, announce, api, camLazy, cfg, esc, IC, largeTitle, load, openSheet, teamAllow, teams, tilePreload, toast, view } from './app.js';
 // 開揪跑要有建立活動的權限（協會或分團幹部）；團員改成在 LINE 揪人、請幹部開團
 const canCreate = () => allow('event') || teams().some((t) => teamAllow(t.id, 'event'));
 const lineShare = (text) => `https://line.me/R/share?text=${encodeURIComponent(text)}`;
@@ -112,7 +112,9 @@ async function mapView() {
   view.innerHTML = `
     <h1 class="sr">練跑地圖</h1>
     <div class="amap" id="amap">
-      <div id="map" role="application" aria-label="練跑地圖"></div>
+      <a class="skiplink" href="#/map" id="skipList">跳到地點清單</a>
+      <div id="map" role="region" aria-label="練跑地圖" aria-describedby="mapHint"></div>
+      <p class="sr" id="mapHint">地圖上的地點也列在下方清單，用清單選地點</p>
       <div class="mapctl" role="toolbar" aria-label="地圖工具">
         <div class="ctlgroup">
           <button class="fab" id="baseBtn" disabled aria-label="底圖" aria-haspopup="menu" aria-expanded="false">${svg('<path d="m12 3.5 8.5 4.3L12 12 3.5 7.8Z"/><path d="m3.5 12 8.5 4.2 8.5-4.2M3.5 16.2 12 20.5l8.5-4.3"/>')}</button>
@@ -161,7 +163,7 @@ async function mapView() {
   const closeMenu = () => { menu.hidden = true; baseBtn.setAttribute('aria-expanded', 'false'); };
   baseBtn.onclick = (e) => { e.stopPropagation(); menu.hidden = !menu.hidden; baseBtn.setAttribute('aria-expanded', String(!menu.hidden)); if (!menu.hidden) menu.querySelector('[aria-checked="true"]')?.focus(); };
   for (const b of menu.querySelectorAll('[data-base]')) b.onclick = () => { setBase(b.dataset.base); for (const x of menu.querySelectorAll('[data-base]')) x.setAttribute('aria-checked', String(x === b)); closeMenu(); baseBtn.focus(); };
-  menu.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closeMenu(); baseBtn.focus(); } });
+  menu.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); closeMenu(); baseBtn.focus(); } });
   map.on('movestart', closeMenu);
   for (const b of menu.querySelectorAll('#restTog, #restSrc, #restAdd')) b.onclick = () => useRS().then((m) => m.menuAct(b.id, () => { closeMenu(); baseBtn.focus(); })).catch((e) => toast(e.message));
   $('#locBtn').onclick = locate;
@@ -173,7 +175,19 @@ async function mapView() {
   $('#drawFree').onclick = () => { freehand = !freehand; $('#drawFree').setAttribute('aria-pressed', String(freehand)); el.classList.toggle('freehand', freehand); toast(freehand ? '手繪：用手指拖就是畫線，兩指移動地圖' : '點選：點一下加一個點'); };
   bindFreehand(el);
   $('#drawLoop').onclick = () => { if (draft.length > 1) { draft.push(draft[0]); paintDraft(); } };
-  $('#drawCancel').onclick = endDraw;
+  $('#drawCancel').onclick = () => { endDraw(); $('#drawBtn')?.focus(); };
+  // Esc：畫路線時取消；地點卡打開時關掉卡片、焦點回清單（底圖選單、sheet 自己處理 Esc）
+  $('#amap').addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape' || e.defaultPrevented || !$('#baseMenu').hidden) return;
+    if (mode === 'draw') { e.preventDefault(); $('#drawCancel').click(); }
+    else if (mode === 'pick') { e.preventDefault(); endPick(); }
+    else if (selected && $('#spotName') && !$('#panel form')) { e.preventDefault(); closeCard({ refocus: true }); }
+  });
+  $('#skipList').onclick = (e) => {
+    e.preventDefault();
+    if (!wide() && detent === 'peek') setDetent('half');
+    ($('#spotName') || $('#spotQ') || $('#panel h2'))?.focus({ preventScroll: true });
+  };
   $('#drawDone').onclick = () => (draft.length < 2 ? toast('至少點兩個點') : routeForm());
   $('#pickCancel').onclick = endPick;
   await loadSpots();
@@ -305,6 +319,17 @@ function bindSheet() {
   sh.addEventListener('pointercancel', end);
   const re = () => { if (!$('#msheet')) return removeEventListener('resize', re); setDetent(detent, { instant: true }); map?.invalidateSize(); };
   addEventListener('resize', re);
+  // 鍵盤（或 VoiceOver）把焦點移到抽屜裡被分頁列蓋住、或在畫面外的控制項：抽屜拉到全開，再把那一項捲到分頁列上方（WCAG 2.4.11）
+  const visBottom = () => { const tabs = $('.tabs'); return tabs && innerWidth < 1024 ? tabs.getBoundingClientRect().top : innerHeight; };
+  const reveal = (el) => { const over = el.getBoundingClientRect().bottom - (visBottom() - 12); if (over > 0) sc.scrollTop += over; };
+  sh.addEventListener('focusin', (e) => {
+    const el = e.target;
+    if (wide() || pid != null || el === sc || el.closest('#grab')) return;
+    if (el.getBoundingClientRect().bottom <= visBottom() - 4) return;
+    if (detent === 'full') return requestAnimationFrame(() => reveal(el));
+    setDetent('full');
+    setTimeout(() => { if (el.isConnected && document.activeElement === el) reveal(el); }, 460);   // 等抽屜升上來（動畫 0.42 秒）再量
+  });
 }
 
 function setBase(k) {
@@ -365,17 +390,18 @@ function paintPins() {
       const s = g.items[0], warn = s.latest && (['積水', '施工', '封閉'].includes(s.latest.surface) || s.latest.crowd === '多');
       const icon = window.L.divIcon({ className: 'mpin-host', iconSize: [36, 46], iconAnchor: [18, 45], html: pinHtml(s, warn) });
       // 地點名稱是團員取的，英文介面不翻：標記整個標 translate="no"（title、alt 才不會被拆成中英夾雜），種類先用 t() 換好
-      window.L.marker([s.lat, s.lng], { icon, title: s.name, keyboard: true, alt: `${s.name}・${t(KIND[s.kind])}`, riseOnHover: true, zIndexOffset: s.id === selected ? 1000 : 0 })
+      // 地圖針不進 Tab 順序（keyboard: false）：一百多支針排在清單前面，鍵盤要按很久才到搜尋；清單才是鍵盤與 VoiceOver 的入口
+      window.L.marker([s.lat, s.lng], { icon, title: s.name, keyboard: false, alt: `${s.name}・${t(KIND[s.kind])}`, riseOnHover: true, zIndexOffset: s.id === selected ? 1000 : 0 })
         .on('add', noTr).addTo(spotsLayer)
         .bindTooltip(`<span translate="no">${esc(s.name)}</span>`, { direction: 'top', offset: [0, -44], className: 'pintip' })
-        .on('click', () => openSpot(s.id, 'pan'));
+        .on('click', () => openSpot(s.id, 'pan', { focus: true }));
       continue;
     }
     const lat = g.items.reduce((n, s) => n + s.lat, 0) / g.items.length, lng = g.items.reduce((n, s) => n + s.lng, 0) / g.items.length;
     const kinds = [...new Set(g.items.map((s) => s.kind))].slice(0, 3);
     const icon = window.L.divIcon({ className: 'mpin-host', iconSize: [44, 44], iconAnchor: [22, 22],
-      html: `<div class="mclus"><b class="num">${g.items.length}</b><span>${kinds.map((k) => `<i class="k-${k}"></i>`).join('')}</span></div>` });
-    window.L.marker([lat, lng], { icon, keyboard: true, title: `${g.items.length} 個地點`, alt: `${g.items.length} 個地點，點一下放大` }).addTo(spotsLayer)
+      html: `<div class="mclus"><b class="num" aria-hidden="true">${g.items.length}</b><span class="sr">${g.items.length} 個地點</span><span aria-hidden="true">${kinds.map((k) => `<i class="k-${k}"></i>`).join('')}</span></div>` });
+    window.L.marker([lat, lng], { icon, keyboard: false, title: `${g.items.length} 個地點`, alt: `${g.items.length} 個地點，點一下放大` }).addTo(spotsLayer)
       .on('click', () => fitVisible(window.L.latLngBounds(g.items.map((s) => [s.lat, s.lng])).pad(0.3), { maxZoom: 16 }));
   }
 }
@@ -389,10 +415,13 @@ function onMapClick(pt) {
   else if (!wide() && detent !== 'peek' && !$('#panel form')) setDetent('peek');
 }
 // 關掉地點或路線卡，回到清單
-function closeCard() {
+//   refocus：從卡片裡關掉的（關閉鈕、Esc）：清單畫好後焦點回到原本那一列（找不到就是搜尋框）
+function closeCard({ refocus = false } = {}) {
+  const was = selected;
   camReset(); RS?.deselect();
   selected = null; history.replaceState(null, '', '#/map');
-  paintPins(); listPanel(); setDetent(wide() ? 'half' : 'peek');
+  paintPins(); setDetent(wide() ? 'half' : 'peek');
+  listPanel().then(() => { if (refocus) ($(`#spotList [data-open="${CSS.escape(was || '')}"]`) || $('#spotQ'))?.focus({ preventScroll: true }); });
 }
 function startPick(cb) { endDraw(); RS?.deselect(); mode = 'pick'; pickCb = cb; $('#pickBar').hidden = false; $('#map').classList.add('picking'); tasking(true); setDetent('peek'); toast('點地圖選位置'); }
 function endPick() { mode = 'browse'; pickCb = null; $('#pickBar').hidden = true; $('#map')?.classList.remove('picking'); tasking(false); }
@@ -449,6 +478,9 @@ function simplify(from) {
 function startDraw(seed = []) {
   endPick(); RS?.deselect(); mode = 'draw'; draft = [...seed]; strokes = []; routeLayer.clearLayers();
   $('#drawBar').hidden = false; $('#map').classList.add('picking'); tasking(true); paintDraft(); setDetent('peek');
+  // 畫路線是選用功能：進入時唸說明、焦點到工具列的第一個按鈕，Esc 取消，不會困住人
+  announce('畫路線：點地圖加點，按取消離開');
+  requestAnimationFrame(() => $('#drawCancel')?.focus());
   $('#panel').innerHTML = `<section class="card"><h3>畫路線</h3><p class="tiny" style="margin:0">沿著要跑的路依序點地圖，轉彎處多點幾下比較準；iPad 可以用 Apple Pencil 直接畫，或打開「手繪」用手指畫。完成後可以存起來分享、下載 GPX，或直接開揪跑。</p></section>`;
 }
 function endDraw() { mode = 'browse'; draft = []; strokes = []; freehand = false; $('#drawFree')?.setAttribute('aria-pressed', 'false'); $('#map')?.classList.remove('freehand'); drawLayer?.clearLayers(); if ($('#drawBar')) $('#drawBar').hidden = true; $('#map')?.classList.remove('picking'); tasking(false); }
@@ -477,7 +509,7 @@ async function listPanel() {
     </div>
     ${pend.length && data.editor ? `<section class="card"><h2 class="h3">待審核的地點</h2><div class="roster">${pend.map((s) => `<button class="r spotrow" data-open="${esc(s.id)}">${kindTile(s.kind, 'pending')}<span><b><span translate="no">${esc(s.name)}</span></b></span><span class="tiny">審核 ›</span></button>`).join('')}</div></section>` : ''}
     <section class="card spotlist">
-      <div class="row spread"><h2 class="h3">練跑地點</h2><span class="tiny" id="spotCount"></span></div>
+      <div class="row spread"><h2 class="h3">練跑地點</h2><span class="tiny" id="spotCount" aria-live="polite"></span></div>
       <div class="row spotopts"><select id="spotCity" aria-label="縣市"><option value="">全部縣市</option></select>
         <button type="button" class="btn ghost sm" id="spotOpen" aria-pressed="${filt.openNow}">現在開放</button>
         <button type="button" class="btn ghost sm iconbtn" id="spotNear" aria-pressed="${filt.near}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 4 3.5 10.6l7 2.9 2.9 7Z"/></svg>離我最近</button></div>
@@ -514,7 +546,7 @@ function bindSpotFilters() {
     $('#spotList').innerHTML = list.slice(0, 200).map((s) => { const o = openOf(s); return `<button class="r spotrow${o?.open === false ? ' closed' : ''}" data-open="${esc(s.id)}">${kindTile(s.kind)}
         <span><b><span translate="no">${esc(s.name)}</span></b><span class="tiny" style="display:block">${[o && `<span class="ostat ${o.open ? 'on' : 'off'}">${esc(o.label)}</span>`, KIND[s.kind], s.city && esc(s.city), s.d != null && (s.d < 1000 ? `${Math.round(s.d)} 公尺` : `${(s.d / 1000).toFixed(1)} 公里`)].filter(Boolean).map((x) => `<span class="nw">${x}</span>`).join('・')}${s.reports ? `・24 小時內 ${s.reports} 則回報${s.latest ? `：${esc(Object.entries(s.latest).filter(([k, v]) => v && k !== 'note').map(([, v]) => v).join('、'))}` : ''}` : ''}</span></span><i class="chev" aria-hidden="true"></i></button>`; }).join('')
       || `<p class="muted" style="margin:0">${approved.length ? '沒有符合的地點，換個關鍵字或類型看看。' : data.editor ? '還沒有地點。按地圖右上的地標按鈕，在地圖上點位置新增。' : '還沒有地點。按地圖右上的地標按鈕，提議一個常跑的地方，幹部審核後就會出現。'}</p>`;
-    for (const b of document.querySelectorAll('#spotList [data-open], #panel .card:first-child [data-open]')) b.onclick = () => openSpot(b.dataset.open, true);
+    for (const b of document.querySelectorAll('#spotList [data-open], #panel .card:first-child [data-open]')) b.onclick = () => openSpot(b.dataset.open, true, { focus: true });
   };
   let t;
   $('#spotQ').oninput = (e) => { if (e.isComposing) return; clearTimeout(t); t = setTimeout(() => { filt.q = $('#spotQ').value; paint(); paintPins(); }, 120); };
@@ -537,12 +569,13 @@ function bindSpotFilters() {
       myPos = [p.coords.latitude, p.coords.longitude]; filt.near = true; $('#spotNear')?.setAttribute('aria-pressed', 'true'); paint();
     }, (e) => { $('#spotNear')?.classList.remove('busy'); toast(e.code === 1 ? '請允許定位權限，才能找離你最近的地點' : '暫時定位不到'); }, { enableHighAccuracy: false, timeout: 10000, maximumAge: 300000 });
   };
-  for (const b of document.querySelectorAll('#panel [data-open]')) b.onclick = () => openSpot(b.dataset.open, true);
+  for (const b of document.querySelectorAll('#panel [data-open]')) b.onclick = () => openSpot(b.dataset.open, true, { focus: true });
   paint();
 }
 
 // 地點卡片：說明、天氣、現場回報、路線、接下來在這裡的活動
-async function openSpot(id, fly) {
+// focus：使用者從清單或地圖針打開的，焦點移到地點名稱（跟休息站卡一樣）；關掉後焦點回到清單裡同一列
+async function openSpot(id, fly, { focus = false } = {}) {
   endDraw(); endPick(); camReset(); RS?.deselect();
   const d = await api(`/spots/${id}`).catch((e) => { toast(e.message); return null; });
   if (!d) return listPanel();
@@ -555,7 +588,7 @@ async function openSpot(id, fly) {
   if (fly) focusOn([s.lat, s.lng], fly === 'pan' ? map.getZoom() : Math.max(map.getZoom(), 15), fly);
   const nav = `https://www.google.com/maps/dir/?api=1&destination=${s.lat},${s.lng}&travelmode=walking`;
   $('#panel').innerHTML = `<section class="card spotcard">
-      <div class="row spread" style="flex-wrap:nowrap;align-items:flex-start"><div class="row" style="gap:12px;align-items:center;flex-wrap:nowrap;min-width:0">${kindTile(s.kind)}<div style="min-width:0"><span class="tiny">${KIND[s.kind]}${s.city ? `・${esc(s.city)}` : ''}</span>${s.status === 'pending' ? ' <span class="pill wait">審核中</span>' : ''}<h2 style="margin:2px 0 0"><span translate="no">${esc(s.name)}</span></h2></div></div>
+      <div class="row spread" style="flex-wrap:nowrap;align-items:flex-start"><div class="row" style="gap:12px;align-items:center;flex-wrap:nowrap;min-width:0">${kindTile(s.kind)}<div style="min-width:0"><span class="tiny">${KIND[s.kind]}${s.city ? `・${esc(s.city)}` : ''}</span>${s.status === 'pending' ? ' <span class="pill wait">審核中</span>' : ''}<h2 style="margin:2px 0 0" id="spotName" tabindex="-1"><span translate="no">${esc(s.name)}</span></h2></div></div>
         <button class="xbtn" id="backList" aria-label="關閉，回地點清單"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7 7 17"/></svg></button></div>
       <div class="spotacts"><a class="btn sm" href="${nav}" target="_blank" rel="noopener">導航 ${IC.external}</a><button class="btn ghost sm" id="offBtn">下載離線地圖</button>${s.status !== 'approved' ? '' : canCreate() ? `<a class="btn ghost sm" href="#/new?spot=${esc(s.id)}">在這裡開揪跑</a>`
         : `<a class="btn ghost sm" href="${lineShare(`我想在「${s.name}」揪跑，有人要一起嗎？ ${location.origin}/#/map?spot=${s.id}`)}" target="_blank" rel="noopener">在 LINE 揪人</a>`}
@@ -577,7 +610,8 @@ async function openSpot(id, fly) {
     ${d.events.length ? `<section class="card"><h3>接下來在這裡</h3>${d.events.map((e) => `<a class="todayev" href="#/e/${esc(e.id)}">${IC.calendar}<span><b><span translate="no">${esc(e.title)}</span></b><span class="tiny" style="display:block">${esc(e.date)}${e.gather_time ? ` ${esc(e.gather_time)}` : ''}</span></span><span class="tiny">›</span></a>`).join('')}</section>` : ''}
     <section class="card"><div class="row spread"><h3>這裡的路線</h3><button class="btn ghost sm iconbtn" id="drawHere">${IC.plus}畫一條</button></div>
       ${d.routes.length ? `<div class="roster">${d.routes.map((r) => `<button class="r spotrow" data-route="${esc(r.id)}"><span class="av num" style="font-size:11px">${(r.distance / 1000).toFixed(1)}</span><span><b><span translate="no">${esc(r.name)}</span></b></span><i class="chev" aria-hidden="true"></i></button>`).join('')}</div>` : '<p class="muted" style="margin:0">還沒有路線。</p>'}</section>`;
-  $('#backList').onclick = closeCard;
+  $('#backList').onclick = () => closeCard({ refocus: true });
+  if (focus) $('#spotName')?.focus({ preventScroll: true });
   $('#editSpot')?.addEventListener('click', () => spotForm(s, [s.lat, s.lng]));
   $('#offBtn').onclick = () => saveOffline(s);
   for (const [b, ok] of [[$('#approve'), true], [$('#reject'), false]]) b?.addEventListener('click', async () => {

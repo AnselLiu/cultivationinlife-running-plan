@@ -3,7 +3,7 @@
 //   shareSheet：課表頁按了「分享與匯出」才載入
 //   單週課表頁的加強功能（weekExtras）在 coachweek.js
 //   身體資料（年齡、安靜心率）只從這台裝置的 cil-coach 讀，不會送到伺服器
-import { $, api, cfg, choose, coachPrefs, dayLabel, dstr, emptyState, esc, feat, fixText, group, IC, ic, largeTitle, legacyData, me, MI, myCycle, org, paintCountdown, planSeg,
+import { $, api, cfg, choose, coachPrefs, focusAfterRender, startGroupSaved, dayLabel, dstr, emptyState, esc, feat, fixText, group, IC, ic, largeTitle, legacyData, me, MI, myCycle, org, paintCountdown, planSeg,
   raceTarget, refreshMe, removeLegacy, render, row, setCoachPrefs, startKey, subTitle, toast, view } from './app.js';
 import * as P from './plan.js';
 import { ageGrade, createCoach, EST_LINE, fuelCalc, GL, GL_ORDER, hrCalc, icsTranslate, legacyBackup, legacyLogBackup, legacyPatch, legacyRange, lvl, parseGoal, planLegacyImport, std100,
@@ -38,7 +38,13 @@ const raceDist = (r) => (/全馬|^42/.test(r?.dist || '') ? 'fm' : /半馬|^21/.
 const isWeekend = (iso) => { const d = P.parseISO(iso); return !!d && (d.getDay() === 0 || d.getDay() === 6); };
 const notice = (html) => `<p class="notice" style="margin:0">${html}</p>`;
 // 頁面裡跳到某一段（?go=cycle、?go=hr…）
-const goTo = (id) => { const el = id && document.getElementById(id); if (el) requestAnimationFrame(() => el.scrollIntoView({ block: 'start' })); };
+//   focus：從連結進來（「我的 › 隱私」的「這台裝置上的課表設定」）時，焦點也放到那一段的標題，VoiceOver 唸的跟畫面上的一致；
+//   頁面裡改設定後的重畫（不是換頁）不搶焦點（nav）
+const goTo = (id, focus = false) => {
+  const el = id && document.getElementById(id); if (!el) return;
+  if (focus) focusAfterRender([`#${id} :is(h2,h3)`, `#${id}`], { nav: true });
+  requestAnimationFrame(() => el.scrollIntoView({ block: 'start' }));
+};
 
 // 回傳離開頁面時要做的清理（賽事倒數的計時器）
 export async function coachView(section) {
@@ -158,7 +164,7 @@ async function raceView(q) {
   $('#raceStart').onchange = (e) => { setCoachPrefs({ start: { [key]: e.target.value || null } }); toast('已儲存'); render(); };
   $('#goalBtn')?.addEventListener('click', () => { setCoachPrefs({ ui: { goal: { ...(p.ui.goal || {}), [key]: !useGoal } } }); render(); });
   for (const b of view.querySelectorAll('[data-sweat]')) b.onclick = () => { setCoachPrefs({ body: { sweat: b.dataset.sweat } }); render(); };
-  goTo(q.get('go'));
+  goTo(q.get('go'), true);
 
   // 比賽前 48 小時：每 30 秒更新「還有 h:mm」，只在畫面看得到的時候跑
   const target = new Date(`${race.date}T${start || '00:00'}:00`);
@@ -241,7 +247,7 @@ async function setupView(q) {
       `<label class="chip"><input type="radio" name="dist" value="${k}" ${k === (me.dist === 'hm' ? 'hm' : 'fm') ? 'checked' : ''}><span>${l} <small class="num">${s}</small></span></label>`).join('')}</div>
     <div class="chips gtiles" role="radiogroup" aria-label="組別" id="gtiles">${tiles(me.dist === 'hm' ? 'hm' : 'fm', me.grp)}</div>
     <button type="button" class="btn block" id="grpSave">儲存</button>
-    <p class="tiny" style="margin:0">跟「我的 → 個人資料」是同一個設定</p>`);
+    <p class="tiny" style="margin:0">存在你的帳號，報名與課表配速都用這個組別。${coachOn ? '<a href="#/plan/setup?go=pb">不知道選哪組？用成績推算 ›</a>' : ''}</p>`);
 
   // 2. 課表週期：跟協會賽季，或跟自己的一場比賽排 20 週
   const pickId = future.some((r) => r.id === q.get('race')) ? q.get('race') : null;
@@ -327,7 +333,7 @@ async function setupView(q) {
   const lg = raw ? await legacySection(raw, { races: data.races || [], startRace: tgt?.race || null }) : null;
 
   view.innerHTML = `${subTitle('課表設定', '課表、賽事準備用到的設定')}
-    ${coachOn ? secGrp : ''}${secCyc}${coachOn ? secPb + secTrain + secRace + secBody + secDev : ''}${lg ? lg.html : ''}`;
+    ${secGrp}${secCyc}${coachOn ? secPb + secTrain + secRace + secBody + secDev : ''}${lg ? lg.html : ''}`;
   lg?.bind();
 
   // #view 是共用的節點：這裡加的監聽在離開頁面時拿掉（回傳的清理函式）
@@ -383,19 +389,25 @@ async function setupView(q) {
     });
   };
 
+  // 項目與組別：不管課表教練開關都有（它是帳號資料，報名與課表配速都用）
+  for (const r of view.querySelectorAll('[name=dist]')) r.onchange = () => {
+    const d = distNow(), keep = Object.keys(P.groups(d)).includes(grpNow()) ? grpNow() : d === 'hm' ? 'C' : 'D';
+    $('#gtiles').innerHTML = tiles(d, keep);
+    if (coachOn) pbPaint();
+  };
+  $('#grpSave').onclick = async (e) => {
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    try {
+      await api('/me/plan', { method: 'PUT', body: { dist: distNow(), grp: grpNow() } }); await refreshMe(); toast('已儲存');
+      // 從「開始使用」卡來的：打勾，回到原本的頁面
+      if (q.get('from') === 'start') { startGroupSaved(); return; }
+      if (coachOn) trainPaint();
+    }
+    catch (err) { toast(err.message); }
+    btn.disabled = false;
+  };
   if (coachOn) {
-    for (const r of view.querySelectorAll('[name=dist]')) r.onchange = () => {
-      const d = distNow(), keep = Object.keys(P.groups(d)).includes(grpNow()) ? grpNow() : d === 'hm' ? 'C' : 'D';
-      $('#gtiles').innerHTML = tiles(d, keep);
-      pbPaint();
-    };
-    $('#grpSave').onclick = async (e) => {
-      const btn = e.currentTarget;
-      btn.disabled = true;
-      try { await api('/me/plan', { method: 'PUT', body: { dist: distNow(), grp: grpNow() } }); await refreshMe(); toast('已儲存'); trainPaint(); }
-      catch (err) { toast(err.message); }
-      btn.disabled = false;
-    };
     $('#pbTime').oninput = $('#pbDist').onchange = () => { setCoachPrefs({ pb: { dist: $('#pbDist').value, time: $('#pbTime').value.trim() } }); pbPaint(); };
     pbPaint();
     for (const k of ['days', 'club', 'vol']) for (const btn of view.querySelectorAll(`[data-${k}]`)) btn.onclick = () => {
@@ -458,7 +470,7 @@ async function setupView(q) {
       } catch (err) { toast(err.message); btn.disabled = false; }
     };
   }
-  goTo(q.get('migrate') === '1' && lg ? 'legacy' : q.get('go'));
+  goTo(q.get('migrate') === '1' && lg ? 'legacy' : q.get('go'), true);
   return cleanup;
 }
 

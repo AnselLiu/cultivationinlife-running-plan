@@ -15,7 +15,8 @@ const qrSVG = (...a) => lazy('./qr.js', 'qrSVG')(...a);
 const scan = (...a) => lazy('./qr.js', 'scan')(...a);
 const canScan = () => !!navigator.mediaDevices?.getUserMedia;
 // 導覽看過就不用下載 guide.js（版本號要跟 guide.js 的 VER 一致）
-const Guide = { start: () => lazy('./guide.js', 'start')(), maybeStart: () => { try { if (localStorage.getItem('cil-guide') === '2') return; } catch { return; } lazy('./guide.js', 'maybeStart')(); } };
+// 五個分頁的導覽：不再自動跳出來，從「開始使用」卡做完三步後、或「我的 → 使用說明」打開
+const Guide = { start: () => lazy('./guide.js', 'start')() };
 // 課表頁的加強功能（用語說明、詳細內容、提醒、滑動換週）：課表畫好、閒下來才載入，首頁不會下載；
 //   在小的 coachweek.js，完整的課表教練（coach.js）只有全季、賽事準備、配速與用語、課表設定、分享才載入
 const coachWeekExtras = (...a) => lazy('./coachweek.js', 'weekExtras')(...a);
@@ -219,17 +220,15 @@ document.addEventListener('submit', (e) => {
 }, true);
 // 按鈕版：click 處理期間停用（沒有表單的「我要報名」「確認收款」等）
 const once = (btn, fn) => async (...a) => { if (btn.disabled) return; btn.disabled = true; btn.classList.add('busy'); try { return await fn(...a); } finally { if (btn.isConnected) { btn.disabled = false; btn.classList.remove('busy'); } } };
-// 三選一的確認面板（取代「確定／取消」容易按錯的 confirm）：回傳選到的 value，關掉回傳 null
-function choose(title, message, options) {
+// 三選一的確認面板（取代「確定／取消」容易按錯的 confirm）：回傳選到的 value，關掉（取消、Esc、點背景）回傳 null
+//   用共用的 openSheet：焦點移到第一個選項、Tab 不會跑出去、關掉後焦點回到原本的按鈕
+function choose(title, message, options, { cancel = '取消' } = {}) {
   return new Promise((done) => {
-    const host = document.createElement('div');
-    host.className = 'sheet'; host.setAttribute('role', 'dialog'); host.setAttribute('aria-modal', 'true'); host.setAttribute('aria-label', title);
-    host.innerHTML = `<div class="sheet-bg" data-v=""></div><div class="sheet-card card"><h3>${esc(title)}</h3>${message ? `<p class="muted" style="margin:0">${message}</p>` : ''}
+    let picked = null;
+    const s = openSheet(title, `<h3 id="chooseT">${esc(title)}</h3>${message ? `<p class="muted" style="margin:0">${message}</p>` : ''}
       <div class="choices">${options.map((o) => `<button type="button" class="btn block ${o.danger ? 'danger' : o.primary ? '' : 'ghost'}" data-v="${esc(o.value)}">${esc(o.label)}</button>`).join('')}
-      <button type="button" class="btn ghost block" data-v="">取消</button></div></div>`;
-    document.body.append(host);
-    host.querySelector('.choices button')?.focus();
-    host.addEventListener('click', (e) => { const v = e.target.closest('[data-v]')?.dataset.v; if (v === undefined) return; host.remove(); done(v || null); });
+      <button type="button" class="btn ghost block" data-close>${esc(cancel)}</button></div>`, document.activeElement, '', { onClose: () => done(picked) });
+    s.host.addEventListener('click', (e) => { const v = e.target.closest('[data-v]')?.dataset.v; if (v === undefined) return; picked = v || null; s.close(); });
   });
 }
 // 婉拒原因面板：常用理由 chips＋自由填寫（最多 120 字）；回傳 { note } 或 null（取消）
@@ -451,12 +450,18 @@ function rich(...parts) {
   flush();
   return f;
 }
-function toast(msg, { action, onAction, onExpire, focus = false, ms = 2600 } = {}) {
-  const prev = $('.toast'); if (prev) { prev.remove(); prev.expire?.(); }
+// 提示泡泡：放進常駐的播報區（#toasts，role=status，頁面一載入就在）——iPhone VoiceOver 對「插入時就帶文字的 live region」常常不唸，
+//   放進已經存在的播報區才唸得到。say：只給螢幕閱讀器多唸的補充（例如「6 秒內可以按復原」），畫面上不顯示
+function toast(msg, { action, onAction, onExpire, focus = false, ms = 2600, say = '' } = {}) {
+  const host = $('#toasts') || document.body;
+  const prev = host.querySelector('.toast'); if (prev) { prev.remove(); prev.expire?.(); }
   const el = document.createElement('div');
   el.className = 'toast';
-  el.role = 'status';
-  if (msg instanceof Node) el.append(msg); else el.textContent = msg;
+  const m = document.createElement('span');
+  if (msg instanceof Node) m.append(msg); else m.textContent = msg;
+  el.append(m);
+  // 補充播報前加句號（自己一個文字節點，英文介面照樣翻）：VoiceOver 在訊息與說明之間會停一下，不會連成一句
+  if (say) { const sr = document.createElement('span'); sr.className = 'sr'; sr.append('。', document.createTextNode(say)); el.append(sr); }
   let done = false;
   el.expire = () => { if (done) return; done = true; const had = el.contains(document.activeElement); el.remove(); onExpire?.(had); };
   let b;
@@ -466,10 +471,37 @@ function toast(msg, { action, onAction, onExpire, focus = false, ms = 2600 } = {
     b.onclick = () => { if (done) return; done = true; el.remove(); onAction?.(); };
     el.append(b);
   }
-  document.body.append(el);
+  host.append(el);
   if (focus) b?.focus();
   const later = () => { if (done) return; if (el.matches(':hover, :focus-within')) setTimeout(later, 1500); else el.expire(); };
   setTimeout(later, ms);
+}
+// 只給螢幕閱讀器的播報（換頁的頁名、畫路線的說明…）：先清空、稍後再寫，同一句話連續兩次也會唸
+function announce(msg) {
+  const live = $('#nlive'); if (!live) return;
+  live.textContent = '';
+  setTimeout(() => { live.textContent = msg; }, 60);
+}
+// 表單欄位的錯誤：錯誤文字放在欄位下方並用 aria-describedby 綁上、欄位標 aria-invalid、焦點移過去；改了欄位就清掉
+//   el：要拿焦點的欄位；also：同一個錯誤也要標紅的其他欄位（例如距離與時間）；anchor：錯誤文字放在誰後面（預設欄位的 label 或 fieldset）
+function fieldError(el, msg, { also = [], anchor } = {}) {
+  if (!el) { toast(msg); return; }
+  const id = `${el.name || el.dataset.q || 'f'}Err`.replace(/[^\w-]/g, '');
+  // chip 型的單選、複選：錯誤放在整組選項（fieldset 或 .chips）後面，不會擠在第一個選項後面
+  const box = anchor || (el.closest('.chip') && (el.closest('fieldset') || el.closest('.chips'))) || el.closest('fieldset, label') || el;
+  let p = document.getElementById(id);
+  if (!p) { p = document.createElement('p'); p.id = id; p.className = 'ferr'; box.after(p); }
+  p.textContent = msg;
+  const all = [el, ...also].filter(Boolean);
+  for (const x of all) {
+    x.setAttribute('aria-invalid', 'true');
+    const d = (x.getAttribute('aria-describedby') || '').split(' ').filter((v) => v && v !== id);
+    x.setAttribute('aria-describedby', [...d, id].join(' '));
+  }
+  const clear = () => { p.remove(); for (const x of all) { x.removeAttribute('aria-invalid'); const d = (x.getAttribute('aria-describedby') || '').split(' ').filter((v) => v && v !== id); if (d.length) x.setAttribute('aria-describedby', d.join(' ')); else x.removeAttribute('aria-describedby'); } };
+  for (const x of all) x.addEventListener(x.type === 'radio' || x.type === 'checkbox' ? 'change' : 'input', clear, { once: true });
+  el.focus();
+  if (!el.matches(':focus')) el.closest('fieldset')?.querySelector('input')?.focus();
 }
 // 課表設定（只存在這台裝置，不會上傳；登出時清除）：每週天數、週四團練、跑量、成績、身體資料、起跑時間、畫面偏好
 const COACH_DEFAULT = { v: 1, plan: { days: 6, club: true, vol: null }, pb: { dist: '10', time: '' },
@@ -691,7 +723,8 @@ const setMe = (m, c) => { me = m; if (c !== undefined) cfg = c; };
 // 大標題：頁面最上方的 Large Title；捲出畫面後，標題縮到頂部列中間（iOS 行為）
 function largeTitle(title, sub = '', action = '') {
   $('#ctitle').textContent = title;
-  return `<header class="lt"><div><h1>${esc(title)}</h1>${sub ? `<p>${sub}</p>` : ''}</div>${action}</header>`;
+  // tabindex=-1：收起卡片、導覽結束時可以把焦點放回大標題（VoiceOver 從頁首開始唸）
+  return `<header class="lt"><div><h1 tabindex="-1">${esc(title)}</h1>${sub ? `<p>${sub}</p>` : ''}</div>${action}</header>`;
 }
 const ICONS = {
   calendar: '<svg viewBox="0 0 24 24"><rect x="3.2" y="4.8" width="17.6" height="15.4" rx="3.4"/><path d="M3.4 9.6h17.2M8 3.2v3.4M16 3.2v3.4"/></svg>',
@@ -935,49 +968,52 @@ function paintTabs(hash = curHash()) {
 wideNav.addEventListener?.('change', () => paintTabs());
 
 // 倒數：自己的主要賽事 → 最近的自己的賽事 → 協會預設
+//   按鈕的名稱就是畫面上的字（「77天到臺北馬」），後面接一段只給螢幕閱讀器的「，換倒數的比賽」（WCAG 2.5.3：名稱要包含看得到的字）
 function paintCountdown() {
   const r = cfg.race, el = $('#countdown');
   el.hidden = !me;
+  const hint = '<span class="sr">，換倒數的比賽</span>';
   if (!r?.date) { el.innerHTML = me ? '<small>設定倒數</small>' : ''; el.title = I18N.t('選擇要倒數的比賽'); return; }
   const t = new Date(`${r.date}T00:00:00`), now = new Date(); now.setHours(0, 0, 0, 0);
   const days = Math.round((t - now) / 864e5);
   const short = r.name.replace(/^20\d\d\s*/, '').replace('馬拉松', '馬').slice(0, 7);
   // 比賽名稱是使用者或賽事資料的原文：英文介面不翻（translate="no"），只翻固定的字
   const nm = `<span translate="no">${esc(short)}</span>`;
-  $('#countdown').innerHTML = days > 0 ? `<b class="num">${days}</b>天到${nm}` : days === 0 ? `<b>今天</b>${nm}` : '';
-  $('#countdown').title = I18N.lang === 'en' ? `${r.name} (${r.date}). ${I18N.t('點一下可以換')}` : `${r.name}（${r.date}），點一下可以換`;
+  el.innerHTML = days > 0 ? `<b class="num">${days}</b>天到${nm}${hint}` : days === 0 ? `<b>今天</b>${nm}${hint}` : '<small>設定倒數</small>';
+  el.title = I18N.lang === 'en' ? `${r.name} (${r.date}). ${I18N.t('點一下可以換')}` : `${r.name}（${r.date}），點一下可以換`;
 }
 // 點右上角倒數：選要倒數哪一場（自己的賽事、常用賽事清單、協會預設，或不顯示）
+//   共用 openSheet：焦點移到目前倒數的那一場、Tab 不會跑到後面、Esc 關閉，關掉後焦點回到倒數按鈕
 async function countdownPicker() {
   if (!me) return;
   $('#cdSheet')?.remove();
+  const opener = document.activeElement?.closest?.('button, a') || $('#countdown');
   const d = await api('/races');
   const days = (date) => Math.round((new Date(`${date}T00:00:00`) - new Date().setHours(0, 0, 0, 0)) / 864e5);
   const upcoming = d.races.filter((r) => days(r.date) >= 0);
   const mineIds = new Set(d.races.map((r) => `${r.name}|${r.date}`));
-  const sheet = document.createElement('div');
-  sheet.id = 'cdSheet'; sheet.className = 'sheet'; sheet.setAttribute('role', 'dialog'); sheet.setAttribute('aria-label', '選擇倒數的比賽');
-  sheet.innerHTML = `<div class="sheet-bg" data-close></div><section class="card sheet-card">
-    <div class="row spread"><h3>倒數哪一場比賽</h3><button class="btn ghost sm" data-close>完成</button></div>
+  const presets = d.presets.filter((p) => !mineIds.has(`${p.name}|${p.date}`));
+  const on = (x) => (x ? ' on" aria-current="true' : '');
+  const s = openSheet('選擇倒數的比賽', `
+    <div class="row spread"><h3 id="cdT">倒數哪一場比賽</h3><button type="button" class="btn ghost sm" data-close>完成</button></div>
     <div class="cdlist">
-      ${upcoming.map((r) => `<button class="cdopt ${d.mode === 'mine' && r.is_primary ? 'on' : ''}" data-race="${r.id}"><span><b><span translate="no">${esc(r.name)}</span></b><span class="tiny">${esc(r.date)}${r.dist ? `・${esc(r.dist)}` : ''}${r.goal ? `・目標 ${esc(r.goal)}` : ''}</span></span><span class="num">${days(r.date)} 天</span></button>`).join('')}
-      ${d.club ? `<button class="cdopt ${d.mode === 'club' ? 'on' : ''}" data-mode="club"><span><b><span translate="no">${esc(d.club.name)}</span></b><span class="tiny">協會預設・${esc(d.club.date)}</span></span><span class="num">${days(d.club.date)} 天</span></button>` : ''}
-      <button class="cdopt ${d.mode === 'off' ? 'on' : ''}" data-mode="off"><span><b>不顯示倒數</b></span></button>
+      ${upcoming.map((r) => `<button type="button" class="cdopt${on(d.mode === 'mine' && r.is_primary)}" data-race="${r.id}"><span><b><span translate="no">${esc(r.name)}</span></b><span class="tiny">${esc(r.date)}${r.dist ? `・${esc(r.dist)}` : ''}${r.goal ? `・目標 ${esc(r.goal)}` : ''}</span></span><span class="num">${days(r.date)} 天</span></button>`).join('')}
+      ${d.club ? `<button type="button" class="cdopt${on(d.mode === 'club')}" data-mode="club"><span><b><span translate="no">${esc(d.club.name)}</span></b><span class="tiny">協會預設・${esc(d.club.date)}</span></span><span class="num">${days(d.club.date)} 天</span></button>` : ''}
+      <button type="button" class="cdopt${on(d.mode === 'off')}" data-mode="off"><span><b>不顯示倒數</b></span></button>
     </div>
-    ${d.presets.filter((p) => !mineIds.has(`${p.name}|${p.date}`)).length ? `<h3 style="margin-top:6px">常用賽事</h3><div class="cdlist">${d.presets.filter((p) => !mineIds.has(`${p.name}|${p.date}`)).map((p, i) => `<button class="cdopt" data-preset="${i}"><span><b><span translate="no">${esc(p.name)}</span></b><span class="tiny">${esc(p.date)}${p.dist ? `・${esc(p.dist)}` : ''}</span></span><span class="tiny">加入並倒數</span></button>`).join('')}</div>` : ''}
+    ${presets.length ? `<h3 style="margin-top:6px">常用賽事</h3><div class="cdlist">${presets.map((p, i) => `<button type="button" class="cdopt" data-preset="${i}"><span><b><span translate="no">${esc(p.name)}</span></b><span class="tiny">${esc(p.date)}${p.dist ? `・${esc(p.dist)}` : ''}</span></span><span class="tiny">加入並倒數</span></button>`).join('')}</div>` : ''}
     <details><summary class="tiny" style="cursor:pointer">自己新增一場</summary>
       <form id="cdAdd" class="filters" style="margin-top:8px">
         <input name="name" maxlength="30" placeholder="比賽名稱，例如 2027 東京馬拉松" required aria-label="比賽名稱">
         <div class="grid2"><input type="date" name="date" required aria-label="比賽日期"><input name="goal" maxlength="10" placeholder="目標成績（選填）" aria-label="目標成績"></div>
-        <button class="btn sm">加入並倒數</button></form></details>
-  </section>`;
-  document.body.append(sheet);
-  const presets = d.presets.filter((p) => !mineIds.has(`${p.name}|${p.date}`));
-  const done = async (msg) => { const r = await api('/me'); cfg = r; me = r.member; paintCountdown(); toast(msg); sheet.remove(); };
+        <button class="btn sm">加入並倒數</button></form></details>`, opener, 'cdT');
+  const sheet = s.host;
+  sheet.id = 'cdSheet';
+  sheet.querySelector('.cdopt.on')?.focus();
+  const done = async (msg) => { const r = await api('/me'); cfg = r; me = r.member; s.close(); paintCountdown(); toast(msg); };
   sheet.addEventListener('click', async (e) => {
-    const t = e.target.closest('[data-close],[data-race],[data-mode],[data-preset]'); if (!t) return;
+    const t = e.target.closest('[data-race],[data-mode],[data-preset]'); if (!t) return;
     try {
-      if (t.dataset.close != null) { sheet.remove(); return; }
       if (t.dataset.race) { await api(`/races/${t.dataset.race}/primary`, { method: 'POST' }); await api('/me/countdown', { method: 'POST', body: { mode: 'mine' } }); return done('已換成這場比賽'); }
       if (t.dataset.mode) { await api('/me/countdown', { method: 'POST', body: { mode: t.dataset.mode } }); return done(t.dataset.mode === 'off' ? '已關閉倒數' : '已換成協會預設'); }
       if (t.dataset.preset) { const p = presets[Number(t.dataset.preset)]; await api('/races', { method: 'POST', body: { ...p, is_primary: true } }); await api('/me/countdown', { method: 'POST', body: { mode: 'mine' } }); return done(`開始倒數：${p.name}`); }
@@ -988,7 +1024,6 @@ async function countdownPicker() {
     try { await api('/races', { method: 'POST', body: { name: f.name.value, date: f.date.value, goal: f.goal.value, is_primary: true } }); await api('/me/countdown', { method: 'POST', body: { mode: 'mine' } }); done(`開始倒數：${f.name.value}`); }
     catch (err) { toast(err.message); }
   };
-  addEventListener('keydown', function esc0(e) { if (e.key === 'Escape') { sheet.remove(); removeEventListener('keydown', esc0); } });
 }
 $('#countdown').addEventListener('click', countdownPicker);
 
@@ -1005,7 +1040,7 @@ function richText(src) {
   return esc(src).split(/\n{2,}/).map((block) => {
     const lines = block.split('\n');
     if (lines.every((l) => l.startsWith('- '))) return `<ul>${lines.map((l) => `<li>${l.slice(2)}</li>`).join('')}</ul>`;
-    if (block.startsWith('## ')) return `<h3>${block.slice(3)}</h3>`;
+    if (block.startsWith('## ')) return `<h2 class="h3">${block.slice(3)}</h2>`;
     return `<p>${lines.join('<br>')}</p>`;
   }).join('');
 }
@@ -1026,9 +1061,9 @@ function privacyView() {
       <p class="tiny" style="margin:0">全文在下方，同意後就會回到剛才的頁面。</p></section>` : ''}
     ${custom ? `<section class="card prose">${richText(custom)}</section>` : `<section class="card prose">
       <p>依個人資料保護法第 8 條，${esc(PRIVACY.org)}在蒐集您的個人資料前，告知以下事項。</p>
-      <h3>一、蒐集目的</h3>
+      <h2 class="h3">一、蒐集目的</h2>
       <p>〇五二 法人或團體對會員之內部管理（團練報名、分組課表、會籍管理）；〇六九 契約、類似契約或其他法律關係事務（活動報名、入場與抽獎）；一三五 資（通）訊服務（通知推播）。</p>
-      <h3>二、蒐集的資料</h3>
+      <h2 class="h3">二、蒐集的資料</h2>
       <p>識別類（C001）：姓名、暱稱、Google 帳號的顯示名稱與大頭貼（不取得 Email）、電話（選填）。<br>
          活動相關：項目與組別、所屬跑團、加入的分團與分團身分、餐點偏好、報名與報到紀錄、活動問卷的回答、中獎紀錄。<br>
          系統紀錄：登入時間、裝置型號摘要、IP 位址的單向雜湊值（無法還原）；App 的開啟速度與錯誤訊息只記裝置類型與頁面，不記是誰，保留 90 天。<br>
@@ -1037,23 +1072,23 @@ function privacyView() {
          照片：拍照分享的照片在你的手機上合成，不會上傳到我們的伺服器。<br>
          賽事報名資料（選填）：只有你需要幹部代為報名馬拉松等賽事時才填，包含中英文姓名、身分證字號或護照號碼、生日、性別、電話、Email、地址、緊急聯絡人與衣服尺寸；<b>加密後保存</b>，只有你自己看得到完整內容。<br>
          協會入會申請另以協會的 Google 表單辦理。</p>
-      <h3>三、利用期間、地區、對象與方式</h3>
+      <h2 class="h3">三、利用期間、地區、對象與方式</h2>
       <p>期間：${esc(PRIVACY.retention)}。<br>
          地區：台灣，以及雲端服務（Cloudflare）的資料中心所在地。<br>
          對象：依職務最小權限開放給協會幹部；分團團長與幹部可以看自己分團的名冊（不含電話）與該分團活動的報名及問卷結果；電話完整號碼只有行政人員看得到。賽事報名資料只在你報名「代為團體報名」的活動並勾選同意後，提供給該活動的主辦幹部，用來向賽事主辦單位送出團體報名，每次下載都留有稽核紀錄。通訊地址存檔前會送到中華郵政的 3+3 郵遞區號服務核對寫法並補上郵遞區號，只傳送地址文字。練跑地圖的「附近即時影像」由本站伺服器向政府公開攝影機取得畫面再轉給你，你的 IP 與位置不會傳給影像來源，本站也不保存影像。不提供給第三方行銷使用。<br>
          方式：以電子方式處理，全程加密傳輸。</p>
-      <h3>四、您的權利</h3>
+      <h2 class="h3">四、您的權利</h2>
       <p>您可以隨時行使個人資料保護法第 3 條的權利：</p>
       <ul>
         <li>查詢、閱覽、製給複本：「我的 → 隱私 → 下載我的資料」</li>
         <li>補充或更正：「我的 → 個人資料」直接修改</li>
         <li>停止蒐集、處理、利用及刪除：「我的 → 隱私 → 刪除帳號」</li>
       </ul>
-      <h3>五、不提供資料的影響</h3>
+      <h2 class="h3">五、不提供資料的影響</h2>
       <p>姓名與組別是報名與排課表的必要資料；不提供就無法報名活動。賽事報名資料只在報名「代為團體報名」的活動時需要，不填不影響其他功能。其他欄位都是選填。</p>
-      <h3>六、安全措施</h3>
+      <h2 class="h3">六、安全措施</h2>
       <p>存取控制依職務分級、特權操作留有稽核紀錄、登入權杖只存雜湊值，並設有嘗試次數限制。詳見專案的資訊安全設計說明。</p>
-      <h3>七、聯絡方式</h3>
+      <h2 class="h3">七、聯絡方式</h2>
       <p>${esc(PRIVACY.contact)}。</p>
     </section>`}
     ${asking ? `<div class="consentbar"><span class="tiny">同意後才能繼續使用</span><button class="btn" id="consentBtn">同意並繼續</button></div>` : ''}`;
@@ -1087,18 +1122,12 @@ async function listView() {
     </div>` : '';
   // 英文的分團名稱比較長：窄螢幕只留「＋」圖示，讓分團 chip 多一點空間（aria-label 照樣唸）
   const teamLink = mine.length ? `<a class="chiplink" href="#/teams" aria-label="分團">${IC.plus}<span class="cltx">分團</span></a>` : '<a class="chiplink" href="#/teams">加入分團 ›</a>';
-  // 第二次打開以後才提示安裝，不要一進來就打擾
-  let visits = 0;
-  try {
-    visits = Number(localStorage.getItem('cil-visits') || 0);
-    if (!sessionStorage.getItem('cil-counted')) { visits += 1; localStorage.setItem('cil-visits', String(visits)); sessionStorage.setItem('cil-counted', '1'); }
-  } catch {}
+  // 新帳號（邀請碼加入是 #/?welcome=1）與還沒加到主畫面、還沒開推播的人：最上面是「開始使用」卡（取代以前的歡迎文字與安裝提示卡）
   const welcome = new URLSearchParams(location.hash.split('?')[1] || '').get('welcome');
   view.innerHTML = `
     ${largeTitle('團練', todayLabel())}
-    ${welcome ? '<div class="notice">歡迎加入耕跑團！先看看今天的課表和接下來的團練；主團會由管理員幫你設定，也可以到「我的 → 主團與分團」申請加入分團。</div>' : ''}
     ${mfaBanner()}
-    ${visits >= 2 ? installCard('home') : ''}
+    ${startShown(welcome) ? startCard() : ''}
     <div class="chiprow">${chips}${teamLink}</div>
     <div class="dash"><div style="display:grid;gap:14px">
     ${today}
@@ -1118,10 +1147,9 @@ async function listView() {
   homeWeather(all);
   bindTodayCard();
   if (anyTeamAllow('event')) reviewCard();
-  bindInstall();
+  bindStart();
   bindStepup();
   flushLogQueue();
-  if (!me.mfaPending) Guide.maybeStart();   // 第一次登入：使用說明導覽
 }
 // 幹部：報名待審核（畫面畫好後才載入，有資料才顯示）
 async function reviewCard() {
@@ -1466,21 +1494,33 @@ function nDelete(li, viaKey = false) {
 }
 // 共用 sheet：焦點移到第一個動作、Tab 不會跑出去、Esc 關閉，關閉後焦點回到原本的元素
 // labelledby：用 sheet 裡標題的 id 當名稱（標題是作者寫的內容、不翻譯時用這個，不用 aria-label）
-function openSheet(label, inner, opener, labelledby = '') {
+// onClose：關掉時（按鈕、Esc、點背景都算）呼叫一次，例如 choose() 回傳 null、掃碼面板關相機
+const FOCUSABLE = 'button:not([disabled]),a[href],input:not([disabled]):not([type=hidden]),select:not([disabled]),textarea:not([disabled]),summary,[tabindex]:not([tabindex="-1"])';
+function openSheet(label, inner, opener, labelledby = '', { onClose } = {}) {
   const host = document.createElement('div');
   host.className = 'sheet'; host.setAttribute('role', 'dialog'); host.setAttribute('aria-modal', 'true');
   if (labelledby) host.setAttribute('aria-labelledby', labelledby); else host.setAttribute('aria-label', I18N.t(label));
   host.innerHTML = `<div class="sheet-bg" data-close></div><div class="sheet-card card">${inner}</div>`;
   document.body.append(host);
-  const focusables = () => [...host.querySelectorAll('button:not([disabled]),a[href],input:not([disabled])')];
-  focusables()[0]?.focus();
+  // 收合的 <details> 裡的欄位、hidden 的按鈕不算（Tab 本來就到不了，算進來會讓焦點跑出面板）
+  const focusables = () => [...host.querySelectorAll(FOCUSABLE)].filter((x) => x.getClientRects().length && (x.matches('summary') || !x.closest('details:not([open])')));
+  // 有危險選項（取消報名、刪除）：焦點先放在安全的那一顆（data-close，例如「保留報名」），VoiceOver 打開後直接點兩下不會誤刪
+  const fs0 = focusables(), safe = host.querySelector('.btn.danger') && fs0.find((x) => x.matches('[data-close]'));
+  (safe || fs0[0])?.focus();
   const key = (e) => {
+    if (!host.isConnected) { document.removeEventListener('keydown', key, true); return; }
     if (e.key === 'Escape') { e.preventDefault(); close(); return; }
     if (e.key !== 'Tab') return;
     const f = focusables(), i = f.indexOf(document.activeElement);
-    if (e.shiftKey && i <= 0) { e.preventDefault(); f[f.length - 1]?.focus(); } else if (!e.shiftKey && i === f.length - 1) { e.preventDefault(); f[0]?.focus(); }
+    if (e.shiftKey && i <= 0) { e.preventDefault(); f[f.length - 1]?.focus(); } else if (!e.shiftKey && (i === f.length - 1 || i < 0)) { e.preventDefault(); f[0]?.focus(); }
   };
-  const close = () => { if (!host.isConnected) return; host.remove(); document.removeEventListener('keydown', key, true); if (opener?.isConnected) opener.focus(); };
+  let closed = false;
+  const close = () => {
+    if (closed) return; closed = true;
+    host.remove(); document.removeEventListener('keydown', key, true);
+    if (opener?.isConnected) opener.focus();
+    onClose?.();
+  };
   document.addEventListener('keydown', key, true);
   host.addEventListener('click', (e) => { if (e.target.closest('[data-close]')) close(); });
   return { host, close };
@@ -1836,23 +1876,26 @@ async function planNewView() {
 // ---------- admin.js（用到才載入）----------
 const adminView = lazy('./admin.js', 'adminView');
 const rosterView = lazy('./admin.js', 'rosterView');
+const settingsPage = lazy('./admin.js', 'settingsPage');
 // 安裝到主畫面：iPhone 要手動「分享 → 加入主畫面」，Android／桌機用瀏覽器的安裝提示
 const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
 const isIOS = () => /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 const SHARE_IC = ic('<path d="M12 15V3.5M7.5 8 12 3.5 16.5 8M5 12.5v6A2.5 2.5 0 0 0 7.5 21h9a2.5 2.5 0 0 0 2.5-2.5v-6"/>');
 const ADD_IC = ic('<rect x="4" y="4" width="16" height="16" rx="4"/><path d="M12 8.5v7M8.5 12h7"/>');
-function installCard(where) {
+// iPhone Safari 加到主畫面的步驟：「開始使用」卡與通知設定頁的說明卡共用同一份（以前四個入口的說明不一樣）
+//   iOS 26 起分享按鈕收在網址列旁的「⋯」裡；iOS 27 的實際按鈕文字要用實機再對一次
+const iosAddSteps = () => `<ol class="steps">
+    <li>點 Safari 網址列旁的「⋯」${SHARE_IC}，選「分享」</li>
+    <li>往下滑，選「加入主畫面」${ADD_IC}</li>
+    <li>打開「以網頁 App 打開」，按「加入」</li>
+    <li>之後從主畫面的耕跑團打開（要再登入一次）</li></ol>`;
+// 通知設定頁的說明卡（查詢用）：還沒加到主畫面才顯示
+function installCard() {
   if (isStandalone()) return '';
-  try { if (where === 'home' && localStorage.getItem('cil-install-dismiss')) return ''; } catch {}
-  const ios = isIOS();
   return `<section class="card tight installcard">
     <div class="instrow"><img src="/icons/icon-192.png" alt="" width="40" height="40">
-      <span><b>把耕跑團加到主畫面</b><span class="tiny">才收得到團練通知，入場券沒網路也能出示</span></span>
-      ${where === 'home' ? '<button class="iconx" id="installX" aria-label="不再顯示">' + ic('<path d="M7 7l10 10M17 7 7 17"/>') + '</button>' : ''}</div>
-    ${ios ? `<details ${where === 'me' ? 'open' : ''}><summary class="tiny">怎麼加？三個步驟</summary><ol class="steps">
-        <li>點 Safari 下方的分享按鈕 ${SHARE_IC}</li>
-        <li>往下滑，選「加入主畫面」${ADD_IC}</li>
-        <li>按「新增」，之後從主畫面的耕跑團圖示打開</li></ol>
+      <span><b>把耕跑團加到主畫面</b><span class="tiny">才收得到團練通知，入場券沒網路也能出示</span></span></div>
+    ${isIOS() ? `<details open><summary class="tiny">怎麼加？</summary>${iosAddSteps()}
         <p class="tiny" style="margin:0">在 LINE 裡打開的話，先點右下角選單選「用預設瀏覽器開啟」。</p></details>`
       : `<button class="btn sm block" data-install ${installEvt ? '' : 'hidden'}>安裝 App</button>
          <p class="tiny" style="margin:0" ${installEvt ? 'hidden' : ''}>點瀏覽器右上角選單，選「安裝應用程式」或「加到主畫面」。</p>`}
@@ -1863,10 +1906,159 @@ function bindInstall() {
     if (!installEvt) return;
     installEvt.prompt();
     const { outcome } = await installEvt.userChoice.catch(() => ({}));
-    if (outcome === 'accepted') toast('安裝完成，之後從主畫面打開');
+    if (outcome === 'accepted') { toast('安裝完成，之後從主畫面打開'); saveStart({ install: 'done' }); }
     installEvt = null;
   };
-  $('#installX')?.addEventListener('click', () => { try { localStorage.setItem('cil-install-dismiss', '1'); } catch {} $('.installcard')?.remove(); });
+}
+
+// ---------- 開始使用（第一次使用的三步）----------
+// 不是彈出視窗：首頁與「我的」最上面同一張卡（像 iPhone 設定最上面的「完成設定」），三步各自可以做、可以略過，整張卡可以「稍後再說」
+//   ① 加到主畫面 ② 開啟推播（iPhone 要先從主畫面打開）③ 選距離與組別；全部完成才問要不要看五個分頁的導覽
+//   進度只記在這台裝置（cil-start）：主畫面 App 一律算 ①完成；② 以「這支手機現在有沒有推播訂閱」為準；③ 在這台裝置確認或存過組別
+//   iPhone 主畫面 App 跟 Safari 的儲存空間是分開的：在 Safari 做完 ①，從主畫面打開會自然從 ② 接著做
+//   共用手機換人登入：新帳號、稍後再說、組別是帳號的（記著是誰的 who，換人就從頭算）；加到主畫面、推播是這台裝置的
+const START_KEY = 'cil-start';
+const ACCT_START = ['fresh', 'dismissed', 'group'];
+const startState = () => {
+  let st; try { st = JSON.parse(localStorage.getItem(START_KEY) || '{}') || {}; } catch { st = {}; }
+  if (st.who && me?.id && st.who !== me.id) for (const k of ACCT_START) delete st[k];
+  return { v: 1, ...st };
+};
+const saveStart = (patch) => { const st = { ...startState(), ...patch, who: me?.id || startState().who }; try { localStorage.setItem(START_KEY, JSON.stringify(st)); } catch {} return st; };
+// 推播這一步在這台裝置能不能做：沒有推播金鑰（na）、iPhone 還沒從主畫面打開（ios）、瀏覽器不支援（no）、被封鎖（denied）、可以（ok）
+function pushMode() {
+  if (!cfg.vapid) return 'na';
+  if (isIOS() && !isStandalone()) return 'ios';
+  if (!('serviceWorker' in navigator) || typeof Notification === 'undefined' || !('PushManager' in window)) return 'no';
+  return Notification.permission === 'denied' ? 'denied' : 'ok';
+}
+// 每一步的狀態：done／skip／na（這台裝置不適用，算完成）／null（還沒做）
+function startSteps(st = startState()) {
+  return { install: isStandalone() ? 'done' : st.install || null, push: pushMode() === 'na' ? 'na' : st.push || null, group: st.group || null };
+}
+const startLeft = (steps) => Object.values(steps).filter((v) => !v).length;
+// 要不要出現：按過「稍後」或 ✕ 就不出現；新帳號（?welcome=1）一定出現；舊帳號只有 ① 或 ② 還沒做才出現
+function startShown(welcome) {
+  let st = startState();
+  if (welcome && !st.fresh) st = saveStart({ fresh: 1, dismissed: 0 });
+  if (st.dismissed) return false;
+  const k = startSteps(st);
+  if (st.fresh) return true;
+  // 已經允許通知、這台還沒查過訂閱（更新後第一次打開的舊使用者）：先不出現，等背景查完訂閱（bindStart）再決定，卡片不會閃一下又消失
+  if (k.install && !k.push && st.pushOff == null && pushMode() === 'ok' && Notification.permission === 'granted') return false;
+  return !k.install || !k.push;
+}
+const ST_LABEL = { done: '已完成', skip: '已略過', na: '不需要' };
+const STEP_IC = { install: ADD_IC, push: ic('<path d="M6.4 9.6a5.6 5.6 0 0 1 11.2 0c0 4 1.4 5.4 1.4 5.4H5s1.4-1.4 1.4-5.4Z"/><path d="M10.2 18.4a2 2 0 0 0 3.6 0"/>'), group: ic('<path d="M5.5 21V4M5.5 4.5h11l-2 3.7 2 3.8h-11"/>') };
+function startCard() {
+  const steps = startSteps(), left = startLeft(steps), n = 3 - left;
+  if (!left) return `<section class="card startcard alldone" id="startCard" aria-labelledby="startTitle">
+    <div class="sthead"><h2 id="startTitle" tabindex="-1">都設定好了</h2><button type="button" class="iconx" id="startX" aria-label="收起開始使用">${ic('<path d="M7 7l10 10M17 7 7 17"/>')}</button></div>
+    <p class="muted" style="margin:0">要不要用一分鐘看看五個分頁？</p>
+    <div class="row" style="gap:8px"><button type="button" class="btn sm" id="startTour">看看五個分頁</button></div></section>`;
+  const pm = pushMode(), app = inAppBrowser(), ios = isIOS();
+  const stateTx = (k) => `<span class="ststate">${steps[k] ? ST_LABEL[steps[k]] : '還沒做'}</span>`;
+  const SKIP = { install: '略過「加到主畫面」', push: '略過「開啟推播」', group: '略過「選距離與組別」' };
+  const skip = (k) => `<button type="button" class="linkbtn tiny" data-stskip="${k}">${SKIP[k]}</button>`;
+  // ① 加到主畫面：LINE／Facebook 的內建瀏覽器要先換 Safari；iPhone Safari 三步；Android／電腦用瀏覽器的安裝提示
+  const install = steps.install ? '' : app ? `<p class="tiny">${app === 'line' ? '現在是在 LINE 裡打開：點右下角的選單，選「用預設瀏覽器開啟」，再到 Safari 加到主畫面。' : '現在是在 Facebook 或 Instagram 裡打開：點右上角「⋯」，選「在瀏覽器開啟」，再加到主畫面。'}</p>
+      <div class="stacts">${app === 'line' ? `<a class="btn sm" href="${esc(`${location.origin}/?openExternalBrowser=1#/`)}">用瀏覽器打開</a>` : '<button type="button" class="btn sm" id="stCopy">複製網址</button>'}${skip('install')}</div>`
+    : ios ? `<details class="sthow"><summary>怎麼加？</summary>${iosAddSteps()}</details>
+      <div class="stacts"><button type="button" class="btn sm ghost" data-stdone="install">我加好了</button>${skip('install')}</div>`
+    : `<div class="stacts">${installEvt ? '<button type="button" class="btn sm" id="stInstall">安裝 App</button>' : ''}<button type="button" class="btn sm ghost" data-stdone="install">我加好了</button>${skip('install')}</div>
+      ${installEvt ? '' : '<p class="tiny">點瀏覽器的選單，選「安裝應用程式」或「加到主畫面」。</p>'}`;
+  // ② 開啟推播：iPhone Safari 先停用並說明原因（aria-disabled，VoiceOver 唸得到）
+  const pushWhy = pm === 'ios' ? '先加到主畫面，從主畫面的耕跑團打開後再開推播' : pm === 'no' ? '這個瀏覽器不支援推播，請用 Safari 或 Chrome 打開並加到主畫面'
+    : pm === 'denied' ? (ios ? '推播被關掉了：到 iPhone 設定 → 通知 → 耕跑團，打開「允許通知」' : '推播被封鎖了：到瀏覽器的網站設定打開通知') : '';
+  const push = steps.push ? '' : `<div class="stacts"><button type="button" class="btn sm" id="stPush"${pushWhy ? ' aria-disabled="true" aria-describedby="stPushWhy"' : ''}>開啟推播</button>${skip('push')}</div>
+      ${pushWhy ? `<p class="tiny" id="stPushWhy">${pushWhy}</p>` : ''}`;
+  // ③ 選距離與組別：確認目前的，或到課表設定改（存好自動回來打勾）
+  const grp = `${me.dist === 'hm' ? '半馬' : '全馬'} ${esc(me.grp)} 組`;
+  const group = steps.group ? '' : `<div class="stacts"><button type="button" class="btn sm" data-stdone="group">確認 ${grp}</button><a class="btn sm ghost" id="stGroupEdit" href="#/plan/setup?go=grp&from=start" aria-label="修改距離與組別">修改 ›</a>${skip('group')}</div>`;
+  const item = (k, title, sub, body) => `<li class="ststep${steps[k] ? ' ok' : ''}" data-step="${k}"><span class="stic" aria-hidden="true">${steps[k] ? IC.check : STEP_IC[k]}</span>
+      <div class="stbody"><span class="sttl"><b>${title}</b><span class="sr">，</span>${stateTx(k)}</span>${steps[k] ? '' : `<span class="tiny">${sub}</span>${body}`}</div></li>`;
+  return `<section class="card startcard" id="startCard" aria-labelledby="startTitle">
+    <div class="sthead"><h2 id="startTitle" tabindex="-1">開始使用</h2><span class="tiny num" id="startProg">${n} / 3 完成</span></div>
+    <div class="stbar" aria-hidden="true"><i style="width:${Math.round(n / 3 * 100)}%"></i></div>
+    <ol class="ststeps" role="list">
+      ${item('install', '加到主畫面', '像 App 一樣打開，入場券沒網路也能出示', install)}
+      ${item('push', '開啟推播', '團練異動、候補遞補、帳號安全第一時間通知你', push)}
+      ${item('group', '選距離與組別', `課表的配速照組別換算・<span class="nw">目前：${grp}</span>`, group)}
+    </ol>
+    <div class="stfoot"><button type="button" class="btn ghost sm" id="startLater">稍後再說</button><button type="button" class="btn ghost sm" id="startTour">看看五個分頁</button></div></section>`;
+}
+// 換掉卡片內容（不重畫整頁）；使用者按了卡片上的按鈕（有 msg）才把焦點移到下一步的第一個按鈕（全部完成時移到卡片標題）
+//   背景查訂閱的更新（沒有 msg）只換內容、不動焦點；查完發現不該出現（主畫面 App、已經有推播）就安靜地收起
+function repaintStart(msg) {
+  const el = $('#startCard'); if (!el) return;
+  const had = el.contains(document.activeElement);   // 焦點本來就在卡片裡：換掉內容後放回卡片裡（不會掉到 body）
+  if (!msg && !startShown()) { el.remove(); if (had) focusEl(view.querySelector('h1')); return; }
+  el.outerHTML = startCard();
+  bindStart(false);
+  if (!msg && !had) return;
+  const next = $('#startCard .ststep:not(.ok) .stacts > :is(button,a)') || $('#startTitle');
+  next?.focus({ preventScroll: true });
+  if (!msg) return;
+  const left = startLeft(startSteps()); announce(left ? `${msg}，還剩 ${left} 步` : `${msg}，都設定好了`);
+}
+const STEP_DONE = { install: '已加到主畫面', push: '已開啟推播', group: '已確認組別' };
+function bindStart(check = true) {
+  const card = $('#startCard');
+  card?.addEventListener('click', async (e) => {
+    const d = e.target.closest('[data-stdone]')?.dataset.stdone, k = e.target.closest('[data-stskip]')?.dataset.stskip;
+    if (d) { saveStart({ [d]: 'done' }); repaintStart(STEP_DONE[d]); return; }
+    if (k) { saveStart({ [k]: 'skip' }); repaintStart('已略過'); return; }
+    if (e.target.closest('#startLater, #startX')) {
+      saveStart({ dismissed: 1 });
+      card.remove();
+      announce('已收起，之後可以在「我的 → 使用說明」再打開');
+      focusEl(view.querySelector('h1'));
+      return;
+    }
+    // 導覽隨時可以看（不用先做完三步）；三步都做完的「都設定好了」卡看完導覽就收起
+    if (e.target.closest('#startTour')) { if (!startLeft(startSteps())) saveStart({ dismissed: 1 }); Guide.start(); return; }
+    if (e.target.closest('#stCopy')) { copy(`${location.origin}/`); return; }
+    if (e.target.closest('#stGroupEdit')) { try { sessionStorage.setItem('cil-start-back', location.hash || '#/'); } catch {} return; }
+    const pb = e.target.closest('#stPush');
+    if (pb) {
+      if (pb.getAttribute('aria-disabled') === 'true') { toast($('#stPushWhy')?.textContent || ''); return; }
+      // quiet：不跳「已開啟通知」、不重畫整頁（焦點才不會掉到 body，VoiceOver 只唸一次「已開啟推播，還剩 N 步」）
+      if (await togglePush(null, { quiet: true }) && await pushSub()) {
+        saveStart({ push: 'done', pushOff: null }); repaintStart(STEP_DONE.push);
+        const ps = $('#pushSub'); if (ps) ps.textContent = '推播已開啟';
+      }
+      return;
+    }
+    const ib = e.target.closest('#stInstall');
+    if (ib && installEvt) {
+      installEvt.prompt();
+      const { outcome } = await installEvt.userChoice.catch(() => ({}));
+      installEvt = null;
+      if (outcome === 'accepted') { saveStart({ install: 'done' }); repaintStart(STEP_DONE.install); } else repaintStart();
+    }
+  });
+  // 推播以這支手機現在的訂閱為準：有訂閱就打勾；記成完成但訂閱不見了（換手機、重新安裝）就回到還沒做
+  //   pushOff 記下「查過，沒有訂閱」：startShown 等這個結果才決定要不要出現；這裡只換內容，不移動焦點
+  if (!check || !cfg.vapid || pushMode() !== 'ok') return;
+  pushSub().then((sub) => {
+    const st = startState(), had = !!$('#startCard');
+    if (sub) { if (st.push !== 'done' || st.pushOff != null) { saveStart({ push: 'done', pushOff: null }); if (had) repaintStart(); } return; }
+    if (st.push === 'done' || st.pushOff == null) saveStart({ push: st.push === 'done' ? null : st.push, pushOff: 1 });
+    if (had && st.push === 'done') repaintStart();
+  });
+}
+// 課表設定改好組別、從「開始使用」來的：打勾，回到原本的頁面
+function startGroupSaved() {
+  saveStart({ group: 'done' });
+  let back = '#/'; try { back = sessionStorage.getItem('cil-start-back') || '#/'; sessionStorage.removeItem('cil-start-back'); } catch {}
+  focusAfterRender(['#startCard .ststep:not(.ok) .stacts > :is(button,a)', '#startTitle']);
+  location.hash = back;
+}
+// 「我的 → 使用說明」：重新打開「開始使用」卡（狀態還在）
+function reopenStart() {
+  saveStart({ dismissed: 0, fresh: 1 });
+  focusAfterRender('#startTitle');
+  if (location.hash.split('?')[0] === '#/me') render(); else location.hash = '#/me';
 }
 
 // 掃描台：有相機就用相機掃（iPhone 也可以，第一次會詢問相機權限），也可以手動輸入代碼
@@ -1875,30 +2067,27 @@ const setStopScan = (fn) => { stopScan = fn; };   // event.js 的掃碼台：換
 // 掃碼面板（團購領取、會籍卡驗證共用）：打開就啟動相機（第一次會詢問相機權限），也可以手動輸入代碼
 //   onCode(code) 回傳要顯示的結果文字；連續掃描時 1.8 秒內不重複處理
 function scanSheet({ title, hint, placeholder = '手動輸入代碼', onCode }) {
-  const host = document.createElement('div');
-  host.className = 'sheet'; host.setAttribute('role', 'dialog'); host.setAttribute('aria-modal', 'true'); host.setAttribute('aria-label', title);
-  host.innerHTML = `<div class="sheet-bg" data-bg></div><div class="sheet-card card"><div class="row spread"><h3>${esc(title)}</h3><button class="btn ghost sm" data-close>完成</button></div>
+  let stop = null, busy = false;
+  // 共用 openSheet：焦點移進面板、Tab 不跑出去、Esc 關閉（同時關相機），關掉後焦點回到開啟的按鈕
+  const s = openSheet(title, `<div class="row spread"><h3 id="scanT">${esc(title)}</h3><button type="button" class="btn ghost sm" data-close>完成</button></div>
     ${canScan() ? '<video playsinline muted class="cam" aria-label="相機畫面"></video>' : '<p class="notice" style="margin:0">這台裝置沒有可以用的相機，請手動輸入代碼。</p>'}
     <p class="tiny center scanmsg" aria-live="polite">${esc(hint)}</p>
-    <form class="row" style="gap:8px"><input name="code" placeholder="${esc(placeholder)}" style="flex:1" autocomplete="off" aria-label="${esc(placeholder)}"><button class="btn sm">送出</button></form></div>`;
-  document.body.append(host);
-  let stop = null, busy = false;
-  const close = () => { stop?.(); host.remove(); };
+    <form class="row" style="gap:8px"><input name="code" placeholder="${esc(placeholder)}" style="flex:1" autocomplete="off" aria-label="${esc(placeholder)}"><button class="btn sm">送出</button></form>`,
+    document.activeElement, 'scanT', { onClose: () => stop?.() });
+  const host = s.host;
   const msg = host.querySelector('.scanmsg');
   const run = async (code) => {
     if (busy) return; busy = true;
     try { msg.textContent = await onCode(code.trim()); navigator.vibrate?.(30); } catch (e) { msg.textContent = e.message; }
     setTimeout(() => { busy = false; }, 1800);
   };
-  host.querySelector('[data-close]').onclick = close;
-  host.querySelector('[data-bg]').onclick = close;
   host.querySelector('form').onsubmit = (e) => { e.preventDefault(); run(e.target.code.value); e.target.code.value = ''; };
   if (canScan()) {
     msg.textContent = '正在打開相機…';
     scan(host.querySelector('video'), (v) => run(v)).then((s0) => { if (host.isConnected) { stop = s0; msg.textContent = hint; } else s0(); })
       .catch((e) => { msg.textContent = e.message; host.querySelector('video')?.remove(); });
   }
-  return close;
+  return s.close;
 }
 // ---------- photo.js（用到才載入）----------
 const studioView = lazy('./photo.js', 'studioView');
@@ -2088,6 +2277,8 @@ async function planView(n) {
 const LOG_STATUS_NAME = { done: '完成', partial: '部分完成', skip: '沒練', extra: '自主加練' };
 const LOG_ICON = { done: IC.check, partial: IC.half, skip: IC.minus, extra: IC.plus };
 const FEEL = ['', '很累', '有點累', '普通', '不錯', '很好'];
+// RPE 自覺強度的文字（滑桿的 aria-valuetext）
+const RPE_WORD = ['', '很輕鬆', '輕鬆', '輕鬆', '中等', '有點吃力', '有點吃力', '吃力', '很吃力', '非常吃力', '全力'];
 const pad2 = (n) => String(n).padStart(2, '0');
 const ymd = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 // 課表上的「週二」「週五或週六」「週末」→ 那一週實際的日期：P.dayDates（比賽那一列只在比賽日）
@@ -2141,7 +2332,7 @@ async function logView() {
     ${incoming ? `<div class="notice">已帶入${incoming.source === 'health' ? ' Apple 健康' : incoming.source === 'gps' ? '這次 GPS 跑步' : ''}的數據，確認後按儲存。</div>` : ''}
     <section class="card">
       <form id="lf" class="logform">
-        ${statuses.length > 1 ? `<div class="chips status">${statuses.map((k) => `<label class="chip"><input type="radio" name="status" value="${k}" ${v.status === k ? 'checked' : ''}><span>${LOG_ICON[k]} ${LOG_STATUS_NAME[k]}</span></label>`).join('')}</div>`
+        ${statuses.length > 1 ? `<fieldset class="qset"><legend class="sr">狀態</legend><div class="chips status">${statuses.map((k) => `<label class="chip"><input type="radio" name="status" value="${k}" ${v.status === k ? 'checked' : ''}><span>${LOG_ICON[k]} ${LOG_STATUS_NAME[k]}</span></label>`).join('')}</div></fieldset>`
           : '<input type="hidden" name="status" value="extra">'}
         <label>日期<input type="date" name="date" value="${esc(date)}" max="${today}" required></label>
         <div class="grid2" data-run>
@@ -2151,7 +2342,7 @@ async function logView() {
         <p class="tiny pace" data-run id="paceOut"></p>
         <div class="grid2" data-run>
           <label>平均心率（選填）<input name="hr" inputmode="numeric" value="${v.hr ?? ''}" placeholder="152"></label>
-          <label><span class="lrow"><span>RPE 自覺強度</span><b class="num" id="rpeOut">${v.rpe || 5}</b></span><input type="range" name="rpe" min="1" max="10" value="${v.rpe || 5}"></label>
+          <label><span class="lrow"><span>RPE 自覺強度</span><b class="num" id="rpeOut" aria-hidden="true">${v.rpe || 5}</b></span><input type="range" name="rpe" min="1" max="10" value="${v.rpe || 5}"></label>
         </div>
         <fieldset class="qset"><legend>身體感覺</legend><div class="chips feel">${[1, 2, 3, 4, 5].map((n) => `<label class="chip"><input type="radio" name="feel" value="${n}" ${Number(v.feel) === n ? 'checked' : ''}><span>${FEEL[n]}</span></label>`).join('')}</div></fieldset>
         <label>備註（只有你看得到）<input name="note" maxlength="300" value="${esc(v.note || '')}" placeholder="腳踝有點緊、風很大…"></label>
@@ -2169,6 +2360,9 @@ async function logView() {
     const km = parseFloat(f.km.value), sec = parseHMS(f.time.value);
     $('#paceOut').textContent = km > 0 && sec > 0 ? `平均配速 ${fmtDistPace(km * 1000, sec)}` : '';
     $('#rpeOut').textContent = f.rpe.value;
+    // 滑桿只唸數字聽不出強度：加上文字（「5，有點吃力」）
+    const rv = Number(f.rpe.value), word = RPE_WORD[rv] || '';
+    if (f.rpe.dataset.vt !== String(rv)) { f.rpe.dataset.vt = String(rv); f.rpe.setAttribute('aria-valuetext', I18N.lang === 'en' ? `${rv}, ${I18N.t(word)}` : `${rv}，${word}`); }
   };
   f.oninput = sync; sync();
   f.onsubmit = async (e) => {
@@ -2181,17 +2375,20 @@ async function logView() {
       rpe: Number(f.rpe.value), feel: Number(f.querySelector('[name=feel]:checked')?.value) || null, note: f.note.value,
       source: log?.source || incoming?.source || 'manual' };
     // 照課表記錄（完成、部分完成）可以不填距離與時間；自主加練才一定要填
-    if (st === 'extra' && !body.km && !body.seconds) return toast('填一下距離或時間');
+    if (st === 'extra' && !body.km && !body.seconds) return fieldError(f.km, '填一下距離或時間', { also: [f.time], anchor: f.km.closest('.grid2') });
     try {
       await api('/logs', { method: 'POST', body });
       if (body.source === 'gps') { const R = await loadRun().catch(() => null); if (R?.session()?.status === 'done') R.discard(); }   // 已存成紀錄，清掉手機上的這次跑步
       if (st === 'skip' || log) { toast(st === 'skip' ? '已記下，休息也是訓練的一部分' : '已更新'); location.hash = planHref(lc, week); return; }
       // 記完接著拍照分享：把剛記的距離、時間帶到拍照
       const p = new URLSearchParams({ km: String(body.km || 0), sec: String(body.seconds || 0), date: body.date, title: (fromEv?.title || planText || '今天的跑步').slice(0, 20), logged: '1' });
-      view.innerHTML = `<section class="card donecard"><span class="donemark">${IC.check}</span><h2>已記錄，辛苦了</h2>
+      view.innerHTML = `<section class="card donecard"><span class="donemark">${IC.check}</span><h1 class="h2" id="doneH" tabindex="-1">已記錄，辛苦了</h1>
         <p class="muted" style="margin:0">${body.km ? `${body.km} 公里` : ''}${body.km && body.seconds ? '・' : ''}${body.seconds ? fmtDuration(body.seconds) : ''}${body.km && body.seconds ? `・配速 ${fmtDistPace(body.km * 1000, body.seconds)}` : ''}</p>
         ${feat('studio') ? `<a class="btn block iconbtn" href="#/studio?${p}">${ic('<path d="M4 8.2a2 2 0 0 1 2-2h1.9l1.5-2h5.2l1.5 2H18a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2Z"/><circle cx="12" cy="12.6" r="3.6"/>')}拍照分享</a>` : ''}
         <a class="btn ghost block" href="${planHref(lc, week)}">回課表</a></section>`;
+      // 表單換成完成卡：焦點移到完成卡的標題（VoiceOver 唸「已記錄，辛苦了」，不會掉回頁首）
+      document.title = `${I18N.t('已記錄，辛苦了')} – ${I18N.t('耕跑團')}`;
+      $('#doneH').focus();
     }
     catch (err) {
       // 斷線（fetch 本身失敗）：先存在手機，連上網路後自動上傳
@@ -2253,7 +2450,7 @@ async function quickTick(btn, c, n, row, date) {
     const again = view.querySelector(`[data-tick="${i}"]`);
     if (again && !again.disabled) again.focus({ preventScroll: true });
     if (r.existed) { toast('這一天已經記錄過了'); return; }
-    toast(r.qid ? '目前離線，已先存在手機' : '已記錄完成', { action: '復原', ms: 6000, onAction: async () => {
+    toast(r.qid ? '目前離線，已先存在手機' : '已記錄完成', { action: '復原', ms: 6000, say: '要復原，6 秒內按「復原」，或點這一列修改', onAction: async () => {
       try { await undoTick(r); toast('已復原'); } catch (e) { toast(e.message); }
       render();
     } });
@@ -2540,15 +2737,17 @@ const teamsView = lazy('./teams.js', 'teamsView');
 // ---------- 我的 ----------
 // ---------- 我的：像 iPhone 設定一樣分組，每一列點進去是一頁 ----------
 const ME_SECTIONS = {
-  profile: '個人資料', races: '我的賽事與倒數', reg: '賽事報名資料', teams: '主團與分團', notify: '通知設定',
+  profile: '個人資料', races: '我的賽事與倒數', reg: '團體報名資料', teams: '主團與分團', notify: '通知設定',
   calendar: '行事曆訂閱', display: '外觀與語言', security: '帳號與安全', privacy: '隱私', assoc: '協會', card: '會籍卡',
 };
 // 設定列的色磚：跟 iPhone 設定一樣每一項一個顏色（深色模式也不會是一整排亮黃方塊）
 const ROW_TILE = { '#/report': 'green', '#/challenge': 'orange', '#/me/races': 'red', '#/me/reg': 'indigo', '#/tickets': 'purple', '#/me/teams': 'teal',
   '#/me/notify': 'red', '#/me/calendar': 'orange', '#/me/display': 'indigo', '#/me/security': 'gray', '#/me/privacy': 'blue', '#/me/assoc': 'indigo', '#/me/card': 'teal',
-  '#/admin': 'gray', '#/roster': 'blue', '#/logs/team': 'green', '#/plan/new': 'green', '#/plan/season': 'green', '#/plan/race': 'red', '#/plan/guide': 'teal', '#/plan/setup': 'gray' };
-const row = (href, icon, title, sub = '', badge = '') => `<a class="setrow" href="${href}"><span class="sic"${ROW_TILE[href] ? ` style="--sc:var(--tile-${ROW_TILE[href]})"` : ''}>${icon}</span><span class="st"><b>${title}</b>${sub ? `<span class="tiny">${sub}</span>` : ''}</span>${badge}<span class="chev" aria-hidden="true"></span></a>`;
-const btnRow = (id, icon, title, sub = '') => `<button class="setrow" id="${id}"><span class="sic">${icon}</span><span class="st"><b>${title}</b>${sub ? `<span class="tiny">${sub}</span>` : ''}</span><span class="chev" aria-hidden="true"></span></button>`;
+  '#/admin': 'gray', '#/admin/settings': 'gray', '#/roster': 'blue', '#/logs/team': 'green', '#/plan/new': 'green', '#/plan/season': 'green', '#/plan/race': 'red', '#/plan/guide': 'teal', '#/plan/setup': 'gray' };
+// 標題與副標中間放一個只給螢幕閱讀器的「，」：VoiceOver 唸「通知設定，推播類別」，不會連成一串沒有停頓
+const rowText = (title, sub) => `<span class="st"><b>${title}</b>${sub ? `<span class="sr">，</span><span class="tiny">${sub}</span>` : ''}</span>`;
+const row = (href, icon, title, sub = '', badge = '') => `<a class="setrow" href="${href}"><span class="sic"${ROW_TILE[href] ? ` style="--sc:var(--tile-${ROW_TILE[href]})"` : ''}>${icon}</span>${rowText(title, sub)}${badge}<span class="chev" aria-hidden="true"></span></a>`;
+const btnRow = (id, icon, title, sub = '') => `<button class="setrow" id="${id}"><span class="sic">${icon}</span>${rowText(title, sub)}<span class="chev" aria-hidden="true"></span></button>`;
 const group = (title, rows) => (rows.filter(Boolean).length ? `<section class="setgroup">${title ? `<h2 class="sgt">${title}</h2>` : ''}<div class="card setcard">${rows.filter(Boolean).join('')}</div></section>` : '');
 const subTitle = (title, sub = '') => largeTitle(title, sub);
 const MI = {
@@ -2570,6 +2769,7 @@ const MI = {
   calsub: ic('<rect x="3.2" y="4.8" width="17.6" height="15.4" rx="3.4"/><path d="M3.4 9.6h17.2M8 3.2v3.4M16 3.2v3.4M12 12.5v5M9.8 15.3 12 17.5l2.2-2.2"/>'),
   display: ic('<circle cx="12" cy="12" r="8"/><path d="M12 4v16M12 8h6.5M12 12h8M12 16h6.5"/>'),
   addhome: ic('<rect x="4" y="4" width="16" height="16" rx="4"/><path d="M12 8.5v7M8.5 12h7"/>'),
+  sliders: IC.sliders,
 };
 async function meView(section) {
   const welcome = new URLSearchParams(location.hash.split('?')[1] || '').get('welcome');
@@ -2586,61 +2786,68 @@ function raceSub() {
   if (days < 0) return '選擇右上角倒數哪一場';
   return `倒數：<span translate="no">${esc(r.name.replace(/^20\d\d\s*/, '').replace('馬拉松', '馬'))}</span>・${days ? `${days} 天` : '今天'}`;
 }
-// 分組順序：內容類（賽事、分團、幹部）先列，設定類放最後；訓練報表與里程挑戰的上一層是課表，不放這裡（點進去分頁列會跳到課表）
+// 「通知」的副標：這支手機有沒有開推播（主畫面 App 才看得到真的狀態；讀不到就寫一般說明）
+async function pushSub() {
+  try { const reg = await Promise.race([navigator.serviceWorker?.ready, new Promise((r) => setTimeout(() => r(null), 800))]); return reg ? await reg.pushManager?.getSubscription() : null; } catch { return null; }
+}
+// 分組：跟側邊欄同一套名稱（賽事與報名、跑團、幹部、設定）；常用的在上面，每一項從「我的」最多兩下就到
+//   訓練報表與里程挑戰的上一層是課表，不放這裡（點進去分頁列會跳到課表）
+//   幹部組預留給報表頁（cil-ops）一列的位置：加在「系統設定」後面即可
 async function meHome(welcome) {
   const main = teamOf(me.main_team);
   const admin = allow('members') || allow('roles') || allow('settings');
   const staff = admin || allow('roster') || canTeamLogs() || canPublishPlan();
   view.innerHTML = `
     ${largeTitle('我的')}
-    ${welcome ? '<div class="notice">歡迎加入！先到「個人資料」確認項目和組別；主團會由管理員設定。</div>' : ''}
     ${mfaBanner()}
+    ${startShown(welcome) ? startCard() : ''}
     <a class="card mecard" href="#/me/profile">
       ${avatar(me)}
       <span class="mi"><b><span translate="no">${esc(me.name)}</span></b>${me.nickname ? ` <span class="tiny"><span translate="no">${esc(me.nickname)}</span></span>` : ''}
         <span class="tiny" style="display:block">${me.title ? `<span translate="no">${esc(me.title)}</span>` : esc(me.roleName || ROLE_NAME[me.role] || '團員')}・${me.dist === 'hm' ? '半馬' : '全馬'} ${esc(me.grp)} 組</span></span>
       ${main ? `<span class="pill team" style="--tc:${esc(main.color)}">${teamIcon(main, 'xs')}<span translate="no">${esc(main.name)}</span></span>` : '<span class="pill">主團未設定</span>'}
     </a>
-    ${group('賽事與入場券', [
+    ${group('賽事與報名', [
       row('#/me/races', MI.flag, '我的賽事與倒數', raceSub()),
-      row('#/me/reg', MI.form, '賽事報名資料', '幹部代為團體報名時使用', '<span id="regBadge"></span>'),
       row('#/tickets', MI.ticket, '入場券與團購', '領取 QR Code、中獎紀錄'),
+      row('#/me/reg', MI.form, '團體報名資料', '幹部代為報名馬拉松時使用', '<span id="regBadge"></span>'),
     ])}
-    ${group('分團與協會', [
+    ${group('跑團', [
       row('#/me/teams', MI.team, '主團與分團', main ? `主團：<span translate="no">${esc(main.name)}</span>` : '主團由管理員設定'),
       row('#/me/assoc', MI.building, esc(org().name || '台灣耕跑團協會'), `${esc(me.membershipName || '跑友')}・入會、章程與文件`),
       me.membership === 'active' ? row('#/me/card', MI.idcard, '會籍卡', me.paid_until ? `會費繳至 ${esc(me.paid_until)}` : '出示給幹部掃描') : '',
     ])}
-    ${staff ? group('幹部專區', [
-      admin ? row('#/admin', MI.admin, '管理後台', '總覽、會員、權限、分團、系統設定') : '',
+    ${staff ? group('幹部', [
+      admin ? row('#/admin', MI.admin, '管理後台', '總覽、會員、權限、分團、稽核') : '',
+      allow('settings') ? row('#/admin/settings', MI.sliders, '系統設定', '活動報名預設、協會、地圖資料、功能開關') : '',
       allow('roster') ? row('#/roster', MI.roster, '團員名冊') : '',
       canTeamLogs() ? row('#/logs/team', MI.trend, '團員訓練', '分享給教練的團員每週完成率') : '',
       canPublishPlan() ? row('#/plan/new', MI.plan, '發布課表', allow('plan') ? '教練' : '分團團長') : '',
     ]) : ''}
     ${group('設定', [
-      row('#/me/notify', MI.bell, '通知設定', '推播類別、加到主畫面'),
-      row('#/me/calendar', MI.calsub, '行事曆訂閱', '團練與賽事自動出現在手機行事曆', cfg.calendarOn ? '<span class="pill solid">已開啟</span>' : ''),
-      row('#/me/display', MI.display, '外觀與語言', '深淺色、分頁列、語言 Language'),
+      row('#/me/notify', MI.bell, '通知設定', `<span id="pushSub">${cfg.vapid ? '推播類別、這支手機的推播' : '推播類別'}</span>`),
       row('#/me/security', MI.shield, '帳號與安全', `${me.google ? 'Google 已綁定' : '綁定 Google'}、通行金鑰、登出`),
+      row('#/me/display', MI.display, '外觀與語言', '深淺色、分頁列、語言 Language'),
+      row('#/me/calendar', MI.calsub, '行事曆訂閱', '團練與賽事自動出現在手機行事曆', cfg.calendarOn ? '<span class="pill solid">已開啟</span>' : ''),
       row('#/me/privacy', MI.eye, '隱私', '分享給教練、排行榜、下載或刪除資料'),
     ])}
-    ${group('', [isStandalone() ? '' : btnRow('addHome', MI.addhome, '加到主畫面', '才收得到團練通知，入場券沒網路也能出示'),
-      btnRow('shareApp', MI.share, '分享耕跑團 App', '用 LINE、QR Code 邀朋友一起跑'), btnRow('openGuide', MI.help, '使用說明', '一分鐘帶你看過每個功能')])}`;
+    ${group('', [btnRow('shareApp', MI.share, '分享耕跑團 App', '用 LINE、QR Code 邀朋友一起跑'), btnRow('openGuide', MI.help, '使用說明', '開始使用的三步、五個分頁的導覽')])}`;
   bindStepup();
-  $('#openGuide').onclick = () => Guide.start();
+  bindStart();
+  // 使用說明：重新打開「開始使用」卡（加到主畫面、推播、組別的進度還在），做完可以看五個分頁的導覽
+  $('#openGuide').onclick = () => reopenStart();
   $('#shareApp').onclick = () => shareApp();
-  $('#addHome')?.addEventListener('click', () => {
-    openSheet('加到主畫面', `${installCard('me').replace('class="card tight installcard"', 'class="installcard sheetinstall"')}<button type="button" class="btn ghost block" data-close>關閉</button>`, $('#addHome'));
-    bindInstall();
-  });
-  // 賽事報名資料填好了沒：畫面先出來，狀態晚一點補上（要解密，不要擋住整頁）
+  // 團體報名資料填好了沒：畫面先出來，狀態晚一點補上（要解密，不要擋住整頁）
   api('/me/race-profile').then((r) => { const b = $('#regBadge'); if (b) b.outerHTML = r?.complete ? '<span class="pill solid">已填好</span>' : r?.profile ? '<span class="pill wait">未填完</span>' : ''; }).catch(() => {});
+  // 通知的副標：這支手機的推播狀態
+  if (cfg.vapid) pushSub().then((sub) => { const el = $('#pushSub'); if (el) el.textContent = sub ? '推播已開啟' : '還沒開推播'; });
 }
 // 「我的」的子頁（me.js，用到才載入）：個人資料、賽事、報名資料、分團、通知、行事曆、外觀、安全、隱私、協會、會籍卡、分享 App
 const meSection = lazy('./me.js', 'meSection');
 const shareApp = lazy('./me.js', 'shareApp');
 
-async function togglePush(sub) {
+// quiet：「開始使用」卡自己更新畫面與播報（不跳提示、不重畫整頁）；成功開啟回傳 true
+async function togglePush(sub, { quiet = false } = {}) {
   try {
     await Device.pushReady();
     const reg = await Promise.race([navigator.serviceWorker?.ready, new Promise((r) => setTimeout(() => r(null), 3000))]);
@@ -2659,8 +2866,10 @@ async function togglePush(sub) {
     const j = s.toJSON();
     await api('/push/subscribe', { method: 'POST', body: { endpoint: j.endpoint, keys: j.keys } });
     Device.markPush(lsOrNull(), me?.id);
+    if (quiet) return true;
     toast('已開啟通知'); render();
   } catch (e) { toast(e.message || '通知設定失敗'); }
+  return false;
 }
 // 開啟推播前的說明 sheet：回傳權限結果；按「先不要」或關掉回傳 null
 function pushExplainer() {
@@ -2697,6 +2906,8 @@ function parentOf(h) {
   if (h.startsWith('/e/') && p.length > 3) return [`#/e/${p[2]}`, '活動'];
   if (h.startsWith('/edit/')) return [`#/e/${p[2]}`, '活動'];
   if (h.startsWith('/logs/m/')) return ['#/logs/team', '團員訓練'];
+  if (h.startsWith('/admin/settings/')) return ['#/admin/settings', '系統設定'];
+  if (h === '/admin/settings') return ['#/admin', '管理後台'];
   if (['/challenge', '/report', '/log', '/plan/new', '/logs/team'].includes(h) || h.startsWith('/plan/')) return ['#/plan', '課表'];
   if (h.startsWith('/t/')) return ['#/teams', '分團'];
   // 分團週報（#/weekly?team=）：回到那個分團；沒帶分團（理事長、行政人員）回管理後台
@@ -2718,6 +2929,7 @@ function nameOf(h) {
   if (N[h]) return N[h];
   if (h.startsWith('/me/')) return ME_SECTIONS[h.slice(4)] || '我的';
   if (h.startsWith('/e/')) return h.endsWith('/stats') ? '統計' : '活動';
+  if (h.startsWith('/admin/settings')) return '系統設定';
   if (h.startsWith('/t/')) return '分團';
   if (h.startsWith('/plan/')) return '課表';
   return '返回';
@@ -2788,8 +3000,9 @@ async function renderOnce() {
   applyFeatures();
   $('#bell').hidden = !me;
   document.body.classList.toggle('guest', !me);
-  if (hash === '/privacy') { if (!me) { try { const r = await api('/me'); me = r.member; cfg = r; } catch {} } return privacyView(); }
-  if (!me) return loginView();
+  // 隱私權政策與登入畫面也要換分頁標題、消耗換頁的焦點設定（不然 title 停在上一頁、焦點掉到 body）
+  if (hash === '/privacy') { if (!me) { try { const r = await api('/me'); me = r.member; cfg = r; } catch {} } $('#ctitle').textContent = ''; privacyView(); return pageSettled(); }
+  if (!me) { $('#ctitle').textContent = ''; loginView(); return pageSettled(); }
   if (cfg.needConsent) {
     // 記住原本要去的頁面（例如捷徑帶數據進來），同意後再回去
     try { sessionStorage.setItem('cil-after-consent', location.hash); } catch {}
@@ -2812,6 +3025,31 @@ async function renderOnce() {
   // 第一個畫面畫好了：記下開啟到可用的時間，20 秒後（或離開時）送出
   if (vitals.ready == null) { vitals.ready = performance.now(); vitals.page = hash.replace(/\/[\w-]{8,}/g, '/:id').slice(0, 40); setTimeout(sendVitals, 20000); }
   $('.top').classList.toggle('titled', false);
+  pageSettled();
+}
+// 換頁後：分頁標題換成這一頁的名稱；使用者自己換頁時，焦點移到新頁面的大標題（VoiceOver 才知道已經換頁、現在在哪一頁）
+//   點分頁列換頁：焦點留在分頁上，只唸一次頁名；第一次打開、資料回來後的重畫（不是使用者換頁）不動焦點
+//   focusAfterRender(selector)：這次重畫完要把焦點放到指定的地方（例如報名後的「我的報名狀態」）
+let navKind = null, focusNext = null;
+//   nav：只有使用者換頁時才移焦點（頁面裡改設定後的重畫不搶焦點）
+const focusAfterRender = (sel, { nav = false } = {}) => { focusNext = nav ? { nav, sel } : sel; };
+function focusEl(el) {
+  if (!el) return false;
+  if (!el.matches(FOCUSABLE)) el.setAttribute('tabindex', '-1');
+  el.focus({ preventScroll: el.tagName === 'H1' });
+  return document.activeElement === el;
+}
+function pageSettled() {
+  const h1 = view.querySelector('h1');
+  const name = ($('#ctitle').textContent || h1?.textContent || '').trim();
+  const app = I18N.t('耕跑團');
+  document.title = name && name !== app ? `${name} – ${app}` : app;
+  const kind = navKind, want = focusNext; navKind = null; focusNext = null;
+  if (document.documentElement.classList.contains('guiding')) return;   // 使用說明導覽換頁：焦點留在導覽的說明框
+  const sels = want?.nav ? (kind ? want.sel : null) : want;
+  if (sels && [].concat(sels).some((sel) => focusEl(view.querySelector(sel)))) return;
+  if (kind === 'go' && h1 && focusEl(h1)) return;
+  if (kind && name) announce(name);
 }
 
 // 載入中的骨架：照每一頁實際的版面畫灰色輪廓，資料回來時位置不會跳
@@ -2839,6 +3077,10 @@ async function route(hash) {
     if (hash === '/roster') return await rosterView();
     if (hash === '/admin') return await adminView();
     if (hash === '/weekly') return await lazy('./admin.js', 'weeklyView')();   // 分團頁的「上週分團週報」（畫面在 admin.js）
+    // 系統設定：清單（等於 #/admin?tab=settings）與子頁
+    if (hash === '/admin/settings') return await settingsPage();
+    const aset = hash.match(/^\/admin\/settings\/(\w+)$/);
+    if (aset) return await settingsPage(aset[1]);
     if (hash === '/plan/new') return planNewView();
     if (hash === '/me') return await meView();
     const mesec = hash.match(/^\/me\/(\w+)$/);
@@ -2866,10 +3108,10 @@ async function route(hash) {
     if (sc) return await scanView(sc[1]);
     const ev = hash.match(/^\/e\/([\w-]+)$/);
     if (ev) return await eventView(ev[1]);
-    // 課表的全季、賽事準備、配速與用語、課表設定：課表教練關掉時不開放（課表設定仍可以改課表週期）
+    // 課表的全季、賽事準備、配速與用語：課表教練關掉時不開放；課表設定一律開放（項目與組別是帳號資料，課表週期也在這裡）
     const pc = hash.match(/^\/plan\/(season|race|guide|setup)$/);
     if (pc) {
-      if (feat('coach') || (pc[1] === 'setup' && (feat('plan_cycle') || cfg.planCycle?.suspended))) { viewCleanup = await coachView(pc[1]); return; }
+      if (feat('coach') || pc[1] === 'setup') { viewCleanup = await coachView(pc[1]); return; }
       view.innerHTML = `<div class="card">${emptyState('runner', '這個功能目前沒有開放')}<p class="tiny center" style="margin:0">管理員可以在「功能與畫面」打開課表教練</p></div>`;
       return;
     }
@@ -2970,6 +3212,7 @@ if (matchMedia('(hover:hover) and (pointer:fine)').matches) {
 // 換頁用 View Transition（支援的瀏覽器才有）
 const go = () => { render(); scrollTo({ top: 0, behavior: 'instant' }); };
 addEventListener('hashchange', () => {
+  navKind = navFromTab ? 'tab' : 'go';
   // 不支援或使用者設定「減少動態效果」：直接換頁，不做轉場；點分頁列換分頁也不做（選取膠囊滑過去，不被整頁淡入淡出蓋掉）
   if (navFromTab || !document.startViewTransition || matchMedia('(prefers-reduced-motion: reduce)').matches) { navFromTab = false; return go(); }
   // 連續換頁時前一個轉場會被中斷；三個 promise 都會 reject，全部接住
@@ -3021,12 +3264,16 @@ if ('serviceWorker' in navigator) {
 // 記住安裝提示（Android／桌機 Chrome），在「我的」與首頁顯示安裝按鈕
 let installEvt = null;
 addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvt = e; document.querySelectorAll('[data-install]').forEach((b) => { b.hidden = false; }); });
-addEventListener('appinstalled', () => { installEvt = null; try { localStorage.setItem('cil-installed', '1'); } catch {} document.querySelectorAll('.installcard').forEach((c) => c.remove()); });
+addEventListener('appinstalled', () => { installEvt = null; try { localStorage.setItem('cil-installed', '1'); } catch {} saveStart({ install: 'done' }); document.querySelectorAll('.installcard').forEach((c) => c.remove()); if ($('#startCard')) repaintStart(); });
 
 // 拆出去的模組（admin.js、photo.js…）從這裡拿共用的工具與狀態
-export { tilePreload, legacyData, removeLegacy, addrField, bindAddrField, latest, $, cfg, downloadAuthed, scanSheet, FEEL, IC, KIND_NAME, LOG_ICON, LOG_STATUS_NAME, MI, PAID_NAME, ROLE_NAME, TAB_DEFAULT, TEAM_PERMS, coachTeam, TEAM_ROLE_NAME, ago, allow, api, applyFeatures, avatar, barChart, bars, bindComments, bindStepup, btnRow, choose, coachPrefs, copy, countdownPicker, dayLabel, dstr, emptyState, esc, eventCard, feat, fixText, group, ic, largeTitle, me, mfaBanner, money, myCycle, nrow, org, pad2, paintCountdown, passkey, planSeg, queueLog, raceTarget, refreshMe, render, route, row, setCoachPrefs, squareIcon, startKey, studio, subTitle, teamAllow, teamIcon, teamOf, teams, toast, rich, keep, names, view, ymd, askReason, isOffline, nowTp, signupDefaults, submitLabel, camLazy, openSheet, apiAll, fmtDuration, fmtDistPace, parseHMS,
+export { tilePreload, focusEl, legacyData, removeLegacy, addrField, bindAddrField, latest, $, cfg, downloadAuthed, scanSheet, FEEL, IC, KIND_NAME, LOG_ICON, LOG_STATUS_NAME, MI, PAID_NAME, ROLE_NAME, TAB_DEFAULT, TEAM_PERMS, coachTeam, TEAM_ROLE_NAME, ago, allow, api, applyFeatures, avatar, barChart, bars, bindComments, bindStepup, btnRow, choose, coachPrefs, copy, countdownPicker, dayLabel, dstr, emptyState, esc, eventCard, feat, fixText, group, ic, largeTitle, me, mfaBanner, money, myCycle, nrow, org, pad2, paintCountdown, passkey, planSeg, queueLog, raceTarget, refreshMe, render, route, row, setCoachPrefs, squareIcon, startKey, studio, subTitle, teamAllow, teamIcon, teamOf, teams, toast, rich, keep, names, view, ymd, askReason, isOffline, nowTp, signupDefaults, submitLabel, camLazy, openSheet, apiAll, fmtDuration, fmtDistPace, parseHMS,
   // event.js、me.js
   applyCounts, bellState, canScan, dayPattern, mapsUrl, once, qrSVG, routeSvg, scan, setStopScan, GOOGLE_G, NICON, applyTabs, applyTheme, askLegacyOnLeave,
   bindInstall, clearDeviceData, dropPush, googleHref, iconsOnly, installCard, isStandalone, lsOrNull, pkSupported, reduceMotion, theme, togglePush, setMe,
   // map.js（休息站用到才載入）
-  load };
+  load,
+  // 無障礙共用：播報、表單錯誤、重畫後的焦點
+  announce, fieldError, focusAfterRender,
+  // coach.js：課表設定從「開始使用」來，存好組別後打勾
+  startGroupSaved };
