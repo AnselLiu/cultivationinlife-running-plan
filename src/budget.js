@@ -150,6 +150,25 @@ export function addUsage(b, day = new Date().toISOString().slice(0, 10)) {
   usage.days.set(day, cur);
   while (usage.days.size > 3) usage.days.delete(usage.days.keys().next().value);   // 寫不出去的舊日子最多留 3 天
 }
+// 拿走一天的累加值（同步，在 await 之前）：同一個 isolate 同時處理好幾個請求，先拿走再寫，
+//   寫的期間結束的請求不會把同一份再寫一次，也不會把之後才加進來的計數刪掉
+export function takeUsage(day, now = Date.now()) {
+  const v = usage.days.get(day), last = usage.last;
+  usage.days.delete(day); usage.last = now;
+  return { v, last };
+}
+// 寫不出去：加回累加器（期間又累加的同一天合併），日子照舊排序，last 回到寫之前（下次照樣重試）
+export function restoreUsage(day, taken) {
+  if (!taken?.v) return;
+  const cur = usage.days.get(day);
+  if (cur) for (const k of USAGE_COLS) cur[k] += Number(taken.v[k]) || 0;
+  else {
+    const all = [...usage.days.entries(), [day, taken.v]].sort((a, b) => (a[0] < b[0] ? -1 : 1));
+    usage.days.clear();
+    for (const [d, x] of all.slice(-3)) usage.days.set(d, x);
+  }
+  usage.last = taken.last;
+}
 // 要寫哪一天（最舊的那一天先寫，換日之後前一天的尾巴不會被新的一天蓋掉）；沒有要寫的回 null
 export function usageDue(now = Date.now(), force = false) {
   if (!usage.days.size) return null;

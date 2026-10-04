@@ -1530,6 +1530,10 @@ body.fullmap{background:none}
 .n-training{--nc:var(--tile-green)}.n-membership{--nc:var(--tile-indigo)}.n-announce{--nc:var(--tile-purple)}
 .n-todo{--nc:var(--yellow);--ng:var(--navy)}.n-other{--nc:var(--tile-gray)}
 .n-ops,.n-report{--nc:var(--yellow);--ng:var(--navy)}
+/* 幹部週報：選單卡＋內容卡之間有間距（.card 沒有 margin）；iPad 以上內容兩欄。系統告警區塊跟健康卡的其他區塊一樣有間距 */
+#rptBox,.rptbody{display:grid;gap:14px}
+@media (min-width:820px){.rptbody{grid-template-columns:repeat(auto-fill,minmax(320px,1fr))}}
+#opsBox{display:grid;gap:12px}
 .ntile{width:36px;height:36px;border-radius:10px;display:grid;place-items:center;flex:none;color:var(--ng,#fff);
   background:radial-gradient(120% 60% at 50% 0%,rgba(255,255,255,.16),transparent 55%),var(--nc,var(--tile-gray));
   box-shadow:inset 0 1px 0 rgba(255,255,255,.28),inset 0 -1px 0 rgba(0,0,0,.10)}
@@ -1580,7 +1584,7 @@ body.fullmap{background:none}
 #todoBox .setrow:active,.nprefrow:active{background:color-mix(in srgb,var(--ink) 6%,transparent)}
 @media (hover:hover){#todoBox .setrow:hover,.nprefrow:hover{background:color-mix(in srgb,var(--ink) 4%,transparent)}}
 .nprefrow .switch input:disabled + i{opacity:.55}
-.nprefrow.flash{outline:2.5px solid color-mix(in srgb,var(--ndot) 60%,transparent);outline-offset:-2px}
+.nprefrow.flash,.switch.flash{outline:2.5px solid color-mix(in srgb,var(--ndot) 60%,transparent);outline-offset:-2px}
 .nfoot{text-align:center;font-size:13px;color:var(--ink-3)}
 .nfootbox{display:grid;gap:10px;justify-items:center}
 .nfootbox .btn.block{justify-self:stretch}

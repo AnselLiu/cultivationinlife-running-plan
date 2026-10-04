@@ -22,11 +22,11 @@ CREATE TABLE ops_daily (
   push_sent INTEGER NOT NULL DEFAULT 0, push_err INTEGER NOT NULL DEFAULT 0, push_gone INTEGER NOT NULL DEFAULT 0, push_drop INTEGER NOT NULL DEFAULT 0,
   updated_at TEXT NOT NULL
 );
--- 系統告警：同一個條件一天（台北）最多一則；主鍵就是防重送的閘門；保存 180 天
+-- 系統告警：同一個條件一天最多一則；主鍵就是防重送的閘門；保存 180 天
 CREATE TABLE ops_alerts (
   cond   TEXT NOT NULL,                 -- backup｜quota｜stops｜errors｜push｜cron
-  day    TEXT NOT NULL,                 -- 台北日期
+  day    TEXT NOT NULL,                 -- 去重日：額度、排程停下、推播是 UTC 日（資料是 UTC 日），其他是台北日
   at     TEXT NOT NULL DEFAULT (datetime('now')),
-  detail TEXT,                          -- 例如 d1Read 83%；不含個資與錯誤原文
+  detail TEXT,                          -- 例如 D1 讀取 83%；不含個資與錯誤原文
   PRIMARY KEY (cond, day)
 );

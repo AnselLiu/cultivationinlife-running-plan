@@ -94,6 +94,8 @@ test('系統告警 opsConditions：六個條件的邊界', async () => {
   assert.deepEqual(conds({ daily: { kv_write: 900 } }, { quota: null }), []);
   const q = opsConditions({ daily: { d1_read: 4150000, kv_write: 810 } }, { quota, nowMs: now })[0];
   assert.match(q.text, /^今天的 D1 讀取 用量已到每日額度的 83%/);
+  assert.equal(q.detail, 'D1 讀取 83%', '後台看得到的細節用中文名稱，不是內部鍵');
+  assert.match(opsConditions({ bk: [ago(27), null] }, { nowMs: now, backupOn: true })[0].detail, /^上次完成：2029-12-31 17:00（27 小時前）$/, '台北時間');
   // 備份：26 小時；從沒完成過看第一次佔用；沒設定備份不檢查
   assert.deepEqual(conds({ bk: [ago(27), null] }), ['backup']);
   assert.deepEqual(conds({ bk: [ago(25), null] }), []);
@@ -128,8 +130,34 @@ test('幹部週報 reportPush／reportFor：鎖定畫面只有數字；行政人
   const d = { scope: 'assoc', signups: { new: 42 }, attendance: { pct: 78 }, newcomers: { runners: 3 }, training: { pct: 50 }, health: { backup: { days: 7 }, alerts: {} } };
   assert.equal(reportPush(d), '報名 42、出席率 78%、新成員 3。系統：備份正常、沒有告警');
   assert.equal(reportPush({ scope: 'team:youth', signups: { new: 18 }, attendance: { pct: 81 }, newcomers: { members: 1 } }), '報名 18、出席率 81%、新團員 1');
-  assert.equal(reportPush({ ...d, health: { backup: { days: 5 }, alerts: { quota: 2 } } }), '報名 42、出席率 78%、新成員 3。系統：備份 5/7 天、告警 2 次');
+  assert.equal(reportPush({ ...d, health: { backup: { days: 5 }, alerts: { quota: 2 } } }), '報名 42、出席率 78%、新成員 3。系統：備份 5／7 天、告警 2 次');
   assert.ok(!('training' in reportFor(d, { training: false, health: true })));
   assert.ok(!('health' in reportFor(d, { training: true, health: false })));
   assert.deepEqual(reportFor(d, { training: true, health: true }), d);
+});
+
+test('每日用量估計：寫入前先拿走累加值，同時結束的請求不重複寫、寫入期間的計數不會被刪；寫失敗加回', async () => {
+  const { addUsage, usageDue, takeUsage, restoreUsage, usage } = await import('../src/budget.js');
+  usage.days.clear(); usage.last = 0;
+  const b = { kind: 'request', d1: 1, rows: 1, wrote: 0, kvGet: 0, kvPut: 0, kvList: 0, kvDel: 0, pushSent: 0, pushErr: 0, pushGone: 0, pushDrop: 0 };
+  const day = '2036-01-01', writes = [];
+  // 三個請求：1、2 同時結束，3 在 1 寫入期間累加
+  addUsage(b, day);
+  const d1 = usageDue(Date.parse('2036-01-01T01:00:00Z'));
+  const t1 = takeUsage(d1, Date.parse('2036-01-01T01:00:00Z'));
+  addUsage(b, day);
+  assert.equal(usageDue(Date.parse('2036-01-01T01:00:01Z')), null, '1 剛拿走：2 不會馬上再寫');
+  addUsage(b, day);
+  writes.push(t1.v.req);
+  const t2 = takeUsage(usageDue(Date.parse('2036-01-01T01:20:00Z')), Date.parse('2036-01-01T01:20:00Z'));
+  writes.push(t2.v.req);
+  assert.deepEqual(writes, [1, 2], '每個請求剛好算一次');
+  // 寫失敗：加回（期間新增的合併），last 回到寫之前
+  addUsage(b, day);
+  const t3 = takeUsage(day, Date.parse('2036-01-01T02:00:00Z'));
+  addUsage(b, day);
+  restoreUsage(day, t3);
+  assert.equal(usage.days.get(day).req, 2);
+  assert.equal(usage.last, Date.parse('2036-01-01T01:20:00Z'));
+  usage.days.clear(); usage.last = 0;
 });

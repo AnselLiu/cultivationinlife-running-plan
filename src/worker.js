@@ -19,7 +19,7 @@ import * as Rest from './rest.js';
 import { fold, b64bytes } from './ics.js';
 import { ERASE_MEMBER } from './erase.js';
 import { WorkerEntrypoint } from 'cloudflare:workers';
-import { Budget, invocationEnv, logBudget, settled, strictViolations, xfetch, planOf, cacheOf, addUsage, usageDue, usage, USAGE_SQL, USAGE_COLS } from './budget.js';
+import { Budget, invocationEnv, logBudget, settled, strictViolations, xfetch, planOf, cacheOf, addUsage, usageDue, takeUsage, restoreUsage, usage, USAGE_SQL, USAGE_COLS } from './budget.js';
 import { holdable, eventLatest, digestText, opsConditions, quotaUsage, reportPush, reportFor, isDigestHour, DIGEST_BATCH, DIGEST_SPAN, DIGEST_TTL, OPS, OPS_CONDS, OPS_NAME, REPORT_MIN_SHARE } from './ops.js';
 
 const COOKIE = '__Host-cil_sess';
@@ -303,6 +303,13 @@ async function notify(env, memberIds, cat, msg, opt = {}) {
   const ttl = msg.ttl ?? def.ttl, urgency = msg.urgency ?? def.urgency, h = holdable(cat, { now: msg.now, latest: msg.latest, ttl, urgency }, opt);
   return writeNotes(env, cat, ids.map((id) => [rid(8), id]), { kind: msg.kind || cat, ref, title: str(msg.title, 80), body: str(msg.body, 300), url: str(msg.url, 200) || null,
     payload: pushPayload(cat, def, msg, ref), ttl, urgency, force: def.locked || opt.force, also: opt.also, hold: h.hold, latest: h.latest });
+}
+// 「活動與邀請」的新活動、邀請通知什麼時候要即時（規格 1.2）：當天與明天的活動（latest＝null）、
+//   有名額上限而且現在就能報名的（先搶先贏，選摘要的人不能吃虧）一律即時；其他帶 latest，摘要來得及才延後
+function evTiming(env, ev) {
+  const latest = eventLatest(ev, env.nowAt || new Date());
+  const fcfs = !!ev.capacity && ev.signup_open !== 0 && !(ev.signup_start && ev.signup_start > tpNow());
+  return { latest, now: !latest || fcfs };
 }
 // 每人內容不同（例如每月總結、疲勞提醒、會費到期、收款）：list 每一項 { member_id, title, body, url, ref, tag, push, latest }，同樣 2 句
 //   推播摘要：每人的 latest 各自比；'timed' 的分類（活動異動、我的報名）沒帶 latest 的那幾個人一律即時（'0' 比任何時間都早）
@@ -1821,7 +1828,9 @@ const api = (async function api(req, env, path, method) {
     const tm = scope.match(/^team:([\w-]{1,16})$/);
     if (!(scope === 'assoc' ? top : tm ? top || leads.includes(tm[1]) : false)) return fail(403, '沒有看這份週報的權限');
     if (week && !isDate(week)) return fail(400, '週次不正確');
-    if (await limited(env, `rptv:${member.id}`, 60, 3600)) return fail(429, '操作太頻繁，請稍後再試');
+    // 總覽小卡（brief）另外限流：每次打開總覽都會讀，不能把完整週報的額度用光
+    const brief = u.get('brief') === '1';
+    if (await limited(env, `${brief ? 'rptb' : 'rptv'}:${member.id}`, 60, 3600)) return fail(429, '操作太頻繁，請稍後再試');
     // 這一週、前一週（「出席率 78%（前一週 74%）」）、最近 12 週的清單
     const [r, p, ws] = await env.DB.batch([
       env.DB.prepare('SELECT week, data FROM ops_reports WHERE scope = ?1 AND week = COALESCE(?2, (SELECT MAX(week) FROM ops_reports WHERE scope = ?1))').bind(scope, week || null),
@@ -1832,8 +1841,8 @@ const api = (async function api(req, env, path, method) {
     if (!row) return fail(404, '還沒有這份週報');
     const training = tm ? (top && can(member, 'plan')) || leads.includes(tm[1]) : top && can(member, 'plan');
     const data = reportFor(parseQ(row.data, {}), { training, health: top && scope === 'assoc' }), pd = parseQ(p.results[0]?.data, null);
-    // 總覽的「上週週報」小卡（brief=1）：只有三個數字，不算「查看週報」、不寫稽核
-    if (u.get('brief') === '1') return json({ week: row.week, scope, brief: { signups: data.signups?.new ?? 0, attendance: data.attendance?.pct ?? null, newcomers: data.newcomers?.runners ?? data.newcomers?.members ?? 0 } });
+    // 總覽的「上週週報」小卡（brief=1）：只有三個數字（報名、出席率、新成員），不算「查看週報」、不寫稽核（刻意的例外，見 SECURITY.md A.8.16）
+    if (brief) return json({ week: row.week, scope, brief: { signups: data.signups?.new ?? 0, attendance: data.attendance?.pct ?? null, newcomers: data.newcomers?.runners ?? data.newcomers?.members ?? 0 } });
     await audit(env, req, member, 'ops.report_view', 'ops', scope, `${scope}｜${row.week}`);
     const prev = pd ? { signups: pd.signups?.new ?? null, attendance: pd.attendance?.pct ?? null, ...(training ? { training: pd.training?.pct ?? null } : {}) } : null;
     return json({ week: row.week, scope, data, prev, weeks: ws.results.map((x) => x.week), teams: top ? null : leads });
@@ -1869,8 +1878,8 @@ const api = (async function api(req, env, path, method) {
       env.DB.prepare("SELECT job, last_run, claim_key, claim_at, attempts, last_error, done_at FROM job_runs WHERE job != 'promote_sweep' ORDER BY job"),
       env.DB.prepare("SELECT COUNT(*) AS n, MIN(created_at) AS oldest FROM push_queue"),
       // 系統告警：現在每個條件成立與否（同一個 opsConditions）與最近 14 天的告警；今天與昨天（UTC）的用量估計
-      env.DB.prepare(`SELECT ${opsSql(1, 2, 3)} AS ops, (SELECT json_group_array(json_object('cond', cond, 'day', day, 'at', at, 'detail', detail))
-        FROM (SELECT * FROM ops_alerts WHERE day >= ?4 ORDER BY day DESC, at DESC LIMIT 100)) AS alerts`).bind(T, U, dayAdd(T, -7), dayAdd(T, -13)),
+      env.DB.prepare(`SELECT ${opsSql(1, 2, 3, 5)} AS ops, (SELECT json_group_array(json_object('cond', cond, 'day', day, 'at', at, 'detail', detail))
+        FROM (SELECT * FROM ops_alerts WHERE day >= ?4 ORDER BY day DESC, at DESC LIMIT 100)) AS alerts`).bind(T, U, dayAdd(T, -7), dayAdd(T, -13), sqlNow(new Date())),
       env.DB.prepare(`SELECT day, ${USAGE_COLS.join(', ')}, updated_at FROM ops_daily WHERE day IN (?1, ?2)`).bind(U, UY),
     ]);
     const metrics = {};
@@ -1887,7 +1896,7 @@ const api = (async function api(req, env, path, method) {
       : j.last_error ? 'failed' : j.claim_key ? 'pending' : String(j.last_run || '').startsWith('retry:') ? 'retry' : 'done' }));
     const ops = parseQ(ores.results[0]?.ops, {}), alerts = parseQ(ores.results[0]?.alerts, []);
     const on = new Map(opsConditions(ops, opsCfg(env)).map((c) => [c.cond, c]));
-    const conditions = OPS_CONDS.map((c) => ({ cond: c, on: on.has(c), detail: on.get(c)?.detail || null, since: alerts.find((a) => a.cond === c && a.day === T)?.at || null }));
+    const conditions = OPS_CONDS.map((c) => ({ cond: c, on: on.has(c), detail: on.get(c)?.detail || null, since: alerts.find((a) => a.cond === c && a.day === (OPS_UTC.includes(c) ? U : T))?.at || null }));
     const usageRow = (day) => { const r = dres.results.find((x) => x.day === day); return r ? { day, ...quotaUsage(r, planOf(env).daily), updated_at: r.updated_at } : { day, ...quotaUsage(null, planOf(env).daily), updated_at: null }; };
     return json({ days, metrics, errors, apis, budget: bres.results, jobs, pushQueue: { n: qres.results[0].n, oldest: qres.results[0].oldest },
       alerts, conditions, usage: usageRow(U), usageYesterday: usageRow(UY) });
@@ -2255,7 +2264,8 @@ const api = (async function api(req, env, path, method) {
       notified = to.length;
       const opens = e.signup_start && e.signup_start > tpNow() ? `・${tpText(e.signup_start)} 開放報名` : '';
       await notify(env, to, 'event',
-        { title: `${e.kind === 'survey' ? '新問卷' : series ? '定期揪跑' : '新活動'}：${e.title}`, body: `${series ? `${dates[0]} 起共 ${dates.length} 場${e.gather_time ? `，${e.gather_time} 集合` : ''}　${e.place || ''}` : `${e.date}${e.gather_time ? ` ${e.gather_time}` : ''}　${e.place || ''}`}${opens}`, url: `/#/e/${id}`, ref: `e:${id}` });
+        { title: `${e.kind === 'survey' ? '新問卷' : series ? '定期揪跑' : '新活動'}：${e.title}`, body: `${series ? `${dates[0]} 起共 ${dates.length} 場${e.gather_time ? `，${e.gather_time} 集合` : ''}　${e.place || ''}` : `${e.date}${e.gather_time ? ` ${e.gather_time}` : ''}　${e.place || ''}`}${opens}`, url: `/#/e/${id}`, ref: `e:${id}`,
+          ...evTiming(env, { ...e, date: dates[0] }) });
     }
     return json({ id, count: dates.length, series, notified, invite: e.visibility === 'invite' });
   }
@@ -2436,7 +2446,7 @@ const api = (async function api(req, env, path, method) {
         .bind(ev.id, member.id, via, JSON.stringify([...new Set(ids)])).all()).results.map((r) => r.member_id);
       if (fresh.length) {
         await audit(env, req, member, 'event.invite', 'event', ev.id, `${fresh.length} 人${tid ? `（分團 ${tid}）` : ''}`);
-        if (b.notify !== false) await notify(env, fresh, 'event', { title: `你受邀參加：${ev.title}`, body: `${ev.date}${ev.gather_time ? ` ${ev.gather_time}` : ''}　${ev.place || ''}`, url: `/#/e/${ev.id}`, ref: `e:${ev.id}` });
+        if (b.notify !== false) await notify(env, fresh, 'event', { title: `你受邀參加：${ev.title}`, body: `${ev.date}${ev.gather_time ? ` ${ev.gather_time}` : ''}　${ev.place || ''}`, url: `/#/e/${ev.id}`, ref: `e:${ev.id}`, ...evTiming(env, ev) });
       }
       return json({ added: fresh.length });
     }
@@ -2746,8 +2756,12 @@ const api = (async function api(req, env, path, method) {
       const TITLE = { cancel: '活動取消', place: '改地點', time: '改時間', other: '活動通知' };
       const when = `${date ? `${date.slice(5).replace('-', '/')}（${'日一二三四五六'[new Date(`${date}T00:00:00Z`).getUTCDay()]}）` : ''}${time ? ` ${time}` : ''}`.trim();
       const body2 = type === 'cancel' ? `${ev.date} 這場取消${msg ? `：${msg}` : ''}` : type === 'place' ? `改到 ${place}${addrOk.address ? `（${addrOk.address}）` : ''}${msg ? `。${msg}` : ''}` : type === 'time' ? `改成 ${when}${msg ? `。${msg}` : ''}` : msg;
-      // 推播摘要：改時間、地點、其他通知，活動（改過之後的日期）在後天以後才可以延到每日摘要；取消、當天與明天的一律即時
-      const latest = eventLatest({ ...ev, date: type === 'time' && date ? date : ev.date, gather_time: type === 'time' && time ? time : ev.gather_time }, new Date(), { cancel: type === 'cancel' });
+      // 推播摘要：改時間、地點、其他通知，活動（改之前與改之後的日期都）在後天以後才可以延到每日摘要；取消、當天與明天的一律即時
+      //   改時間要兩邊都算：明天 06:00 延到下週，原本明天要到的人一定要即時知道；取早的那個，任一邊是 null 就即時
+      const nowD = new Date(), cancel = type === 'cancel';
+      const la = eventLatest(ev, nowD, { cancel });
+      const lb = type === 'time' ? eventLatest({ ...ev, date: date || ev.date, gather_time: time || ev.gather_time }, nowD, { cancel }) : la;
+      const latest = la && lb ? (la < lb ? la : lb) : null;
       const nmsg = { kind: 'event', title: `${TITLE[type]}：${ev.title}`, body: body2, url: `/#/e/${ev.id}`, ref: `e:${ev.id}`, tag: `notice-${ev.id}`, latest, now: !latest };
       if (ids.length) await notify(env, ids, 'change', nmsg);
       if (others.length) await notify(env, others, 'event', nmsg);
@@ -2819,7 +2833,7 @@ const api = (async function api(req, env, path, method) {
         const fresh = matched.length ? (await env.DB.prepare(`INSERT OR IGNORE INTO event_invites (event_id, member_id, invited_by, via)
           SELECT ?1, value, ?2, 'manual' FROM json_each(?3) RETURNING member_id`).bind(ev.id, member.id, JSON.stringify(matched.map((m) => m.id))).all()).results.map((r) => r.member_id) : [];
         added = fresh.length;
-        if (fresh.length) await notify(env, fresh, 'event', { title: `你受邀參加：${ev.title}`, body: `${ev.date}${ev.gather_time ? ` ${ev.gather_time}` : ''}　${ev.place || ''}`, url: `/#/e/${ev.id}`, ref: `e:${ev.id}` });
+        if (fresh.length) await notify(env, fresh, 'event', { title: `你受邀參加：${ev.title}`, body: `${ev.date}${ev.gather_time ? ` ${ev.gather_time}` : ''}　${ev.place || ''}`, url: `/#/e/${ev.id}`, ref: `e:${ev.id}`, ...evTiming(env, ev) });
       } else {
         // 只通知這次報名成功的人；原本就已報名（含候補）的不再通知，候補的人用候補文案
         const had = new Set((await env.DB.prepare(`SELECT member_id FROM signups WHERE event_id = ? AND status IN ('in','wait') AND member_id IN (SELECT value FROM json_each(?))`)
@@ -3441,6 +3455,8 @@ const api = (async function api(req, env, path, method) {
       if (val !== (member.notif_mute || null)) {
         stmts.push(env.DB.prepare('UPDATE members SET notif_mute = ? WHERE id = ?').bind(val, member.id),
           await auditStmt(env, req, member, 'notif.prefs', 'member', member.id, `mute=${mute.join(',')}`));
+        // 關掉的類別：還在等摘要的也不推了（摘要不會再提到這一類；通知中心照樣有）
+        if (val) stmts.push(env.DB.prepare("UPDATE notifications SET push_held = NULL WHERE push_held = 1 AND member_id = ?1 AND instr(',' || ?2 || ',', ',' || category || ',') > 0").bind(member.id, val));
       }
       next.notif_mute = val;
     }
@@ -4574,7 +4590,7 @@ async function backupStep(env, job, label, { action = 'backup.daily', now = new 
     const ids = await opsRecipients(env);
     cur.alerted = true;
     const marks = [cursorStmt(env, job, cur), await auditStmt(env, null, null, 'backup.stalled', 'system', label, `開始於 ${cur.at}，已完成 ${cur.n} 段`)];
-    const sent = await alertSend(env, ids, [{ cond: 'backup', detail: `${label} 開始超過 24 小時，已完成 ${cur.n} 段`, text: `每日備份開始超過 24 小時還沒做完。${OPS_SEE}` }], tpDate(now), marks);
+    const sent = await alertSend(env, ids, [{ cond: 'backup', detail: `${label} 開始超過 24 小時，已完成 ${cur.n} 段`, text: `每日備份開始超過 24 小時還沒做完。${OPS_SEE}` }], now, marks);
     if (!sent) await env.DB.batch(marks);   // 今天已經告警過：只記游標與稽核
   }
   const pieces = [], seg = env.backupSeg || plan.backupSeg;   // backupSeg：測試用（/api/dev/cron?seg=，只有 DEV_LOGIN=1 的本機）
@@ -4935,11 +4951,10 @@ async function finishBudget(e, b, opt = {}) {
   const mayWrite = b.kind === 'request' || (b.kind === 'cron' && opt.ran);
   const day = mayWrite && e.DB ? usageDue(Date.now(), b.kind === 'cron') : null;
   if (!day || b.sub + 1 > b.plan.sub || b.over) return;
-  const v = usage.days.get(day);
+  const t = takeUsage(day);   // await 之前先拿走（同時結束的其他請求不會重複寫、之後的計數不會被刪）
   try {
-    await e.DB.prepare(USAGE_SQL).bind(day, ...USAGE_COLS.map((k) => v[k])).run();
-    usage.days.delete(day); usage.last = Date.now();
-  } catch (err) { console.error('ops_daily', err?.message || err); }   // 寫不出去就留在累加器，下次再寫
+    await e.DB.prepare(USAGE_SQL).bind(day, ...USAGE_COLS.map((k) => t.v[k])).run();
+  } catch (err) { restoreUsage(day, t); console.error('ops_daily', err?.message || err); }   // 寫不出去就加回累加器，下次再寫
 }
 
 // ---- 推播摘要（每日一則）----
@@ -4969,7 +4984,10 @@ async function digestJob(env, now) {
     FROM json_each(?1) j JOIN members m ON m.id = json_extract(j.value, '$[0]') JOIN push_subs s ON s.member_id = m.id
     WHERE m.notif_digest_sent IS NOT ?2`).bind(JSON.stringify(list), t.date, DIGEST_TTL));
   stmts.push(env.DB.prepare('UPDATE members SET notif_digest_sent = ?2 WHERE id IN (SELECT value FROM json_each(?1))').bind(ids, t.date));
-  stmts.push(env.DB.prepare('UPDATE notifications SET push_held = NULL WHERE push_held = 1 AND member_id IN (SELECT value FROM json_each(?1))').bind(ids));
+  // 只清算進這次摘要的（每人到 last 為止）：查詢之後才寫進來的留給下一次摘要，不會沒算到又不推
+  stmts.push(env.DB.prepare(`UPDATE notifications SET push_held = NULL FROM json_each(?1) j
+    WHERE notifications.push_held = 1 AND notifications.member_id = json_extract(j.value, '$[0]')
+      AND notifications.created_at || '|' || notifications.id <= json_extract(j.value, '$[1]')`).bind(JSON.stringify(rows.map((r) => [r.member_id, String(r.last || '')]))));
   stmts.push(env.DB.prepare('UPDATE notifications SET push_held = NULL WHERE push_held = 1 AND read_at IS NOT NULL'));
   const res = await env.DB.batch(stmts);
   if (push && res[0].meta?.changes) env.wantDrain = true;
@@ -4980,9 +4998,15 @@ async function digestJob(env, now) {
 // 條件與門檻在 src/ops.js（opsConditions）；資料由每小時那一句 CRON_PROBE 的 ops 欄一起查出來（安靜的整點不多花一句）
 //   T：今天（台北）｜U：今天（UTC，ops_daily 與 budget_log 的日子）｜B：7 天前（台北，前端錯誤的基準）；前 7 天的基準只有今天錯誤 ≥ 20 次才讀
 //   管理後台 /api/admin/health 用同一段 SQL（同一個 opsConditions 判斷「現在成立與否」）
-const opsSql = (T, U, B) => `json_object(
+//   N：現在（UTC 'YYYY-MM-DD HH:MM:SS'，排程用模擬的時間）
+//   去重（ops_alerts 的 day 與 sent）：看 UTC 日資料的條件（額度、排程停下、推播）用 UTC 日，否則台北 00:00 會拿同一天（UTC）的數字再發一次；
+//     前端錯誤用台北日；一直成立的條件（每日備份、排程放棄）另外要求 24 小時內沒發過（不會每天半夜 00:00 再發）
+const opsSql = (T, U, B, N) => `json_object(
     'daily', json((SELECT json_object(${USAGE_COLS.map((k) => `'${k}', ${k}`).join(', ')}) FROM ops_daily WHERE day = ?${U})),
-    'sent', json((SELECT json_group_array(cond) FROM ops_alerts WHERE day = ?${T})),
+    'sent', json((SELECT json_group_array(DISTINCT cond) FROM ops_alerts WHERE cond IN (${OPS_CONDS.map((c) => `'${c}'`).join(', ')}) AND day >= date(?${U}, '-1 day')
+      AND CASE WHEN cond IN (${OPS_UTC.map((c) => `'${c}'`).join(', ')}) THEN day = ?${U}
+               WHEN cond IN (${OPS_PERSIST.map((c) => `'${c}'`).join(', ')}) THEN day = ?${T} OR at > datetime(?${N}, '-24 hours')
+               ELSE day = ?${T} END)),
     'bk', json((SELECT json_array(done_at, COALESCE(json_extract(cursor, '$.at'), claim_at)) FROM job_runs WHERE job = 'backup')),
     'stops', json((SELECT json_group_array(name) FROM budget_log WHERE day = ?${U} AND kind != 'request' AND stopped >= ${OPS.stops})),
     'err', (SELECT COALESCE(SUM(n), 0) FROM client_errors WHERE day = ?${T}),
@@ -4991,19 +5015,29 @@ const opsSql = (T, U, B) => `json_object(
       (SELECT COALESCE(SUM(n), 0) FROM client_errors WHERE day >= ?${B} AND day < ?${T}),
       (SELECT COUNT(*) FROM client_metrics WHERE day >= ?${B} AND day < ?${T} AND metric = 'ready')) END),
     'pq', (SELECT created_at FROM push_queue ORDER BY id LIMIT 1),
-    'gave', json((SELECT json_group_array(job) FROM job_runs WHERE claim_key IS NOT NULL AND attempts >= 3
-      AND (last_error IS NOT NULL OR claim_at < datetime('now', '-15 minutes')))))`;
+    'gave', json((SELECT json_group_array(job || ' ' || substr(claim_key, 1, 20)) FROM job_runs WHERE claim_key IS NOT NULL AND attempts >= 3
+      AND (last_error IS NOT NULL OR claim_at < datetime('now', '-15 minutes')))),
+    'cronLast', (SELECT detail FROM ops_alerts WHERE cond = 'cron' ORDER BY day DESC LIMIT 1))`;
 const OPS_SEE = '請到管理後台「總覽」查看';
+const OPS_UTC = ['quota', 'stops', 'push'], OPS_PERSIST = ['backup', 'cron'];
+// 這個條件的去重日：UTC 日資料的條件用 UTC 日，其他用台北日
+const opsDay = (cond, now) => (OPS_UTC.includes(cond) ? now.toISOString().slice(0, 10) : tpDate(now));
+const sqlNow = (now) => now.toISOString().slice(0, 19).replace('T', ' ');
 const opsCfg = (env) => ({ backupOn: !!backupStore(env) && !!env.BACKUP_KEY, quota: planOf(env).daily, nowMs: Date.now() });
 // 現在成立、今天（台北）還沒發過的條件
-const opsPending = (s, env) => { const sent = Array.isArray(s.ops?.sent) ? s.ops.sent : []; return opsConditions(s.ops, opsCfg(env)).filter((c) => !sent.includes(c.cond)); };
+//   排程放棄：同一批（工作＋那次的 key）只發一次；每月總結、每季檢視放棄後要到下個月、下一季才會換 key，不能每天發
+const opsPending = (s, env) => {
+  const sent = Array.isArray(s.ops?.sent) ? s.ops.sent : [];
+  return opsConditions(s.ops, opsCfg(env)).filter((c) => !sent.includes(c.cond) && !(c.cond === 'cron' && c.detail === s.ops?.cronLast));
+};
 const opsRecipients = async (env) => (await env.DB.prepare("SELECT id FROM members WHERE role IN ('chair', 'staff') LIMIT 20").all()).results.map((r) => r.id);
 // 發告警：ops_alerts（主鍵 cond＋台北日期）、通知（ops 分類，不能關、一律即時）、稽核（一句寫完）放在同一個 batch。
 //   ops_alerts 是一般 INSERT（不是 OR IGNORE）：別的執行先發過時主鍵衝突，整批回滾，就不會重複通知；這種情況回 0，不算錯誤
-async function alertSend(env, ids, conds, day, also = []) {
+async function alertSend(env, ids, conds, now, also = []) {
   if (!conds.length) return 0;
-  const ins = env.DB.prepare("INSERT INTO ops_alerts (cond, day, detail) SELECT json_extract(value, '$[0]'), ?2, json_extract(value, '$[1]') FROM json_each(?1)")
-    .bind(JSON.stringify(conds.map((c) => [c.cond, str(c.detail, 200) || null])), day);
+  const day = tpDate(now);
+  const ins = env.DB.prepare("INSERT INTO ops_alerts (cond, day, detail, at) SELECT json_extract(value, '$[0]'), json_extract(value, '$[2]'), json_extract(value, '$[1]'), ?2 FROM json_each(?1)")
+    .bind(JSON.stringify(conds.map((c) => [c.cond, str(c.detail, 200) || null, opsDay(c.cond, now)])), sqlNow(now));
   const au = await auditManyStmt(env, null, null, 'ops.alert', 'system', conds.map((c) => [c.cond, c.detail]));
   const notes = ids.flatMap((id) => conds.map((c) => ({ member_id: id, title: `系統狀態：${OPS_NAME[c.cond] || c.cond}`, body: c.text, url: '/#/admin?tab=overview',
     ref: `ops:${c.cond}:${day}`, tag: `ops-${c.cond}` })));
@@ -5020,7 +5054,7 @@ async function opsAlerts(env, now) {
   const conds = opsPending(s, env);
   if (!conds.length) return { done: true, result: 0 };
   if (!fits(env, 1 + 4, 'opsAlerts')) return { done: false, result: 0 };
-  const n = await alertSend(env, await opsRecipients(env), conds, tpDate(now));
+  const n = await alertSend(env, await opsRecipients(env), conds, now);
   return { done: true, result: n };
 }
 
@@ -5151,13 +5185,13 @@ const CRON_PROBE = `SELECT
   EXISTS (SELECT 1 FROM notifications n JOIN members m ON m.id = n.member_id
           WHERE n.push_held = 1 AND n.read_at IS NULL AND m.notif_digest <= ?8 AND m.notif_digest > ?8 - ${DIGEST_SPAN}
             AND m.notif_digest_sent IS NOT ?1) AS dg,
-  ${opsSql(1, 9, 10)} AS ops`;
+  ${opsSql(1, 9, 10, 11)} AS ops`;
 async function cronProbe(env, now) {
   const t = taipei(now), nowMin = t.getUTCHours() * 60 + t.getUTCMinutes(), today0 = tpDate(now);
   // ev_hour：集合時間落在 (現在, 現在 + 120 分]、還沒提醒過（延後的整點也還能補送，見 remindEvents）
   const r = await env.DB.prepare(CRON_PROBE).bind(today0, hhmm(Math.min(nowMin + 120, 1439)), tpDate(new Date(now.getTime() + 864e5)),
     tpDate(new Date(now.getTime() + 30 * 864e5)), tpNow(now.getTime()), hhmm(nowMin), utcYesterday(now),
-    t.getUTCHours(), now.toISOString().slice(0, 10), dayAdd(today0, -7)).first();
+    t.getUTCHours(), now.toISOString().slice(0, 10), dayAdd(today0, -7), sqlNow(now)).first();
   const parse = (v, d) => { try { return JSON.parse(v || '') ?? d; } catch { return d; } };
   return { ...r, jobs: parse(r.jobs, {}), cams_on: parse(r.cams_on, []), rest_on: parse(r.rest_on, {}), ops: parse(r.ops, {}) };
 }

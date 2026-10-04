@@ -109,7 +109,7 @@ export function opsConditions(p, cfg = {}) {
     const ref = msOf(done) ?? msOf(first);
     if (ref != null && now - ref > OPS.backupHours * 3600e3) {
       const h = Math.floor((now - ref) / 3600e3);
-      out.push({ cond: 'backup', detail: `${done ? '上次完成' : '開始'}於 ${new Date(ref).toISOString().slice(0, 16).replace('T', ' ')} UTC（${h} 小時前）`,
+      out.push({ cond: 'backup', detail: `${done ? '上次完成' : '開始'}：${new Date(ref + 8 * 3600e3).toISOString().slice(0, 16).replace('T', ' ')}（${h} 小時前）`,
         text: `每日備份超過 ${OPS.backupHours} 小時沒有完成。${SEE}` });
     }
   }
@@ -118,7 +118,7 @@ export function opsConditions(p, cfg = {}) {
     const u = quotaUsage(o.daily, cfg.quota);
     const ratio = (col) => u.values[col] / u.quota[col];
     const top = QUOTA_COLS.filter(([col]) => u.quota[col] && ratio(col) >= OPS.quotaPct).sort((a, b) => ratio(b[0]) - ratio(a[0]))[0];
-    if (top) out.push({ cond: 'quota', detail: `${top[1]} ${u.pct[top[0]]}%`, text: `今天的 ${top[2]} 用量已到每日額度的 ${u.pct[top[0]]}%。${SEE}` });
+    if (top) out.push({ cond: 'quota', detail: `${top[2]} ${u.pct[top[0]]}%`, text: `今天的 ${top[2]} 用量已到每日額度的 ${u.pct[top[0]]}%。${SEE}` });
   }
   // 3. 排程工作連續因額度停下：同一個名稱今天停下 ≥ 2 次；本來就分段做的（每日備份、推播佇列）不算
   const stops = (Array.isArray(o.stops) ? o.stops : []).filter((n) => typeof n === 'string' && !n.split(':').some((x) => /^(backup|push|drain)/.test(x)));
@@ -155,7 +155,7 @@ export function reportPush(data) {
   const a = `報名 ${data.signups?.new ?? 0}、出席率 ${pctText(data.attendance?.pct)}`;
   if (data.scope !== 'assoc') return `${a}、新團員 ${data.newcomers?.members ?? 0}`;
   const h = data.health || {};
-  const bk = h.backup ? (h.backup.days >= 7 ? '備份正常' : `備份 ${h.backup.days}/7 天`) : '備份未設定';
+  const bk = h.backup ? (h.backup.days >= 7 ? '備份正常' : `備份 ${h.backup.days}／7 天`) : '備份未設定';
   const al = Object.values(h.alerts || {}).reduce((t, n) => t + (Number(n) || 0), 0);
   return `${a}、新成員 ${data.newcomers?.runners ?? 0}。系統：${bk}、${al ? `告警 ${al} 次` : '沒有告警'}`;
 }

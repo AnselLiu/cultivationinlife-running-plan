@@ -1311,9 +1311,10 @@ const NICON = { security: IC.shieldAlert, change: IC.calAlert, signup: IC.ticket
   membership: IC.idcard, announce: IC.megaphone, todo: IC.clipCheck, other: IC.bell, ops: ic('<path d="M3 12h4l2.5-6 4 12 2.5-6H21"/>'), report: ic('<path d="M4 20V10M10 20V4M16 20v-8M22 20H2"/>') };
 // 整句都是伺服器範本的標題：英文介面可以翻；夾帶活動或分團名稱的標題、內文一律不翻
 const NFIXED = new Set(['新裝置登入', '新增了一把通行金鑰', '移除了一把通行金鑰', '已登出所有裝置', '幹部需要兩步驟驗證', '你已成為理事長', '你已卸任理事長',
-  '身分更新', '候補遞補成功', '入會完成', '會籍已到期', '會費今天到期', '有人申請入會', '練跑地圖：有新的地點提議', '每季權限檢視', '跑完了嗎？', '這週練得很兇，注意恢復', '教練回饋了你的訓練', '每日備份還沒做完']);
+  '身分更新', '候補遞補成功', '入會完成', '會籍已到期', '會費今天到期', '有人申請入會', '練跑地圖：有新的地點提議', '每季權限檢視', '跑完了嗎？', '這週練得很兇，注意恢復', '教練回饋了你的訓練', '每日備份還沒做完',
+  '上週幹部週報', ...['每日備份', '每日額度', '排程工作停下', '前端錯誤', '推播', '排程工作失敗'].map((x) => `系統狀態：${x}`)]);
 // 夾帶活動名稱的範本：開頭的範本字（「待審核：」）英文介面可以翻，後面的名稱不翻；內文只有固定句型可以翻
-const NPREFIX = /^(待審核：|還有 \d+ 筆待審核：)/, NBODY = [/^目前 \d+ 筆報名等你核准$/];
+const NPREFIX = /^(待審核：|還有 \d+ 筆待審核：|上週分團週報：)/, NBODY = [/^目前 \d+ 筆報名等你核准$/];
 const nTitle = (t) => { if (NFIXED.has(t)) return esc(t); const m = t.match(NPREFIX); return m ? `${esc(m[1])}<span translate="no">${esc(t.slice(m[1].length))}</span>` : `<span translate="no">${esc(t)}</span>`; };
 const nBody = (b) => (NBODY.some((re) => re.test(b)) ? esc(b) : `<span translate="no">${esc(b)}</span>`);
 // 只接受站內網址；通知中心本身不算（改開詳細內容）
@@ -1679,7 +1680,9 @@ async function notificationsView() {
   nLeave();
   NS.chips = null; NS.seq++; NS.loading = false;
   const my = NS.seq;
-  let chip = CHIPS.find((c) => c.key === lsGet('cil-ncat')) || CHIPS[0], r;
+  // 網址帶 ?cat=（例如點每日摘要推播的「未讀」）優先，不改記住的篩選；沒帶才用上次選的
+  const qcat = new URLSearchParams(location.hash.split('?')[1] || '').get('cat');
+  let chip = CHIPS.find((c) => c.key === qcat) || CHIPS.find((c) => c.key === lsGet('cil-ncat')) || CHIPS[0], r;
   NS.key = chip.key;
   try {
     r = await api(nQuery());
@@ -2696,6 +2699,8 @@ function parentOf(h) {
   if (h.startsWith('/logs/m/')) return ['#/logs/team', '團員訓練'];
   if (['/challenge', '/report', '/log', '/plan/new', '/logs/team'].includes(h) || h.startsWith('/plan/')) return ['#/plan', '課表'];
   if (h.startsWith('/t/')) return ['#/teams', '分團'];
+  // 分團週報（#/weekly?team=）：回到那個分團；沒帶分團（理事長、行政人員）回管理後台
+  if (h === '/weekly') { const t = new URLSearchParams(location.hash.split('?')[1] || '').get('team'); return /^[\w-]{1,16}$/.test(t || '') ? [`#/t/${t}`, '分團'] : ['#/admin', '管理後台']; }
   if (['/teams', '/tickets', '/admin', '/roster'].includes(h) || h.startsWith('/m/')) return ['#/me', '我的'];
   return ['#/', '團練'];
 }
@@ -2709,7 +2714,7 @@ function tabOf(h) {
 function nameOf(h) {
   const N = { '/': '團練', '/plan': '課表', '/run': '跑步', '/studio': '拍照', '/me': '我的', '/calendar': '行事曆', '/map': '地圖', '/challenge': '挑戰', '/admin': '管理後台',
     '/teams': '分團', '/report': '報表', '/tickets': '入場券', '/notifications': '通知', '/past': '過去的團練', '/roster': '名冊', '/logs/team': '團員訓練',
-    '/plan/season': '全季課表', '/plan/race': '賽事準備', '/plan/guide': '配速與用語', '/plan/setup': '課表設定' };
+    '/plan/season': '全季課表', '/plan/race': '賽事準備', '/plan/guide': '配速與用語', '/plan/setup': '課表設定', '/weekly': '週報' };
   if (N[h]) return N[h];
   if (h.startsWith('/me/')) return ME_SECTIONS[h.slice(4)] || '我的';
   if (h.startsWith('/e/')) return h.endsWith('/stats') ? '統計' : '活動';

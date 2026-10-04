@@ -3925,12 +3925,14 @@ export default {
 "、出席率": ", attendance ",
 "、新成員": ", new members ",
 "備份、每日額度、前端錯誤、推播與排程異常": "Backup, daily quota, app errors, push and scheduled job problems",
-"每週一的報名、出席、訓練完成率與系統健康": "Monday summary of sign-ups, attendance, training completion and system health",
+"每週一的報名、出席與系統健康等數字": "Monday numbers: sign-ups, attendance, system health and more",
 "推播時間": "Push timing",
 "即時": "Immediately",
 "每日摘要": "Daily digest",
 "摘要時間": "Digest time",
-"帳號安全、系統狀態、幹部待辦、當天與明天的活動異動、集合前提醒一律即時推播。其他通知會先放在通知中心，每天在你選的時間推一則摘要。": "Account security, system status, officer to-dos, changes to today's and tomorrow's events, and meet-up reminders are always pushed immediately. Other notifications go to the notification center first, with one digest pushed daily at the time you choose.",
+"帳號安全、系統狀態、幹部待辦、當天與明天的活動異動與報名結果、集合前提醒、有名額的開放報名一律即時推播。其他通知會先放在通知中心，每天在你選的時間推一則摘要。": "Account security, system status, officer to-dos, changes and sign-up results for today's and tomorrow's events, meet-up reminders, and sign-up openings with limited spots are always pushed immediately. Other notifications go to the notification center first, with one digest pushed daily at the time you choose.",
+"帳號安全、幹部待辦、當天與明天的活動異動與報名結果、集合前提醒、有名額的開放報名一律即時推播。其他通知會先放在通知中心，每天在你選的時間推一則摘要。": "Account security, officer to-dos, changes and sign-up results for today's and tomorrow's events, meet-up reminders, and sign-up openings with limited spots are always pushed immediately. Other notifications go to the notification center first, with one digest pushed daily at the time you choose.",
+"帳號安全、當天與明天的活動異動與報名結果、集合前提醒、有名額的開放報名一律即時推播。其他通知會先放在通知中心，每天在你選的時間推一則摘要。": "Account security, changes and sign-up results for today's and tomorrow's events, meet-up reminders, and sign-up openings with limited spots are always pushed immediately. Other notifications go to the notification center first, with one digest pushed daily at the time you choose.",
 "每週一收到分團週報": "Team weekly report every Monday",
 "只有數字，沒有名字；沒打開也能在分團頁看": "Numbers only, no names; you can still view it on the team page when off",
 "系統狀態": "System status",
@@ -3974,6 +3976,14 @@ export default {
 "修改推播摘要時間": "Changed push digest time",
 "分團週報推播": "Team weekly report push",
 "產生幹部週報": "Generated officer weekly report",
-"查看幹部週報": "Viewed officer weekly report"
+"查看幹部週報": "Viewed officer weekly report",
+"週次": "Week",
+"查看": "View",
+"備份：": "Backup: ",
+"候補轉正": "Promoted from waitlist",
+"以收到「候補遞補成功」通知的人數計，實際可能更多": "Counted from \u201cpromoted from waitlist\u201d notifications, so the real number may be higher",
+"、失敗": ", failed ",
+"／7 天": "/7 days",
+"。系統：": ". System: "
 };
 export const inner = {"團練": "group run", "課表": "training plan", "拍照": "photo", "跑步": "running", "我的": "my", "揪跑": "social run", "分團": "sub-club", "主團": "home club", "報名": "sign up", "幹部": "officers", "團員": "members", "跑友": "runners", "活動": "event", "協會": "Association", "行事曆": "calendar", "地點": "spot", "路線": "route", "天氣": "weather", "通知": "notifications", "賽事": "race", "組別": "group", "訓練紀錄": "training log", "內容": "details", "流程": "process", "選擇": "option", "跑法": "how to run", "起跑": "start", "慢跑": "jog", "小時": "hours", "碳水": "carbs", "熱身": "warm-up", "分段": "segments", "強度": "intensity", "主課": "main set", "前段": "first part", "組數": "sets", "比賽日": "race day", "可在": "can be done on"};

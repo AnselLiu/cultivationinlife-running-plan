@@ -124,15 +124,19 @@ const OPS_TEXT = { backup: '每日備份超過 26 小時沒有完成', quota: '�
 const QUOTA_NAME = { req: 'Worker 請求', d1_read: 'D1 讀取', d1_write: 'D1 寫入', kv_read: 'KV 讀取', kv_write: 'KV 寫入', kv_list: 'KV 列出', kv_del: 'KV 刪除' };
 const big = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(n >= 1e7 ? 0 : 1)}M` : n >= 1e4 ? `${Math.round(n / 1e3)}K` : String(n));
 const hm = (at) => (at ? new Date(`${at.replace(' ', 'T')}Z`).toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Taipei' }) : '');
+// 告警細節裡的排程工作名稱（job_runs 與執行額度紀錄的內部名稱）換成中文
+//   'hourly:events' → 活動提醒（每小時排程的前綴拿掉）、'month_summary 2036-05' → 每月總結 2036-05
+const jobLabel = (x) => x.replace(/^hourly:/, '').split(/([: ])/).map((t) => JOB_NAME[t] || t).join('');
+const opsDetail = (cond, d) => (cond === 'stops' || cond === 'cron' ? String(d).split('、').map(jobLabel).join('、') : String(d));
 function opsHtml(h) {
   if (!h.conditions) return '';
   const u = h.usage || {};
   return `<div id="opsBox"><h3>系統告警</h3>
     <div class="itemtable">${h.conditions.map((c) => `<div class="itr"><span><b style="font-weight:600">${OPS_NAME[c.cond] || esc(c.cond)}</b>
-      ${c.on && c.detail ? `<span class="tiny" style="display:block;word-break:break-word">${esc(c.detail)}</span>` : ''}</span>
+      ${c.on && c.detail ? `<span class="tiny" style="display:block;word-break:break-word">${esc(opsDetail(c.cond, c.detail))}</span>` : ''}</span>
       <span class="tiny">${c.on ? `<b style="color:var(--race)">發生中${c.since ? `（今天 ${hm(c.since)} 起）` : ''}</b>` : '正常'}</span></div>`).join('')}</div>
     ${(h.alerts || []).length ? `<h4>最近 14 天的告警</h4><div class="itemtable">${h.alerts.map((a) => `<div class="itr"><span><b class="num" style="font-weight:600">${esc(a.day.slice(5).replace('-', '/'))}</b>
-      <span class="tiny" style="display:block;word-break:break-word">${OPS_NAME[a.cond] || esc(a.cond)}${a.detail ? `・${esc(a.detail)}` : ''}</span></span><span class="tiny">${hm(a.at)}</span></div>`).join('')}</div>`
+      <span class="tiny" style="display:block;word-break:break-word">${OPS_NAME[a.cond] || esc(a.cond)}${a.detail ? `・${esc(opsDetail(a.cond, a.detail))}` : ''}</span></span><span class="tiny">${hm(a.at)}</span></div>`).join('')}</div>`
       : '<p class="tiny" style="margin:0">最近 14 天沒有告警。</p>'}
     <p class="tiny" style="margin:0">同一個條件一天最多通知一次，理事長與行政人員不能關這類推播。</p>
     <h3>今天的額度用量（估計）</h3>
@@ -151,12 +155,13 @@ function reportHtml(r, { scopes = [] } = {}) {
   const sel = (id, label, opts, cur) => `<label class="row" style="gap:8px"><span class="tiny">${label}</span><select id="${id}" style="flex:1">${opts.map(([v, t]) => `<option value="${esc(v)}"${v === cur ? ' selected' : ''}>${esc(t)}</option>`).join('')}</select></label>`;
   const card = (title, lines) => `<section class="card"><h3>${title}</h3>${lines.filter(Boolean).map((l) => `<p style="margin:0">${l}</p>`).join('')}</section>`;
   const kinds = Object.entries(d.events?.kinds || {}).map(([k, n]) => `${KIND_NAME[k] || k} ${n}`).join('、');
-  const out = [`<section class="card" style="display:grid;gap:8px">
+  const head = `<section class="card" style="display:grid;gap:8px">
       ${sel('rptWeek', '週次', (r.weeks || []).map((w) => [w, `${w.slice(5).replace('-', '/')} 那週`]), r.week)}
       ${scopes.length > 1 ? sel('rptScope', '對象', scopes, r.scope) : ''}
-      <p class="tiny" style="margin:0">上週一到週日的聚合數字，不含任何人的名字與金額。</p></section>`,
-    card('活動', [`${d.events?.n ?? 0} 場（取消 ${d.events?.cancelled ?? 0} 場）`, kinds ? `<span class="tiny">${esc(kinds)}</span>` : '']),
-    card('報名', [`新增 ${d.signups?.new ?? 0}${p.signups != null ? `（前一週 ${p.signups}）` : ''}、取消 ${d.signups?.cancel ?? 0}、候補轉正 ${d.signups?.promoted ?? 0}`]),
+      <p class="tiny" style="margin:0">上週一到週日的聚合數字，不含任何人的名字與金額。</p></section>`;
+  const out = [card('活動', [`${d.events?.n ?? 0} 場（取消 ${d.events?.cancelled ?? 0} 場）`, kinds ? `<span class="tiny">${esc(kinds)}</span>` : '']),
+    card('報名', [`新增 ${d.signups?.new ?? 0}${p.signups != null ? `（前一週 ${p.signups}）` : ''}、取消 ${d.signups?.cancel ?? 0}`,
+      `候補轉正 ${d.signups?.promoted ?? 0}<span class="tiny" style="display:block">以收到「候補遞補成功」通知的人數計，實際可能更多</span>`]),
     card('出席', [`出席率 ${pctT(d.attendance?.pct)}${prevT(p.attendance)}`, `<span class="tiny">報到 ${d.attendance?.came ?? 0}／正取 ${d.attendance?.in ?? 0}（不含餐敘與問卷）</span>`,
       d.party ? `餐敘報到率 ${pctT(d.party.pct)}（${d.party.in}／${d.party.n}）` : '']),
     card(d.scope === 'assoc' ? '新成員' : '新團員', [d.scope === 'assoc' ? `新跑友 ${d.newcomers?.runners ?? 0}、新協會會員 ${d.newcomers?.assoc ?? 0}` : `新團員 ${d.newcomers?.members ?? 0}`])];
@@ -176,24 +181,37 @@ function reportHtml(r, { scopes = [] } = {}) {
       `推播：送出 ${hh.push?.sent ?? 0}、失敗 ${hh.push?.err ?? 0}、失效 ${hh.push?.gone ?? 0}、丟棄 ${hh.push?.drop ?? 0}`,
       `告警：${al.length ? al.map(([c, n]) => `${OPS_NAME[c] || esc(c)} ${n} 天`).join('、') : '沒有'}`]));
   }
-  return out.join('');
+  return { head, body: out.join('') };
 }
-async function loadReport(box, { scope = '', week = '' } = {}) {
+// 週報：選單（週次、對象）一張卡＋下面的內容（#rptBox 與 .rptbody 都是 grid，卡片之間有間距）
+//   換週次或對象查不到週報（例如上週一之後才建立的分團）：只換下面的內容，選單留著可以換回來；換完焦點回到剛剛的選單
+async function loadReport(box, { scope = '', week = '', focus = '' } = {}) {
   if (!box) return;
   const q = new URLSearchParams(); if (scope) q.set('scope', scope); if (week) q.set('week', week);
   let r;
-  try { r = await api(`/ops/reports?${q}`); } catch (e) { if (box.isConnected) box.innerHTML = `<section class="card"><p class="muted" style="margin:0">${esc(e.status === 404 ? '還沒有週報：每週一 09:00 產生上週的週報' : e.message)}</p></section>`; return; }
+  try { r = await api(`/ops/reports?${q}`); } catch (e) {
+    if (!box.isConnected) return;
+    const msg = `<section class="card"><p class="muted" style="margin:0">${esc(e.status === 404 ? '還沒有週報：每週一 09:00 產生上週的週報' : e.message)}</p></section>`;
+    const body = box.querySelector('.rptbody');
+    if (body) body.innerHTML = msg; else box.innerHTML = msg;
+    return;
+  }
   if (!box.isConnected) return;
   // 對象：理事長與行政人員是協會版與每個分團；團長是自己的分團
   const scopes = r.teams ? r.teams.map((t) => [`team:${t}`, teamOf(t)?.name || t]) : [['assoc', '協會'], ...teams().map((t) => [`team:${t.id}`, t.name])];
-  box.innerHTML = reportHtml(r, { scopes });
-  $('#rptWeek')?.addEventListener('change', (e) => loadReport(box, { scope: r.scope, week: e.target.value }));
-  $('#rptScope')?.addEventListener('change', (e) => loadReport(box, { scope: e.target.value }));
+  const { head, body } = reportHtml(r, { scopes });
+  box.innerHTML = `${head}<div class="rptbody">${body}</div>`;
+  // 分團頁（#/weekly）的副標題跟著對象換
+  const sub = $('#rptSub');
+  if (sub) sub.textContent = r.scope === 'assoc' ? '協會' : (scopes.find(([v]) => v === r.scope)?.[1] || '');
+  $('#rptWeek')?.addEventListener('change', (e) => loadReport(box, { scope: $('#rptScope')?.value || r.scope, week: e.target.value, focus: 'rptWeek' }));
+  $('#rptScope')?.addEventListener('change', (e) => loadReport(box, { scope: e.target.value, focus: 'rptScope' }));
+  if (focus) $(`#${focus}`)?.focus();
 }
 // 分團頁的「上週分團週報」（#/weekly?team=）：畫面和後台同一份程式
 async function weeklyView() {
   const tid = new URLSearchParams(location.hash.split('?')[1] || '').get('team') || '';
-  view.innerHTML = `${largeTitle('週報', tid ? esc(teamOf(tid)?.name || '') : '')}<div id="rptBox"><section class="card"><p class="tiny" style="margin:0">載入中…</p></section></div>`;
+  view.innerHTML = `${largeTitle('週報', `<span id="rptSub" translate="no">${tid ? esc(teamOf(tid)?.name || '') : ''}</span>`)}<div id="rptBox"><section class="card"><p class="tiny" style="margin:0">載入中…</p></section></div>`;
   await loadReport($('#rptBox'), { scope: /^[\w-]{1,16}$/.test(tid) ? `team:${tid}` : '' });
 }
 // 總覽最上方的「上週週報」小卡：三個數字（不寫查看稽核；完整週報才寫）

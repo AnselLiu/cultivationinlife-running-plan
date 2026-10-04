@@ -16,6 +16,12 @@ const MO3 = MON.map((m) => m.slice(0, 3));
 const DN = { 全馬: 'marathon', 半馬: 'half' };
 // 動態句型：數字、日期、倒數等（先於片段替換）
 const PATTERNS = [
+  // 管理後台：系統告警與幹部週報（整句，數字在中間）
+  [/^發生中（今天 (\d{1,2}:\d{2}) 起）$/, 'Ongoing (since $1 today)'],
+  [/^新增 (\d+)(?:（前一週 (\d+)）)?、取消 (\d+)$/, (_, a, p, c) => `New ${a}${p ? ` (previous week ${p})` : ''}, cancelled ${c}`],
+  [/^報名 (\d+)、出席率 (\d+%|—)、新(成員|團員) (\d+)$/, (_, a, b, k, n) => `Sign-ups ${a}, attendance ${b}, new ${k === '成員' ? 'members' : 'team members'} ${n}`],
+  [/^(\d{4}-\d{2}-\d{2}) 開始超過 24 小時，已完成 (\d+) 段$/, '$1 started over 24 hours ago, $2 segments done'],
+  [/^備份：(\d+)／7 天完成/, 'Backup: $1/7 days completed'],
   // 課表與課表週期（整句，要在日期句型之前）
   [/^你的 W1 從 (\d{1,2})\/(\d{1,2})（([日一二三四五六])）開始，還有 (\d+) 天$/, (_, m, d, w, n) => `Your W1 starts ${WD[w]} ${m}/${d} — ${n} days to go`],
   [/^W1 (\d{1,2})\/(\d{1,2})（([日一二三四五六])）開始，還有 (\d+) 天$/, (_, m, d, w, n) => `W1 starts ${WD[w]} ${m}/${d} — ${n} days to go`],

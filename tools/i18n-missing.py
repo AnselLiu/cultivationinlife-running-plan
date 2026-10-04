@@ -95,7 +95,8 @@ P='\u3000 \t\n・，。：；、（）「」'
 def kind(k):
   if k in NOT_UI or re.match(r'(?:SELECT|INSERT|UPDATE|DELETE|WITH)\b', k) or re.search(r'\\\\[sd]|\(\?:|^\[.*\]$|\($|^\)', k): return '不是介面文字'
   c=k.replace('\\n','').strip(P)
-  if c and (c in pat or c in have): return '句型處理'
+  # 句型裡要是獨立的片段（前後不是中文字）：短的詞只出現在較長句型的中間（「週次」在別的句子裡）不算處理過
+  if c and (c in have or (len(c) == 1 and c in pat) or re.search(r'(?<![\u3400-\u9fff])' + re.escape(c) + r'(?![\u3400-\u9fff])', pat)): return '句型處理'
   return ''
 real=[k for k in missing if not kind(k)]
 print(f'介面字串 {len(segs)} 個，沒有英文的 {len(real)} 個（另有句型處理 {sum(kind(k)=="句型處理" for k in missing)} 個、不是介面文字 {sum(kind(k)=="不是介面文字" for k in missing)} 個）')

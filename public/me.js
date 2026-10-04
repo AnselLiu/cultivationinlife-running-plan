@@ -151,7 +151,7 @@ const NPREF = [
   ['signup', '前一晚與集合前提醒、天氣、到貨、中獎'], ['event', '新團練、揪跑、問卷、邀請與賽事提醒'],
   ['training', '新課表、教練回饋、跑後記錄提醒、每月里程'], ['membership', '入團結果、主團、入會與會費到期'],
   ['announce', '協會與分團公告'], ['todo', '入團入會申請、繳費確認、地點審核、天氣調整'],
-  ['ops', '備份、每日額度、前端錯誤、推播與排程異常'], ['report', '每週一的報名、出席、訓練完成率與系統健康'],
+  ['ops', '備份、每日額度、前端錯誤、推播與排程異常'], ['report', '每週一的報名、出席與系統健康等數字'],
 ];
 // 待辦：幹部才有；系統狀態與幹部週報：理事長與行政人員才有（伺服器回 ops）
 const prefRows = (p) => NPREF.filter(([k]) => (k !== 'todo' || p.officer) && (!['ops', 'report'].includes(k) || p.ops)).map(([k, desc]) => {
@@ -162,11 +162,15 @@ const prefRows = (p) => NPREF.filter(([k]) => (k !== 'todo' || p.officer) && (![
 });
 // 推播時間：即時（預設）或每日摘要（07:00–22:00 的整點，切到摘要時預選 20:00）；團長多一列「每週一收到分團週報」
 const DG_HOURS = Array.from({ length: 16 }, (_, i) => i + 7);
+// 哪些一律即時：依身分列（一般團員收不到系統狀態與幹部待辦，就不提）
+const digestNote = (p) => (p.ops ? '帳號安全、系統狀態、幹部待辦、當天與明天的活動異動與報名結果、集合前提醒、有名額的開放報名一律即時推播。其他通知會先放在通知中心，每天在你選的時間推一則摘要。'
+  : p.officer ? '帳號安全、幹部待辦、當天與明天的活動異動與報名結果、集合前提醒、有名額的開放報名一律即時推播。其他通知會先放在通知中心，每天在你選的時間推一則摘要。'
+  : '帳號安全、當天與明天的活動異動與報名結果、集合前提醒、有名額的開放報名一律即時推播。其他通知會先放在通知中心，每天在你選的時間推一則摘要。');
 const timingCard = (p) => `<section class="setgroup"><h2 class="sgt">推播時間</h2><div class="card" style="display:grid;gap:10px">
     <div class="seg" role="group" aria-label="推播時間"><button type="button" data-dg="now" aria-pressed="${p.digest == null}">即時</button><button type="button" data-dg="daily" aria-pressed="${p.digest != null}">每日摘要</button></div>
     <label class="row" id="dgRow" style="gap:8px"${p.digest == null ? ' hidden' : ''}><span>摘要時間</span><select id="dgHour" style="flex:0 0 auto;width:auto">${DG_HOURS.map((h) => `<option value="${h}"${(p.digest ?? 20) === h ? ' selected' : ''}>${String(h).padStart(2, '0')}:00</option>`).join('')}</select></label>
-    <p class="tiny" style="margin:0">帳號安全、系統狀態、幹部待辦、當天與明天的活動異動、集合前提醒一律即時推播。其他通知會先放在通知中心，每天在你選的時間推一則摘要。</p>
-    ${p.teamReport != null ? `<label class="switch"><span>每週一收到分團週報<span class="tiny" style="display:block">只有數字，沒有名字；沒打開也能在分團頁看</span></span><input type="checkbox" id="teamReport" ${p.teamReport ? 'checked' : ''}><i></i></label>` : ''}
+    <p class="tiny" style="margin:0">${digestNote(p)}</p>
+    ${p.teamReport != null ? `<label class="switch"${p.ops ? '' : ' id="pref-report"'}><span>每週一收到分團週報<span class="tiny" style="display:block">只有數字，沒有名字；沒打開也能在分團頁看</span></span><input type="checkbox" id="teamReport" ${p.teamReport ? 'checked' : ''}><i></i></label>` : ''}
   </div></section>`;
 function bindTiming(p) {
   let cur = p.digest ?? null;
