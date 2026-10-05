@@ -21,7 +21,7 @@ const status = (page) => page.evaluate(() => JSON.parse(localStorage.getItem('ci
 test('計圈：連按只算一圈，進行中的這一圈每秒更新，成績只留完成的圈', async ({ page, context }) => {
   await startRun(page, context);
   await page.locator('#rLap').click();                 // 剛開始 3 秒內不算
-  await expect(page.locator('#rLapMsg')).toHaveText('剛記過一圈，這次不算');
+  await expect(page.locator('#rLapMsg')).toHaveText('剛開始，3 秒後再記圈');
   await expect(page.locator('#rLaps > div')).toHaveCount(0);
   await page.waitForTimeout(3200);
   await page.locator('#rLap').click();
@@ -44,11 +44,15 @@ test('計圈：連按只算一圈，進行中的這一圈每秒更新，成績�
 
 test('口袋模式：點了沒反應，滑到右邊才解鎖；VoiceOver 用解鎖按鈕；開始後直接進入的偏好記在這台手機', async ({ page, context }) => {
   await startRun(page, context);
+  // 主畫面 App 的狀態列跟著變黑，離開口袋模式再還原
+  const themes = () => page.evaluate(() => [...document.querySelectorAll('meta[name="theme-color"]')].map((m) => m.content));
+  const before = await themes();
   await page.locator('#rPocket').click();
   const pocket = page.locator('#pocket');
   await expect(page.getByRole('dialog', { name: '口袋模式' })).toBeVisible();
   await expect(page.locator('#pkTime')).toHaveText(/\d+:\d\d/);
   await expect(page.locator('#pkState')).toHaveText('記錄中');
+  expect(await themes()).toEqual(['#000000', '#000000']);
   expect(await axeBad(page)).toEqual([]);
   // 誤觸：點暫停鈕的位置、畫面中間，都不會暫停
   const pb = await page.locator('#rPause').boundingBox();
@@ -72,6 +76,7 @@ test('口袋模式：點了沒反應，滑到右邊才解鎖；VoiceOver 用解�
   await drag(1);
   await expect(pocket).toHaveCount(0);
   await expect(page.locator('#rPocket')).toBeFocused();
+  expect(await themes()).toEqual(before);
   // VoiceOver／鍵盤：解鎖按鈕
   await page.locator('#rPocket').click();
   await expect(pocket).toBeVisible();

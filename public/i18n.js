@@ -141,6 +141,7 @@ const PATTERNS = [
   // 跑步記錄的空檔估算（成績頁整句、記錄中只有前半句）
   [/^螢幕鎖定或訊號弱時以直線估算 (\d+) 公尺，路線上畫成虛線；實際跑的通常比直線長一點。$/, '$1 m was estimated as a straight line while the screen was locked or GPS was weak (dashed on the route). The real distance is usually a bit longer.'],
   [/^螢幕鎖定或訊號弱時以直線估算 (\d+) 公尺$/, '$1 m estimated as a straight line while the screen was locked or GPS was weak'],
+  [/^有 ([\d:]+) 收不到定位（螢幕鎖定或訊號弱），這段沒有算到距離，平均配速會偏慢；知道實際距離可以在下面填。$/, 'For $1 there was no location (screen locked or weak GPS), so that stretch has no distance and your average pace will look slow. If you know the real distance, enter it below.'],
   ['FRAG'],
   [/NT\$([\d,]+) 起/g, 'from NT$$$1'],
   [/([\d.]+) 公里/g, '$1 km'], [/([\d.]+) 公尺/g, '$1 m'], [/([\d.]+) 毫秒/g, '$1 ms'], [/([\d.]+) 秒/g, '$1 s'],

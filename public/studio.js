@@ -122,10 +122,13 @@ function drawRoute(ctx, route, box, progress = 1, width = 10) {
   ctx.stroke();
   if (est.length) {
     ctx.save();
-    ctx.shadowBlur = 0; ctx.globalAlpha = .5; ctx.lineWidth = width * .7; ctx.setLineDash([width * .2, width * 1.6]);
-    ctx.beginPath();
-    for (const [[ax, ay], [bx, by]] of est) { ctx.moveTo(ax, ay); ctx.lineTo(bx, by); }
-    ctx.stroke();
+    ctx.shadowBlur = 0; ctx.globalAlpha = .5; ctx.lineWidth = width * .7;
+    // 每一段自己算點距：短的空檔縮小後只有幾十個像素，點距跟著縮，至少看得到 3–4 個點，不會像路線斷掉
+    for (const [[ax, ay], [bx, by]] of est) {
+      const per = Math.max(width * .9, Math.min(width * 1.8, Math.hypot(bx - ax, by - ay) / 4));
+      ctx.setLineDash([width * .2, per - width * .2]);
+      ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke();
+    }
     ctx.restore();
   }
   // 起點與目前位置

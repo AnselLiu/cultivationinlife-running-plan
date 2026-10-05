@@ -2,9 +2,14 @@
 //   軌跡只存在這支手機（localStorage），伺服器只會收到「存成訓練紀錄」時的距離與時間
 //   重新整理或切到別的頁面都不會中斷；畫面保持常亮（Wake Lock）
 //   空檔：iPhone 鎖定螢幕或切到背景時網頁會停住、收不到定位；訊號弱時定位點也不能用
-//     空檔期間計時照走，不自動暫停、不問「跑完了嗎」；等到第一個好的定位點，再看這段的平均速度：
-//     像在跑（約 1.2–7 m/s）→ 用直線補上距離，標成估算（est）；像站著（慢於 1.2 m/s 又不到 30 公尺）→ 照一般規則從最後移動的時間自動暫停；
+//     空檔期間計時照走，不自動暫停、不問「跑完了嗎」；等到第一個好的定位點，再看這段的平均速度（只看速度，不看距離）：
+//     像在跑（1.2–7 m/s）→ 用直線補上距離，標成估算（est）；
+//     大多停著（慢於 1.2 m/s）→ 從最後移動的時間自動暫停；已經離開的話接著自動繼續，離開的那一小段用平常的速度換算時間補上
+//       （60 公尺內，或平均還有 0.3 m/s 以上；更慢的像走回家、坐咖啡店，就斷開不算）；
 //     快得不合理（超過 7 m/s，例如搭車）→ 路線斷開、距離不算，計時照走，之後照一般規則判斷
+//   自動暫停中也一樣：暫停中鎖定螢幕或訊號弱，回來的第一個好的定位點已經離開了，就回頭用平常的速度估算什麼時候開始跑
+//   空檔超過 5 分鐘還收不到好的定位點（忘了按結束、走進室內）：當成停下來，從最後移動的時間自動暫停並問「跑完了嗎」；之後定位回來照上面的規則回頭補
+//   空檔中按暫停或結束：再接 30 秒 GPS，收到好的定位點就照上面的規則補上最後那段；收不到就記下來，成績頁提醒這段沒有距離
 //   GPS 雜訊處理：精度差於 40 公尺的點不用、相鄰點小於 3 公尺不算、換算時速超過 32 公里的跳點丟掉
 //   自動暫停：最近 20 秒的好定位點都在 10 公尺內（真的停下來：等紅燈、補給）才暫停，收不到定位點不算停下來；
 //     再移動 15 公尺自動繼續；停超過 3 分鐘問「跑完了嗎？」
@@ -14,10 +19,13 @@ const FREEZE_MS = 5000;                    // 每秒檢查一次；兩次檢查�
 const NOFIX_MS = 10000;                    // 超過 10 秒沒有好的定位點＝空檔
 const FRESH_MS = 5000, STILL_FIXES = 3;    // 自動暫停：5 秒內有好的定位點，而且最後一次移動之後至少 3 個點都在原地
 const GOOD_ACC = 40;                       // 精度（公尺）在這以內才用
-const EST_MIN_V = 1.2, EST_MAX_V = 7, STILL_M = 30;   // 空檔怎麼補：平均速度（m/s）與「站著」的距離上限
+const EST_MIN_V = 1.2, EST_MAX_V = 7;      // 空檔怎麼補：平均速度（m/s）在這之間算在跑
 const JOIN_M = 60;                         // 自動繼續時離暫停前最後一點在這以內就接起來
 const LAP_GAP_MS = 3000;                   // 計圈：3 秒內再按一次不算
 const WOKE_MS = 60000;                     // 剛從凍結回來、還沒收到好的定位點：1 分鐘內先不問「跑完了嗎」
+const GAP_MAX_MS = 300000;                 // 空檔（醒著的時間）超過 5 分鐘還沒有好的定位點：當成停下來
+const LEAD_MAX_M = 60, EST_SLOW_V = 0.3;   // 大多停著的空檔：離開多遠以內、或平均多快以上，才補離開的那一小段
+const SETTLE_MS = 30000;                   // 空檔中按暫停或結束：再等多久的定位點
 
 const KEY = 'cil-run-session';
 const R = 6371000, rad = (d) => (d * Math.PI) / 180;
@@ -47,6 +55,11 @@ const save = (force) => {
 
 // 經過時間：累計的＋這一段跑步中的
 export const elapsed = (x = s) => (x ? x.elapsedMs + (x.status === 'running' ? Date.now() - x.resumedAt : 0) : 0);
+// 平常的速度（m/s）：用來換算空檔裡跑了多久；記到的太少就當 3 m/s（每公里 5:33）
+function vRef() {
+  const sec = elapsed() / 1000, v = sec > 60 && s.dist > 100 ? s.dist / sec : 3;
+  return Math.min(5, Math.max(2, v));
+}
 
 // Wake Lock（螢幕保持亮著）：iPhone 鎖定螢幕時網頁會停住、收不到定位，所以跑步中一直要著
 //   系統可能拒絕（低電量模式）或中途放掉（切到背景）：聽 release，狀態給畫面顯示提醒，回到前景再要一次
@@ -81,8 +94,10 @@ document.addEventListener('visibilitychange', () => {
   if (tracking()) { unwatch(); watch(); }
 });
 // 從凍結回來：跑步中就開一段空檔，等下一個好的定位點再決定怎麼補
+//   已經有空檔（凍結前訊號就弱了）：5 分鐘上限從醒來重新算，凍結的時間本來就收不到定位
 function woke() {
   s.wokeAt = Date.now();
+  if (s.gap) s.gap.at = s.wokeAt;
   if (s.status === 'running') openGap('frozen');
 }
 function openGap(why) {
@@ -91,6 +106,7 @@ function openGap(why) {
   save(true); emit();
 }
 const lastPt = () => s.points[s.points.length - 1];
+const lastGood = () => { for (let i = s.points.length - 1; i >= 0; i--) if (!s.points[i].brk) return s.points[i]; return null; };
 // 每個好的定位點都拿來判斷有沒有在動：離開錨點 10 公尺＝有在動，否則算一個「在原地」的點
 function seen(p) {
   if (!s.anchor || hav(s.anchor, p) >= 10) { s.anchor = { lat: p.lat, lon: p.lon }; s.lastMoveAt = Date.now(); s.stillN = 0; }
@@ -102,6 +118,21 @@ function addPoint(p) {
   p.m = elapsed();                                   // 跑步中的累計時間（扣掉暫停），算分段用
   s.points.push(p);
 }
+// 直線估算的一段：距離與時間都記成估算，這一點畫虛線
+function addEst(p, d, ms) {
+  s.dist += d; s.estM = (s.estM || 0) + d; s.estS = (s.estS || 0) + ms;
+  p.est = true; addPoint(p);
+}
+// 空檔結束（收到第一個好的定位點）時怎麼補：看從空檔前最後一點到這一點、ms 毫秒的平均速度
+//   lead：離開的那一段用平常的速度換算要多久（不超過整個空檔）；0＝不補
+function gapKind(prev, p, ms) {
+  const d = hav(prev, p), v = d / Math.max(1, ms / 1000), lead = Math.min(ms, (d / vRef()) * 1000);
+  if (v > EST_MAX_V) return { kind: 'fast', d, lead: 0 };
+  if (v >= EST_MIN_V) return { kind: 'run', d, lead };
+  return { kind: 'stop', d, lead: d <= LEAD_MAX_M || v >= EST_SLOW_V ? lead : 0 };
+}
+// 時間往回退（自動暫停從最後移動起算、空檔判斷為停著）：之後才記的圈不能超過新的時間
+const clampLaps = () => { for (const l of s.laps) if (l.at > s.elapsedMs) l.at = s.elapsedMs; };
 
 function onPosition(pos) {
   if (!s) return;
@@ -109,15 +140,18 @@ function onPosition(pos) {
   const { latitude: lat, longitude: lon, accuracy: acc, altitude: alt, altitudeAccuracy: altAcc } = pos.coords;
   const p = { t: pos.timestamp || now, lat: +lat.toFixed(6), lon: +lon.toFixed(6) };
   if (alt != null && altAcc != null && altAcc < 15) p.alt = Math.round(alt * 10) / 10;
+  if (s.settle && s.status !== 'running') { if (acc <= GOOD_ACC) endSettle(p); return; }
   if (!tracking()) return;
   s.gps = acc <= 20 ? 'good' : acc <= GOOD_ACC ? 'ok' : 'weak';
   s.acc = Math.round(acc);
   // 自動暫停中：還在接 GPS，離開暫停點 15 公尺就自動繼續
+  //   暫停中有一段收不到好的定位點（鎖定螢幕、訊號弱）才離開：回頭用平常的速度估算什麼時候開始跑
   if (s.status === 'paused') {
     if (acc <= GOOD_ACC) {
+      const quiet = now - (s.fixAt || now), prev = lastGood();
       s.fixAt = now; s.wokeAt = 0;
       const d = s.anchor ? hav(s.anchor, p) : 0;
-      if (d >= 15) { autoResume(p); return; }
+      if (d >= 15) { autoResume(p, quiet > NOFIX_MS && prev ? gapKind(prev, p, quiet).lead : undefined); return; }
       s.leftAt = d >= 5 ? s.leftAt || now : 0;       // 開始離開暫停點的時間：自動繼續時從這裡起算
     }
     emit();
@@ -130,18 +164,17 @@ function onPosition(pos) {
   if (last && !last.brk) {
     const d = hav(last, p), dt = Math.max(0.5, (p.t - last.t) / 1000);
     // 空檔後的第一個好點：看這段的平均速度決定怎麼補
-    if (inGap && dt * 1000 > NOFIX_MS) {
-      const v = d / dt;
-      if (v > EST_MAX_V) {                           // 快得不合理：路線斷開、距離不算，計時照走
+    const g = inGap && dt * 1000 > NOFIX_MS ? gapKind(last, p, p.t - last.t) : null;
+    if (g && (g.kind !== 'stop' || now - (s.lastMoveAt || 0) > AUTO_PAUSE_MS)) {
+      if (g.kind === 'fast') {                       // 快得不合理：路線斷開、距離不算，計時照走
         s.points.push({ brk: true, t: p.t });
         addPoint(p); moved(p);
-      } else if (v < EST_MIN_V && d < STILL_M) {     // 像站著：照一般規則，從最後一次移動的時間自動暫停
+      } else if (g.kind === 'run') {                 // 像在跑：用直線補上，標成估算（實際路線通常比直線長，這是下限）
+        addEst(p, g.d, p.t - last.t); moved(p);
+      } else {                                       // 大多停著：從最後一次移動的時間自動暫停；已經離開了就接著自動繼續
+        autoPause();
+        if (s.anchor && hav(s.anchor, p) >= 15) { autoResume(p, g.lead); return; }
         seen(p);
-        if (now - (s.lastMoveAt || 0) > AUTO_PAUSE_MS) { autoPause(); if (hav(s.anchor, p) >= 15) autoResume(p); return; }
-      } else {                                       // 像在跑：用直線補上，標成估算（實際路線通常比直線長，這是下限）
-        s.dist += d; s.estM = (s.estM || 0) + d; s.estS = (s.estS || 0) + (p.t - last.t);
-        p.est = true;
-        addPoint(p); moved(p);
       }
       save(true); emit(); return;
     }
@@ -179,27 +212,56 @@ export function start({ useGps = true, goal = null } = {}) {
   if (s.useGps) watch();
   lock(); save(true); emit();
 }
+// 空檔中（還沒補上距離）按暫停或結束：GPS 再接一下，等一個好的定位點把最後那段補上（endSettle）
+function settle() {
+  const now = Date.now();
+  if (!s.useGps || s.gps === 'denied' || !lastGood() || !(s.gap || now - (s.fixAt || now) > NOFIX_MS)) return false;
+  s.settle = { at: now, until: now + SETTLE_MS, resumedAt: s.resumedAt };
+  return true;
+}
+function endSettle(p) {
+  const st = s.settle, prev = lastGood();
+  s.settle = null;
+  if (s.status !== 'running') unwatch();
+  if (!st || !prev) return;
+  const ms = Math.max(0, st.at - prev.t), g = p ? gapKind(prev, p, ms) : null;
+  // 補的點放在暫停的斷點前面（暫停後的路不算）
+  const put = (fn) => { const brk = lastPt()?.brk ? s.points.pop() : null; fn(); if (brk) s.points.push(brk); };
+  if (g?.kind === 'run') put(() => addEst(p, g.d, ms));
+  else if (g?.kind === 'stop') {
+    // 大多停著：時間退回最後一次移動，再加上離開的那一小段
+    const back = Math.max(0, st.at - Math.max(st.resumedAt, s.lastMoveAt || 0) - g.lead);
+    s.elapsedMs = Math.max(0, s.elapsedMs - back); clampLaps();
+    if (g.lead > 0) put(() => { if (g.d <= JOIN_M) { s.dist += g.d; addPoint(p); } else addEst(p, g.d, g.lead); });
+  } else s.lostMs = (s.lostMs || 0) + ms;            // 收不到、或快得不合理：這段沒有距離，成績頁提醒
+  save(true); emit();
+}
 export function pause() {
   if (!s || s.status !== 'running') return;
   s.elapsedMs += Date.now() - s.resumedAt;
+  const wait = settle();
   s.status = 'paused'; s.gap = null;
   if (s.points.length) s.points.push({ brk: true, t: Date.now() });   // 暫停的空檔不連線、不算距離
-  unwatch(); unlock(); save(true); emit();
+  if (!wait) unwatch();
+  unlock(); save(true); emit();
 }
 export function resume() {
   if (!s || s.status !== 'paused') return;
+  if (s.settle) endSettle();                         // 暫停前那段還沒等到定位點就繼續：記成沒有距離
   const now = Date.now();
-  s.status = 'running'; s.resumedAt = now; s.auto = false; s.lastMoveAt = now; s.askedAt = 0;
+  s.status = 'running'; s.held = 0; s.resumedAt = now; s.auto = false; s.lastMoveAt = now; s.askedAt = 0;
   s.fixAt = now; s.tickAt = now; s.stillN = 0; s.gap = null; s.wokeAt = 0;
   if (s.useGps) watch();
   lock(); save(true); emit();
 }
-// 計圈：3 秒內（剛開始或剛記過一圈）再按不算，避免連按多出一圈 0:01；有記到回傳 true
+// 計圈：3 秒內（剛開始或剛記過一圈，看實際的時間）再按不算，避免連按多出一圈 0:01；有記到回傳 true
+//   不用跑步時間比：自動暫停會把時間往回退，剛自動繼續時按的圈會被誤擋
 export function lap() {
   if (!s || s.status !== 'running') return false;
-  const at = elapsed(), prev = s.laps[s.laps.length - 1];
-  if (at - (prev ? prev.at : 0) < LAP_GAP_MS) return false;
-  s.laps.push({ at, d: Math.round(s.dist) });
+  const now = Date.now(), at = elapsed(), prev = s.laps[s.laps.length - 1];
+  const from = prev ? prev.w ?? now - LAP_GAP_MS : s.startedAt;
+  if (now - from < LAP_GAP_MS) return false;
+  s.laps.push({ at, d: Math.round(s.dist), w: now });
   save(true); emit();
   return true;
 }
@@ -207,13 +269,15 @@ export function lap() {
 export function currentLap(x = s) {
   const prev = x?.laps[x.laps.length - 1];
   if (!prev) return null;
-  return { n: x.laps.length + 1, sec: (elapsed(x) - prev.at) / 1000, m: Math.max(0, Math.round(x.dist - prev.d)) };
+  return { n: x.laps.length + 1, sec: Math.max(0, (elapsed(x) - prev.at) / 1000), m: Math.max(0, Math.round(x.dist - prev.d)) };
 }
 export function finish() {
   if (!s) return;
+  const wait = !!s.settle || (s.status === 'running' && settle());   // 暫停時開始等的也繼續等（結束按鈕只在暫停時出現）
   if (s.status === 'running') s.elapsedMs += Date.now() - s.resumedAt;
   s.status = 'done'; s.endedAt = Date.now(); s.gap = null;
-  unwatch(); unlock(); save(true); emit();
+  if (!wait) unwatch();
+  unlock(); save(true); emit();
 }
 export function discard() {
   unwatch(); unlock(); s = null;
@@ -225,20 +289,24 @@ function autoPause() {
   const stopAt = Math.min(Date.now(), Math.max(s.resumedAt, s.lastMoveAt || s.resumedAt));
   s.elapsedMs += stopAt - s.resumedAt;
   s.status = 'paused'; s.auto = true; s.pausedAt = stopAt; s.gap = null; s.leftAt = 0;
+  clampLaps();
   const last = lastPt();
   if (last && !last.brk) s.points.push({ brk: true, t: Date.now(), auto: true });
   save(true); emit();
 }
 // 自動繼續：觸發的這個點也記進軌跡；離暫停前最後一點不遠（站著等紅燈）就接起來、距離照算
-function autoResume(p) {
-  const now = Date.now();
-  s.status = 'running'; s.auto = false; s.askedAt = 0;
-  s.resumedAt = s.leftAt && now - s.leftAt < 10000 ? s.leftAt : now;   // 走出 15 公尺之前那幾秒也算
+//   lead（空檔後才收到定位）：從 lead 毫秒前起算；有 lead 就接起來，超過 60 公尺的那段標成直線估算；lead 0＝斷開、從現在起算
+function autoResume(p, lead) {
+  const now = Date.now(), gap = lead != null;
+  s.status = 'running'; s.auto = false; s.askedAt = 0; s.held = 0;
+  s.resumedAt = gap ? now - lead : s.leftAt && now - s.leftAt < 10000 ? s.leftAt : now;   // 走出 15 公尺之前那幾秒也算
   s.fixAt = now; s.gap = null; s.wokeAt = 0; s.leftAt = 0;
   moved(p);
-  const end = lastPt(), prev = [...s.points].reverse().find((q) => !q.brk);
-  if (end?.brk && end.auto && prev && hav(prev, p) <= JOIN_M) { s.points.pop(); s.dist += hav(prev, p); }
-  addPoint(p);
+  const end = lastPt(), prev = lastGood(), d = prev ? hav(prev, p) : 0;
+  const join = end?.brk && end.auto && prev && (gap ? lead > 0 : d <= JOIN_M);
+  if (join) s.points.pop();
+  if (join && d > JOIN_M) addEst(p, d, lead);
+  else { if (join) s.dist += d; addPoint(p); }
   save(true); emit();
 }
 // 每秒檢查一次（GPS 停著不動時手機常常不回報新位置，所以不能只靠 onPosition）
@@ -247,13 +315,16 @@ function autoResume(p) {
 export function check() {
   if (!s) return null;
   const now = Date.now();
+  if (s.settle && now > s.settle.until) endSettle();
   if (active()) {
     if (s.tickAt && now - s.tickAt > FREEZE_MS) woke();
     s.tickAt = now;
   }
   if (s.status === 'running' && s.useGps && s.gps !== 'denied') {
     if (!s.gap && now - (s.fixAt || now) > NOFIX_MS) openGap('nofix');
-    if (!s.gap && s.points.length && now - (s.lastMoveAt || 0) > AUTO_PAUSE_MS && now - (s.fixAt || 0) < FRESH_MS && (s.stillN || 0) >= STILL_FIXES) autoPause();
+    // 空檔太久（走進室內忘了按結束、一直收不到）：當成停下來，下面照常問「跑完了嗎」；定位回來再回頭補
+    if (s.gap && now - s.gap.at > GAP_MAX_MS) { autoPause(); s.held = 1; }
+    else if (!s.gap && s.points.length && now - (s.lastMoveAt || 0) > AUTO_PAUSE_MS && now - (s.fixAt || 0) < FRESH_MS && (s.stillN || 0) >= STILL_FIXES) autoPause();
   }
   const waking = s.wokeAt && now - s.wokeAt < WOKE_MS;
   if (s.status === 'paused' && s.auto && !waking && now - s.pausedAt > ASK_FINISH_MS && now - (s.askedAt || 0) > ASK_AGAIN_MS) { s.askedAt = now; save(true); return 'finish'; }
@@ -269,8 +340,8 @@ export function dismissAsk() { if (s) { s.askedAt = Date.now(); save(true); } }
 
 // 沒有 GPS（跑步機、操場）時，結束後手動填距離
 export function setDistance(m) { if (s) { s.manualDist = m > 0 ? m : null; save(true); emit(); } }
-// 重新整理後回到記錄中（或自動暫停中）：繼續接 GPS、螢幕保持亮著
-if (tracking()) watch();
+// 重新整理後回到記錄中（或自動暫停中、按了暫停或結束還在等最後那段的定位點）：繼續接 GPS、螢幕保持亮著
+if (tracking() || (s?.settle && s.useGps)) watch();
 if (live()) lock();
 
 // 目前配速：最近 30 秒的距離換算（秒／公里）
@@ -313,7 +384,8 @@ export function summary(x = s) {
   const tp = new Date(x.startedAt + 8 * 3600e3).toISOString();
   return { distance, seconds, pace: distance > 0 ? seconds / (distance / 1000) : null, gain: Math.round(x.gain || 0),
     route, splits, laps, date: tp.slice(0, 10), start: tp.slice(11, 16), gps: x.useGps, points: pts.length,
-    est: x.manualDist ? 0 : Math.round(x.estM || 0), estSec: Math.round((x.estS || 0) / 1000) };
+    est: x.manualDist ? 0 : Math.round(x.estM || 0), estSec: Math.round((x.estS || 0) / 1000),
+    lost: x.manualDist ? 0 : Math.round((x.lostMs || 0) / 1000), settling: !!x.settle };
 }
 
 // 匯出 GPX（存到手機或給其他 App）

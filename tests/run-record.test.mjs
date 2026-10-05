@@ -56,6 +56,13 @@ function world(Run) {
   return w;
 }
 const near = (a, b, tol, msg) => assert.ok(Math.abs(a - b) <= tol, `${msg}：${a}，應該接近 ${b}（±${tol}）`);
+// 空檔用直線回頭補：時間與距離都不超過實際（容許 GPS 雜訊多算一點），至少八成，平均配速跟實際差不到 8%
+const lowerBound = (r, w) => {
+  assert.ok(r.seconds <= w.moving / 1000 + 5 && r.seconds >= w.moving / 1000 * 0.8, `時間 ${r.seconds}，實際 ${w.moving / 1000}`);
+  assert.ok(r.distance <= w.m + 60 && r.distance >= w.m * 0.8, `距離 ${Math.round(r.distance)}，實際 ${Math.round(w.m)}`);
+  const real = w.moving / (w.m / 1000) / 1000;
+  assert.ok(Math.abs(r.pace - real) / real < 0.08, `配速 ${Math.round(r.pace)}，實際 ${Math.round(real)} 秒／公里`);
+};
 
 test('(a) 跑步中鎖定螢幕 5 分鐘，解鎖後先跑 check()：計時照走、距離用直線補上，不暫停也不問跑完了嗎', async () => {
   const Run = await load(); Run.start({ useGps: true });
@@ -224,4 +231,120 @@ test('Wake Lock：被系統放掉時狀態變成 off，回到前景再要一次�
   wakeDeny = false;
   Run.pause();
   assert.equal(Run.awake(), 'off', '暫停時放掉');
+});
+
+test('(e) 等紅燈自動暫停後鎖定螢幕、繼續跑 5 分鐘才解鎖：回頭估算什麼時候開始跑，時間與距離都補上', async () => {
+  const Run = await load(); Run.start({ useGps: true });
+  const w = world(Run), v = 3.3;
+  w.run(120, v);
+  w.run(40, 0);
+  assert.equal(Run.session().status, 'paused', '等紅燈先自動暫停');
+  document.visibilityState = 'hidden'; w.wake();
+  w.freeze(300, v);
+  document.visibilityState = 'visible'; w.wake();
+  w.tick(); w.run(60, v);
+  Run.finish();
+  const r = Run.summary();
+  assert.deepEqual(w.asks, []);
+  // 轉角那段用直線補，距離是下限；時間用平常的速度換算，所以也略少，但配速跟實際一樣
+  lowerBound(r, w);
+  assert.ok(r.est > 700, `估算距離 ${r.est}`);
+  assert.equal(r.route.filter((p) => p[2] === 2).length, 0, '路線沒有斷開（估算的那段畫虛線）');
+});
+
+test("(e') 等紅燈自動暫停後在高架橋下訊號弱 2 分鐘：一樣回頭補上", async () => {
+  const Run = await load(); Run.start({ useGps: true });
+  const w = world(Run), v = 3.3;
+  w.run(120, v);
+  w.run(40, 0);
+  assert.equal(Run.session().status, 'paused');
+  w.acc = 240; w.run(120, v);
+  w.acc = 5; w.run(60, v);
+  Run.finish();
+  const r = Run.summary();
+  lowerBound(r, w);
+  assert.ok(r.est > 250, `估算距離 ${r.est}`);   // 轉角前後的直線約 280 公尺
+});
+
+test('(f) 跑完走進室內忘了按結束（一直訊號弱）：5 分鐘後當成停下來，問跑完了嗎，時間不會一直加', async () => {
+  const Run = await load(); Run.start({ useGps: true });
+  const w = world(Run), v = 3.3;
+  w.run(600, v);
+  w.acc = 80; w.run(2400, 0);
+  const y = Run.session();
+  assert.equal(y.status, 'paused');
+  assert.equal(y.held, 1, '因為收不到定位才暫停');
+  assert.equal(w.asks[0], 'finish', '要問跑完了嗎');
+  near(Run.elapsed() / 1000, 600, 3, '時間停在最後一次移動');
+});
+
+test('(g) 跑完鎖定螢幕走 300 公尺回家，40 分鐘後才解鎖：大多停著，不當成在跑', async () => {
+  const Run = await load(); Run.start({ useGps: true });
+  const w = world(Run), v = 3.3;
+  w.run(600, v);
+  w.freeze(2400, 0); w.m += 300;
+  w.wake(); w.tick(); w.run(30, 0);
+  const r = Run.summary();
+  near(r.seconds, 600, 5, '時間');
+  assert.equal(r.est, 0, '不用直線補');
+});
+
+test("(g') 等紅燈時手機不回報定位，開始跑 10 秒後才回來：從停下來起暫停，只補離開的那一小段", async () => {
+  const Run = await load(); Run.start({ useGps: true });
+  const w = world(Run), v = 3.3;
+  w.run(120, v);
+  w.run(60, 0, { fixes: false });
+  w.run(10, v, { fixes: false });
+  w.run(60, v);
+  Run.finish();
+  const r = Run.summary();
+  near(r.seconds, w.moving / 1000, 6, '時間（等紅燈的 60 秒不算）');
+  near(r.distance, w.m, 40, '距離');
+});
+
+test('(h) 鎖定螢幕跑到最後，解鎖就按暫停、結束：再等一下定位點，把最後那段補上', async () => {
+  const Run = await load(); Run.start({ useGps: true });
+  const w = world(Run), v = 3.3;
+  w.run(600, v);
+  w.freeze(300, v);
+  w.wake(); w.tick();
+  Run.pause(); Run.finish();
+  assert.equal(Run.summary().settling, true, '還在等定位點');
+  now += 3000; w.fix();
+  const r = Run.summary();
+  assert.equal(r.settling, false);
+  near(r.seconds, 900, 3, '時間');
+  near(r.distance, w.m, 100, '距離（±1.5 m 雜訊跑 10 分鐘會多算一點）');
+  assert.ok(r.est > 900, `估算距離 ${r.est}`);
+  assert.equal(r.lost, 0);
+  assert.equal(r.route.filter((p) => p[2] === 2).length, 0, '最後那段畫虛線，不是斷開');
+});
+
+test("(h') 訊號弱時按暫停、結束，30 秒內都沒有好的定位點：記下這段沒有距離，成績頁提醒", async () => {
+  const Run = await load(); Run.start({ useGps: true });
+  const w = world(Run), v = 3.3;
+  w.run(120, v);
+  w.acc = 200; w.run(120, v);
+  Run.pause(); Run.finish();
+  w.run(31, 0);
+  const r = Run.summary();
+  assert.equal(r.settling, false);
+  near(r.lost, 120, 3, '沒有距離的時間');
+  assert.equal(geoCb, null, '等完就關掉 GPS');
+});
+
+test('(i) 等紅燈時按計圈、接著自動暫停：時間往回退後計圈不會是負的，自動繼續後馬上按也算', async () => {
+  const Run = await load(); Run.start({ useGps: true });
+  const w = world(Run), v = 3.3;
+  w.run(300, v);
+  w.run(5, 0);
+  assert.equal(Run.lap(), true);
+  w.run(40, 0);
+  assert.equal(Run.session().status, 'paused');
+  assert.ok(Run.currentLap().sec >= 0, '進行中這一圈不能是負的');
+  w.run(20, v);
+  assert.equal(Run.session().status, 'running');
+  assert.equal(Run.lap(), true, '自動繼續後按的圈要算');
+  Run.finish();
+  for (const l of Run.summary().laps) assert.ok(l.sec >= 0, `第 ${l.n} 圈 ${l.sec} 秒`);
 });

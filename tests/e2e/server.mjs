@@ -2,7 +2,11 @@
 //   node tests/e2e/server.mjs [port] [https]：Safari（WebKit）連 localhost 也會把資源升級成 https，所以 Safari 測試用 https 版
 import { spawn, execSync } from 'node:child_process';
 import { rmSync } from 'node:fs';
+import { createConnection } from 'node:net';
 const PORT = process.argv[2] || '8796', HTTPS = process.argv[3] === 'https';
+// 這個 port 已經有伺服器在跑（別的測試 session）：直接結束，不要清掉它正在用的資料庫
+const listening = (host) => new Promise((r) => { const c = createConnection({ port: Number(PORT), host }, () => { c.destroy(); r(true); }); c.on('error', () => r(false)); });
+if ((await listening('127.0.0.1')) || (await listening('::1'))) { console.error(`port ${PORT} 已經有伺服器在跑，沒有清它的資料庫；換一個 port 或先關掉那個伺服器`); process.exit(1); }
 // 不要互動式確認、不送使用統計（不然 migration 會停在那邊等）
 const env = { ...process.env, CI: '1', WRANGLER_SEND_METRICS: 'false' };
 const STATE = PORT === '8796' ? '.wrangler/e2e-state' : `.wrangler/e2e-state-${PORT}`;

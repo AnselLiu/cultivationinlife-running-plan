@@ -2331,6 +2331,8 @@ async function logView() {
   const evDay = fromEv?.week_no && personal ? (await P.weekPlan(fromEv.week_no, me.dist, me.grp))?.find((d) => new RegExp(dayPattern(fromEv.date)).test(d.d)) : null;
   const extra = !log && !day;
   const v = { status: extra ? 'extra' : 'done', km: '', seconds: null, hr: '', rpe: 5, feel: 3, note: '', ...log, ...(incoming || {}) };
+  // 跑步記錄帶來的備註（含直線估算多少）：這天已經有備註就接在後面，不蓋掉
+  if (log?.note && incoming?.note && !log.note.includes(incoming.note)) v.note = `${log.note}；${incoming.note}`.slice(0, 300);
   // 個人週期的比賽那一列只記「比賽日」（教練看得到課表內容，看不到你的比賽名稱）
   const planText = log?.plan_text || (day && personal && P.isRaceDay(day, week) ? '比賽日' : day?.t) || '';
   const label = log?.plan_day || day?.d || '';
@@ -2558,7 +2560,15 @@ function bindComments() {
 const hms = (sec) => { sec = Math.max(0, Math.round(sec)); const h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60), x = sec % 60; return `${h ? `${h}:` : ''}${h ? pad2(m) : m}:${pad2(x)}`; };
 const paceStr = (secPerKm) => (secPerKm && secPerKm < 1800 ? `${Math.floor(secPerKm / 60)}'${pad2(Math.round(secPerKm % 60))}"` : '—');
 const GPS_NAME = { waiting: '正在定位…', good: 'GPS 良好', ok: 'GPS 普通', weak: 'GPS 訊號弱', denied: '沒有定位權限', off: '只計時' };
-let runTick = null, lapMsgT = 0, wakeBadAt = 0;
+let runTick = null, lapMsgT = 0, wakeBadAt = 0, settleOff = null;
+// 螢幕保持亮著要不到、或被系統放掉：跑步中超過 2 秒才提醒（記錄中的畫面與口袋模式共用）
+function wakeWarn(y) {
+  const bad = y.status === 'running' && ['off', 'denied', 'unsupported'].includes(Run.awake()) && document.visibilityState === 'visible';
+  wakeBadAt = bad ? wakeBadAt || Date.now() : 0;
+  return !!wakeBadAt && Date.now() - wakeBadAt >= 2000;
+}
+// 「跑完了嗎？」問的時候停著，之後自動繼續跑了：這個問題就不用再顯示
+function staleAsk(y) { if (pendingAsk?.kind === 'finish' && y.status === 'running') { pendingAsk = null; const b = $('#askDone'); if (b) b.innerHTML = ''; } }
 // 路線預覽（SVG，不載地圖圖資，路線不離開手機）
 //   點是 [緯度, 經度, 記號]：記號 1＝空檔的直線估算（虛線、淡一點）、2＝跟上一點斷開（不連線）
 function routeSvg(route) {
@@ -2568,14 +2578,19 @@ function routeSvg(route) {
   const minX = Math.min(...lons) * kx, maxX = Math.max(...lons) * kx, minY = Math.min(...lats), maxY = Math.max(...lats);
   const w = Math.max(maxX - minX, 1e-6), h = Math.max(maxY - minY, 1e-6), sc = Math.min(560 / w, 260 / h);
   const P = ([la, lo]) => `${(20 + (lo * kx - minX) * sc + (560 - w * sc) / 2).toFixed(1)},${(20 + (maxY - la) * sc + (260 - h * sc) / 2).toFixed(1)}`;
+  // 估算的路段：每一段自己算點距（短的空檔縮小後只有幾十個單位，點距跟著縮，至少看得到 3–4 個點，不會像路線斷掉）
   let line = '', est = '';
   route.forEach((p, i) => {
     if (!i || p[2] === 2) line += `M${P(p)}`;
-    else if (p[2] === 1) { est += `M${P(route[i - 1])}L${P(p)}`; line += `M${P(p)}`; }
+    else if (p[2] === 1) {
+      const a = P(route[i - 1]), b = P(p), [ax, ay] = a.split(',').map(Number), [bx, by] = b.split(',').map(Number);
+      const per = Math.max(6, Math.min(12, Math.hypot(bx - ax, by - ay) / 4));
+      est += `<path class="est" d="M${a}L${b}" stroke-dasharray="2 ${(per - 2).toFixed(1)}"/>`; line += `M${b}`;
+    }
     else line += `L${P(p)}`;
   });
   const [sx, sy] = P(route[0]).split(','), [ex, ey] = P(route[route.length - 1]).split(',');
-  return `<svg class="routesvg" viewBox="0 0 600 300" role="img" aria-label="這次跑步的路線"><path d="${line}"/>${est ? `<path class="est" d="${est}"/>` : ''}
+  return `<svg class="routesvg" viewBox="0 0 600 300" role="img" aria-label="這次跑步的路線"><path d="${line}"/>${est}
     <circle cx="${sx}" cy="${sy}" r="8" class="st"/><circle cx="${ex}" cy="${ey}" r="8" class="en"/></svg>`;
 }
 // 空檔的估算：「螢幕鎖定或訊號弱時以直線估算 620 公尺」
@@ -2598,7 +2613,9 @@ async function runView() {
         <div class="card kpi"><span class="tiny">平均配速</span><b class="num">${paceStr(r.pace)}</b></div>
         <div class="card kpi"><span class="tiny">爬升</span><b class="num">${r.gain ? `${r.gain}<small> m</small>` : '—'}</b></div>
       </section>
-      ${!r.gps || r.distance < 50 ? `<section class="card"><h3>距離</h3><p class="tiny" style="margin:0">${r.gps ? 'GPS 沒有記到距離（可能在室內或訊號太弱），' : '這次沒有開 GPS，'}請填實際跑的距離，例如跑步機上的數字或操場圈數。</p>
+      ${r.settling ? '<p class="tiny estnote" role="status">正在等 GPS 補上最後一段（最多 30 秒）…</p>' : ''}
+      ${r.lost >= 10 ? `<p class="tiny estnote">有 ${hms(r.lost)} 收不到定位（螢幕鎖定或訊號弱），這段沒有算到距離，平均配速會偏慢；知道實際距離可以在下面填。</p>` : ''}
+      ${!r.gps || r.distance < 50 || x.lostMs >= 10000 ? `<section class="card"><h3>距離</h3><p class="tiny" style="margin:0">${!r.gps || r.distance < 50 ? `${r.gps ? 'GPS 沒有記到距離（可能在室內或訊號太弱），' : '這次沒有開 GPS，'}請填實際跑的距離，例如跑步機上的數字或操場圈數。` : '知道實際距離的話填在這裡，會取代 GPS 算的距離。'}</p>
         <form id="manDist" class="row" style="gap:8px"><input name="km" inputmode="decimal" placeholder="例如 8.0" aria-label="實際距離（公里）" style="flex:1" value="${x.manualDist ? (x.manualDist / 1000).toFixed(2) : ''}"><span>km</span><button class="btn sm">更新</button></form></section>` : ''}
       ${r.est ? `<p class="tiny estnote">${estText(r.est)}，路線上畫成虛線；實際跑的通常比直線長一點。</p>` : ''}
       ${r.route.length > 1 ? `<section class="card"><div class="row spread"><h3>路線</h3><span class="tiny">只留在你的手機上</span></div>${routeSvg(r.route)}</section>` : ''}
@@ -2615,6 +2632,9 @@ async function runView() {
         <button class="btn danger block" id="runDiscard">刪除這次記錄</button>
       </section>`;
     $('#manDist')?.addEventListener('submit', (e) => { e.preventDefault(); Run.setDistance(parseFloat(e.target.km.value) * 1000); runView(); });
+    // 還在等最後那段的定位點：等到（或 30 秒到了）就重畫成績
+    settleOff?.(); settleOff = null;
+    if (r.settling) settleOff = Run.on((y) => { if (y?.settle) return; settleOff?.(); settleOff = null; if (y?.status === 'done' && location.hash.split('?')[0] === '#/run') runView(); });
     $('#toStudio')?.addEventListener('click', () => {
       studio.stats = { title: '今天的跑步', date: r.date, distance: r.distance, seconds: r.seconds, elevation: r.gain, avg_hr: null, route: r.route };
       studio.source = 'manual'; studio.template = r.route.length > 1 ? 'route' : studio.template; location.hash = '#/studio';
@@ -2632,9 +2652,9 @@ async function runView() {
     view.innerHTML = `${largeTitle('跑步', '計時加上 GPS，跑完自動算出今天的成績')}
       <section class="card runstart">
         <button class="runbtn go" id="runGo" aria-label="開始跑步記錄"><span>開始</span></button>
-        <p class="tiny center" style="margin:0">第一次使用會詢問定位權限。跑步時螢幕會保持亮著；iPhone 鎖定螢幕時會停止記錄，解鎖後空白的那段用直線估算（路線畫成虛線）。手機放口袋可以開「口袋模式」防誤觸。</p>
+        <p class="tiny center" style="margin:0">第一次使用會詢問定位權限。跑步時螢幕會保持亮著；iPhone 鎖定螢幕時收不到定位（計時照走），解鎖後空白的那段用直線估算（路線畫成虛線）。手機放口袋可以開「口袋模式」防誤觸。</p>
         <button class="btn ghost block" id="runNoGps">不用 GPS，只計時（跑步機、操場）</button>
-        <label class="switch pkpref"><span>開始後直接進入口袋模式<span class="tiny" style="display:block">手機放口袋時畫面全黑、點了沒反應，螢幕保持亮著</span></span><input type="checkbox" id="pkPref" ${pocketPref.get() ? 'checked' : ''}><i></i></label>
+        <label class="switch pkpref"><span>開始後直接進入口袋模式<span class="tiny" style="display:block">手機放口袋時畫面全黑、點了沒反應，會盡量讓螢幕保持亮著</span></span><input type="checkbox" id="pkPref" ${pocketPref.get() ? 'checked' : ''}><i></i></label>
       </section>
       ${group('跑完之後', [
         feat('studio') ? row('#/studio', MI.camera, '拍照分享', '距離、時間和路線放進照片，分享到 IG').replace('class="setrow"', 'class="setrow runshare"') : '',
@@ -2667,7 +2687,8 @@ async function runView() {
       </div>
       ${x.goal ? `<div class="goalbar"><span class="tiny">今天的課表：${esc(x.goal.text)}</span><span class="bar big"><i id="rGoal" style="width:0%"></i></span></div>` : ''}
       <div class="notice wakenote" id="rWake" role="status" hidden><b>螢幕可能會自動關掉</b>
-        <p>iPhone 鎖定螢幕時網頁會停住、收不到定位，解鎖後空白的那段只能用直線估算。想記完整，跑步時讓螢幕保持亮著：放口袋時開口袋模式，或把「設定 › 螢幕顯示與亮度 › 自動鎖定」暫時設為「永不」（低電量模式下 iPhone 會 30 秒就鎖定）。</p>
+        <p>iPhone 鎖定螢幕時網頁會停住、收不到定位，解鎖後空白的那段只能用直線估算。想記完整：把「設定 › 螢幕顯示與亮度 › 自動鎖定」暫時設為「永不」；低電量模式下要先關掉低電量模式才能改。</p>
+        <p id="rWakeAgain">也可以再試一次，或開口袋模式（開的時候會再要一次）。</p>
         <button type="button" class="linkbtn" id="rWakeRetry">再試一次讓螢幕保持亮著</button></div>
       <button type="button" class="btn ghost sm iconbtn" id="rPocket">${IC.lock}口袋模式</button>
       <p class="tiny gapline" id="rGap" hidden></p>
@@ -2692,13 +2713,13 @@ async function runView() {
     const gl = $('#rGap'), gt = y.gap ? '收不到定位，等 GPS 回來後這段用直線估算' : y.estM >= 1 ? estText(y.estM) : '';
     if (gl && gl.dataset.t !== gt) { gl.dataset.t = gt; gl.textContent = gt; gl.hidden = !gt; }
     // 螢幕保持亮著要不到、或被系統放掉：跑步中超過 2 秒就提醒（不擋畫面）
+    //   這個瀏覽器不支援的話，再試一次或口袋模式都沒用，只講自動鎖定
     const wk = $('#rWake');
     if (wk) {
-      const bad = y.status === 'running' && ['off', 'denied', 'unsupported'].includes(Run.awake()) && document.visibilityState === 'visible';
-      wakeBadAt = bad ? wakeBadAt || Date.now() : 0;
-      wk.hidden = !(wakeBadAt && Date.now() - wakeBadAt >= 2000);
-      $('#rWakeRetry').hidden = Run.awake() === 'unsupported';
+      wk.hidden = !wakeWarn(y);
+      $('#rWakeRetry').hidden = $('#rWakeAgain').hidden = Run.awake() === 'unsupported';
     }
+    staleAsk(y);
     // 自動暫停或自動繼續時，按鈕要跟著換
     if ((y.status === 'paused') !== !!$('#rResume')) { runView(); return; }
     if ($('#rState')) $('#rState').textContent = y.status === 'paused' ? (y.auto ? '停下來了，自動暫停' : '已暫停') : '記錄中';
@@ -2714,14 +2735,18 @@ async function runView() {
       const l = y.laps[y.laps.length - 1], prev = y.laps[y.laps.length - 2];
       msg.textContent = `已記第 ${y.laps.length} 圈 ${hms((l.at - (prev ? prev.at : 0)) / 1000)}`;
     } else {
-      msg.textContent = '剛記過一圈，這次不算';
+      msg.textContent = y?.status !== 'running' ? '暫停中不能記圈' : y.laps.length ? '剛記過一圈，這次不算' : '剛開始，3 秒後再記圈';
       btn.classList.remove('nudge'); void btn.offsetWidth; btn.classList.add('nudge');
     }
     clearTimeout(lapMsgT); lapMsgT = setTimeout(() => { msg.textContent = ''; }, 2500);
     paint();
   });
   $('#rPocket')?.addEventListener('click', pocketOn);
-  $('#rWakeRetry')?.addEventListener('click', () => Run.keepAwake());
+  // 再試一次：1 秒後還是要不到，就改口請他用自動鎖定設定
+  $('#rWakeRetry')?.addEventListener('click', (e) => {
+    const b = e.currentTarget; Run.keepAwake();
+    setTimeout(() => { if (Run.awake() !== 'on' && b.isConnected) b.textContent = '還是沒辦法，請改用自動鎖定設定'; }, 1000);
+  });
   $('#rPause')?.addEventListener('click', () => { Run.pause(); runView(); });
   $('#rResume')?.addEventListener('click', () => { Run.resume(); runView(); });
   $('#rStop')?.addEventListener('click', () => { Run.finish(); runView(); });
@@ -2742,9 +2767,12 @@ function pocketOn() {
     <div class="pktime num" id="pkTime"></div>
     <div class="pkstats"><div><b class="num" id="pkDist"></b><span>km</span></div><div><b class="num" id="pkPace"></b><span>目前配速 /km</span></div></div>
     <p class="pkask" id="pkAsk" hidden></p>
+    <p class="pkask" id="pkWake" hidden>螢幕可能會自動關掉，解鎖後再試一次</p>
     <div class="pkslide" id="pkSlide" aria-hidden="true"><span>滑到右邊解鎖</span><i id="pkKnob"></i></div>
     <button type="button" class="sr" id="pkUnlock">解鎖口袋模式</button>`;
   document.body.append(el);
+  // iPhone 主畫面 App 的狀態列跟著 theme-color：口袋模式時整片黑（離開時還原）
+  for (const m of document.querySelectorAll('meta[name="theme-color"]')) { m.dataset.c = m.content; m.content = '#000000'; }
   // 後面的畫面不能點、VoiceOver 也不會跑出去
   pocketInert = [...document.body.children].filter((c) => c !== el && !c.inert);
   for (const c of pocketInert) c.inert = true;
@@ -2774,6 +2802,7 @@ function pocketOff(focus) {
   clearInterval(pocketTick); pocketTick = null;
   const el = document.getElementById('pocket'); if (!el) return;
   el.remove();
+  for (const m of document.querySelectorAll('meta[name="theme-color"][data-c]')) { m.content = m.dataset.c; delete m.dataset.c; }
   for (const c of pocketInert) c.inert = false;
   pocketInert = [];
   if (focus) $('#rPocket')?.focus();
@@ -2787,6 +2816,8 @@ function paintPocket() {
   $('#pkPace').textContent = paceStr(Run.currentPace());
   $('#pkState').textContent = y.status === 'paused' ? (y.auto ? '停下來了，自動暫停' : '已暫停') : '記錄中';
   el.classList.toggle('paused', y.status === 'paused');
+  $('#pkWake').hidden = !wakeWarn(y);
+  staleAsk(y);
   const ask = $('#pkAsk');
   ask.hidden = !pendingAsk;
   if (pendingAsk && ask.textContent !== pendingAsk.msg) ask.textContent = pendingAsk.msg;
@@ -2794,7 +2825,7 @@ function paintPocket() {
 // 問「跑完了嗎？」：停太久或課表目標到了；畫面在背景時也用通知提醒
 function askFinish(kind) {
   const y = Run.session(); if (!y) return;
-  const msg = kind === 'goal' ? `今天的課表（${y.goal.text}）完成了，要結束這次記錄嗎？` : '已經停下來 3 分鐘了，跑完了嗎？';
+  const msg = kind === 'goal' ? `今天的課表（${y.goal.text}）完成了，要結束這次記錄嗎？` : y.held ? '已經 5 分鐘收不到定位了，跑完了嗎？' : '已經停下來 3 分鐘了，跑完了嗎？';
   navigator.vibrate?.([200, 100, 200]);
   if (document.visibilityState === 'hidden' && window.Notification?.permission === 'granted')
     navigator.serviceWorker?.ready.then((reg) => reg.showNotification('跑完了嗎？', { body: msg, tag: 'run-ask', data: { url: '/#/run' }, icon: '/icons/icon-192.png' })).catch(() => {});
