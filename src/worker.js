@@ -2609,6 +2609,8 @@ const api = (async function api(req, env, path, method) {
       const ids = [...new Set((Array.isArray(b.member_ids) ? b.member_ids : []).map((x) => str(x, 32)).filter(Boolean))].slice(0, 200);
       if (!action || !ids.length) return fail(400, '審核資料不正確');
       const note = action === 'reject' ? str(b.note, 120) || null : null;
+      // 移出（可再報名）：一樣取消報名、通知本人，但不記成婉拒，本人之後可以自己再報名（沒開審核的活動也不會卡住）
+      const rebook = action === 'reject' && b.rebook === true;
       const rows = (await env.DB.prepare(`SELECT id, member_id, name, status, review, paid, pay_reported_at, amount, created_at FROM signups
         WHERE event_id = ? AND member_id IN (SELECT value FROM json_each(?))`).bind(ev.id, JSON.stringify(ids)).all()).results
         .sort((a, c) => (a.created_at < c.created_at ? -1 : a.created_at > c.created_at ? 1 : a.id < c.id ? -1 : 1));
@@ -2643,11 +2645,11 @@ const api = (async function api(req, env, path, method) {
         if (listed.length && b.revoke !== true)
           return json({ error: '這些人已經在名單上，要確認移出', needRevoke: true, count: listed.length, paid: listed.filter((r) => r.paid === 'paid').length }, 409);
         // 一句改完所有人（每人比對自己原本的狀態，兩句之間被別人處理掉的不會改到）
-        const upd = live.length ? new Set((await env.DB.prepare(`UPDATE signups SET status = 'cancel', review = 'rejected', reviewed_by = ?1, reviewed_at = datetime('now'), review_note = ?2, reg_consent_at = NULL,
+        const upd = live.length ? new Set((await env.DB.prepare(`UPDATE signups SET status = 'cancel', review = CASE WHEN ?5 THEN NULL ELSE 'rejected' END, reviewed_by = ?1, reviewed_at = datetime('now'), review_note = ?2, reg_consent_at = NULL,
             cancelled_at = datetime('now'), cancel_by = CASE WHEN status = 'pending' THEN 'rejected' ELSE 'organizer' END,
-            paid_note = CASE WHEN paid = 'paid' THEN '婉拒，待退費' ELSE paid_note END
+            paid_note = CASE WHEN paid = 'paid' THEN CASE WHEN ?5 THEN '移出，待退費' ELSE '婉拒，待退費' END ELSE paid_note END
           WHERE event_id = ?3 AND (id || ':' || status) IN (SELECT value FROM json_each(?4)) RETURNING id`)
-          .bind(member.id, note, ev.id, JSON.stringify(live.map((r) => `${r.id}:${r.status}`))).all()).results.map((x) => x.id)) : new Set();
+          .bind(member.id, note, ev.id, JSON.stringify(live.map((r) => `${r.id}:${r.status}`)), rebook ? 1 : 0).all()).results.map((x) => x.id)) : new Set();
         const gone = live.filter((r) => upd.has(r.id));
         for (const r of live.filter((x) => !upd.has(x.id))) skip(r, '這筆已被處理');
         const notes = [];
@@ -2655,16 +2657,16 @@ const api = (async function api(req, env, path, method) {
           const paid = r.paid === 'paid';
           if (paid) out.refund.push(r.name);
           out.rejected.push({ member_id: r.member_id, name: r.name, was: r.status });
-          // 原因只放通知中心內文；鎖定畫面用通用文字
-          if (r.status === 'pending') notes.push({ ...base, member_id: r.member_id, title: `未通過審核：${ev.title}`,
-            body: note ? `主辦婉拒了這筆報名：${note}` : '主辦婉拒了這筆報名，有疑問請聯絡主辦人', push: { body: '請到活動頁查看說明' } });
+          // 原因只放通知中心內文；鎖定畫面用通用文字；移出一律通知本人（沒有不通知的選項）
+          if (r.status === 'pending') notes.push({ ...base, member_id: r.member_id, title: rebook ? `申請已退回：${ev.title}` : `未通過審核：${ev.title}`,
+            body: rebook ? `主辦退回了這筆申請${note ? `：${note}` : ''}。需要的話可以再申請` : note ? `主辦婉拒了這筆報名：${note}` : '主辦婉拒了這筆報名，有疑問請聯絡主辦人', push: { body: '請到活動頁查看說明' } });
           else { revoked++; notes.push({ ...base, member_id: r.member_id, title: `已被移出名單：${ev.title}`,
-            body: `主辦把你移出了名單${note ? `：${note}` : ''}${paid ? '。已繳費用由主辦處理退費' : ''}`, push: { body: '請到活動頁查看說明' } }); }
+            body: `主辦把你移出了名單${note ? `：${note}` : ''}${paid ? '。已繳費用由主辦處理退費' : ''}${rebook ? '。需要的話可以再報名' : ''}`, push: { body: '請到活動頁查看說明' } }); }
         }
         if (gone.length) {
           // 入場券一句刪完；每位一列稽核（對象是會員，只記活動標題，不記原因），一句寫完
           await env.DB.batch([env.DB.prepare('DELETE FROM tickets WHERE event_id = ?1 AND member_id IN (SELECT value FROM json_each(?2))').bind(ev.id, JSON.stringify(gone.map((r) => r.member_id))),
-            await auditManyStmt(env, req, member, 'event.signup_reject', 'member', gone.map((r) => [r.member_id, ev.title]))]);
+            await auditManyStmt(env, req, member, 'event.signup_reject', 'member', gone.map((r) => [r.member_id, `${ev.title}${rebook ? '（可再報名）' : ''}`]))]);
           await notifyMany(env, 'change', notes, { kind: 'signup' });
         }
         if (gone.some((r) => r.status === 'in')) await promote(env, ev, { reserve: 6 });
@@ -2672,29 +2674,33 @@ const api = (async function api(req, env, path, method) {
         const todo = [];
         for (const r of rows) {
           if (!(r.status === 'cancel' && r.review === 'rejected')) { skip(r, r.status === 'pending' ? '這筆已被處理' : '目前狀態不能這樣處理'); continue; }
-          if (!ev.require_approval) { skip(r, '這場沒有開啟審核，請改用代為報名'); continue; }
           todo.push(r);
         }
-        // 重新審核：保留原本的 created_at（排隊順序不變）
-        const upd = todo.length ? new Set((await env.DB.prepare(`UPDATE signups SET status = 'pending', review = NULL, review_note = NULL, reviewed_by = ?1, reviewed_at = datetime('now'),
-            cancelled_at = NULL, cancel_by = NULL
+        // 有開審核：重新審核，回到待審核，保留原本的 created_at（排隊順序不變）
+        // 沒開審核：恢復可報名（拿掉婉拒，報名維持取消），本人之後自己再報名；以前這種情況沒有出路
+        const back = !!ev.require_approval;
+        out.restored = !back;
+        const upd = todo.length ? new Set((await env.DB.prepare(`UPDATE signups SET status = CASE WHEN ?4 THEN 'pending' ELSE status END, review = NULL, review_note = NULL, reviewed_by = ?1, reviewed_at = datetime('now'),
+            cancelled_at = CASE WHEN ?4 THEN NULL ELSE cancelled_at END, cancel_by = CASE WHEN ?4 THEN NULL ELSE cancel_by END
           WHERE event_id = ?2 AND status = 'cancel' AND review = 'rejected' AND id IN (SELECT value FROM json_each(?3)) RETURNING id`)
-          .bind(member.id, ev.id, JSON.stringify(todo.map((r) => r.id))).all()).results.map((x) => x.id)) : new Set();
+          .bind(member.id, ev.id, JSON.stringify(todo.map((r) => r.id)), back ? 1 : 0).all()).results.map((x) => x.id)) : new Set();
         for (const r of todo) {
           if (!upd.has(r.id)) { skip(r, '這筆已被處理'); continue; }
           out.reopened.push({ member_id: r.member_id, name: r.name });
         }
-        if (out.reopened.length) {
+        if (out.reopened.length && back) {
           await notify(env, out.reopened.map((x) => x.member_id), 'change', { kind: 'signup', ...base, title: `你的報名重新進入審核：${ev.title}`, body: '主辦會再通知你結果' });
           await alertReviewers(env, ev, member.id);
+        } else if (out.reopened.length) {
+          await notify(env, out.reopened.map((x) => x.member_id), 'change', { kind: 'signup', ...base, title: `可以再報名了：${ev.title}`, body: '主辦恢復了你的報名資格，需要的話請到活動頁報名' });
         }
       }
       const nRej = out.rejected.length - revoked;
       await audit(env, req, member, 'event.signup_review', 'event', ev.id,
-        `核准 ${out.in.length + out.wait.length}（正取 ${out.in.length}、候補 ${out.wait.length}）、婉拒 ${nRej}、移出 ${revoked}、重新審核 ${out.reopened.length}、略過 ${out.skipped.length}`);
+        `核准 ${out.in.length + out.wait.length}（正取 ${out.in.length}、候補 ${out.wait.length}）、${rebook ? '退回' : '婉拒'} ${nRej}、移出 ${revoked}${rebook ? '（可再報名）' : ''}、${out.restored ? '恢復可報名' : '重新審核'} ${out.reopened.length}、略過 ${out.skipped.length}`);
       await settleReviews(env, ev.id);
       const signed = await countIn(env, ev.id);
-      return json({ ...out, seatsLeft: ev.capacity ? Math.max(0, ev.capacity - signed) : null, pending: await pendingCount(env, ev.id) });
+      return json({ ...out, rebook, seatsLeft: ev.capacity ? Math.max(0, ev.capacity - signed) : null, pending: await pendingCount(env, ev.id) });
     }
     if (op === 'payments') {
       const PAID = ['unpaid', 'paid', 'waived', 'refunded'];

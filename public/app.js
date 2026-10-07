@@ -234,7 +234,8 @@ function choose(title, message, options, { cancel = '取消' } = {}) {
 // 婉拒原因面板：常用理由 chips＋自由填寫（最多 120 字）；回傳 { note } 或 null（取消）
 //   who：團員自己填的姓名，一律當純文字、不翻譯；lines：說明句（純文字，空字串略過）；ok：確認鍵文字（婉拒／移出）
 //   開著的時候 Tab 只在面板裡循環，關掉後焦點回到原本的按鈕
-function askReason(title, { who = '', lines = [], chips = [], ok = '婉拒' } = {}) {
+// alt：第二個動作（例如「移出（可再報名）」），選了回傳 { note, alt: true }
+function askReason(title, { who = '', lines = [], chips = [], ok = '婉拒', alt = '' } = {}) {
   return new Promise((done) => {
     const back = document.activeElement;
     const host = document.createElement('div');
@@ -246,7 +247,7 @@ function askReason(title, { who = '', lines = [], chips = [], ok = '婉拒' } = 
       ${chips.length ? `<div class="chips" role="group" aria-label="常用原因">${chips.map((c) => `<button type="button" class="chip" data-c="${esc(c)}" aria-pressed="false">${esc(c)}</button>`).join('')}</div>` : ''}
       <label>原因（選填）<textarea maxlength="120" rows="3" aria-describedby="reasonHint"></textarea></label>
       <p class="tiny" id="reasonHint" style="margin:0">原因只有本人看得到，推播不會顯示原因</p>
-      <div class="choices"><button type="button" class="btn danger block" data-ok="1">${esc(ok)}</button><button type="button" class="btn ghost block" data-x="1">取消</button></div></div>`;
+      <div class="choices"><button type="button" class="btn danger block" data-ok="1">${esc(ok)}</button>${alt ? `<button type="button" class="btn block" data-alt="1">${esc(alt)}</button>` : ''}<button type="button" class="btn ghost block" data-x="1">取消</button></div></div>`;
     document.body.append(host);
     const ta = host.querySelector('textarea');
     const close = (v) => { host.remove(); if (back?.isConnected) back.focus(); done(v); };
@@ -260,6 +261,7 @@ function askReason(title, { who = '', lines = [], chips = [], ok = '婉拒' } = 
         return;
       }
       if (e.target.closest('[data-ok]')) { close({ note: ta.value.trim().slice(0, 120) }); return; }
+      if (e.target.closest('[data-alt]')) { close({ note: ta.value.trim().slice(0, 120), alt: true }); return; }
       if (e.target.closest('[data-x]')) close(null);
     });
     host.addEventListener('keydown', (e) => {

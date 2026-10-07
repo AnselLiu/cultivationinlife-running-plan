@@ -359,7 +359,7 @@ async function statsView(id) {
         ${(st.items || []).length && live ? `<label class="inline picked"><input type="checkbox" data-pick="${esc(x.member_id)}" ${x.picked ? 'checked' : ''}> 已領取</label>` : ''}
         ${st.canReview ? `<span class="row rvbtns" style="gap:6px">${x.status === 'pending' ? `<button type="button" class="btn sm" data-rv="approve" ${off}>核准</button><button type="button" class="btn ghost sm" data-rv="reject" ${off}>婉拒</button>`
           : x.status === 'in' || x.status === 'wait' ? `<button type="button" class="btn ghost sm" data-rv="revoke" ${off}>移出名單</button>`
-          : x.status === 'rejected' ? `<button type="button" class="btn ghost sm" data-rv="reopen" ${off}>重新審核</button>` : ''}</span>` : ''}</span>
+          : x.status === 'rejected' ? `<button type="button" class="btn ghost sm" data-rv="reopen" ${off}>${st.requireApproval ? '重新審核' : '恢復可報名'}</button>` : ''}</span>` : ''}</span>
       ${money && (live || refund) ? `<select data-pay="${esc(x.member_id)}" aria-label="繳費狀態" class="paysel ${x.paid}">${Object.entries(PAID_NAME).map(([k, v]) => `<option value="${k}" ${x.paid === k ? 'selected' : ''}>${v}</option>`).join('')}</select>` : '<span></span>'}
     </div>`; };
   const kpi = [[survey ? '回覆' : '正取', t.in], ...(survey ? [] : [['候補', t.wait]]),
@@ -521,10 +521,11 @@ function bindReview(id, st) {
       // 姓名是團員自己填的：交給 askReason 當純文字顯示（不翻譯），說明句各自是一整句，方便翻譯
       const r = await askReason(listed.length ? '移出名單' : '婉拒報名', {
         who: ids.length === 1 ? nameOf(ids[0]) : '', lines: [ids.length === 1 ? '' : `已選 ${ids.length} 人`,
-          listed.length ? '移出後，空出的名額會由候補遞補。' : '婉拒後會通知本人。', paidN ? `其中 ${paidN} 人已繳費，會標記待退費。` : ''],
-        chips: ['名額已滿', '資格不符', '資料不完整', '其他'], ok: listed.length ? '移出名單' : '婉拒' });
+          listed.length ? '移出後，空出的名額會由候補遞補。' : '婉拒後會通知本人。', paidN ? `其中 ${paidN} 人已繳費，會標記待退費。` : '',
+          listed.length ? '都會通知本人。「移出名單」之後不能自己再報名；「移出（可再報名）」之後本人可以再報名。' : ''],
+        chips: ['名額已滿', '資格不符', '資料不完整', '其他'], ok: listed.length ? '移出名單' : '婉拒', alt: listed.length ? '移出（可再報名）' : '' });
       if (!r) return;
-      body = { action: 'reject', member_ids: ids, note: r.note, revoke: listed.length > 0 };
+      body = { action: 'reject', member_ids: ids, note: r.note, revoke: listed.length > 0, ...(r.alt ? { rebook: true } : {}) };
     }
     const all = [...btns, ...document.querySelectorAll('[data-rv], [data-bulk], #approveAll')];
     const was = all.map((b) => b.disabled);
@@ -535,8 +536,8 @@ function bindReview(id, st) {
       // 名字用 keep() 標成不翻譯：英文模式只翻固定的字，不會因為名字是中文就整句保留中文
       const skipped = [out.skipped.length ? [`，${out.skipped.length} 筆沒處理：`, names(out.skipped, '、', (x) => [keep(x.name), `（${x.reason}）`])] : '', out.more ? `，還有 ${out.more.member_ids.length} 人沒處理完，請再按一次` : ''];
       if (action === 'approve') toast(rich(`已核准 ${out.in.length + out.wait.length} 人（正取 ${out.in.length}、候補 ${out.wait.length}）`, skipped, out.notes.length ? ['。', names(out.notes, '、', (x) => { const q = /^「(.+)」(.*)$/.exec(x.reason); return [keep(x.name), ...(q ? ['：「', keep(q[1]), `」${q[2]}`] : [`：${x.reason}`])]; })] : ''));
-      else if (action === 'reopen') toast(rich(`已重新審核 ${out.reopened.length} 人`, skipped));
-      else if (body.revoke) toast(rich(`已移出 ${out.rejected.length} 人`, out.refund.length ? ['，待退費：', names(out.refund)] : '', skipped));
+      else if (action === 'reopen') toast(rich(out.restored ? `已恢復 ${out.reopened.length} 人可再報名` : `已重新審核 ${out.reopened.length} 人`, skipped));
+      else if (body.revoke) toast(rich(`已移出 ${out.rejected.length} 人${body.rebook ? '，之後可以再報名' : ''}`, out.refund.length ? ['，待退費：', names(out.refund)] : '', skipped));
       else toast(rich(`已婉拒 ${out.rejected.length} 人`, skipped));
       const y = scrollY; await statsView(id); scrollTo(0, y);
     } catch (e) { all.forEach((b, i) => { if (b.isConnected) b.disabled = was[i]; }); toast(e.message); }

@@ -4181,6 +4181,20 @@ export default {
 "取消時間": "Canceled at",
 "取消方式": "How canceled",
 "結束時間（選填）": "End time (optional)",
-"結束時間要在開始之後": "The end time must be after the start time"
+"結束時間要在開始之後": "The end time must be after the start time",
+"恢復可報名": "Allow to sign up again",
+"都會通知本人。「移出名單」之後不能自己再報名；「移出（可再報名）」之後本人可以再報名。": "They're notified either way. After Remove from list, they can't sign up again on their own. After Remove (can sign up again), they can.",
+"移出（可再報名）": "Remove (can sign up again)",
+"已恢復": "Restored:",
+"人可再報名": "people can sign up again",
+"，之後可以再報名": ", they can sign up again later",
+"申請已退回：": "Request returned: ",
+"主辦退回了這筆申請": "The organizer returned this request",
+"。需要的話可以再申請": ". You can apply again if needed",
+"。需要的話可以再報名": ". You can sign up again if needed",
+"（可再報名）": " (can sign up again)",
+"可以再報名了：": "You can sign up again: ",
+"主辦恢復了你的報名資格，需要的話請到活動頁報名": "The organizer restored your signup eligibility. Sign up on the event page if you'd like",
+"退回": "Returned"
 };
 export const inner = {"團練": "group run", "課表": "training plan", "拍照": "photo", "跑步": "running", "我的": "my", "揪跑": "social run", "分團": "sub-club", "主團": "home club", "報名": "sign up", "幹部": "officers", "團員": "members", "跑友": "runners", "活動": "event", "協會": "Association", "行事曆": "calendar", "地點": "spot", "路線": "route", "天氣": "weather", "通知": "notifications", "賽事": "race", "組別": "group", "訓練紀錄": "training log", "內容": "details", "流程": "process", "選擇": "option", "跑法": "how to run", "起跑": "start", "慢跑": "jog", "小時": "hours", "碳水": "carbs", "熱身": "warm-up", "分段": "segments", "強度": "intensity", "主課": "main set", "前段": "first part", "組數": "sets", "比賽日": "race day", "可在": "can be done on"};
