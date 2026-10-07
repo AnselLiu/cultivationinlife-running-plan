@@ -1,10 +1,10 @@
 // 耕跑團 PWA — 「我的」的子頁（用到才載入；「我的」第一層在 app.js）
-//   個人資料、我的賽事與倒數、賽事報名資料、主團與分團、通知設定、行事曆訂閱、外觀與語言、帳號與安全、隱私、協會、會籍卡、分享 App
+//   個人資料、我的賽事與倒數、賽事報名資料、主團與分團、推薦人、通知設定、行事曆訂閱、外觀與語言、帳號與安全、隱私、協會、會籍卡、分享 App
 //   共用的工具與狀態從 app.js 拿；改登入狀態用 setMe（import 進來的 me、cfg 不能直接改）
 import {
   $, addrField, ago, api, applyTabs, applyTheme, askLegacyOnLeave, avatar, bindAddrField, bindInstall, bindStepup, btnRow, camLazy, cfg, choose,
-  clearDeviceData, copy, countdownPicker, dropPush, esc, feat, GOOGLE_G, googleHref, group, IC, iconsOnly, installCard, isStandalone, lsOrNull, me,
-  mfaBanner, MI, myCycle, NICON, openSheet, org, paintCountdown, passkey, pkSupported, qrSVG, reduceMotion, refreshMe, render, ROLE_NAME, row, setMe, subTitle,
+  clearDeviceData, copy, countdownPicker, dropPush, esc, feat, fieldError, focusEl, GOOGLE_G, googleHref, group, IC, iconsOnly, installCard, isStandalone, lsOrNull, me,
+  mfaBanner, MI, myCycle, NICON, openSheet, org, paintCountdown, passkey, pkSupported, qrSVG, reduceMotion, refOn, refreshMe, render, ROLE_NAME, row, setMe, startBack, subTitle,
   TEAM_ROLE_NAME, teamIcon, teamOf, teams, theme, toast, togglePush, view, ymd
 } from './app.js';
 import * as I18N from './i18n.js';
@@ -317,19 +317,152 @@ function mePrivacy() {
     <section class="card">
       <label class="switch"><span>把訓練完成率、里程與平均強度分享給教練與分團幹部<span class="tiny" style="display:block">每次的時間、心率、強度、感覺與備註永遠只有你看得到</span></span><input type="checkbox" id="shareLogs" ${me.share_logs ? 'checked' : ''}><i></i></label>
       <label class="switch"><span>出現在分團里程排行榜<span class="tiny" style="display:block">只有同分團的人看得到你的名字與里程</span></span><input type="checkbox" id="showRank" ${me.show_rank ? 'checked' : ''}><i></i></label>
+      ${cfg.googleLogin && (refOn() || me.referral?.emailLinked) ? `<label class="switch"><span>讓我推薦的跑友用 Gmail 找到我<span class="tiny" style="display:block">只存一組由 Email 算出、無法還原的查詢碼；關掉後立刻刪除，之後登入也不再產生</span></span><input type="checkbox" id="emailFind" ${me.referral?.findable !== false ? 'checked' : ''}><i></i></label>` : ''}
     </section>
     <section class="card"><h2 class="h3">我們存了什麼</h2>
-      <p class="tiny" style="margin:0">姓名、暱稱、組別、主團、餐點偏好、報名與訓練紀錄；賽事報名資料加密保存；電話只有行政人員看得到完整號碼。</p>
+      <p class="tiny" style="margin:0">${refOn() ? '姓名、暱稱、組別、主團、餐點偏好、報名與訓練紀錄；推薦人（如果有填）；Gmail 查詢碼（無法還原成 Email）；賽事報名資料加密保存；電話只有行政人員看得到完整號碼。' : '姓名、暱稱、組別、主團、餐點偏好、報名與訓練紀錄；賽事報名資料加密保存；電話只有行政人員看得到完整號碼。'}</p>
       <div class="row"><a class="btn ghost sm" href="#/privacy">隱私權政策</a><a class="btn ghost sm" href="/api/me/export" download>下載我的資料</a></div></section>
     ${feat('coach') ? group('', [row('#/plan/setup?go=device', MI.phone, '這台裝置上的課表設定與身體資料', '只存在這台裝置，不會上傳；登出時清除')]) : ''}
-    <section class="card"><h2 class="h3">刪除帳號</h2><p class="tiny" style="margin:0">報名、入場券、通知與訓練紀錄都會刪除，中獎紀錄只留獎項給協會對帳。</p>
+    <section class="card"><h2 class="h3">刪除帳號</h2><p class="tiny" style="margin:0">${refOn() ? '報名、入場券、通知與訓練紀錄都會刪除，中獎紀錄只留獎項給協會對帳。把你設為推薦人的跑友只會看到「推薦人已刪除帳號」。' : '報名、入場券、通知與訓練紀錄都會刪除，中獎紀錄只留獎項給協會對帳。'}</p>
       <button class="btn danger block" id="delAcct">刪除我的帳號</button></section>`;
   $('#showRank').onchange = async (e) => { try { await api('/me/show-rank', { method: 'POST', body: { on: e.target.checked } }); me.show_rank = e.target.checked; toast(e.target.checked ? '已加入排行榜' : '已退出排行榜'); } catch (err) { e.target.checked = !e.target.checked; toast(err.message); } };
+  // 讓推薦的跑友用 Gmail 找到我：關掉立刻刪除查詢碼；再打開不會自己恢復，要到「推薦人」再用 Google 確認一次
+  $('#emailFind')?.addEventListener('change', async (e) => {
+    try {
+      const r = await api('/me/email-findable', { method: 'POST', body: { on: e.target.checked } });
+      if (me.referral) Object.assign(me.referral, { findable: r.findable, emailLinked: r.emailLinked });
+      toast(r.findable ? '跑友可以用 Gmail 找到你' : '已關閉，查詢碼已刪除');
+    } catch (err) { e.target.checked = !e.target.checked; toast(err.message); }
+  });
   $('#shareLogs').onchange = async (e) => { try { await api('/me/share-logs', { method: 'POST', body: { share: e.target.checked } }); me.share_logs = e.target.checked; toast(e.target.checked ? '已分享給教練' : '已停止分享'); } catch (err) { e.target.checked = !e.target.checked; toast(err.message); } };
   $('#delAcct').onclick = async () => {
     if (!confirm('刪除後無法復原。確定刪除帳號？') || !await askLegacyOnLeave()) return;
     try { await api('/me', { method: 'DELETE' }); clearDeviceData(); setMe(null); toast('帳號已刪除'); location.hash = '#/'; render(); } catch (e) { toast(e.message); }
   };
+}
+// 推薦人：我的推薦人（用 Gmail 找跑友帳號，或只填名字）、推薦我的跑友（是我／不是我）、讓推薦的跑友用 Gmail 找到我（用 Google 確認一次）
+//   協會關掉推薦人時不能新填或更換，但已經填的照樣顯示，「移除」「不是我」照樣可以按（撤回一律可以做）
+//   輸入的 Gmail 只留在這一頁的記憶體裡（查詢與設定時送出），伺服器只拿來算查詢碼，不保存
+const REF_GOOGLE = {
+  confirmed: '已確認，推薦的跑友現在可以用你的 Gmail 找到你。',
+  noemail: '這個 Google 帳號沒有經過驗證的 Email，跑友沒辦法用它找到你。',
+  off: '你關閉了「讓跑友用 Gmail 找到我」，所以沒有更新。要打開請到「隱私」。',
+  later: '請先同意新版隱私權政策，再按一次「用 Google 確認」。',
+  taken: '這個 Google 帳號已經綁定另一個帳號了。如果那個帳號也是你的，請聯絡行政人員合併。',
+  stepup: '確認前要先用通行金鑰驗證一次：到「帳號與安全」按「驗證一次」，再回來按「用 Google 確認」。',
+};
+async function meReferral(googleMsg) {
+  const from = new URLSearchParams(location.hash.split('?')[1] || '').get('from');
+  const d = await api('/me/referral');
+  // mode：用 Gmail 找或只填名字；edit：已經有推薦人、按了「更換」；hit：查詢結果；email：剛查的 Gmail（設定時再送一次）
+  let mode = 'email', edit = false, hit = null, email = '';
+  const day = (s) => esc(String(s || '').slice(0, 10));
+  const paint = (focus) => {
+    const on = d.on ?? refOn(), R = d.referrer, kids = d.referred || [];
+    const form = on && (!R || edit);
+    const status = !R ? '<p class="muted" style="margin:0">還沒有填推薦人。</p>' : edit ? ''
+      : R.kind === 'member' ? `<div class="refme"><div><b translate="no">${esc(R.name)}</b>${R.nickname ? ` <span class="tiny" translate="no">${esc(R.nickname)}</span>` : ''}</div>
+          <div class="refpills"><span class="pill">跑友帳號</span>${R.ack === 'ok' ? '<span class="pill solid">對方已確認</span>' : '<span class="pill wait">等對方確認</span>'}</div>
+          <p class="tiny" style="margin:0">${R.by === 'admin' ? `${day(R.at)} 設定・由協會幹部設定` : `${day(R.at)} 設定`}</p></div>`
+      : R.kind === 'name' ? `<div class="refme"><div><b translate="no">${esc(R.name)}</b></div><div class="refpills"><span class="pill">只填名字</span></div>
+          <p class="tiny" style="margin:0">協會幹部可以幫你連到對方的帳號。</p></div>`
+      : '<p class="muted" style="margin:0">你的推薦人已經刪除帳號。</p>';
+    const acts = !R || edit ? '' : `<div class="row" style="gap:8px">${on ? (R.kind === 'gone' ? '<button type="button" class="btn sm" id="refChange">重新填寫</button>' : '<button type="button" class="btn ghost sm" id="refChange">更換</button>') : ''}
+      <button type="button" class="btn ghost sm" id="refDel">移除</button></div>`;
+    const seg = `<div class="seg" role="group" aria-label="推薦人的填法"><button type="button" data-refmode="email" aria-pressed="${mode === 'email'}">用 Gmail 找</button><button type="button" data-refmode="name" aria-pressed="${mode === 'name'}">只填名字</button></div>`;
+    const found = hit?.found && !hit.self;
+    const emailForm = found ? `<div class="notice" id="refHit" tabindex="-1">找到了：<b translate="no">${esc(hit.name)}</b>${hit.nickname ? `（<span translate="no">${esc(hit.nickname)}</span>）` : ''}</div>
+        <p style="margin:0"><b>是這位嗎？</b></p>
+        <div class="row" style="gap:8px"><button type="button" class="btn sm" id="refYes">是，設為推薦人</button><button type="button" class="btn ghost sm" id="refRetry">不是，重找</button></div>
+        <p class="tiny" style="margin:0">對方會收到通知、看得到你的名字；不認識的話，對方可以按「不是我」移除。</p>`
+      : `<form id="refEmailF" class="refform" novalidate>
+        <label>推薦人的 Gmail<input type="email" name="email" inputmode="email" autocomplete="off" autocapitalize="none" spellcheck="false" maxlength="254" placeholder="例如 runner@gmail.com" value="${esc(email)}"></label>
+        <p class="tiny" style="margin:0">對方要用 Google 登入耕跑團、而且確認過才找得到。你輸入的 Email 不會存下來。</p>
+        ${hit?.self ? '<div class="notice" id="refHit" tabindex="-1">這是你自己的 Gmail，推薦人要填別人喔。</div>'
+          : hit ? '<div class="notice" id="refHit" tabindex="-1">找不到這個 Gmail。可能對方還沒用 Google 確認，或關閉了這個功能。可以請對方到「我的 → 推薦人」按「用 Google 確認」，或先只填名字。</div>' : ''}
+        <button class="btn block">找找看</button></form>`;
+    const nameForm = `<form id="refNameF" class="refform" novalidate>
+        <label>推薦人的名字<input name="name" maxlength="20" autocomplete="off" placeholder="例如 王大明"></label>
+        <p class="tiny" style="margin:0">對方沒有耕跑團帳號也可以填。只存名字，之後協會幹部可以幫你連到對方的帳號。</p>
+        <button class="btn block">儲存</button></form>`;
+    const mine = `<section class="card"><h2 class="h3" id="refMine" tabindex="-1">我的推薦人</h2>
+      ${d.denied && !R ? '<div class="notice">上一位推薦人表示不認識你的帳號，已經移除。可以再找一次，或只填名字。</div>' : ''}
+      ${status}${acts}
+      ${form ? `${seg}${mode === 'email' ? emailForm : nameForm}${edit ? '<button type="button" class="btn ghost sm" id="refCancel">取消</button>' : ''}` : ''}</section>`;
+    const kidRow = (k) => `<div class="r" data-kid="${esc(k.id)}">${MI.person}<span><b translate="no" id="rk-${esc(k.id)}">${esc(k.name)}</b>${k.nickname ? ` <span class="tiny" translate="no">${esc(k.nickname)}</span>` : ''}<span class="tiny" style="display:block">${day(k.at)}</span></span>
+      ${k.ack === 'ok' ? '<span class="pill solid">已確認</span>' : '<span class="pill wait">等你確認</span>'}
+      <div class="racts">${k.ack === 'ok' ? `<button type="button" class="linkbtn tiny" data-refno aria-describedby="rk-${esc(k.id)}">不是我</button>`
+        : `<button type="button" class="btn sm" data-refok aria-describedby="rk-${esc(k.id)}">是我</button><button type="button" class="btn ghost sm" data-refno aria-describedby="rk-${esc(k.id)}">不是我</button>`}</div></div>`;
+    const theirs = kids.length || on ? `<section class="card"><div class="row spread"><h2 class="h3" id="refKids" tabindex="-1">推薦我的跑友</h2><span class="tiny num">${kids.length} 位</span></div>
+      ${kids.length ? `<div class="refkids">${kids.map(kidRow).join('')}</div>` : '<p class="tiny" style="margin:0">還沒有跑友把你設為推薦人。</p>'}</section>` : '';
+    const google = `<a class="btn google sm" href="${googleHref(true, { from: 'ref' })}">${GOOGLE_G}<span>用 Google 確認</span></a>`;
+    const findme = cfg.googleLogin && on ? `<section class="card"><div class="row spread"><h2 class="h3">讓推薦的跑友找到你</h2>${d.findable && d.emailLinked ? '<span class="pill solid">已開啟</span>' : ''}</div>
+      ${d.findable && d.emailLinked ? `<p style="margin:0">已確認 Google 帳號：跑友輸入你的 Gmail 就能把你設為推薦人。</p><p class="tiny" style="margin:0">只存一組無法還原的查詢碼，不存 Email。</p><a class="tiny" href="#/me/privacy">在隱私設定關閉 ›</a>`
+        : d.findable ? `<p style="margin:0">還沒確認 Google 帳號，跑友用你的 Gmail 找不到你。</p><div class="row">${google}</div><p class="tiny" style="margin:0">只會用 Email 算出一組無法還原的查詢碼，不存 Email 本身。</p>`
+        : '<p style="margin:0">已關閉：跑友沒辦法用 Gmail 找到你。</p><a class="tiny" href="#/me/privacy">到隱私設定打開 ›</a>'}</section>` : '';
+    view.innerHTML = `${subTitle('推薦人', '團購或活動聯絡不上你時，協會幹部能透過推薦人找到你')}
+      ${REF_GOOGLE[googleMsg] ? `<div class="notice">${REF_GOOGLE[googleMsg]}${googleMsg === 'stepup' ? ' <a href="#/me/security">前往 ›</a>' : ''}</div>` : ''}
+      ${on ? '' : '<div class="notice">推薦人功能目前沒有開放。已經填的推薦人照樣保留，你可以隨時移除。</div>'}
+      ${mine}${theirs}${findme}`;
+    bind();
+    if (focus) focusEl(typeof focus === 'function' ? focus() : $(focus));
+  };
+  // 重新讀一次（設定、移除、確認之後）；/api/me 也更新，「我的」列與首頁卡的待確認數字才會對
+  const reload = async (focus) => {
+    Object.assign(d, await api('/me/referral'));
+    edit = false; hit = null; email = ''; googleMsg = null;   // Google 回來的提示只在剛回來時顯示
+    await refreshMe().catch(() => {});
+    paint(focus);
+  };
+  // 設定好推薦人：從「開始使用」卡來的回到原本那一頁（卡上這一步打勾）
+  const saved = async (msg) => {
+    toast(msg);
+    if (from === 'start') { await refreshMe().catch(() => {}); startBack(); return; }
+    await reload('#refMine');
+  };
+  const busy = (b, fn) => async (e) => { e?.preventDefault?.(); if (b?.disabled) return; if (b) b.disabled = true; try { await fn(e); } finally { if (b?.isConnected) b.disabled = false; } };
+  function bind() {
+    for (const b of view.querySelectorAll('[data-refmode]')) b.onclick = () => { mode = b.dataset.refmode; hit = null; paint(`#${mode === 'email' ? 'refEmailF' : 'refNameF'} input`); };
+    $('#refChange')?.addEventListener('click', () => { edit = true; mode = 'email'; hit = null; paint('[data-refmode="email"]'); });
+    $('#refCancel')?.addEventListener('click', () => { edit = false; hit = null; paint('#refChange'); });
+    $('#refRetry')?.addEventListener('click', () => { hit = null; paint('#refEmailF input'); });
+    const ef = $('#refEmailF');
+    ef?.addEventListener('submit', busy(ef.querySelector('button'), async () => {
+      // 全形、大寫、空白交給伺服器整理（中文輸入法打的 Ｇｍａｉｌ 也找得到），這裡只擋空白
+      const input = ef.querySelector('input[name="email"]'), v = input.value.trim();
+      if (!v) { fieldError(input, '請輸入正確的 Gmail'); return; }
+      try { hit = await api('/me/referral/lookup', { method: 'POST', body: { email: v } }); email = v; paint('#refHit'); }
+      catch (err) { if (err.status === 400) fieldError(input, err.message); else toast(err.message); }
+    }));
+    const yes = $('#refYes');
+    yes?.addEventListener('click', busy(yes, async () => {
+      try { await api('/me/referral', { method: 'PUT', body: { email } }); await saved('已設定推薦人，等對方確認'); }
+      catch (err) { toast(err.message); }
+    }));
+    const nf = $('#refNameF');
+    nf?.addEventListener('submit', busy(nf.querySelector('button'), async () => {
+      const input = nf.querySelector('input[name="name"]'), v = input.value.trim();
+      if (!v) { fieldError(input, '名字請填 1–20 個字，不要填 Email、電話或網址'); return; }
+      try { await api('/me/referral', { method: 'PUT', body: { name: v } }); await saved('已儲存推薦人'); }
+      catch (err) { if (err.status === 400) fieldError(input, err.message); else toast(err.message); }
+    }));
+    const del = $('#refDel');
+    del?.addEventListener('click', busy(del, async () => {
+      if (!confirm('移除推薦人？對方不會收到通知。')) return;
+      try { await api('/me/referral', { method: 'DELETE' }); toast('已移除推薦人'); await reload('#refMine'); } catch (err) { toast(err.message); }
+    }));
+    // 推薦我的跑友：是我／不是我（不是我＝從對方的資料移除並通知對方，之後對方不能再把你設為推薦人）
+    for (const b of view.querySelectorAll('[data-refok], [data-refno]')) b.addEventListener('click', busy(b, async () => {
+      const ok = b.hasAttribute('data-refok'), id = b.closest('[data-kid]').dataset.kid;
+      if (!ok && !confirm('確定不是你推薦的？會從對方的資料移除，並通知對方。')) return;
+      try {
+        await api('/me/referral/ack', { method: 'POST', body: { member_id: id, ok } });
+        toast(ok ? '已確認' : '已移除，也通知對方了');
+        await reload(() => $('.refkids [data-refok]') || $('#refKids'));
+      } catch (err) { toast(err.message); }
+    }));
+  }
+  paint();
 }
 // 分享 App：當面掃 QR、手機分享選單、LINE、複製連結。只分享網址（用 Google 登入加入），不帶邀請碼
 export function shareApp() {
@@ -382,5 +515,5 @@ function meAssoc() {
 
 // 子頁對照（app.js 的 meView 依網址呼叫）
 export function meSection(section, googleMsg) {
-  return ({ profile: meProfile, races: meRaces, reg: meReg, teams: meTeams, notify: meNotify, calendar: meCalendar, display: meDisplay, security: meSecurity, privacy: mePrivacy, assoc: meAssoc, card: meCard })[section](googleMsg);
+  return ({ profile: meProfile, races: meRaces, reg: meReg, teams: meTeams, notify: meNotify, calendar: meCalendar, display: meDisplay, security: meSecurity, privacy: mePrivacy, assoc: meAssoc, card: meCard, referral: meReferral })[section](googleMsg);
 }
