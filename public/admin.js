@@ -1,7 +1,7 @@
 // 耕跑團 PWA — admin.js：從 app.js 拆出來、用到才載入的畫面（第一次開 App 不用下載）
 import * as Party from './party.js';
 import { defaultWindow, SIGNUP_DEFAULTS, tpText } from './signup-window.js';
-import { $, latest, nowTp, openSheet, scanSheet, ago, allow, api, apiAll, applyFeatures, avatar, barChart, bars, bindStepup, cfg, esc, group, IC, KIND_NAME, largeTitle, me, mfaBanner, nrow, org, pad2, paintCountdown, passkey, refreshMe, render, ROLE_NAME, row, studio, TAB_DEFAULT, TEAM_PERMS, teamAllow, teamIcon, teamOf, teams, toast, view, btnRow, MI } from './app.js';
+import { $, latest, nowTp, openSheet, scanSheet, ago, allow, api, apiAll, applyFeatures, avatar, barChart, bars, bindStepup, cfg, esc, group, IC, KIND_NAME, largeTitle, me, mfaBanner, nrow, org, pad2, paintCountdown, passkey, refreshMe, render, ROLE_NAME, row, studio, TAB_DEFAULT, TEAM_PERMS, teamAllow, teamIcon, teamOf, teams, toast, view, btnRow, MI, ic, emptyState, focusEl, once } from './app.js';
 
 // ---------- 管理介面（RBAC、會籍、座位圖）----------
 let adminSeq = 0;
@@ -330,6 +330,7 @@ function bindMemberSearch(form, listEl, rowFn, after) {
 async function membersPanel(meta) {
   const chips = Object.entries(MEMBERSHIP_NAME).map(([k, v]) => `<span class="pill ${k === 'active' ? 'solid' : k === 'applied' ? 'wait' : ''}">${v} ${meta.counts[k] || 0}</span>`).join('');
   return `
+    ${refOn() ? group('', [row('#/admin/tree', TREE_IC, '推薦族譜', '誰推薦誰；團購或活動找不到人時用')]) : ''}
     <section class="card"><div class="row spread"><div class="row" style="gap:6px">${chips}</div><button class="btn ghost sm" id="verifyCard" type="button">掃描會籍卡</button></div>
       <p class="tiny" style="margin:0">跑友只要加入就能報名團練；協會會員要另外申請與繳費，兩者分開管理。</p></section>
     ${meta.counts.applied ? `<section class="card"><h3>待審核入會（${meta.counts.applied}）</h3><div class="roster" id="appliedList"></div></section>` : ''}
@@ -506,10 +507,13 @@ const AUDIT_NAME = {
   'push.subscribe': '開啟推播', 'push.unsubscribe': '關閉推播', 'push.truncated': '推播分批送出', 'role.handover': '移交理事長', 'route.delete': '刪除路線',
   'spot.add': '新增地點', 'spot.propose': '提議地點', 'spot.approve': '核准地點', 'spot.update': '修改地點', 'spot.delete': '刪除地點', 'spot.report_delete': '刪除現場回報',
   'settings.cams': '附近即時影像來源開關', 'settings.cams_sync': '同步攝影機清單', 'cam.link.add': '新增直播連結', 'cam.link.delete': '刪除直播連結',
+  'referrer.lookup': '用 Gmail 找推薦人', 'referrer.set': '設定推薦人', 'referrer.clear': '移除推薦人（本人）', 'referrer.ack': '推薦人確認', 'referrer.deny': '推薦人按「不是我」',
+  'referrer.view': '查看推薦族譜', 'referrer.relink': '推薦人連到帳號（幹部）', 'referrer.admin_clear': '移除推薦人（幹部）', 'privacy.email_lookup': '用 Gmail 找到我（開關）',
+  'google.refresh': '重新確認 Google 帳號',
 };
 // 稽核紀錄：一定要選時間區間（預設最近 7 天），再依類型、操作者、對象縮小；一次 50 筆
 const AUDIT_GROUPS = { '': '所有類型', role: '身分變更', membership: '會籍', team: '分團', event: '活動', checkin: '報到', lottery: '抽獎',
-  settings: '系統設定', signup: '報名審核', privacy: '個資', login: '登入', passkey: '通行金鑰', mfa: '兩步驟驗證', account: '帳號', 'join.denied': '邀請碼錯誤', bootstrap: '初始設定', plan: '課表' };
+  settings: '系統設定', signup: '報名審核', privacy: '個資', login: '登入', passkey: '通行金鑰', mfa: '兩步驟驗證', account: '帳號', 'join.denied': '邀請碼錯誤', bootstrap: '初始設定', plan: '課表', referrer: '推薦人' };
 function auditPanel() {
   const to = new Date().toISOString().slice(0, 10), from = new Date(Date.now() - 6 * 864e5).toISOString().slice(0, 10);
   return `<section class="card">
@@ -535,8 +539,8 @@ function auditPanel() {
 }
 // 稽核細節：JSON 轉成「開：A、B；關：C」，ISO 時間轉成「10/5 22:25」
 function auditDetail(d) {
-  // 結尾的 ｜team=…｜role=… 是給還原工具看的代碼（tools/restore-sql.mjs），畫面上不顯示
-  let t = String(d).replace(/(｜(team|role)=[\w-]+)+$/, '');
+  // 結尾的 ｜team=…｜role=…｜to=… 是給還原工具看的代碼（tools/restore-sql.mjs），畫面上不顯示
+  let t = String(d).replace(/(｜(team|role|to)=[\w-]+)+$/, '');
   if (/^\{.*\}$/.test(t)) {
     try {
       const o = JSON.parse(t), on = [], off = [], rest = [];
@@ -654,14 +658,15 @@ function bindEventsPanel() {
 // ---------- 系統設定（理事長、行政人員）----------
 const FEATURE_NAME = { gps: '跑步記錄（計時＋GPS）', studio: '拍照分享', health: 'Apple 健康匯入', file: 'GPX／TCX 檔匯入', coach: '課表教練（全季、賽事準備、配速與用語）',
   plan_cycle: '個人課表週期（跟自己的比賽排 20 週）', plan_export: '分享與匯出課表（複製、PDF、行事曆）', party: '餐敘活動（春酒、慶功宴、尾牙）', cams: '附近即時影像（政府公開攝影機）',
-  rest: '跑者休息站（飲水、廁所、淋浴置物、補給）', meetup: '團員揪團（團員自己發起活動）' };
+  rest: '跑者休息站（飲水、廁所、淋浴置物、補給）', meetup: '團員揪團（團員自己發起活動）', referral: '推薦人（跑友填介紹人、推薦族譜）' };
 // 功能開關的說明：關掉會影響什麼（課表教練與教練身分容易搞混，寫清楚）
 const FEATURE_HELP = { coach: '關閉後所有人都看不到這些頁面；不影響每週課表與訓練紀錄',
   plan_cycle: '關閉後所有人都照協會賽季排課；已選的週期會保留，打開後恢復',
   plan_export: '教練已同意分享，預設開啟；關閉後所有人都看不到分享按鈕',
-  meetup: '團員可以在自己參加的分團發起揪團：不能收費、不推播，每人同時最多 3 場；分團與協會幹部可以編輯或刪除。關閉後不能再發起，已經開的照常' };
+  meetup: '團員可以在自己參加的分團發起揪團：不能收費、不推播，每人同時最多 3 場；分團與協會幹部可以編輯或刪除。關閉後不能再發起，已經開的照常',
+  referral: '跑友可以填是誰介紹他來的（用 Gmail 找跑友帳號，或只填名字）；會員管理權限的幹部在「管理後台 → 會員 → 推薦族譜」查看。打開前請先在 Google Cloud 的 OAuth 同意畫面加上 Email 範圍；打開後 Google 登入會多問一次 Email 授權。關閉後不能新增，已經填的保留，本人仍可移除' };
 // 預設關閉的功能（要明確打開才有）
-const FEATURE_OFF = new Set(['cams', 'rest', 'meetup']);
+const FEATURE_OFF = new Set(['cams', 'rest', 'meetup', 'referral']);
 // 系統設定：第一層是分組清單（跟「我的」一樣的列，副標是目前的值），點一列進到子頁才是表單；常用的在前、少用但重要的放最後
 //   網址：#/admin/settings（等於 #/admin?tab=settings）、#/admin/settings/<段>；表單、儲存 API、稽核名稱都跟拆開前一樣
 const yrs = (n, none = '不自動刪除') => (Number(n) ? `${Number(n)} 年` : none);
@@ -785,8 +790,8 @@ const camsCard = () => `<section class="card" id="camSrcCard">
     <p class="tiny" style="margin:0">地點卡會列出 1.5 公里內的政府公開攝影機（沒有就列 3 公里內最近一支），畫面由本站轉送、不保存，跑友的 IP 不會送到影像來源。功能開關打開後，水利署與水利處的鏡頭清單每天清晨 04:00 起自動同步（每小時只同步一個來源）；公路局的清單由電腦上的同步工具更新。關掉來源後立即不再顯示，也不再連線。</p>
     <div id="camSrcList" class="toggles"><p class="tiny" style="margin:0">載入中…</p></div>
   </section>`;
-// 功能開關分三組：訓練、活動、地圖（地圖的兩項旁邊有「設定來源 ›」）
-const FEATURE_GROUPS = [['訓練', ['gps', 'studio', 'health', 'file', 'coach', 'plan_cycle', 'plan_export']], ['活動', ['party', 'meetup']], ['地圖', ['cams', 'rest']]];
+// 功能開關分四組：訓練、活動、地圖（地圖的兩項旁邊有「設定來源 ›」）、會員
+const FEATURE_GROUPS = [['訓練', ['gps', 'studio', 'health', 'file', 'coach', 'plan_cycle', 'plan_export']], ['活動', ['party', 'meetup']], ['地圖', ['cams', 'rest']], ['會員', ['referral']]];
 const featuresCard = () => `<section class="card">
     <form id="featForm" class="toggles">
       ${FEATURE_GROUPS.map(([g, ks]) => `<fieldset class="qset featgrp"><legend>${g}</legend>${ks.map((k) => `<label class="switch"><span>${FEATURE_NAME[k]}${FEATURE_HELP[k] ? `<span class="tiny" style="display:block">${FEATURE_HELP[k]}</span>` : ''}</span><input type="checkbox" name="${k}" ${featOn(k) ? 'checked' : ''}><i></i></label>${k === 'cams' || k === 'rest' ? `<a class="tiny tlink featsrc" href="#/admin/settings/${k}">${k === 'cams' ? '設定影像來源 ›' : '設定休息站來源 ›'}</a>` : ''}`).join('')}</fieldset>`).join('')}
@@ -1002,6 +1007,160 @@ function bindSettings() {
     try { await api('/settings/shortcut', { method: 'POST', body: { url: e.target.url.value.trim() } }); await reload('已儲存捷徑連結'); } catch (err) { toast(err.message); } });
 }
 
+// ---------- 推薦族譜（誰推薦誰）----------
+// 會員管理權限的幹部（理事長、理事、監事、行政人員）：先搜尋再看，不一次列出所有人；每次查看伺服器都寫稽核；監事只能看
+//   網址：#/admin/tree、#/admin/tree?id=<會員>（以他為中心）、#/admin/tree?name=<只填的名字>（填了同一個名字的跑友）
+//   功能開關關掉時入口列不顯示，但已經填的資料還在，這頁照樣能看
+const refOn = () => featOn('referral');
+const TREE_IC = MI.tree || ic('<circle cx="12" cy="5" r="2.2"/><circle cx="6" cy="18.8" r="2.2"/><circle cx="18" cy="18.8" r="2.2"/><path d="M12 7.2v4.3M6 16.6V14a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v2.6"/>');
+const TREE_DOWN = 3;   // 往下看幾層（伺服器最多 3 層、300 位）
+const refNm = (name, nick) => `<b translate="no">${esc(name)}</b>${nick ? ` <span class="tiny" translate="no">${esc(nick)}</span>` : ''}`;
+// 監事看到的是遮掉中間的號碼（0912***678）：只顯示、不給撥號連結
+const telOk = (p) => /^[\d+()\s-]{6,}$/.test(p || '');
+const telHref = (p) => `tel:${esc(String(p).replace(/[^\d+]/g, ''))}`;
+const refWho = (r) => (!r ? '沒有' : r.kind === 'name' ? `只填名字：<span translate="no">${esc(r.name)}</span>`
+  : r.kind === 'gone' ? '已刪除帳號' : `<span translate="no">${esc(r.name)}</span>`);
+const refPills = (r, ack, by, done = false) => `${r?.kind === 'member' && ack == null ? '<span class="pill wait">等推薦人確認</span>' : ''}${done && r?.kind === 'member' && ack === 'ok' ? '<span class="pill">推薦人已確認</span>' : ''}${by === 'admin' ? '<span class="pill">由管理員設定</span>' : ''}`;
+let treeSeq = 0;
+async function treeView() {
+  if (me.mfaPending) { view.innerHTML = `${largeTitle('推薦族譜')}${mfaBanner()}`; bindStepup(); return; }
+  if (!allow('members')) { view.innerHTML = '<div class="card"><p class="muted">沒有查看推薦族譜的權限。</p></div>'; return; }
+  const ro = me.role === 'supervisor', my = ++treeSeq;
+  const qs = new URLSearchParams(location.hash.split('?')[1] || '');
+  let s;
+  try { s = await api('/admin/referrals'); }
+  catch (e) { if (my === treeSeq) view.innerHTML = `${largeTitle('推薦族譜')}<div class="card"><p class="muted">${esc(e.message)}</p></div>`; return; }
+  if (my !== treeSeq || !location.hash.startsWith('#/admin/tree')) return;   // 等資料的時候已經換頁
+  const sm = s.summary || {};
+  const kpi = (label, v) => `<div class="card kpi"><span class="tiny">${label}</span><b class="num">${v ?? '—'}</b></div>`;
+  view.innerHTML = `${largeTitle('推薦族譜', '誰推薦誰・每次查看都會留下稽核紀錄')}${ro ? '<p class="tiny">監事只能查看。</p>' : ''}
+    <section class="kpis">${kpi('有推薦人', sm.linked)}${kpi('只填名字', sm.named)}${kpi('等推薦人確認', sm.pending)}${kpi('推薦人已刪除', sm.gone)}</section>
+    <p class="tiny">可以用 Gmail 找到的跑友 ${Number(sm.findable) || 0} 位</p>
+    <section class="card"><h3>找跑友</h3>
+      <form id="rtForm" class="refq" role="search"><input name="q" maxlength="20" placeholder="姓名、暱稱或會員編號" aria-label="搜尋跑友" autocomplete="off" enterkeyhint="search" required><button class="btn sm">搜尋</button></form>
+      <p class="tiny" id="rtHint" style="margin:0"${s.needFilter === false ? ' hidden' : ''}>輸入名字開始找。為了保護個資，不會一次列出所有人。也會找只填名字的推薦人。</p></section>
+    <div id="rtOut"></div>`;
+  const out = $('#rtOut'), only = latest();
+  let cur = null;   // 目前顯示的人或名字（按鈕要用）
+  const show = (html, sel) => { $('#rtHint').hidden = true; out.innerHTML = html; if (sel) focusEl(out.querySelector(sel)); };
+  // 搜尋結果：跑友（點了以他為中心）、只填名字的推薦人（點了看填這個名字的人）
+  const search = async (q) => {
+    const r = await only(api(`/admin/referrals?q=${encodeURIComponent(q)}`));
+    const ms = r.members || [], ns = r.names || [];
+    cur = null;
+    history.replaceState(null, '', '#/admin/tree');
+    if (!ms.length && !ns.length) return show(`<section class="card">${emptyState(MI.roster, '找不到符合的跑友')}</section>`, '.empty');
+    show(`${ms.length ? `<section class="card"><h3 tabindex="-1">跑友</h3><div class="roster reflist">${ms.map((m) => `<button type="button" class="r" data-fid="${esc(m.id)}"><span>${refNm(m.name, m.nickname)}
+        <span class="tiny" style="display:block">推薦人：${refWho(m.referrer)}・推薦了 ${Number(m.kids) || 0} 位</span>${refPills(m.referrer, m.ack, m.by)}</span><span class="chev" aria-hidden="true"></span></button>`).join('')}</div></section>` : ''}
+      ${ns.length ? `<section class="card"><h3 tabindex="-1">只填名字的推薦人</h3><div class="roster reflist">${ns.map((n) => `<button type="button" class="r" data-fname="${esc(n.name)}"><span><b translate="no">${esc(n.name)}</b>
+        <span class="tiny" style="display:block">${Number(n.n) || 0} 位跑友填了這個名字</span></span><span class="chev" aria-hidden="true"></span></button>`).join('')}</div></section>` : ''}
+      ${r.more?.members || r.more?.names ? '<p class="tiny">結果太多，只顯示前 30 筆，請再縮小條件</p>' : ''}`, 'h3');
+  };
+  // 以某一位為中心：往上一串推薦人（最近的在上）、他本人、往下可以收合的樹
+  const focus = async (id, { quiet = false } = {}) => {
+    const t = await only(api(`/admin/referrals/tree?id=${encodeURIComponent(id)}&down=${TREE_DOWN}`));
+    const n = t.node, ref = n.referrer ?? null, ack = n.ack !== undefined ? n.ack : n.referrer_ack, by = n.by ?? n.referrer_by, up = t.up || [];
+    cur = { kind: 'node', node: n, ref };
+    history.replaceState(null, '', `#/admin/tree?id=${encodeURIComponent(n.id)}`);
+    const end = t.upEnd || (!up.length && ref && ref.kind !== 'member' ? ref : null);
+    const endHtml = !end ? '' : end.kind === 'name' ? `<div class="r"><span class="pill">只填名字</span><b translate="no">${esc(end.name)}</b></div>`
+      : end.kind === 'gone' ? '<div class="r"><span class="pill">推薦人已刪除帳號</span></div>' : '<p class="tiny" style="margin:0">還有更上層，點最上面那位繼續看</p>';
+    const upHtml = up.length || end ? up.map((u) => `<div class="r"><span class="pill">第 ${Number(u.d)} 層</span>
+        <button type="button" class="tname" data-fid="${esc(u.id)}">${refNm(u.name, u.nickname)}<span class="tiny" style="display:block">${esc(u.club || '未填跑團')}・${MEMBERSHIP_NAME[u.membership] || MEMBERSHIP_NAME.none}</span></button>
+        ${u.phone ? (telOk(u.phone) ? `<a class="tlink" href="${telHref(u.phone)}" translate="no">${esc(u.phone)}</a>` : `<span class="tiny" translate="no">${esc(u.phone)}</span>`) : ''}</div>`).join('') + endHtml
+      : '<p class="muted" style="margin:0">沒有推薦人</p>';
+    // 往下：同一位推薦人的跑友放在他底下；第一層先打開，更深的收合；被截掉或超過層數的，給「以他為中心看下一層」
+    const kids = new Map();
+    for (const d of t.down || []) { if (!kids.has(d.parent)) kids.set(d.parent, []); kids.get(d.parent).push(d); }
+    const node = (d) => {
+      const ch = kids.get(d.id) || [], k = Number(d.kids) || 0;
+      const head = `<b translate="no">${esc(d.name)}</b>${d.nickname ? `<span class="tiny" translate="no">${esc(d.nickname)}</span>` : ''}${d.d > 3 ? `<span class="pill tdepth">第 ${Number(d.d)} 層</span>` : ''}<span class="tiny">推薦了 ${k} 位</span>${d.ack == null ? '<span class="pill wait">待確認</span>' : ''}`;
+      const more = k > ch.length ? `<button type="button" class="linkbtn tmore" data-fid="${esc(d.id)}">以他為中心看下一層</button>` : '';
+      return ch.length || more ? `<details class="tnode" style="--d:${Number(d.d)}"${d.d === 1 ? ' open' : ''}><summary>${head}</summary>${ch.map(node).join('')}${more}</details>`
+        : `<div class="tnode tleaf" style="--d:${Number(d.d)}">${head}</div>`;
+    };
+    const dial = n.phone ? (telOk(n.phone) ? `<span translate="no">${esc(n.phone)}</span><a class="btn ghost sm" href="${telHref(n.phone)}">撥電話</a>` : `<span translate="no">${esc(n.phone)}</span>`) : '';
+    show(`<section class="card"><h3>往上：推薦人</h3><div class="refup">${upHtml}</div></section>
+      <section class="card reffocus"><h3 id="rtFocusH" tabindex="-1">${refNm(n.name, n.nickname)}</h3>
+        <p class="tiny" style="margin:0">${esc(n.club || '未填跑團')}・${MEMBERSHIP_NAME[n.membership] || MEMBERSHIP_NAME.none}${n.member_no ? `・編號 ${esc(n.member_no)}` : ''}</p>
+        ${dial ? `<p class="row" style="margin:0;gap:8px">${dial}</p>` : ''}
+        ${refPills(ref, ack, by, true) ? `<div class="row" style="gap:6px">${refPills(ref, ack, by, true)}</div>` : ''}
+        ${!ro && ref ? `<div class="row" style="gap:8px">${ref.kind === 'name' ? '<button type="button" class="btn sm" id="rtRelinkOne">連到跑友帳號</button>' : ''}<button type="button" class="btn ghost sm" id="rtClear">移除推薦人</button></div>` : ''}</section>
+      <section class="card"><h3>往下：推薦的跑友（${Number(n.kids) || 0} 位）</h3><div class="reftree">${(kids.get(n.id) || []).map(node).join('')}</div>
+        ${t.downMore ? '<p class="tiny" style="margin:0">超過 300 位，只顯示前 300 位；點某一位以他為中心繼續看</p>' : ''}</section>`, quiet ? '' : '#rtFocusH');
+  };
+  // 只填名字：填了同一個名字的跑友；幹部可以勾選後一起連到某位跑友的帳號
+  const named = async (name, { quiet = false } = {}) => {
+    const r = await only(api(`/admin/referrals/named?name=${encodeURIComponent(name)}`));
+    const ms = r.members || r.rows || [];
+    cur = { kind: 'name', name };
+    history.replaceState(null, '', `#/admin/tree?name=${encodeURIComponent(name)}`);
+    show(`<section class="card"><h3 id="rtNameH" tabindex="-1">只填名字：<span translate="no">${esc(name)}</span></h3>
+      ${ms.length ? `<div class="roster reflist">${ms.map((m) => `<div class="r${ro ? '' : ' rpick'}">${ro ? '' : `<label class="pick"><input type="checkbox" data-nid="${esc(m.id)}" checked aria-label="選取 ${esc(m.name)}"><i>${IC.check}</i></label>`}
+        <span>${refNm(m.name, m.nickname)}<span class="tiny" style="display:block">${esc(m.club || '未填跑團')}・${esc(String(m.at ?? m.referrer_at ?? '').slice(0, 10))}</span>${(m.by ?? m.referrer_by) === 'admin' ? '<span class="pill">由管理員設定</span>' : ''}</span></div>`).join('')}</div>`
+        : emptyState(MI.roster, '找不到符合的跑友')}
+      ${!ro && ms.length ? '<button type="button" class="btn" id="rtRelink">連到跑友帳號</button>' : ''}</section>`, quiet ? '' : '#rtNameH');
+  };
+  const fail = (e) => toast(e.message);
+  $('#rtForm').onsubmit = (e) => { e.preventDefault(); const q = e.target.q.value.trim(); if (q) search(q).catch(fail); };
+  out.addEventListener('click', async (e) => {
+    const b = e.target.closest('button'); if (!b || !out.contains(b)) return;
+    if (b.dataset.fid) return focus(b.dataset.fid).catch(fail);
+    if (b.dataset.fname) return named(b.dataset.fname).catch(fail);
+    if (ro) return;
+    if (b.id === 'rtClear' && cur?.kind === 'node') {
+      const n = cur.node;
+      if (!confirm(`移除 ${n.name} 的推薦人？會通知本人。`)) return;
+      await once(b, async () => { try { await api('/admin/referrals/clear', { method: 'POST', body: { member_id: n.id } }); toast('已移除'); await focus(n.id); } catch (err) { fail(err); } })();
+    }
+    if (b.id === 'rtRelinkOne' && cur?.kind === 'node') relinkSheet(cur.ref.name, [cur.node.id], b, () => focus(cur.node.id).catch(fail));
+    if (b.id === 'rtRelink' && cur?.kind === 'name') {
+      const ids = [...out.querySelectorAll('[data-nid]:checked')].map((c) => c.dataset.nid);
+      if (!ids.length) return;
+      const name = cur.name;
+      relinkSheet(name, ids, b, () => named(name).catch(fail));
+    }
+  });
+  const id = qs.get('id'), nm = qs.get('name');
+  if (id && /^[\w-]{1,32}$/.test(id)) await focus(id, { quiet: true }).catch(fail);
+  else if (nm && [...nm].length <= 20) await named(nm, { quiet: true }).catch(fail);
+}
+// 把「只填名字」連到某位跑友的帳號：搜尋、選一位、確認後一起連；對方會收到通知，可以按「不是我」移除
+function relinkSheet(name, ids, opener, after) {
+  const s = openSheet('連到跑友帳號', `<h3 id="rlT">連到跑友帳號</h3>
+    <form id="rlF" class="refq" role="search"><input name="q" maxlength="20" placeholder="姓名、暱稱或會員編號" aria-label="搜尋跑友" autocomplete="off" enterkeyhint="search" required><button class="btn sm">搜尋</button></form>
+    <div class="roster reflist" id="rlList"></div>
+    <p class="tiny" id="rlMsg" role="status" style="margin:0"></p>
+    <div class="sheetacts"><button type="button" class="btn ghost" data-close>取消</button><button type="button" class="btn" id="rlGo" disabled>連結</button></div>`, opener, 'rlT');
+  const h = s.host, list = h.querySelector('#rlList'), msg = h.querySelector('#rlMsg'), go = h.querySelector('#rlGo'), only = latest();
+  let picked = null, found = [];
+  h.querySelector('#rlF').onsubmit = async (e) => {
+    e.preventDefault();
+    const q = e.target.q.value.trim(); if (!q) return;
+    try {
+      const r = await only(api(`/admin/referrals?q=${encodeURIComponent(q)}`));
+      found = r.members || []; picked = null; go.disabled = true; msg.textContent = '';
+      list.innerHTML = found.length ? found.map((m) => `<label class="r rpick"><input type="radio" name="rlTo" value="${esc(m.id)}">
+          <span>${refNm(m.name, m.nickname)}<span class="tiny" style="display:block">${esc(m.club || '未填跑團')}${m.member_no ? `・編號 ${esc(m.member_no)}` : ''}</span></span></label>`).join('')
+        : emptyState(MI.roster, '找不到符合的跑友');
+    } catch (err) { toast(err.message); }
+  };
+  list.onchange = (e) => {
+    picked = found.find((m) => m.id === e.target.value); if (!picked) return;
+    go.disabled = false;
+    msg.innerHTML = `把 ${ids.length} 位跑友填的推薦人「<span translate="no">${esc(name)}</span>」連到 <b translate="no">${esc(picked.name)}${picked.nickname ? `（${esc(picked.nickname)}）` : ''}</b> 的帳號？對方會收到通知，可以按「不是我」移除。`;
+  };
+  go.onclick = once(go, async () => {
+    if (!picked) return;
+    try {
+      const r = await api('/admin/referrals/relink', { method: 'POST', body: { name, to: picked.id, member_ids: ids } });
+      s.close();
+      toast(`已連結 ${Number(r.linked) || 0} 位${r.skipped ? `，${Number(r.skipped)} 位跳過（已改過或會形成循環）` : ''}`);
+      after?.();
+    } catch (err) { toast(err.message); }
+  });
+}
+
 // ---------- 名冊與角色 ----------
 async function rosterView() {
   view.innerHTML = `
@@ -1032,4 +1191,4 @@ function roleDialog(id, name, cur) {
   };
 }
 
-export { adminView, rosterView, weeklyView, settingsPage };
+export { adminView, rosterView, weeklyView, settingsPage, treeView };

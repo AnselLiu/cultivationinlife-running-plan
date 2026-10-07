@@ -3344,6 +3344,7 @@ async function route(hash) {
     if (hash === '/roster') return await rosterView();
     if (hash === '/admin') return await adminView();
     if (hash === '/weekly') return await lazy('./admin.js', 'weeklyView')();   // 分團頁的「上週分團週報」（畫面在 admin.js）
+    if (hash === '/admin/tree') return await lazy('./admin.js', 'treeView')();   // 推薦族譜（畫面在 admin.js）
     // 系統設定：清單（等於 #/admin?tab=settings）與子頁
     if (hash === '/admin/settings') return await settingsPage();
     const aset = hash.match(/^\/admin\/settings\/(\w+)$/);
