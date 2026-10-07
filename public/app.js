@@ -715,7 +715,7 @@ const anyTeamAllow = (p) => allow(p) || teams().some((t) => teamAllow(t.id, p));
 // 團員揪團（功能開關 meetup，預設關閉）：沒有建立活動權限的團員，可以在自己參加的分團發起（伺服器會再檢查一次）
 const meetupTeams = () => (cfg.settings?.features?.meetup === true ? myTeams().filter((t) => !teamAllow(t.id, 'event')) : []);
 // 推薦人（協會在功能開關打開才有）：首頁卡、開始使用的第 4 步、登入頁的說明、「我的 → 推薦人」的表單
-//   關掉後已經填的推薦人、推薦我的跑友照樣看得到，也照樣可以移除、按「不是我」
+//   關掉後已經填的推薦人、我推薦的跑友照樣看得到，也照樣可以移除、按「不是我」
 const refOn = () => cfg.settings?.features?.referral === true;
 const canMeetup = (tid) => meetupTeams().some((t) => !tid || t.id === tid);
 // 活動類型的標籤：團員發起的揪團標「揪團」
@@ -855,7 +855,7 @@ function loginView() {
     ${lead}
     <section class="card authcard">
       ${cfg.googleLogin ? `<a class="btn google block" href="${googleHref()}">${GOOGLE_G}<span>${inAppBrowser() === 'line' ? '用瀏覽器開啟並以 Google 登入' : '使用 Google 帳號登入'}</span></a>
-      ${refOn() && /取消/.test(err || '') ? `<p class="tiny center" style="margin:0">不想提供 Email 也可以只用名稱與大頭貼登入，跑友就沒辦法用 Gmail 找到你。</p><a class="btn ghost block" href="${googleHref(false, { basic: true })}">只用名稱與大頭貼登入</a>` : ''}
+      ${refOn() && /取消/.test(err || '') ? `<p class="tiny center" style="margin:0">不想提供 Email 也可以只用名稱與大頭貼登入；之前已經用 Google 確認過的話，要到「我的 → 隱私」關閉「讓我推薦的跑友用 Gmail 找到我」。</p><a class="btn ghost block" href="${googleHref(false, { basic: true })}">只用名稱與大頭貼登入</a>` : ''}
       ${inAppBrowser() === 'line' ? '<p class="tiny center" style="margin:0">Google 不允許在 LINE 裡登入，按上面的按鈕會改用 Safari 或 Chrome 打開這個網站。</p>' : ''}
       ${inAppBrowser() === 'meta' ? '<p class="notice" style="margin:0">Google 不允許在 Facebook／Instagram 裡登入：請點右上角「⋯」選「在瀏覽器開啟」。</p>' : ''}
       ${pkSupported() ? `<button class="btn ghost block iconbtn" id="pkLogin">${IC.lock}用通行金鑰登入</button>` : ''}
@@ -3076,7 +3076,7 @@ async function meHome(welcome) {
     ])}
     ${group('跑團', [
       row('#/me/teams', MI.team, '主團與分團', main ? `主團：<span translate="no">${esc(main.name)}</span>` : '主團由管理員設定'),
-      refOn() || me.referral?.has || me.referral?.pending ? row('#/me/referral', MI.referral, '推薦人', me.referral?.has ? '已填・推薦我的跑友' : '誰介紹你來的、推薦我的跑友',
+      refOn() || me.referral?.has || me.referral?.pending ? row('#/me/referral', MI.referral, '推薦人', me.referral?.has ? '已填・你推薦的跑友' : '誰介紹你來的、你推薦的跑友',
         me.referral?.pending ? `<span class="pill wait">${me.referral.pending} 位待確認</span>` : '') : '',
       row('#/me/assoc', MI.building, esc(org().name || '台灣耕跑團協會'), `${esc(me.membershipName || '跑友')}・入會、章程與文件`),
       me.membership === 'active' ? row('#/me/card', MI.idcard, '會籍卡', me.paid_until ? `會費繳至 ${esc(me.paid_until)}` : '出示給幹部掃描') : '',

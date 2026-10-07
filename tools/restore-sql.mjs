@@ -14,9 +14,11 @@
 //     detail 結尾有 ｜team=分團 id 就照 id，舊紀錄照分團名稱。之後又重新加入的，還原後要再加入一次（隱私優先）
 //   - 停用或重新產生行事曆訂閱 calendar.off／calendar.on：清掉 cal_token_hash（倒回來的舊網址可能外流過；本人重新產生一個）
 //   - 刪掉自己的訓練紀錄 log.delete、路線 route.delete、分團公告 team.post_delete：照 id 再刪一次
-//   - 關掉「讓推薦的跑友用 Gmail 找到我」privacy.email_lookup：最後一次是「關閉」就關掉並刪掉查詢碼（同一秒有開有關，以關閉為準）
+//   - 關掉「讓推薦的跑友用 Gmail 找到我」privacy.email_lookup：只要關過就刪掉查詢碼（刪除是單向的：之後再打開也不會恢復，要再用 Google 確認一次），
+//     開關照最後一次（同一秒有開有關，以關閉為準）
 //   - 移除推薦人 referrer.clear（本人）、referrer.admin_clear（幹部）：清掉推薦人
 //   - 推薦人按「不是我」referrer.deny（actor＝推薦人、target＝被推薦的人）：只清掉推薦人還是這位的那一筆，並補回 180 天的冷卻（rate_limits）
+//   備份不含 rate_limits：備份「之前」按的「不是我」，冷卻照備份自己的 audit_log 補回（還沒過 180 天的；toSql）
 //   members 用 INSERT … ON CONFLICT(id) DO UPDATE（不是 INSERT OR REPLACE）：REPLACE 會先刪掉舊的那一列，
 //     觸發 referrer_id 的 ON DELETE SET NULL（已經還原的人推薦關係不見）與子表的 ON DELETE CASCADE
 //   最後把抓到的稽核紀錄原樣補回 audit_log（INSERT OR IGNORE，簽章照原本的，驗得過）：Time Travel 會連稽核紀錄一起倒回，
@@ -137,6 +139,9 @@ export function planReplay(rows) {
     routes: ids((r) => r.action === 'route.delete'),
     posts: rows.filter((r) => r.action === 'team.post_delete' && ID.test(r.detail || '')).map((r) => [r.target_id, r.detail]),
     emailOff: offAtLast(rows, 'privacy.email_lookup'),
+    // 關過就刪查詢碼（之後又打開也一樣）；最後一次是開啟的，開關打開（查詢碼不恢復）
+    emailDel: ids((r) => r.action === 'privacy.email_lookup' && r.detail === '關閉'),
+    emailOn: [...latest(rows, 'privacy.email_lookup')].filter(([, v]) => !v.rows.some((r) => r.detail === '關閉') && v.rows.some((r) => r.detail === '開啟')).map(([id]) => id),
     refClear: ids((r) => r.action === 'referrer.clear' || r.action === 'referrer.admin_clear'),
     refDeny: rows.filter((r) => r.action === 'referrer.deny').map((r) => [r.target_id, r.actor_id, sqlTime(r.at)]),
   };
@@ -196,9 +201,22 @@ export const planSummary = (p) => [
   ['刪除帳號', p.erased.length], ['刪除賽事報名資料', p.raceDelete.length], ['停止分享訓練', p.shareOff.length], ['退出排行榜', p.rankOff.length],
   ['通知分類設定', p.mute.size], ['推播訂閱刪除', p.pushOff.length], ['通行金鑰刪除', p.passkeys.length], ['登入失效', p.revoke.length],
   ['身分與分團成員', p.steps.length], ['行事曆訂閱停用', p.calOff.length], ['訓練紀錄刪除', p.logs.length], ['路線刪除', p.routes.length], ['分團公告刪除', p.posts.length],
-  ['Gmail 查詢關閉', p.emailOff.length], ['推薦人移除', p.refClear.length], ['推薦人「不是我」', p.refDeny.length],
+  ['Gmail 查詢關閉', p.emailOff.length], ['Gmail 查詢碼刪除（關過又打開）', p.emailDel.length - p.emailOff.length], ['推薦人移除', p.refClear.length], ['推薦人「不是我」', p.refDeny.length],
   ['看不懂、要人工確認的身分或分團紀錄', p.unresolved.length],
 ].filter(([, n]) => n).map(([k, n]) => `${k} ${n}`).join('、') || '沒有要重做的撤回';
+
+// 「不是我」的 180 天冷卻（refno:<被推薦的人>:<推薦人>）：已經有的取比較晚的那個；live：匯入時已經過期的不寫（備份裡的舊紀錄）
+const cooldownSql = (child, by, at, live = false) => `INSERT INTO rate_limits (key, count, window_end) SELECT ${lit(`refno:${child}:${by}`)}, 1000000, datetime(${lit(at)}, '+180 days') WHERE ${live ? `datetime(${lit(at)}, '+180 days') > datetime('now')` : '1'} ON CONFLICT(key) DO UPDATE SET count = excluded.count, window_end = MAX(window_end, excluded.window_end);`;
+// 備份自己的 audit_log 裡的「不是我」（備份之前按的）：rate_limits 不備份，匯入新的資料庫時冷卻要從這裡補回
+export function backupCooldowns(data) {
+  const out = [];
+  for (const r of data?.tables?.audit_log || []) {
+    if (r?.action !== 'referrer.deny') continue;
+    const at = sqlTime(r.at);
+    if (typeof r.target_id === 'string' && ID.test(r.target_id) && typeof r.actor_id === 'string' && ID.test(r.actor_id) && AT.test(at)) out.push(cooldownSql(r.target_id, r.actor_id, at, true));
+  }
+  return out;
+}
 
 // 重做撤回的 SQL（放在匯入的最後，蓋過剛匯入的舊資料）；timeTravel：Time Travel 之後用，另外清掉倒回來的推播佇列（不重送舊推播）
 export function replaySql(rows, { timeTravel = false } = {}) {
@@ -214,12 +232,14 @@ export function replaySql(rows, { timeTravel = false } = {}) {
   each(p.revoke, ['DELETE FROM sessions WHERE member_id = ?1']);
   for (const s of p.steps) L.push(...stepSql(s));
   each(p.calOff, ['UPDATE members SET cal_token_hash = NULL WHERE id = ?1']);
+  each(p.emailDel, ['UPDATE members SET email_h = NULL WHERE id = ?1']);
   each(p.emailOff, ['UPDATE members SET email_findable = 0, email_h = NULL WHERE id = ?1']);
+  each(p.emailOn, ['UPDATE members SET email_findable = 1 WHERE id = ?1']);
   each(p.refClear, ['UPDATE members SET referrer_id = NULL, referrer_name = NULL, referrer_at = NULL, referrer_by = NULL, referrer_ack = NULL, referrer_gone = 0 WHERE id = ?1']);
   for (const [child, by, at] of p.refDeny) {
     if (!ID.test(child) || !ID.test(by) || !AT.test(at)) throw new Error(`看不懂的 id：${child}`);
     L.push(`UPDATE members SET referrer_id = NULL, referrer_name = NULL, referrer_ack = 'denied', referrer_by = NULL WHERE id = ${lit(child)} AND referrer_id = ${lit(by)};`);
-    L.push(`INSERT INTO rate_limits (key, count, window_end) VALUES (${lit(`refno:${child}:${by}`)}, 1000000, datetime(${lit(at)}, '+180 days')) ON CONFLICT(key) DO UPDATE SET count = excluded.count, window_end = MAX(window_end, excluded.window_end);`);
+    L.push(cooldownSql(child, by, at));
   }
   for (const [id, by] of p.logs) { if (!ID.test(id) || !ID.test(by)) throw new Error(`看不懂的 id：${id}`); L.push(`DELETE FROM training_logs WHERE id = ${lit(id)} AND member_id = ${lit(by)};`); }
   each(p.routes, ['DELETE FROM routes WHERE id = ?1', 'UPDATE events SET route_id = NULL WHERE route_id = ?1']);
@@ -244,6 +264,8 @@ export function toSql(data, { only = null, erased = [], audit = [] } = {}) {
   }
   // 跑者休息站：備份只有幹部整理、新增、修正、隱藏或補充說明過的列；把來源的版本標記清掉，下次同步（維護工具與排程）才會整份重寫官方資料
   if (data.tables.rest_sources && (!only || only === 'rest_sources' || only === 'rest_stops')) lines.push('UPDATE rest_sources SET etag = NULL, cursor = NULL;');
+  // 備份之前按的「不是我」：補回還沒過期的冷卻（完整還原或只還原 members 時）
+  if (!only || only === 'members') lines.push(...backupCooldowns(data));
   // 重做備份之後的撤回（放在最後，蓋過剛匯入的舊資料）
   for (const id of erased) if (typeof id !== 'string' || !ID.test(id)) throw new Error(`看不懂的帳號 id：${id}`);
   lines.push(...replaySql([...erased.map((target_id) => ({ action: ERASE_ACTIONS[0], target_id })), ...audit]).lines);

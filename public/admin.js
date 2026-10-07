@@ -1110,7 +1110,7 @@ async function treeView() {
     if (ro) return;
     if (b.id === 'rtClear' && cur?.kind === 'node') {
       const n = cur.node;
-      if (!confirm(`移除 ${n.name} 的推薦人？會通知本人。`)) return;
+      if (!confirm('移除這位跑友的推薦人？會通知本人。')) return;   // 名字在上面的卡片標題（不放進確認文字，英文介面才翻得到）
       await once(b, async () => { try { await api('/admin/referrals/clear', { method: 'POST', body: { member_id: n.id } }); toast('已移除'); await focus(n.id); } catch (err) { fail(err); } })();
     }
     if (b.id === 'rtRelinkOne' && cur?.kind === 'node') relinkSheet(cur.ref.name, [cur.node.id], b, () => focus(cur.node.id).catch(fail));

@@ -61,8 +61,8 @@ node tools/restore-backup.mjs --replay withdrawals.json --since "$T"
    - 身分變更（`role.change`）、理事長移交（`role.handover`，雙方）、初始理事長（`bootstrap.chair`）、分團身分（`team.role`）：重設成最後一次的身分，降級的人重新登入不會拿回原本的權限。分團身分降為團員時職稱一起清掉，其他身分的職稱保留還原時的。
    - 新紀錄的 detail 結尾有 `｜role=代碼`、`｜team=分團 id`；舊紀錄照中文名稱與分團名稱。看不懂的（被改過或格式不對）不自動做，工具印出筆數。
 9. 停用或重新產生行事曆訂閱（`calendar.off`、`calendar.on`）：清掉訂閱網址的雜湊，倒回來的舊網址（可能外流過）失效；本人到「我的」重新產生。
-10. 關閉用 Gmail 找到我（`privacy.email_lookup` 最後一次是關閉）：清掉 Gmail 查詢碼（`email_h`）並保持關閉。
-11. 移除推薦人（`referrer.clear` 本人、`referrer.admin_clear` 幹部）：清掉推薦人；推薦人按「不是我」（`referrer.deny`）：只清掉推薦人還是這位的那一筆，標成沒有確認，並補回 180 天的冷卻（`rate_limits`）。
+10. 關閉用 Gmail 找到我（`privacy.email_lookup`）：只要關過就清掉 Gmail 查詢碼（`email_h`；刪除是單向的，之後又打開也不會從備份回來，要本人再用 Google 確認一次）；開關照最後一次（同一秒有開有關以關閉為準）。
+11. 移除推薦人（`referrer.clear` 本人、`referrer.admin_clear` 幹部）：清掉推薦人；推薦人按「不是我」（`referrer.deny`）：只清掉推薦人還是這位的那一筆，標成沒有確認，並補回 180 天的冷卻（`rate_limits`）。備份不含 `rate_limits`：備份之前按的「不是我」，冷卻照備份自己的 `audit_log` 補回（還沒過 180 天的，完整還原或只還原 `members` 時）。
 12. 刪除自己的訓練紀錄（`log.delete`）、路線（`route.delete`）、分團公告（`team.post_delete`）：照 id 再刪一次，備註、心率、強度不會跟著回來。
 13. 清空倒回來的推播佇列（`push_queue`），舊推播不會重送；通知中心的內容不受影響。
 14. 抓到的稽核紀錄原樣補回 `audit_log`（`INSERT OR IGNORE`，簽章照原本的）。之後再從更舊的備份還原時，也查得到這些撤回。

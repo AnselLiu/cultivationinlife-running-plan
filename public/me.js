@@ -273,10 +273,13 @@ function meDisplay() {
   $('#camLazy')?.addEventListener('change', (e) => camLazy.set(e.target.checked));
   for (const b of document.querySelectorAll('[data-lang]')) b.onclick = () => { if (b.dataset.lang !== I18N.lang) I18N.setLang(b.dataset.lang); };
 }
+// 綁定或確認時選到另一個 Google 帳號（已經綁了一個）：不換綁（google=other）
+const GOOGLE_OTHER = '這不是你登入耕跑團用的 Google 帳號，請改選原本那個帳號再確認一次。';
 async function meSecurity(googleMsg) {
   view.innerHTML = `${subTitle('帳號與安全')}
     ${googleMsg === 'linked' ? '<div class="notice">已綁定 Google，之後可以直接用 Google 登入。</div>' : googleMsg === 'taken' ? '<div class="notice">這個 Google 帳號已經綁定另一個帳號了。如果那個帳號也是你的，請聯絡行政人員合併。</div>'
-      : googleMsg === 'stepup' ? '<div class="notice">綁定 Google 前，請先按下方「驗證一次」用通行金鑰確認是你本人，再重新綁定。</div>' : ''}
+      : googleMsg === 'stepup' ? '<div class="notice">綁定 Google 前，請先按下方「驗證一次」用通行金鑰確認是你本人，再重新綁定。</div>'
+      : googleMsg === 'other' ? `<div class="notice">${GOOGLE_OTHER}</div>` : ''}
     ${mfaBanner()}
     ${cfg.googleLogin ? `<section class="card"><div class="row spread"><div><h2 class="h3">Google 帳號</h2><span class="tiny">${me.google ? '已綁定，可以用 Google 登入' : '綁定後換手機或清掉瀏覽器資料，也能用 Google 回到同一個帳號'}</span></div>
       ${me.google ? '<span class="pill solid">已綁定</span>' : `<a class="btn google sm" href="${googleHref(true)}">${GOOGLE_G}<span>綁定</span></a>`}</div></section>` : ''}
@@ -331,7 +334,8 @@ function mePrivacy() {
     try {
       const r = await api('/me/email-findable', { method: 'POST', body: { on: e.target.checked } });
       if (me.referral) Object.assign(me.referral, { findable: r.findable, emailLinked: r.emailLinked });
-      toast(r.findable ? '跑友可以用 Gmail 找到你' : '已關閉，查詢碼已刪除');
+      // 打開不會恢復刪掉的查詢碼：還沒確認的提醒到「推薦人」用 Google 確認
+      toast(!r.findable ? '已關閉，查詢碼已刪除' : r.emailLinked ? '跑友可以用 Gmail 找到你' : '已開啟。到「我的 → 推薦人」按「用 Google 確認」後，跑友才找得到你');
     } catch (err) { e.target.checked = !e.target.checked; toast(err.message); }
   });
   $('#shareLogs').onchange = async (e) => { try { await api('/me/share-logs', { method: 'POST', body: { share: e.target.checked } }); me.share_logs = e.target.checked; toast(e.target.checked ? '已分享給教練' : '已停止分享'); } catch (err) { e.target.checked = !e.target.checked; toast(err.message); } };
@@ -340,7 +344,7 @@ function mePrivacy() {
     try { await api('/me', { method: 'DELETE' }); clearDeviceData(); setMe(null); toast('帳號已刪除'); location.hash = '#/'; render(); } catch (e) { toast(e.message); }
   };
 }
-// 推薦人：我的推薦人（用 Gmail 找跑友帳號，或只填名字）、推薦我的跑友（是我／不是我）、讓推薦的跑友用 Gmail 找到我（用 Google 確認一次）
+// 推薦人：我的推薦人（用 Gmail 找跑友帳號，或只填名字）、我推薦的跑友（把我設為推薦人的，是我／不是我）、讓推薦的跑友用 Gmail 找到我（用 Google 確認一次）
 //   協會關掉推薦人時不能新填或更換，但已經填的照樣顯示，「移除」「不是我」照樣可以按（撤回一律可以做）
 //   輸入的 Gmail 只留在這一頁的記憶體裡（查詢與設定時送出），伺服器只拿來算查詢碼，不保存
 const REF_GOOGLE = {
@@ -350,6 +354,7 @@ const REF_GOOGLE = {
   later: '請先同意新版隱私權政策，再按一次「用 Google 確認」。',
   taken: '這個 Google 帳號已經綁定另一個帳號了。如果那個帳號也是你的，請聯絡行政人員合併。',
   stepup: '確認前要先用通行金鑰驗證一次：到「帳號與安全」按「驗證一次」，再回來按「用 Google 確認」。',
+  other: GOOGLE_OTHER,
 };
 async function meReferral(googleMsg) {
   const from = new URLSearchParams(location.hash.split('?')[1] || '').get('from');
@@ -393,13 +398,13 @@ async function meReferral(googleMsg) {
       ${k.ack === 'ok' ? '<span class="pill solid">已確認</span>' : '<span class="pill wait">等你確認</span>'}
       <div class="racts">${k.ack === 'ok' ? `<button type="button" class="linkbtn tiny" data-refno aria-describedby="rk-${esc(k.id)}">不是我</button>`
         : `<button type="button" class="btn sm" data-refok aria-describedby="rk-${esc(k.id)}">是我</button><button type="button" class="btn ghost sm" data-refno aria-describedby="rk-${esc(k.id)}">不是我</button>`}</div></div>`;
-    const theirs = kids.length || on ? `<section class="card"><div class="row spread"><h2 class="h3" id="refKids" tabindex="-1">推薦我的跑友</h2><span class="tiny num">${kids.length} 位</span></div>
+    const theirs = kids.length || on ? `<section class="card"><div class="row spread"><h2 class="h3" id="refKids" tabindex="-1">我推薦的跑友</h2><span class="tiny num">${kids.length} 位</span></div>
       ${kids.length ? `<div class="refkids">${kids.map(kidRow).join('')}</div>` : '<p class="tiny" style="margin:0">還沒有跑友把你設為推薦人。</p>'}</section>` : '';
     const google = `<a class="btn google sm" href="${googleHref(true, { from: 'ref' })}">${GOOGLE_G}<span>用 Google 確認</span></a>`;
     const findme = cfg.googleLogin && on ? `<section class="card"><div class="row spread"><h2 class="h3">讓推薦的跑友找到你</h2>${d.findable && d.emailLinked ? '<span class="pill solid">已開啟</span>' : ''}</div>
-      ${d.findable && d.emailLinked ? `<p style="margin:0">已確認 Google 帳號：跑友輸入你的 Gmail 就能把你設為推薦人。</p><p class="tiny" style="margin:0">只存一組無法還原的查詢碼，不存 Email。</p><a class="tiny" href="#/me/privacy">在隱私設定關閉 ›</a>`
+      ${d.findable && d.emailLinked ? `<p style="margin:0">已確認 Google 帳號：跑友輸入你的 Gmail 就能把你設為推薦人。</p><p class="tiny" style="margin:0">只存一組無法還原的查詢碼，不存 Email。</p><a class="tiny tlink" href="#/me/privacy">在隱私設定關閉 ›</a>`
         : d.findable ? `<p style="margin:0">還沒確認 Google 帳號，跑友用你的 Gmail 找不到你。</p><div class="row">${google}</div><p class="tiny" style="margin:0">只會用 Email 算出一組無法還原的查詢碼，不存 Email 本身。</p>`
-        : '<p style="margin:0">已關閉：跑友沒辦法用 Gmail 找到你。</p><a class="tiny" href="#/me/privacy">到隱私設定打開 ›</a>'}</section>` : '';
+        : '<p style="margin:0">已關閉：跑友沒辦法用 Gmail 找到你。</p><a class="tiny tlink" href="#/me/privacy">到隱私設定打開 ›</a>'}</section>` : '';
     view.innerHTML = `${subTitle('推薦人', '團購或活動聯絡不上你時，協會幹部能透過推薦人找到你')}
       ${REF_GOOGLE[googleMsg] ? `<div class="notice">${REF_GOOGLE[googleMsg]}${googleMsg === 'stepup' ? ' <a href="#/me/security">前往 ›</a>' : ''}</div>` : ''}
       ${on ? '' : '<div class="notice">推薦人功能目前沒有開放。已經填的推薦人照樣保留，你可以隨時移除。</div>'}
@@ -451,7 +456,7 @@ async function meReferral(googleMsg) {
       if (!confirm('移除推薦人？對方不會收到通知。')) return;
       try { await api('/me/referral', { method: 'DELETE' }); toast('已移除推薦人'); await reload('#refMine'); } catch (err) { toast(err.message); }
     }));
-    // 推薦我的跑友：是我／不是我（不是我＝從對方的資料移除並通知對方，之後對方不能再把你設為推薦人）
+    // 我推薦的跑友：是我／不是我（不是我＝從對方的資料移除並通知對方，之後對方不能再把你設為推薦人）
     for (const b of view.querySelectorAll('[data-refok], [data-refno]')) b.addEventListener('click', busy(b, async () => {
       const ok = b.hasAttribute('data-refok'), id = b.closest('[data-kid]').dataset.kid;
       if (!ok && !confirm('確定不是你推薦的？會從對方的資料移除，並通知對方。')) return;

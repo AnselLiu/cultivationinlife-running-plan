@@ -121,7 +121,7 @@ test('Google 登入寫查詢碼：Email 驗證過才寫（布林或字串 true�
   assert.equal((await me(off.cookie)).name, '字串驗證', '名字不會被改掉');
 });
 
-test('同意新版政策才算查詢碼；推薦人頁的「用 Google 確認」回到推薦人頁；同一個 Google 帳號不用通行金鑰驗證、換帳號才要', async () => {
+test('同意新版政策才算查詢碼；推薦人頁的「用 Google 確認」回到推薦人頁；同一個 Google 帳號不用通行金鑰驗證、第一次綁才要；已經綁了別的不換綁', async () => {
   assert.equal((await call('t_runner', '/me')).json.needConsent, true, 't_runner 的同意版本是舊的');
   const later = await google({ link: '1', from: 'ref', sub: 'g_run', email: 'run@gmail.com', verified: '1' }, 't_runner');
   assert.equal(later.location, '/#/me/referral?google=later');
@@ -140,8 +140,25 @@ test('同意新版政策才算查詢碼；推薦人頁的「用 Google 確認」
   const pk = await account('pk', { sub: 'g_pk', name: '有金鑰' });
   await addPasskey(pk.cookie);
   assert.equal((await google({ link: '1', sub: 'g_pk', email: 'pk@gmail.com', verified: '1' }, pk.cookie)).location, '/#/me?google=linked', '同一個 Google 帳號');
-  assert.equal((await google({ link: '1', from: 'ref', sub: 'g_pk2' }, pk.cookie)).location, '/#/me/referral?google=stepup', '換另一個 Google 帳號');
   assert.equal((await google({ link: '1', from: 'ref', sub: 'g_rec' }, pk.cookie)).location, '/#/me/referral?google=taken');
+  // 已經綁了 Google、帳號選擇畫面選到另一個：不換綁（不然原本那個 Google 帳號登入會開出空的新帳號），有沒有通行金鑰都一樣
+  assert.equal((await google({ link: '1', from: 'ref', sub: 'g_pk2' }, pk.cookie)).location, '/#/me/referral?google=other', '換另一個 Google 帳號');
+  const np = await account('nopk', { sub: 'g_nopk', email: 'nopk@gmail.com', verified: '1', name: '沒有金鑰' });
+  for (const params of [{ link: '1', from: 'ref' }, { link: '1' }]) {
+    const r = await google({ ...params, sub: 'g_nopk_b', email: 'nopk.b@gmail.com', verified: '1' }, np.cookie);
+    assert.equal(r.location, params.from ? '/#/me/referral?google=other' : '/#/me?google=other');
+  }
+  const back = await google({ sub: 'g_nopk', name: '沒有金鑰' });
+  assert.equal(back.location, '/#/', '原本的 Google 帳號照樣登入原本的帳號');
+  assert.equal((await me(back.cookie)).id, np.id);
+  assert.equal((await me(back.cookie)).referral.emailLinked, true, '查詢碼沒有被換成另一個 Gmail 的');
+  // 還沒綁 Google、有通行金鑰：第一次綁要先驗證
+  for (const h of IPS) await rate(`join:${h}`, 'clear=1');
+  const j = await call(null, '/join', { method: 'POST', body: { code: 'test-join', name: '邀請碼加入', consent: true } });
+  assert.equal(j.status, 200, j.text);
+  const jc = j.headers.getSetCookie().find((c) => c.startsWith('__Host-cil_sess=')).split(';')[0];
+  await addPasskey(jc);
+  assert.equal((await google({ link: '1', from: 'ref', sub: 'g_join' }, jc)).location, '/#/me/referral?google=stepup', '第一次綁 Google');
 });
 
 test('用 Gmail 找：全形、googlemail、大小寫都找得到；只回遮罩名字與暱稱；找不到、關掉找我都是同一個回應；自己', async () => {
@@ -177,7 +194,7 @@ test('關掉找我會一直保持：再用 Google 登入也不產生；打開後
   const back = await google({ sub: 'g_off', email: 'off@gmail.com', verified: '1' });
   assert.equal((await me(back.cookie)).referral.emailLinked, true);
   const rows = (await auditOf('privacy.email_lookup')).filter((r) => r.target_id === o.id).map((r) => r.detail);
-  assert.deepEqual(rows, ['開啟', '關閉'], '新的在前');
+  assert.deepEqual([...rows].sort(), ['開啟', '關閉'].sort(), '一筆關閉、一筆開啟（同一秒的順序照隨機 id，不比順序）');
 });
 
 test('同一個查詢碼換到另一個帳號：後登入的找得到，前一個清掉', async () => {
@@ -328,7 +345,7 @@ test('匯出：推薦人名字遮罩、推薦我的只有人數，不含查詢�
   assert.equal(ex.json.referral.gmail_lookup_code_stored, true);
   const rx = await call(S.recA.cookie, '/me/export');
   assert.equal(rx.json.referral.referred_me, 1);
-  assert.ok(!rx.text.includes(e1.id), '推薦我的跑友 id 不匯出');
+  assert.ok(!rx.text.includes(e1.id), '我推薦的跑友 id 不匯出');
 });
 
 test('推薦人刪除帳號：被推薦的人看到「推薦人已刪除帳號」（不留名字），提到他的推薦通知一起刪掉', async () => {
@@ -425,12 +442,18 @@ test('把「只填名字」連到跑友帳號：每人各一則通知、推薦�
   assert.equal((await call(d1.cookie, '/me/referral', { method: 'PUT', body: { email: 'n2@gmail.com' } })).status, 200);
   assert.deepEqual((await call('t_staff', '/admin/referrals/relink', { method: 'POST', body: { name: '李小明', to: d1.id, member_ids: [n2.id, n3.id] } })).json, { linked: 1, skipped: 1 });
   assert.equal((await call('t_staff', '/admin/referrals/relink', { method: 'POST', body: { name: '李小明', to: d1.id, member_ids: ["x' OR 1=1"] } })).status, 400);
-  // 幹部移除推薦人
+  // 幹部移除推薦人：原推薦人那則「有跑友把你設為推薦人」一起標成已讀（跟本人移除一樣）
+  const rfOf = async () => (await notes(n2.cookie)).find((x) => x.ref === `rf:${d1.id}`);
+  const rf0 = await rfOf();
+  assert.ok(rf0 && !rf0.read_at, 'd1 用 Gmail 設 n2 為推薦人：n2 有一則未讀');
+  assert.equal((await call('t_staff', '/admin/referrals/clear', { method: 'POST', body: { member_id: d1.id } })).status, 200);
+  assert.ok((await rfOf()).read_at, '幹部移除後標成已讀');
   const c = await call('t_staff', '/admin/referrals/clear', { method: 'POST', body: { member_id: n1.id } });
   assert.equal(c.status, 200);
   assert.equal((await call(n1.cookie, '/me/referral')).json.referrer, null);
   assert.ok((await notes(n1.cookie)).some((x) => x.title === '推薦人已移除'));
-  assert.equal((await auditOf('referrer.admin_clear'))[0].target_id, n1.id);
+  const ac = (await auditOf('referrer.admin_clear')).map((r) => r.target_id);
+  assert.ok(ac.includes(n1.id) && ac.includes(d1.id));
   assert.equal((await call('t_staff', '/admin/referrals/clear', { method: 'POST', body: { member_id: n1.id } })).status, 404, '沒有可以移除的');
 });
 

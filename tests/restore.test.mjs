@@ -289,7 +289,7 @@ function backupWithReferral() {
 }
 const REFERRAL = [
   A('k1', '2026-10-02 08:00:00', 'privacy.email_lookup', 'ra', '關閉'),
-  A('k2', '2026-10-02 08:00:00', 'privacy.email_lookup', 'rf', '關閉'),             // 關了又開：照最後一次（開啟），備份的查詢碼保留
+  A('k2', '2026-10-02 08:00:00', 'privacy.email_lookup', 'rf', '關閉'),             // 關了又開：開關打開，但刪掉的查詢碼不會從備份回來
   A('k3', '2026-10-02 09:00:00', 'privacy.email_lookup', 'rf', '開啟'),
   A('k4', '2026-10-02 08:01:00', 'referrer.clear', 're'),
   A('k5', '2026-10-02 08:02:00', 'referrer.deny', 'rc', '', { actor_id: 'ra' }),      // 推薦人 ra 對 rc 按「不是我」
@@ -308,8 +308,10 @@ test('還原後重做推薦人撤回：Gmail 查詢關閉、移除推薦人、�
   db.exec(`BEGIN;\n${toSql(backupWithReferral(), { audit: rows }).join('\n')}\nCOMMIT;`);
   const m = (id) => ({ ...one(db, `SELECT email_h, email_findable, referrer_id, referrer_name, referrer_ack FROM members WHERE id = '${id}'`) });
   assert.deepEqual(m('ra'), { email_h: null, email_findable: 0, referrer_id: null, referrer_name: null, referrer_ack: null });
-  assert.equal(m('rf').email_h, 'HF', '最後一次是開啟：備份的查詢碼保留');
-  assert.equal(m('rf').email_findable, 1);
+  assert.equal(m('rf').email_h, null, '關過又打開：刪掉的查詢碼不會從備份回來（要再用 Google 確認一次）');
+  assert.equal(m('rf').email_findable, 1, '開關照最後一次（開啟）');
+  assert.equal(m('rb').email_h, 'HB', '沒關過的不動');
+  assert.match(planSummary(plan), /Gmail 查詢碼刪除（關過又打開） 1/);
   assert.equal(m('re').referrer_name, null, '本人移除的推薦人不會回來');
   assert.deepEqual(m('rc'), { email_h: null, email_findable: 1, referrer_id: null, referrer_name: null, referrer_ack: 'denied' });
   assert.equal(m('rd').referrer_id, 'ra', '「不是我」的是 rb，rd 的推薦人是 ra：不動');
@@ -323,6 +325,28 @@ test('還原後重做推薦人撤回：Gmail 查詢關閉、移除推薦人、�
   // 「不是我」一定要有推薦人（actor_id）：看起來被改過，整份擋下
   assert.throws(() => auditRowsFrom(wranglerJson([{ ...REFERRAL[4], actor_id: null }])));
   assert.throws(() => replaySql([{ ...REFERRAL[4], at: "2026-10-02'; --" }]));
+});
+
+test('備份之前按的「不是我」：rate_limits 沒有備份，冷卻照備份自己的 audit_log 補回（已經過期的不寫）', () => {
+  const at = (days) => new Date(Date.now() - days * 86400e3).toISOString().replace('T', ' ').slice(0, 19);
+  const data = backupWithReferral();
+  data.tables.audit_log = [
+    A('b1', at(10), 'referrer.deny', 'rc', '', { actor_id: 'ra' }),      // 10 天前：還在冷卻
+    A('b2', at(200), 'referrer.deny', 'rd', '', { actor_id: 'rb' }),     // 200 天前：已經過期
+    A('b3', at(5), 'referrer.deny', 're', '', { actor_id: "x'; --" }),    // 看不懂的 id：略過
+    A('b4', at(3), 'referrer.clear', 'rf'),
+  ];
+  const db = freshDb();
+  db.exec(`BEGIN;\n${toSql(data, {}).join('\n')}\nCOMMIT;`);
+  const keys = db.prepare("SELECT key, count, window_end FROM rate_limits WHERE key LIKE 'refno:%'").all().map((r) => ({ ...r }));
+  assert.deepEqual(keys.map((r) => r.key), ['refno:rc:ra']);
+  assert.equal(keys[0].count, 1000000);
+  assert.equal(keys[0].window_end, one(db, `SELECT datetime('${at(10)}', '+180 days') AS w`).w, '冷卻 180 天從按下的時間算');
+  // 已經有比較晚的冷卻：不縮短；只還原別的表時不寫
+  db.exec("UPDATE rate_limits SET window_end = '2099-01-01 00:00:00' WHERE key = 'refno:rc:ra'");
+  db.exec(`BEGIN;\n${toSql(data, { only: 'members' }).join('\n')}\nCOMMIT;`);
+  assert.equal(one(db, "SELECT window_end FROM rate_limits WHERE key = 'refno:rc:ra'").window_end, '2099-01-01 00:00:00');
+  assert.ok(!toSql(data, { only: 'signups' }).some((l) => l.includes('rate_limits')));
 });
 
 test('還原 members 用更新（不是 REPLACE）：不在備份裡的人推薦關係保留，子表不被 CASCADE 刪掉', () => {

@@ -492,8 +492,10 @@ async function googleSignIn(req, env, claims, mode) {
     const toMe = (x) => new Response(null, { status: 302, headers: { location: mode === 'R' ? `/#/me/referral?google=${x}` : `/#/me?google=${x}`, 'set-cookie': clear } });
     if (!cur) return back('請先登入再綁定 Google');
     if (m && m.id !== cur.id) return toMe('taken');
-    // 同一個 Google 帳號再確認一次只更新大頭貼與查詢碼，不用通行金鑰驗證；換綁另一個 Google 帳號才要
+    // 同一個 Google 帳號再確認一次只更新大頭貼與查詢碼，不用通行金鑰驗證；還沒綁 Google 的帳號第一次綁才要
     const same = !!m;
+    // 已經綁了另一個 Google 帳號（帳號選擇畫面選錯）：不換綁，不然原本那個 Google 帳號之後登入會開出一個空的新帳號
+    if (!same && cur.google_sub) return toMe('other');
     if (!same) {
       const pkOf = await env.DB.prepare('SELECT 1 FROM passkeys WHERE member_id = ? LIMIT 1').bind(cur.id).first();
       if (pkOf && !(cur.s_mfa && Date.now() - Date.parse(`${cur.s_mfa.replace(' ', 'T')}Z`) < 15 * 60e3)) return toMe('stepup');
@@ -3142,7 +3144,7 @@ const api = (async function api(req, env, path, method) {
       : member.referrer_gone ? { kind: 'gone' } : null);
     const recPush = { title: '有跑友把你設為推薦人', body: '點開確認是不是你認識的人' };
 
-    // 1. 我的推薦人、推薦我的跑友
+    // 1. 我的推薦人、我推薦的跑友
     if (path === '/api/me/referral' && method === 'GET') {
       const res = await env.DB.batch([
         ...(member.referrer_id ? [env.DB.prepare('SELECT r.name, r.nickname FROM members r WHERE r.id = ?1').bind(member.referrer_id)] : []),
@@ -3316,7 +3318,9 @@ const api = (async function api(req, env, path, method) {
         const child = str((await body()).member_id, 32);
         if (!ID.test(child)) return fail(404, '找不到這筆推薦');
         const lim = await adminLimit(); if (lim) return lim;
-        if (!(await env.DB.prepare(Ref.CLEAR_SQL).bind(child).all()).results.length) return fail(404, '找不到這筆推薦');
+        // 清掉之前（同一個 batch 的第一句）先把原推薦人那則「有跑友把你設為推薦人」標成已讀，跟本人移除一樣
+        const [, cl] = await env.DB.batch([env.DB.prepare(Ref.ADMIN_CLEAR_READ_SQL).bind(child), env.DB.prepare(Ref.CLEAR_SQL).bind(child)]);
+        if (!cl.results.length) return fail(404, '找不到這筆推薦');
         await notify(env, [child], 'membership', { title: '推薦人已移除', body: '協會幹部移除了你的推薦人。有問題可以聯絡協會。', url: '/#/me/referral' },
           { also: [await auditStmt(env, req, member, 'referrer.admin_clear', 'member', child, '')] });
         return json({ ok: true });
@@ -3356,7 +3360,7 @@ const api = (async function api(req, env, path, method) {
       routes: await q('SELECT name, distance, shared, points, created_at FROM routes WHERE created_by = ?'),
       calendar_items: await q('SELECT date, title, kind, url, note, created_at FROM calendar_items WHERE created_by = ?'),
       meetups: await q('SELECT id, title, date, gather_time, end_time, place, lead, status, created_at FROM events WHERE created_by = ? AND owner_managed = 1 ORDER BY date'),   // 自己發起的揪團（活動頁顯示「發起：暱稱」）
-      // 推薦人：名字遮罩（跟 App 一樣），推薦我的跑友只匯出人數（名單是別人的資料），查詢碼本身不匯出
+      // 推薦人：名字遮罩（跟 App 一樣），我推薦的跑友只匯出人數（名單是別人的資料），查詢碼本身不匯出
       referral: await (async () => {
         const r = await env.DB.prepare(`SELECT (SELECT name FROM members WHERE id = ?2) AS name, (SELECT nickname FROM members WHERE id = ?2) AS nickname,
           (SELECT COUNT(*) FROM members WHERE referrer_id = ?1) AS n`).bind(member.id, member.referrer_id || null).first();

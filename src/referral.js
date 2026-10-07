@@ -77,6 +77,9 @@ export const RELINK_SQL = `UPDATE members SET referrer_id = ?3, referrer_name = 
       SELECT 1 FROM up WHERE up.id = members.id OR up.d >= 64)
   RETURNING id, name, nickname`;
 export const ADMIN_CLEAR_SQL = CLEAR_SQL;
+// 幹部移除推薦人：在 CLEAR_SQL 之前（同一個 batch）把原推薦人那則推薦通知（ref＝rf:<被推薦的人>）標成已讀；沒有帳號推薦人＝不動
+export const ADMIN_CLEAR_READ_SQL = `UPDATE notifications SET read_at = COALESCE(read_at, datetime('now'))
+  WHERE member_id = (SELECT referrer_id FROM members WHERE id = ?1) AND ref = 'rf:' || ?1`;
 export const SUMMARY_SQL = `SELECT COUNT(referrer_id) AS linked,
     COALESCE(SUM(referrer_id IS NULL AND referrer_name IS NOT NULL), 0) AS named,
     COALESCE(SUM(referrer_id IS NOT NULL AND referrer_ack IS NULL), 0) AS pending,

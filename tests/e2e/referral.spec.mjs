@@ -39,7 +39,7 @@ test('首頁推薦人卡：還沒填推薦人才出現，「沒有推薦人」�
 
   // 「我的」有推薦人這一列；收起首頁提示之後照樣可以填
   await page.goto('/#/me');
-  await expect(page.locator('a.setrow[href="#/me/referral"]')).toContainText('誰介紹你來的、推薦我的跑友');
+  await expect(page.locator('a.setrow[href="#/me/referral"]')).toContainText('誰介紹你來的、你推薦的跑友');
   await page.locator('a.setrow[href="#/me/referral"]').click();
   await expect(page.locator('#view h1')).toHaveText('推薦人');
   await expect(page.getByText('還沒有填推薦人。')).toBeVisible();
@@ -199,7 +199,7 @@ test('功能關閉：推薦人頁只留已填的資料與移除，首頁卡、�
     await expect(page.locator('#refCard')).toHaveCount(0);
     await page.goto('/#/me');
     // 已經填了推薦人：關掉後「我的」照樣有這一列（看得到、可以移除）
-    await expect(page.locator('a.setrow[href="#/me/referral"]')).toContainText('已填・推薦我的跑友');
+    await expect(page.locator('a.setrow[href="#/me/referral"]')).toContainText('已填・你推薦的跑友');
     await page.goto('/#/me/referral');
     await expect(page.locator('.notice', { hasText: '推薦人功能目前沒有開放' })).toBeVisible();
     await expect(page.getByRole('button', { name: '更換' })).toHaveCount(0);
@@ -226,10 +226,11 @@ test('隱私：「讓我推薦的跑友用 Gmail 找到我」開關（有 Google
   await expect(page.locator('#view')).toContainText('Gmail 查詢碼（無法還原成 Email）');
   const sw = page.locator('#emailFind'), was = await sw.isChecked();
   expect(await axeBad(page)).toEqual([]);
-  // 關掉立刻刪除查詢碼；再打開（不會自己恢復查詢碼，要再用 Google 確認）
+  // 關掉立刻刪除查詢碼；再打開（不會自己恢復查詢碼，提醒要到「推薦人」再用 Google 確認）
+  const reopened = '已開啟。到「我的 → 推薦人」按「用 Google 確認」後，跑友才找得到你';
   await page.locator('label.switch', { has: sw }).click();
-  await expect(toast(page)).toContainText(was ? '已關閉，查詢碼已刪除' : '跑友可以用 Gmail 找到你');
+  await expect(toast(page)).toContainText(was ? '已關閉，查詢碼已刪除' : /已開啟。到「我的 → 推薦人」|跑友可以用 Gmail 找到你/);
   await page.locator('label.switch', { has: sw }).click();
-  await expect(toast(page)).toContainText(was ? '跑友可以用 Gmail 找到你' : '已關閉，查詢碼已刪除');
+  await expect(toast(page)).toContainText(was ? reopened : '已關閉，查詢碼已刪除');
   await expect(sw).toBeChecked({ checked: was });
 });

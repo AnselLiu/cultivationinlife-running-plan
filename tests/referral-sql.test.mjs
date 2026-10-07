@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
-import { BIND_SQL, UP_SQL, DOWN_SQL, RELINK_SQL, CLEAR_SQL, DENY_SQL, ACK_SQL, FOCUS_SQL, SUMMARY_SQL, SEARCH_SQL, NAMES_SQL, NAMED_SQL, NAME_SQL, COOLDOWN_SQL, LOGIN_SQL, LINK_SQL, CLEAR_HOLDER_SQL } from '../src/referral.js';
+import { BIND_SQL, UP_SQL, DOWN_SQL, RELINK_SQL, CLEAR_SQL, DENY_SQL, ACK_SQL, FOCUS_SQL, SUMMARY_SQL, SEARCH_SQL, NAMES_SQL, NAMED_SQL, NAME_SQL, COOLDOWN_SQL, LOGIN_SQL, LINK_SQL, CLEAR_HOLDER_SQL, ADMIN_CLEAR_READ_SQL } from '../src/referral.js';
 import { ERASE_MEMBER } from '../src/erase.js';
 
 const dir = new URL('../migrations/', import.meta.url);
@@ -128,4 +128,21 @@ test('登入時把別人身上相同的查詢碼清掉（同一句）', () => {
   db.prepare(CLEAR_HOLDER_SQL).run('H');
   db.prepare(CLEAR_HOLDER_SQL).run(null);
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM members WHERE email_h IS NOT NULL").get().n, 0);
+});
+
+test('幹部移除推薦人：清掉之前先把原推薦人那則推薦通知標成已讀（別人的、別的 ref 不動）', () => {
+  const db = freshDb();
+  add(db, 'r', 'c', 'x');
+  bind(db, 'c', 'r');
+  db.prepare(`INSERT INTO notifications (id, member_id, kind, category, ref, title) VALUES
+    ('n1', 'r', 'membership', 'membership', 'rf:c', '有跑友把你設為推薦人'), ('n2', 'x', 'membership', 'membership', 'rf:c', '別人的'),
+    ('n3', 'r', 'membership', 'membership', 'rf:x', '別的跑友'), ('n4', 'c', 'membership', 'membership', 'rf:r', '被推薦的人自己的')`).run();
+  db.exec('BEGIN');
+  db.prepare(ADMIN_CLEAR_READ_SQL).run('c');
+  assert.equal(db.prepare(CLEAR_SQL).all('c').length, 1);
+  db.exec('COMMIT');
+  assert.deepEqual(db.prepare('SELECT id FROM notifications WHERE read_at IS NOT NULL').all().map((r) => r.id), ['n1']);
+  assert.equal(db.prepare(ADMIN_CLEAR_READ_SQL).run('c').changes, 0, '已經沒有推薦人：不動');
+  db.prepare(NAME_SQL).run('x', '王大明');
+  assert.equal(db.prepare(ADMIN_CLEAR_READ_SQL).run('x').changes, 0, '只填名字：不動');
 });
