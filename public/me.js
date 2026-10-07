@@ -427,7 +427,7 @@ async function meReferral(googleMsg) {
     $('#refCancel')?.addEventListener('click', () => { edit = false; hit = null; paint('#refChange'); });
     $('#refRetry')?.addEventListener('click', () => { hit = null; paint('#refEmailF input'); });
     const ef = $('#refEmailF');
-    ef?.addEventListener('submit', busy(ef.querySelector('button'), async () => {
+    ef?.addEventListener('submit', busy(null, async () => {   // 送出鍵由共用的 submit 處理停用（app.js），這裡再看 disabled 會直接跳過
       // 全形、大寫、空白交給伺服器整理（中文輸入法打的 Ｇｍａｉｌ 也找得到），這裡只擋空白
       const input = ef.querySelector('input[name="email"]'), v = input.value.trim();
       if (!v) { fieldError(input, '請輸入正確的 Gmail'); return; }
@@ -440,7 +440,7 @@ async function meReferral(googleMsg) {
       catch (err) { toast(err.message); }
     }));
     const nf = $('#refNameF');
-    nf?.addEventListener('submit', busy(nf.querySelector('button'), async () => {
+    nf?.addEventListener('submit', busy(null, async () => {
       const input = nf.querySelector('input[name="name"]'), v = input.value.trim();
       if (!v) { fieldError(input, '名字請填 1–20 個字，不要填 Email、電話或網址'); return; }
       try { await api('/me/referral', { method: 'PUT', body: { name: v } }); await saved('已儲存推薦人'); }

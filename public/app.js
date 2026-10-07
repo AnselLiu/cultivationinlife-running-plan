@@ -3001,7 +3001,7 @@ const ME_SECTIONS = {
 // 設定列的色磚：跟 iPhone 設定一樣每一項一個顏色（深色模式也不會是一整排亮黃方塊）
 const ROW_TILE = { '#/report': 'green', '#/challenge': 'orange', '#/me/races': 'red', '#/me/reg': 'indigo', '#/tickets': 'purple', '#/me/teams': 'teal', '#/me/referral': 'orange',
   '#/me/notify': 'red', '#/me/calendar': 'orange', '#/me/display': 'indigo', '#/me/security': 'gray', '#/me/privacy': 'blue', '#/me/assoc': 'indigo', '#/me/card': 'teal',
-  '#/admin': 'gray', '#/admin/settings': 'gray', '#/roster': 'blue', '#/logs/team': 'green', '#/plan/new': 'green', '#/plan/season': 'green', '#/plan/race': 'red', '#/plan/guide': 'teal', '#/plan/setup': 'gray' };
+  '#/admin': 'gray', '#/admin/settings': 'gray', '#/roster': 'blue', '#/logs/team': 'green', '#/plan/new': 'green', '#/plan/season': 'green', '#/plan/race': 'red', '#/plan/guide': 'teal', '#/plan/setup': 'gray', '#/admin/tree': 'gray' };
 // 標題與副標中間放一個只給螢幕閱讀器的「，」：VoiceOver 唸「通知設定，推播類別」，不會連成一串沒有停頓
 const rowText = (title, sub) => `<span class="st"><b>${title}</b>${sub ? `<span class="sr">，</span><span class="tiny">${sub}</span>` : ''}</span>`;
 const row = (href, icon, title, sub = '', badge = '') => `<a class="setrow" href="${href}"><span class="sic"${ROW_TILE[href] ? ` style="--sc:var(--tile-${ROW_TILE[href]})"` : ''}>${icon}</span>${rowText(title, sub)}${badge}<span class="chev" aria-hidden="true"></span></a>`;
@@ -3175,6 +3175,7 @@ function parentOf(h) {
   if (h.startsWith('/logs/m/')) return ['#/logs/team', '團員訓練'];
   if (h.startsWith('/admin/settings/')) return ['#/admin/settings', '系統設定'];
   if (h === '/admin/settings') return ['#/admin', '管理後台'];
+  if (h === '/admin/tree') return ['#/admin?tab=members', '管理後台'];   // 推薦族譜：回到管理後台的會員分頁
   if (['/challenge', '/report', '/log', '/plan/new', '/logs/team'].includes(h) || h.startsWith('/plan/')) return ['#/plan', '課表'];
   if (h.startsWith('/t/')) return ['#/teams', '分團'];
   // 分團週報（#/weekly?team=）：回到那個分團；沒帶分團（理事長、行政人員）回管理後台
@@ -3185,14 +3186,14 @@ function parentOf(h) {
 // 這一頁屬於哪個分頁：本身是分頁就是自己，不然沿著上一層往上找（最多找 4 層）
 function tabOf(h) {
   const TOP = feat('gps') ? ['/', '/plan', '/run', '/map', '/me'] : ['/', '/plan', '/run', '/map', '/studio', '/me'];
-  for (let i = 0; i < 4 && !TOP.includes(h); i++) h = parentOf(h)[0].slice(1);
+  for (let i = 0; i < 4 && !TOP.includes(h); i++) h = parentOf(h)[0].slice(1).split('?')[0];   // 上一層可能帶分頁參數（#/admin?tab=members）
   return h;
 }
 // 頁面名稱（返回鍵顯示「‹ 上一頁的名稱」）
 function nameOf(h) {
   const N = { '/': '團練', '/plan': '課表', '/run': '跑步', '/studio': '拍照', '/me': '我的', '/calendar': '行事曆', '/map': '地圖', '/challenge': '挑戰', '/admin': '管理後台',
     '/teams': '分團', '/report': '報表', '/tickets': '入場券', '/notifications': '通知', '/past': '過去的團練', '/roster': '名冊', '/logs/team': '團員訓練',
-    '/plan/season': '全季課表', '/plan/race': '賽事準備', '/plan/guide': '配速與用語', '/plan/setup': '課表設定', '/weekly': '週報' };
+    '/plan/season': '全季課表', '/plan/race': '賽事準備', '/plan/guide': '配速與用語', '/plan/setup': '課表設定', '/weekly': '週報', '/admin/tree': '推薦族譜' };
   if (N[h]) return N[h];
   if (h.startsWith('/me/')) return ME_SECTIONS[h.slice(4)] || '我的';
   if (h.startsWith('/e/')) return h.endsWith('/stats') ? '統計' : '活動';

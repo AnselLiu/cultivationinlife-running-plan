@@ -99,6 +99,10 @@ test('用 Gmail 找推薦人（全形也找得到）、推薦人收到通知按�
   await expect(page.locator('a.setrow[href="#/me/referral"] .pill.wait')).toHaveText('1 位待確認');
   await page.goto('/#/notifications');
   await page.locator('a.nrow', { hasText: '有跑友把你設為推薦人' }).first().click();
+  // 內文較長、在通知列被截斷時先開詳情面板，按「前往」才到推薦人頁
+  const go = page.getByRole('link', { name: '前往' });
+  await expect(go.or(page.locator('.refkids'))).toBeVisible();
+  if (await go.isVisible()) await go.click();
   await expect(page).toHaveURL(/#\/me\/referral/);
   const kids = page.locator('.refkids');
   await expect(kids.locator('.r')).toHaveCount(1);

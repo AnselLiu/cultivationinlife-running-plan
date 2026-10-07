@@ -14,7 +14,7 @@
 - **我的賽事倒數**：每個人可以加自己的賽事（名稱、日期、距離、目標），標題列倒數主要賽事；沒設定時倒數協會預設賽事（幹部可改）。
 - **跑步記錄**：手機計時＋GPS，自動暫停、課表目標提醒、停太久會問「跑完了嗎」；跑完算出距離、配速、每公里分段與計圈，一鍵存到訓練紀錄或拍照分享；軌跡只留在手機上，可下載 GPX。
 - **拍照分享**：資料來源有手動輸入、Apple 健康捷徑、GPX／TCX 檔（Garmin Connect、Apple 健康都能匯出）；照片可選圖、拍照或用 **AR 相機**（鏡頭畫面即時疊數據）；三種版型（極簡、路線、號碼布）× 三種比例（限時動態／Reels 9:16、貼文 4:5、方形 1:1）；輸出圖片或 6 秒 Reels 短片，用手機分享選單送到 Instagram。照片不上傳。
-- **登入與身分**：Google 登入（只取名稱與大頭貼，不取 Email）、通行金鑰（Face ID／指紋），或用邀請碼加入。
+- **登入與身分**：Google 登入（只取名稱與大頭貼；協會開放推薦人時，Email 只換算成無法還原的查詢碼，不存 Email）、通行金鑰（Face ID／指紋），或用邀請碼加入。
 
 ## 架構
 
@@ -51,7 +51,7 @@
 
 **身分與安全**：工作階段權杖放 HttpOnly cookie，資料庫只存 SHA-256；寫入類 API 只收同源 JSON 請求（擋 CSRF）；Google 登入用 state＋nonce cookie 防 CSRF 與重放，並以 Google 公鑰驗證 ID Token。
 
-**個資**：網站只存姓名、組別、Google 顯示名稱與大頭貼網址（不存 Email）、報名紀錄。協會入會申請仍走官方 Google 表單，網站只放連結。
+**個資**：網站只存姓名、組別、Google 顯示名稱與大頭貼網址（協會開放推薦人時，Email 只換算成無法還原的查詢碼，不存 Email）、推薦人（選填）、報名紀錄。協會入會申請仍走官方 Google 表單，網站只放連結。
 
 **賽事報名資料**（代為團體報名馬拉松用，選填）：身分證字號、生日、地址、緊急聯絡人等，用 `RACE_KEY` 以 AES-GCM 加密後存在 `member_private`，只有本人看得到完整內容；本人報名「代為團體報名」的活動並勾選同意後，該活動的主辦幹部才能下載 CSV，每次下載都寫稽核。本人刪除資料時，已給的同意一併撤回。`RACE_KEY` 遺失就無法解密，只能請大家重填。
 
@@ -86,7 +86,7 @@ npm run deploy
 
 已設定完成（2026-10-03）：Google Cloud 專案 `cultivation-in-life-run`、OAuth 用戶端「cil-run web」（網頁應用程式，正式站與測試環境兩個重新導向 URI），同意畫面已發布為「實際運作中」，隱私權政策連結 `https://cil-run.anselliu7.workers.dev/privacy`。
 
-1. 到 [Google Cloud Console](https://console.cloud.google.com/) 建立專案 → 「API 和服務」→「OAuth 同意畫面」：使用者類型選「外部」，應用程式名稱「耕跑團」，範圍只要 `openid`、`profile`（非敏感範圍，不需要 Google 審查），最後按「發布應用程式」。
+1. 到 [Google Cloud Console](https://console.cloud.google.com/) 建立專案 → 「API 和服務」→「OAuth 同意畫面」：使用者類型選「外部」，應用程式名稱「耕跑團」，範圍 `openid`、`profile`、`.../auth/userinfo.email`（都是非敏感範圍，不需要 Google 審查；`email` 只在功能開關「推薦人」打開時才要求），最後按「發布應用程式」。
 2. 「憑證」→「建立憑證」→「OAuth 用戶端 ID」→ 類型「網頁應用程式」，已授權的重新導向 URI：
    - `https://cil-run.anselliu7.workers.dev/api/google/callback`
    - （選用）`https://cil-run-staging.anselliu7.workers.dev/api/google/callback`、`http://localhost:8790/api/google/callback`
@@ -97,7 +97,17 @@ npx wrangler secret put GOOGLE_CLIENT_ID --name cil-run
 npx wrangler secret put GOOGLE_CLIENT_SECRET --name cil-run
 ```
 
-沒設定時，登入畫面只顯示邀請碼與通行金鑰。Google 不允許在 LINE、Facebook、Instagram 的內建瀏覽器登入；在 LINE 裡打開時，登入按鈕會改用 `openExternalBrowser=1` 跳到 Safari／Chrome。
+沒設定時，登入畫面只顯示邀請碼與通行金鑰。
+
+**推薦人上線步驟**（功能開關 `referral`，預設關閉）：
+
+1. Google Cloud Console → OAuth 同意畫面 → 資料存取：加上 `.../auth/userinfo.email`（非敏感範圍）。**要在打開開關之前做**。
+2. `npx wrangler d1 migrations apply cil-run --remote`（`0052_referral`），先在測試環境做一次。
+3. 部署程式。開關還是關的，畫面沒有變化；隱私權政策版本跟著 hab 一起變成 `2026-10-07.1`。
+4. 如果「系統設定 → 隱私權政策」有自訂內文，把推薦人與 Gmail 查詢碼的段落加進去，並更新版本。
+5. 打開「系統設定 → 功能開關 → 會員 → 推薦人」。
+6. 不要換 `AUDIT_KEY`：換掉會讓所有 Gmail 查詢碼失效（Email 沒存，算不回來），只能等大家再用 Google 確認一次。
+Google 不允許在 LINE、Facebook、Instagram 的內建瀏覽器登入；在 LINE 裡打開時，登入按鈕會改用 `openExternalBrowser=1` 跳到 Safari／Chrome。
 
 ### 跑步數據匯入
 
