@@ -1404,6 +1404,75 @@ test('報名姓名由伺服器決定（送來的 name 不收）；代為報名�
   assert.ok(au.some((x) => (x.detail || '').includes('已在名單 1')), JSON.stringify(au));
 });
 
+test('攜伴：任何類型都能帶攜伴與姓名；勾了「攜伴也佔名額」名額算本人＋攜伴（容量 5：1+3 正取、1+1 候補）；公開名單只有＋人數，姓名只給主辦與本人', async () => {
+  // API 沒帶 count_guests：維持以前的算法（每筆 1 位）；表單預設勾選會送 true
+  assert.equal((await call('t_chair', `/events/${await mkEvent({ title: '攜伴舊算法', capacity: 2, guest_max: 3 })}`)).json.count_guests, 0);
+  const id = await mkEvent({ title: '攜伴名額', capacity: 5, guest_max: 3, count_guests: true });
+  assert.equal((await call('t_chair', `/events/${id}`)).json.count_guests, 1);
+  // 一般團練（不是餐敘）也能帶攜伴；姓名去掉空白、空的不算、超過人數的不收
+  assert.equal((await signup('t_lead', id, { guests: 3, guest_names: ['王小明', ' 李大華 ', '', '陳多多', '超過人數'] })).json.status, 'in');
+  await sleep(1100);
+  assert.equal((await signup('t_coach', id, { guests: 1, guest_names: ['林小美'] })).json.status, 'wait', '只剩 1 個位子，1+1 排候補');
+  const pub = (await call('t_other', `/events/${id}`)).json;
+  assert.equal(pub.signups.find((x) => x.member_id === 't_lead').guests, 3, '公開名單有攜伴人數');
+  assert.ok(!/王小明|林小美/.test(JSON.stringify(pub)), '公開的活動頁沒有攜伴姓名');
+  assert.deepEqual((await call('t_lead', `/events/${id}`)).json.myGuestNames, ['王小明', '李大華', '陳多多'], '本人看得到自己填的');
+  const roster = (await call('t_chair', `/events/${id}/roster`)).json.text;
+  assert.ok(roster.includes('測試團長 ＋3') && !roster.includes('王小明'), roster);
+  const st = (await call('t_chair', `/events/${id}/stats`)).json;
+  assert.equal(st.total.seats, 4);
+  assert.equal(st.seatsLeft, 1);
+  assert.deepEqual(st.people.find((x) => x.member_id === 't_lead').guestNames, ['王小明', '李大華', '陳多多']);
+  const csv = (await call('t_chair', `/events/${id}/export.csv`)).text;
+  assert.ok(csv.includes('"攜伴","攜伴姓名"') && csv.includes('"王小明、李大華、陳多多"'), 'CSV 有攜伴姓名');
+  // 只要 1 個位子的人：候補第一位（1+1）位子不夠，跳過換下一位
+  await sleep(1100);
+  assert.equal((await signup('t_super', id)).json.status, 'in', '剩下的 1 個位子給位子夠的人');
+  assert.equal(await stOf('t_coach', id), 'wait');
+  // 已經是正取，攜伴加多了位子不夠：擋下，狀態不變
+  const more = await signup('t_super', id, { guests: 2 });
+  assert.equal(more.status, 400);
+  assert.match(more.json.error, /名額不夠/);
+  assert.equal(await stOf('t_super', id), 'in');
+  // 舊版畫面沒送 guest_names：改報名內容不會清掉姓名
+  assert.equal((await signup('t_lead', id, { guests: 3, note: '晚點到' })).status, 200);
+  assert.deepEqual((await call('t_lead', `/events/${id}`)).json.myGuestNames, ['王小明', '李大華', '陳多多']);
+  // 本人匯出含自己填的攜伴姓名
+  const ex = (await call('t_lead', '/me/export')).json.signups.find((x) => x.event_id === id);
+  assert.equal(ex.guests, 3);
+  assert.deepEqual(JSON.parse(ex.guest_names), ['王小明', '李大華', '陳多多']);
+  // 正取減少攜伴：空出來的位子給候補（1+1 現在放得下）
+  assert.equal((await signup('t_lead', id, { guests: 1, guest_names: ['王小明'] })).json.status, 'in');
+  assert.equal(await stOf('t_coach', id), 'in');
+  assert.deepEqual((await call('t_lead', `/events/${id}`)).json.myGuestNames, ['王小明']);
+  assert.equal((await call('t_chair', `/events/${id}/stats`)).json.total.seats, 5);
+});
+
+test('攜伴也佔名額：取消空出的位子不夠候補第一組就跳過，給後面位子夠的人；取消「攜伴也佔名額」會遞補', async () => {
+  const id = await mkEvent({ title: '攜伴遞補', capacity: 5, guest_max: 3, count_guests: true });
+  assert.equal((await signup('t_staff', id, { guests: 1 })).json.status, 'in');
+  await sleep(1100);
+  assert.equal((await signup('t_runner', id, { guests: 2 })).json.status, 'in', '2＋3＝5，剛好滿');
+  await sleep(1100);
+  assert.equal((await signup('t_other', id, { guests: 3 })).json.status, 'wait');
+  await sleep(1100);
+  assert.equal((await signup('t_super', id)).json.status, 'wait');
+  assert.equal((await unsign('t_staff', id)).json.was, 'in');
+  assert.equal(await stOf('t_other', id), 'wait', '空出 2 個位子，候補第一組要 4 個，先跳過');
+  assert.equal(await stOf('t_super', id), 'in', '排在後面、只要 1 個位子的遞補');
+  assert.ok((await notesFor('t_super', id)).some((n) => n.title.startsWith('候補遞補成功')));
+  // 主辦取消「攜伴也佔名額」：每筆只算 1 位，空出來的位子遞補
+  const cur = (await call('t_chair', `/events/${id}`)).json;
+  const r = await call('t_chair', `/events/${id}`, { method: 'PUT', body: { ...evBase, title: '攜伴遞補', date: cur.date, capacity: 5, guest_max: 3, count_guests: false } });
+  assert.equal(r.status, 200, r.text);
+  assert.equal(await stOf('t_other', id), 'in');
+  // 舊版畫面編輯（沒帶 count_guests）保留原值
+  assert.equal((await call('t_chair', `/events/${id}`, { method: 'PUT', body: { ...evBase, title: '攜伴遞補', date: cur.date, capacity: 5, guest_max: 3 } })).status, 200);
+  assert.equal((await call('t_chair', `/events/${id}`)).json.count_guests, 0);
+  const au = (await call('t_chair', `/audit?from=${plus(-1)}&to=${plus(1)}&action=event.update&target=${id}`)).json.items;
+  assert.ok(au.some((x) => (x.detail || '').includes('攜伴佔名額 關')), JSON.stringify(au));
+});
+
 test('報名通知：開關控制、狀態沒變不重複、代為報名只通知真的報上的人', async () => {
   const id = await mkEvent({ title: '通知測試', capacity: 1, notify_signup: true, fee: 300 });
   assert.equal((await signup('t_lead', id)).json.status, 'in');

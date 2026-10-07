@@ -345,6 +345,30 @@ test('大量輸入：候補都因為庫存不夠排不進去的場次，每小�
   assert.deepEqual(await violations(), []);
 });
 
+test('大量輸入：攜伴也佔名額、200 位候補（攜伴 0–3 位），調高名額與取消的遞補都在額度內，位子不夠的那一組跳過', async () => {
+  const id = ok50(await call('t_chair', '/events', { method: 'POST', body: evBody({ title: '額度攜伴', capacity: 10, guest_max: 3, count_guests: true }) }), '建立活動').id;
+  await call(null, `/dev/seed-bulk?waitguests=${id}&n=200`);
+  const seats = (ev) => ev.signups.filter((x) => x.status === 'in').reduce((n, x) => n + 1 + (x.guests || 0), 0);
+  // 名額 10 → 60：依報名先後，每 4 位（1、2、3、4 個位子）佔 10 個位子，前 24 位剛好 60
+  const cur = (await call('t_chair', `/events/${id}`)).json;
+  ok50(await call('t_chair', `/events/${id}`, { method: 'PUT', body: { ...evBody({ title: '額度攜伴', capacity: 60, guest_max: 3, count_guests: true }), date: cur.date } }), '調高名額');
+  let ev = (await call('t_chair', `/events/${id}`)).json;
+  assert.equal(seats(ev), 60);
+  assert.deepEqual(ev.signups.filter((x) => x.status === 'in').map((x) => x.member_id).sort(), bids(0, 24));
+  // b_0003（本人＋3 位）取消：空出 4 個位子，依序 b_0024（1）、b_0025（2）遞補，b_0026（3）、b_0027（4）位子不夠跳過，b_0028（1）補滿
+  const r = await call('b_0003', `/events/${id}/signup`, { method: 'DELETE' });
+  delete cookies.b_0003;   // 後面的測試會重建假會員（舊的登入跟著刪掉），不要留著這個 cookie
+  ok50(r, '取消遞補');
+  ev = (await call('t_chair', `/events/${id}`)).json;
+  assert.equal(seats(ev), 60);
+  const st = Object.fromEntries(ev.signups.map((x) => [x.member_id, x.status]));
+  assert.deepEqual(['b_0024', 'b_0025', 'b_0026', 'b_0027', 'b_0028'].map((m) => st[m]), ['in', 'in', 'wait', 'wait', 'in']);
+  const s = ok50(await call('t_chair', `/events/${id}/stats`), '統計');
+  assert.equal(s.total.seats, 60);
+  assert.equal(s.seatsLeft, 0);
+  assert.deepEqual(await violations(), []);
+});
+
 test('大量輸入：國定假日匯入（假資料 365 天）在 16 個子請求以內；主團設定 300 人', async () => {
   const r = await call('t_chair', '/holidays/import', { method: 'POST', body: { year: 2031 } });
   assert.equal(r.status, 200, r.text);

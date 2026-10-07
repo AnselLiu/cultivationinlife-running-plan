@@ -2163,6 +2163,9 @@ a.footlink{display:inline-flex;align-items:center;gap:4px;min-height:44px;paddin
 /* 登入頁：從分享連結或錯誤回來時只留品牌，不放介紹磚 */
 .welcome.compact{padding-bottom:0}
 .notice.err{background:color-mix(in srgb,var(--race) 12%,transparent);color:var(--race)}
+/* 攜伴姓名欄 */
+.guestnames{display:grid;gap:8px;grid-template-columns:repeat(auto-fill,minmax(150px,1fr))}
+.guestnames:not(:has(label:not([hidden]))){display:none}
 .wfeat li{align-content:start}
 /* 分團卡：人數對齊名稱，不是對齊圖示 */
 .teamcard > .row.spread:last-child{padding-left:50px}

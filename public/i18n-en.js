@@ -4202,6 +4202,24 @@ export default {
 "填寫中": "Open for responses",
 "即將開放": "Opens",
 "額滿可候補": "Full · waitlist open",
-"已結束": "Ended"
+"已結束": "Ended",
+"報名時可以替同行的親友填攜伴姓名（選填），只有該活動的主辦幹部看得到，公開名單只顯示「＋人數」；請先徵得對方同意": "When you sign up you can enter your guests’ names (optional). Only the event’s organizers can see them; the public roster shows just “+ number”. Please ask your guests first",
+"報名時給主辦的備註改成只有主辦幹部看得到，不再出現在公開名單": "Notes to the organizer are now visible only to the event’s organizers and no longer appear on the public roster",
+"活動相關：項目與組別、所屬跑團、加入的分團與分團身分、餐點偏好、報名與報到紀錄、給主辦的備註、活動問卷的回答、中獎紀錄。": "Event-related: event and group, running club, sub-clubs joined and sub-club roles, meal preferences, signup and check-in records, notes to the organizer, event survey answers, prize records.",
+"攜伴姓名（選填）：你報名時替同行親友填的姓名，只有該活動的主辦幹部看得到，公開名單只顯示攜伴人數；請先徵得對方同意。": "Guest names (optional): names you enter for friends or family coming with you. Only the event’s organizers can see them; the public roster shows just the number of guests. Please ask your guests first.",
+"人數": "Number",
+"姓名（選填）": "name (optional)",
+"姓名只有主辦看得到，名單上只顯示「＋人數」": "Only the organizer sees names. The roster shows just “+ number”",
+"；攜伴也佔名額": "; guests count toward capacity",
+"，目前還有": ", spots left: ",
+"（攜伴也佔名額）": " (guests count toward capacity)",
+"攜伴也佔名額": "Guests count toward capacity",
+"名額算本人加攜伴，例如帶 2 位就佔 3 個名額；關掉的話每筆報名只算 1 位": "Capacity counts each member plus their guests (bringing 2 guests uses 3 spots). Turn off to count each signup as 1",
+"攜伴每位跟報名費同價（費用在下方「費用與收款」設定）；報名時可以填攜伴姓名，只有主辦看得到。": "Each guest pays the same as the signup fee (set under “Fees and payment collection” below). Members can enter guest names, visible only to organizers.",
+"（含攜伴）": " (incl. guests)",
+"名額不夠，最多只能帶": "Not enough spots. You can bring at most",
+"位攜伴": "guests",
+"攜伴佔名額": "Guests count toward capacity",
+"攜伴姓名": "Guest names"
 };
 export const inner = {"團練": "group run", "課表": "training plan", "拍照": "photo", "跑步": "running", "我的": "my", "揪跑": "social run", "分團": "sub-club", "主團": "home club", "報名": "sign up", "幹部": "officers", "團員": "members", "跑友": "runners", "活動": "event", "協會": "Association", "行事曆": "calendar", "地點": "spot", "路線": "route", "天氣": "weather", "通知": "notifications", "賽事": "race", "組別": "group", "訓練紀錄": "training log", "內容": "details", "流程": "process", "選擇": "option", "跑法": "how to run", "起跑": "start", "慢跑": "jog", "小時": "hours", "碳水": "carbs", "熱身": "warm-up", "分段": "segments", "強度": "intensity", "主課": "main set", "前段": "first part", "組數": "sets", "比賽日": "race day", "可在": "can be done on"};

@@ -63,8 +63,6 @@ async function formView(id) {
       </div>
       <fieldset class="group" data-when="party">
         <legend>餐敘（春酒、慶功宴、尾牙）</legend>
-        <label>可攜伴人數<input type="number" name="guest_max" min="0" max="9" value="${d.guest_max || ''}" placeholder="不開放"></label>
-        <p class="tiny" style="margin:0">攜伴每位跟報名費同價，費用在下方「費用與收款」設定。</p>
         <label>餐點選項（逗號分隔）<input name="meal_options" maxlength="60" value="${esc(d.meal_options || '')}" placeholder="葷食,素食"></label>
       </fieldset>
       <fieldset class="group" id="signupBox"><legend>報名設定</legend>
@@ -76,6 +74,9 @@ async function formView(id) {
         <p class="tiny" id="winHint" aria-live="polite" style="margin:0"></p>
         <label class="switch" data-when="!survey"><span>需要審核<span class="tiny" style="display:block">報名後由主辦幹部核准才算數；核准前不佔名額、不用繳費</span></span><input type="checkbox" name="require_approval" ${d.require_approval ? 'checked' : ''}><i></i></label>
         <label class="switch" data-when="!survey"><span>通知報名者<span class="tiny" style="display:block">報名成功、排入候補、確認收款時推播給本人；審核結果一律會通知</span></span><input type="checkbox" name="notify_signup" ${d.notify_signup ? 'checked' : ''}><i></i></label>
+        <label data-when="!survey">可攜伴人數<input type="number" name="guest_max" min="0" max="9" inputmode="numeric" value="${d.guest_max || ''}" placeholder="不開放"></label>
+        <label class="switch" data-when="!survey" data-guests><span>攜伴也佔名額<span class="tiny" style="display:block">名額算本人加攜伴，例如帶 2 位就佔 3 個名額；關掉的話每筆報名只算 1 位</span></span><input type="checkbox" name="count_guests" ${(id ? d.count_guests : d.count_guests ?? 1) ? 'checked' : ''}><i></i></label>
+        <p class="tiny" style="margin:0" data-when="!survey" data-guests>攜伴每位跟報名費同價（費用在下方「費用與收款」設定）；報名時可以填攜伴姓名，只有主辦看得到。</p>
         ${id && d.cancelled ? `<label class="switch"><span>恢復這場活動<span class="tiny" style="display:block">這場已取消；打開後儲存會重新開放</span></span><input type="checkbox" name="reopen" ${qp.get('reopen') === '1' ? 'checked' : ''}><i></i></label>` : ''}
         ${allow('settings') ? '<a class="tiny" href="#/admin/settings/signup">預設值在後台「活動報名預設」設定 ›</a>' : ''}
       </fieldset>
@@ -204,7 +205,10 @@ async function formView(id) {
       el.hidden = neg ? f.kind.value === k : f.kind.value !== k;
     }
   };
-  f.kind.onchange = sync; sync(); winHint();
+  // 攜伴也佔名額：有開攜伴才顯示
+  const guestSync = () => { const on = Number(f.guest_max.value) > 0 && f.kind.value !== 'survey'; for (const el of f.querySelectorAll('[data-guests]')) el.hidden = !on; };
+  f.kind.onchange = () => { sync(); guestSync(); }; sync(); guestSync(); winHint();
+  f.guest_max.addEventListener('input', guestSync);
   bindAddrField(f, 'address', f.address.value || d.address, f.address.value && f.address.value !== d.address ? '' : d.address_zip);
   const visHint = () => { $('#visHint').textContent = f.visibility.value === 'invite'
     ? '只有受邀的人看得到，不會出現在其他人的列表，也不會通知其他人。建立後在活動頁邀請人或開邀請連結。'
@@ -243,7 +247,7 @@ async function formView(id) {
       place: f.place.value, address: f.address.value.trim(), lead: f.lead.value, note: f.note.value, plan_text: f.plan_text.value,
       link_url: f.link_url.value, link_label: f.link_label.value, deadline: f.deadline.value, signup_start: f.signup_start.value,
       require_approval: f.kind.value !== 'survey' && f.require_approval.checked, notify_signup: f.notify_signup.checked, reopen: f.reopen?.checked || undefined,
-      week_no: num(f.week_no), capacity: num(f.capacity), fee: num(f.fee), guest_max: num(f.guest_max), meal_options: f.meal_options.value,
+      week_no: num(f.week_no), capacity: num(f.capacity), fee: num(f.fee), guest_max: num(f.guest_max), count_guests: f.count_guests.checked, meal_options: f.meal_options.value,
       signup_open: f.signup_open.checked, questions, visibility: f.visibility.value, group_reg: f.group_reg.checked,
       options: [...f.querySelectorAll('.optrow')].map((r) => ({ name: r.querySelector('[data-k=name]').value.trim(), price: Number(r.querySelector('[data-k=price]').value) || 0 })).filter((o) => o.name),
       items: [...f.querySelectorAll('.itemrow')].map((r) => { const v = (k) => r.querySelector(`[data-k=${k}]`).value.trim();
@@ -259,7 +263,7 @@ async function formView(id) {
     if (werr) return toast(werr);
     if (id) {
       if (body.deadline && body.deadline <= nowTp() && body.deadline !== d.deadline && !confirm('儲存後立即截止報名，確定嗎？')) return;
-      const n = (d.signups || []).filter((x) => x.status === 'in').length;
+      const n = (d.signups || []).filter((x) => x.status === 'in').reduce((k, x) => k + (body.count_guests ? 1 + (x.guests || 0) : 1), 0);
       if (body.capacity && body.capacity < n && body.capacity !== d.capacity
         && !confirm(`目前正取 ${n} 人已超過新的上限。已報名的人不會被取消，有人取消也不會遞補，直到人數低於上限。確定嗎？`)) return;
       const admitAsk = (k) => confirm(`還有 ${k} 筆待審核，關閉審核會依報名順序直接錄取（額滿排候補）並通知他們。確定嗎？`);
@@ -350,7 +354,7 @@ async function statsView(id) {
       ${st.canReview ? `<label class="selhit"><input type="checkbox" class="sel" data-sel aria-label="選取 ${esc(x.name)}" ${off}></label>` : ''}
       ${live && st.kind !== 'party' ? `<label class="attend" title="出席"><input type="checkbox" data-att="${esc(x.member_id)}" aria-label="出席：${esc(x.name)}" ${x.attended ? 'checked' : ''}><i>${IC.check}</i></label>` : '<span aria-hidden="true"></span>'}
       <span><b><span translate="no">${esc(x.name)}</span></b>${x.nickname ? ` <span class="tiny"><span translate="no">${esc(x.nickname)}</span></span>` : ''}${x.amount ? ` <span class="num tiny">${money2(x.amount)}</span>` : ''} ${STATUS_PILL[x.status] || ''}
-        <span class="tiny" style="display:block">${[x.option && esc(x.option), ...itemText(x.items, st.items).map(esc), st.groupReg && (x.regOk ? '報名資料 OK' : '報名資料未提供'), x.guests && `攜伴 ${x.guests}`, x.paid_note && `<span translate="no">${esc(x.paid_note)}</span>`].filter(Boolean).join('・')}</span>
+        <span class="tiny" style="display:block">${[x.option && esc(x.option), ...itemText(x.items, st.items).map(esc), st.groupReg && (x.regOk ? '報名資料 OK' : '報名資料未提供'), x.guests && `攜伴 ${x.guests}${(x.guestNames || []).length ? `（<span translate="no">${x.guestNames.map(esc).join('、')}</span>）` : ''}`, x.paid_note && `<span translate="no">${esc(x.paid_note)}</span>`].filter(Boolean).join('・')}</span>
         ${st.canReview ? `<span class="tiny" style="display:block"><span title="${tpAt(x.created_at)}">${ago(x.created_at)}報名</span>${x.firstAt && x.firstAt !== x.created_at ? `・第一次報名 <span class="num">${tpAt(x.firstAt)}</span>` : ''}${x.reviewedAt ? `・<span translate="no">${esc(x.reviewerName || '')}</span> ${x.status === 'rejected' ? '婉拒' : x.review === 'approved' ? '核准' : '處理'}・${ago(x.reviewedAt)}` : ''}${x.edited ? '・核准後有修改' : ''}${st.groupReg && !x.regComplete ? '・報名資料不完整' : ''}</span>` : ''}
         ${x.status === 'cancel' && x.cancelledAt ? `<span class="tiny" style="display:block">取消於 <span class="num">${tpAt(x.cancelledAt)}</span>・${CANCEL_BY[x.cancelBy] || '已取消'}</span>` : ''}
         ${x.note ? `<span class="tiny" style="display:block">備註：<span translate="no">${esc(x.note)}</span></span>` : ''}
@@ -365,13 +369,14 @@ async function statsView(id) {
   const kpi = [[survey ? '回覆' : '正取', t.in], ...(survey ? [] : [['候補', t.wait]]),
     ...(st.canReview && (t.pending || st.requireApproval) ? [['待審核', `${t.pending}${t.pendingGuests ? `＋攜伴 ${t.pendingGuests}` : ''}`]] : []),
     ...(t.rejected ? [['未通過', t.rejected]] : []), ['已取消', t.cancel],
-    ...(st.kind === 'party' ? [['攜伴', t.guests], ['已報到', `${t.checkedIn}/${t.in}`]] : survey ? [] : st.kind === 'buy' ? [['已領取', `${st.picked}/${t.in}`]] : [['出席', `${t.attended}/${t.in}`]]), ['協會會員數', t.members]];
+    ...(st.kind === 'party' || st.guestMax || t.guests ? [['攜伴', t.guests]] : []),
+    ...(st.kind === 'party' ? [['已報到', `${t.checkedIn}/${t.in}`]] : survey ? [] : st.kind === 'buy' ? [['已領取', `${st.picked}/${t.in}`]] : [['出席', `${t.attended}/${t.in}`]]), ['協會會員數', t.members]];
   const money = st.money, nf = (n) => n.toLocaleString('zh-TW');
   view.innerHTML = `
     ${largeTitle('統計', `<span translate="no">${esc(st.title)}</span>・${dstr(st.date)}`)}
     <section class="kpis">${kpi.map(([k, v]) => `<div class="card kpi"><span class="tiny">${k}</span><b class="num">${v}</b></div>`).join('')}</section>
-    ${st.capacity ? `<section class="card"><div class="row spread"><h2 class="h3">名額</h2><span class="tiny num">${t.in}/${st.capacity}・剩 ${st.seatsLeft} 名額</span></div>
-      <span class="bar big"><i style="width:${Math.min(100, Math.round(t.in / st.capacity * 100))}%"></i></span>
+    ${st.capacity ? `<section class="card"><div class="row spread"><h2 class="h3">名額</h2><span class="tiny num">${t.seats ?? t.in}/${st.capacity}・剩 ${st.seatsLeft} 名額${st.countGuests && t.guests ? '（含攜伴）' : ''}</span></div>
+      <span class="bar big"><i style="width:${Math.min(100, Math.round((t.seats ?? t.in) / st.capacity * 100))}%"></i></span>
       ${t.pending && st.seatsLeft ? `<p class="tiny" style="margin:0">尚有 ${st.seatsLeft} 個名額可核准</p>` : ''}</section>` : ''}
     ${st.payDuePassed && t.pending ? '<p class="notice">繳費期限已過，核准的人可能來不及繳費，請另外告知期限</p>' : ''}
     ${money ? `<section class="card"><div class="row spread"><h2 class="h3">收款</h2>${money.payInfo?.due ? `<span class="tiny">繳費期限 ${esc(money.payInfo.due)}</span>` : ''}</div>
