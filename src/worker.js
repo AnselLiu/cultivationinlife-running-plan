@@ -18,6 +18,8 @@ import * as Cams from './cams.js';
 import * as Rest from './rest.js';
 import { fold, b64bytes } from './ics.js';
 import { ERASE_MEMBER } from './erase.js';
+import { normalizeEmail, deriveEmailKey, emailDigest } from './email.js';
+import * as Ref from './referral.js';
 import { WorkerEntrypoint } from 'cloudflare:workers';
 import { Budget, invocationEnv, logBudget, settled, strictViolations, xfetch, planOf, cacheOf, addUsage, usageDue, takeUsage, restoreUsage, usage, USAGE_SQL, USAGE_COLS } from './budget.js';
 import { holdable, eventLatest, digestText, opsConditions, quotaUsage, reportPush, reportFor, isDigestHour, DIGEST_BATCH, DIGEST_SPAN, DIGEST_TTL, OPS, OPS_CONDS, OPS_NAME, REPORT_MIN_SHARE } from './ops.js';
@@ -64,17 +66,25 @@ const today = () => new Date(Date.now() + 8 * 3600e3).toISOString().slice(0, 10)
 const url0 = (req) => new URL(req.url);
 // 隱私權政策版本：預設值；實際版本由後台「系統設定」決定，改版後使用者下次開啟會被要求重新同意
 const PRIVACY_VERSION = '2026-10-07.1';
+// 個資匯出的 profile 不放的欄位（另外還有所有 s_ 開頭的工作階段欄位）
+const EXPORT_OMIT = new Set(['line_id', 'google_sub', 'cal_token_hash', 'team_officer', 'email_h', 'referrer_id', 'referral_hide']);
 async function getSettings(env, preloaded) {
   const rows = preloaded || (await env.DB.prepare(`SELECT key, value FROM settings WHERE key IN ('org','features','docs','privacy','tabs','signup')`).all()).results;
   const out = { org: {}, features: {}, docs: [], privacy: { version: PRIVACY_VERSION, body: '' }, tabs: {}, signup: { ...SIGNUP_DEFAULTS } };
   for (const r of rows) { try { out[r.key] = JSON.parse(r.value); } catch {} }
   // 活動報名預設：只存相對規則，缺的欄位用內建預設補上
   out.signup = { ...SIGNUP_DEFAULTS, ...(out.signup && typeof out.signup === 'object' ? out.signup : {}) };
-  // 用內建條文時，版本跟著程式走（條文改了就要重新同意）；後台自訂條文才用後台存的版本
-  if (!out.privacy.body) out.privacy.version = PRIVACY_VERSION;
-  out.privacy.version ||= PRIVACY_VERSION;
+  out.privacy.version = privacyVersionOf(out.privacy);
   return out;
 }
+// 用內建條文時，版本跟著程式走（條文改了就要重新同意）；後台自訂條文才用後台存的版本
+//   p：settings 的 privacy 原始字串或解析後的物件（Google 登入只讀這一格，不呼叫 getSettings）
+function privacyVersionOf(p) {
+  if (typeof p === 'string' || p == null) { try { p = JSON.parse(p || 'null'); } catch { p = null; } }
+  return (p && typeof p === 'object' && p.body && p.version) || PRIVACY_VERSION;
+}
+// 預設關閉的功能開關（明確打開才是 true）：raw 是 settings 的 features 原始字串
+const optInOf = (raw, k) => { try { return JSON.parse(raw || '{}')[k] === true; } catch { return false; } };
 const httpsUrl = (u, max = 300) => (/^https:\/\/[\w.-]+\.[a-z]{2,}(\/[^\s<>"']*)?$/i.test(u || '') ? String(u).slice(0, max) : '');
 
 function validGroup(dist, grp) {
@@ -175,6 +185,14 @@ async function hmac(env, text) {
   if (!env.AUDIT_KEY) return null;
   const key = await cachedKey('hmac', env.AUDIT_KEY, () => crypto.subtle.importKey('raw', new TextEncoder().encode(env.AUDIT_KEY), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']));
   return [...new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(text)))].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+// Gmail 查詢碼（推薦人）：跟稽核簽章分開的子金鑰（HKDF info 'email-lookup-v1'），快取標籤 'email-v1' 不跟 'hmac'、'race' 混用
+//   換 AUDIT_KEY 會讓所有查詢碼失效（Email 沒存，算不回來），只能等大家再用 Google 確認一次（docs/SECURITY.md A.8.15）
+//   Email 本身一律不存、不記錄、不放進稽核、錯誤訊息或回應
+const emailKey = (env) => (env.AUDIT_KEY ? cachedKey('email-v1', env.AUDIT_KEY, () => deriveEmailKey(env.AUDIT_KEY)) : null);
+async function emailHash(env, raw) {
+  const n = normalizeEmail(raw), k = n ? await emailKey(env) : null;
+  return k ? emailDigest(k, n) : null;
 }
 const auditFields = (r) => [r.id, r.at, r.actor_id, r.actor_name, r.actor_role, r.action, r.target_type, r.target_id, r.detail, r.ip_hash].map((v) => v ?? '').join('\u001f');
 // auditStmt 只產生 statement（HMAC 照算），讓呼叫端可以和其他寫入放進同一個 DB.batch（同一個交易）
@@ -369,20 +387,24 @@ const allMemberIds = async (env, exceptId) =>
 // ---- Google 登入（OpenID Connect 授權碼流程）----
 // 需要 secrets：GOOGLE_CLIENT_ID、GOOGLE_CLIENT_SECRET
 // Google Cloud 的「已授權的重新導向 URI」填 https://網域/api/google/callback
-// 範圍只要 openid profile（名稱與大頭貼），不要 Email；資料庫只存 Google 的 sub
+// 範圍：協會開放推薦人時加 email（只換算成查詢碼，不存 Email），其他時候只要 openid profile；資料庫只存 Google 的 sub
 const OAUTH_STATE = '__Host-cil_oauth';
 const googleRedirect = (url) => `${url.origin}/api/google/callback`;
 const GOOGLE_ISS = ['https://accounts.google.com', 'accounts.google.com'];
 
 // link=1：已經登入的人把 Google 綁到目前帳號（例如先用邀請碼加入），不會另外開新帳號
-function googleStart(env, url, current) {
+//   cookie 的模式：.L 從「帳號與安全」綁定｜.R 從「推薦人」頁按「用 Google 確認」（回到 #/me/referral）
+//   basic=1：只用名稱與大頭貼登入（不想提供 Email 的人；Google 的授權畫面只能全部同意或全部取消）
+async function googleStart(env, url, current) {
   if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET) return fail(503, '尚未設定 Google 登入');
-  const state = rid(12), nonce = rid(12), link = url.searchParams.get('link') === '1' && current ? '.L' : '';
+  const refOn = optInOf((await env.DB.prepare("SELECT value FROM settings WHERE key = 'features'").first())?.value, 'referral');
+  const sp = url.searchParams, state = rid(12), nonce = rid(12);
+  const link = sp.get('link') === '1' && current ? (sp.get('from') === 'ref' ? '.R' : '.L') : '';
   const auth = new URL('https://accounts.google.com/o/oauth2/v2/auth');
   auth.searchParams.set('response_type', 'code');
   auth.searchParams.set('client_id', env.GOOGLE_CLIENT_ID);
   auth.searchParams.set('redirect_uri', googleRedirect(url));
-  auth.searchParams.set('scope', 'openid profile');
+  auth.searchParams.set('scope', refOn && sp.get('basic') !== '1' ? 'openid profile email' : 'openid profile');
   auth.searchParams.set('state', state);
   auth.searchParams.set('nonce', nonce);
   auth.searchParams.set('prompt', 'select_account');
@@ -417,10 +439,11 @@ async function verifyGoogleIdToken(env, idToken, nonce) {
   return claims;
 }
 
+const OAUTH_CLEAR = `${OAUTH_STATE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`;
+const oauthBack = (msg) => new Response(null, { status: 302, headers: { location: `/#/?err=${encodeURIComponent(msg)}`, 'set-cookie': OAUTH_CLEAR } });
 async function googleCallback(req, env, url) {
-  const clear = `${OAUTH_STATE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`;
-  const back = (msg) => new Response(null, { status: 302, headers: { location: `/#/?err=${encodeURIComponent(msg)}`, 'set-cookie': clear } });
-  const [want, nonce, linkFlag] = ((req.headers.get('cookie') || '').match(new RegExp(`${OAUTH_STATE}=([\\w]+\\.[\\w]+(?:\\.L)?)`))?.[1] || '').split('.');
+  const back = oauthBack;
+  const [want, nonce, mode] = ((req.headers.get('cookie') || '').match(new RegExp(`${OAUTH_STATE}=([\\w]+\\.[\\w]+(?:\\.[LR])?)`))?.[1] || '').split('.');
   // 使用者在 Google 授權頁按了取消
   if (url.searchParams.get('error')) return back(url.searchParams.get('error') === 'access_denied' ? '你取消了 Google 登入' : 'Google 登入失敗，請再試一次');
   const code = url.searchParams.get('code'), state = url.searchParams.get('state');
@@ -435,28 +458,63 @@ async function googleCallback(req, env, url) {
     await audit(env, req, null, 'login.denied', null, null, `Google：${str(e.message, 60)}`);
     return back('Google 登入驗證失敗');
   }
+  return googleSignIn(req, env, claims, mode);
+}
+
+// 驗證過的 Google 帳號（claims）登入、開新帳號或綁定；測試用的 /api/dev/google 也走這裡（不碰 ID Token 驗證）
+//   mode：undefined 登入｜'L' 從「帳號與安全」綁定｜'R' 從「推薦人」頁確認
+//   查詢碼（email_h）：協會開放推薦人、有 AUDIT_KEY、沒關掉「用 Gmail 找到我」、已同意目前版本的隱私權政策、Google 有給 Email 才更新（Ref.nextEmailHash）
+//   三條寫入路徑都在同一句把別人身上相同的查詢碼清掉（被清掉的人不寫稽核、不通知）
+async function googleSignIn(req, env, claims, mode) {
+  const clear = OAUTH_CLEAR, back = oauthBack;
   const pic = safeAvatar(claims.picture), displayName = str(claims.name || claims.given_name, 40) || '跑者';
-  let m = await env.DB.prepare('SELECT id, name, role FROM members WHERE google_sub = ?').bind(claims.sub).first();
+  // 一次讀完：隱私權政策版本、功能開關、這個 Google 帳號綁的會員（取代以前的 SELECT … WHERE google_sub 與新帳號的 getSettings）
+  const ctx = await env.DB.prepare(`SELECT (SELECT value FROM settings WHERE key = 'privacy') AS sp, (SELECT value FROM settings WHERE key = 'features') AS sf,
+      m.id, m.name, m.role, m.consent_version, m.email_findable, m.email_h
+    FROM (SELECT 1) LEFT JOIN members m ON m.google_sub = ?1`).bind(claims.sub).first();
+  const pv = privacyVersionOf(ctx?.sp), refOn = optInOf(ctx?.sf, 'referral'), keyOk = !!env.AUDIT_KEY;
+  let m = ctx?.id ? { id: ctx.id, name: ctx.name, role: ctx.role } : null;
+  // 查詢碼只在真的要寫的時候才算（Email 有驗證才算；沒驗證＝null，會把舊的清掉）
+  const HASH = Symbol('hash');
+  const nextHash = async (findable, consentOk) => {
+    const r = Ref.nextEmailHash({ refOn, keyOk, findable, consentOk, hasClaim: 'email' in claims, hash: HASH });
+    if (!(r.set && r.value === HASH)) return r;
+    const verified = claims.email_verified === true || claims.email_verified === 'true';
+    return { set: true, value: verified ? await emailHash(env, claims.email) : null };
+  };
   // 綁定模式：把這個 Google 帳號接到目前登入的帳號
-  if (linkFlag === 'L') {
+  if (mode === 'L' || mode === 'R') {
     const cur = await currentMember(req, env);
-    const toMe = (q) => new Response(null, { status: 302, headers: { location: `/#/me?${q}`, 'set-cookie': clear } });
+    const toMe = (x) => new Response(null, { status: 302, headers: { location: mode === 'R' ? `/#/me/referral?google=${x}` : `/#/me?google=${x}`, 'set-cookie': clear } });
     if (!cur) return back('請先登入再綁定 Google');
-    if (m && m.id !== cur.id) return toMe('google=taken');
-    const pkOf = await env.DB.prepare('SELECT 1 FROM passkeys WHERE member_id = ? LIMIT 1').bind(cur.id).first();
-    if (pkOf && !(cur.s_mfa && Date.now() - Date.parse(`${cur.s_mfa.replace(' ', 'T')}Z`) < 15 * 60e3)) return toMe('google=stepup');
-    await env.DB.prepare('UPDATE members SET google_sub = ?, avatar = COALESCE(?, avatar) WHERE id = ?').bind(claims.sub, pic, cur.id).run();
-    await audit(env, req, cur, 'google.link', 'member', cur.id, '綁定 Google');
-    return toMe('google=linked');
+    if (m && m.id !== cur.id) return toMe('taken');
+    // 同一個 Google 帳號再確認一次只更新大頭貼與查詢碼，不用通行金鑰驗證；換綁另一個 Google 帳號才要
+    const same = !!m;
+    if (!same) {
+      const pkOf = await env.DB.prepare('SELECT 1 FROM passkeys WHERE member_id = ? LIMIT 1').bind(cur.id).first();
+      if (pkOf && !(cur.s_mfa && Date.now() - Date.parse(`${cur.s_mfa.replace(' ', 'T')}Z`) < 15 * 60e3)) return toMe('stepup');
+    }
+    const consentOk = cur.consent_version === pv, nx = await nextHash(cur.email_findable, consentOk);
+    if (!same || pic || (nx.set && nx.value !== cur.email_h)) {
+      await env.DB.prepare(Ref.LINK_SQL).bind(cur.id, pic, nx.set ? nx.value : null, nx.set ? 1 : 0, claims.sub).run();
+    }
+    await audit(env, req, cur, same ? 'google.refresh' : 'google.link', 'member', cur.id,
+      !same ? '綁定 Google' : !nx.set || cur.email_findable === 0 ? '未變更' : nx.value ? '查詢碼已更新' : '沒有已驗證的 Email');
+    if (mode === 'L') return toMe('linked');
+    return toMe(!refOn || !keyOk ? 'linked' : cur.email_findable === 0 ? 'off' : !consentOk ? 'later' : nx.set && nx.value ? 'confirmed' : 'noemail');
   }
   let isNew = false;
   if (m) {
-    if (pic) await env.DB.prepare('UPDATE members SET avatar = ? WHERE id = ?').bind(pic, m.id).run();
+    const nx = await nextHash(ctx.email_findable, ctx.consent_version === pv);
+    if (pic || (nx.set && nx.value !== ctx.email_h)) await env.DB.prepare(Ref.LOGIN_SQL).bind(m.id, pic, nx.set ? nx.value : null, nx.set ? 1 : 0).run();
   } else {
     isNew = true;
-    const id = rid(8);
-    await env.DB.prepare("INSERT INTO members (id, name, dist, grp, role, google_sub, avatar, consent_at, consent_version) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), ?)")
-      .bind(id, displayName, 'fm', 'D', 'member', claims.sub, pic, (await getSettings(env)).privacy.version).run();
+    const id = rid(8), nx = await nextHash(1, true), h = nx.set ? nx.value : null;
+    await env.DB.batch([
+      ...(h ? [env.DB.prepare(Ref.CLEAR_HOLDER_SQL).bind(h)] : []),
+      env.DB.prepare(`INSERT INTO members (id, name, dist, grp, role, google_sub, avatar, consent_at, consent_version, email_h)
+        VALUES (?1, ?2, 'fm', 'D', 'member', ?3, ?4, datetime('now'), ?5, ?6)`).bind(id, displayName, claims.sub, pic, pv, h),
+    ]);
     m = { id, name: displayName, role: 'member' };
   }
   await audit(env, req, m, isNew ? 'account.create' : 'login', 'member', m.id, 'Google');
@@ -5822,6 +5880,15 @@ async function devRoute(req, env, ctx, url, path) {
       ON CONFLICT(key) DO UPDATE SET count = excluded.count, window_end = excluded.window_end`).bind(key, Number(q.get('count')) || 0, Math.max(Number(q.get('sec')) || 600, 1)).run();
     return json({ ok: true });
   }
+  // 測試用 Google 登入：不經過 Google，直接拿 claims 走 googleSignIn（不碰 ID Token 驗證，也沒有「接受未簽章權杖」的開關）
+  //   ?sub=&name=&pic=&email=&verified=1（'str'＝字串 'true'）&link=1&from=ref
+  if (path === '/api/dev/google' && req.method === 'GET') {
+    const sub = str(q.get('sub'), 64);
+    if (!sub) return fail(400, '缺 sub');
+    const claims = { sub, name: str(q.get('name'), 40), ...(q.get('pic') ? { picture: q.get('pic') } : {}),
+      ...(q.has('email') ? { email: q.get('email'), email_verified: q.get('verified') === '1' ? true : q.get('verified') === 'str' ? 'true' : false } : {}) };
+    return googleSignIn(req, env, claims, q.get('link') === '1' ? (q.get('from') === 'ref' ? 'R' : 'L') : undefined);
+  }
   // 開發用登入
   if (path === '/api/dev/login' && req.method === 'GET') {
     const m = await env.DB.prepare('SELECT * FROM members WHERE id = ?').bind(str(q.get('id'), 32)).first();
@@ -5833,7 +5900,7 @@ async function devRoute(req, env, ctx, url, path) {
 
 async function handle(req, env, ctx, url, path) {
   // Google 登入是瀏覽器導向（GET、不是 JSON），走在下面的 CSRF 檢查之前
-  if (path === '/api/google/start' && req.method === 'GET') return googleStart(env, url, url.searchParams.get('link') === '1' ? await currentMember(req, env) : null);
+  if (path === '/api/google/start' && req.method === 'GET') return await googleStart(env, url, url.searchParams.get('link') === '1' ? await currentMember(req, env) : null);
   if (path === '/api/google/callback' && req.method === 'GET') return googleCallback(req, env, url);
   if (path.startsWith('/api/dev/') && env.DEV_LOGIN === '1' && LOCAL.includes(url.hostname)) {
     const r = await devRoute(req, env, ctx, url, path);
