@@ -71,3 +71,13 @@ test('windowError：格式、截止晚於活動、開始晚於截止、建立時
   assert.equal(tpShort('2026-10-05T20:00'), '10/5 20:00');
   assert.equal(tpText(''), '');
 });
+
+test('windowError：結束時間（選填）要晚於集合時間；沒填集合時間、問卷不檢查', () => {
+  const ev = { date: '2026-10-10', gather_time: '07:00' };
+  assert.match(windowError({ ...ev, end_time: '06:30' }), /結束時間要在開始之後/);
+  assert.match(windowError({ ...ev, end_time: '07:00' }), /結束時間要在開始之後/);
+  assert.equal(windowError({ ...ev, end_time: '09:00' }), null);
+  assert.equal(windowError({ ...ev, end_time: '' }), null);
+  assert.equal(windowError({ date: '2026-10-10', gather_time: '', end_time: '09:00' }), null);
+  assert.equal(windowError({ ...ev, kind: 'survey', end_time: '06:00' }), null);
+});

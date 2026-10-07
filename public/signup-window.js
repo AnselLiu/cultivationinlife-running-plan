@@ -52,6 +52,8 @@ export function defaultWindow({ date, gather_time, kind }, d = SIGNUP_DEFAULTS, 
 }
 // 驗證；回傳錯誤訊息或 null。create＝新增活動（截止不能已經過去）
 export function windowError(e, { now = tpNow(), create = false } = {}) {
+  // 結束時間（選填）要晚於集合／開始時間；同一天，不跨午夜
+  if (e.kind !== 'survey' && /^\d{2}:\d{2}$/.test(e.end_time || '') && /^\d{2}:\d{2}$/.test(e.gather_time || '') && e.end_time <= e.gather_time) return '結束時間要在開始之後';
   if (e.signup_start && !isStamp(e.signup_start)) return '報名開始時間格式不正確';
   if (e.deadline && !isStamp(e.deadline)) return '報名截止時間格式不正確';
   const start0 = evStart(e);

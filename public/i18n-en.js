@@ -4179,6 +4179,8 @@ export default {
 "取消於": "Canceled",
 "首次報名": "First signed up",
 "取消時間": "Canceled at",
-"取消方式": "How canceled"
+"取消方式": "How canceled",
+"結束時間（選填）": "End time (optional)",
+"結束時間要在開始之後": "The end time must be after the start time"
 };
 export const inner = {"團練": "group run", "課表": "training plan", "拍照": "photo", "跑步": "running", "我的": "my", "揪跑": "social run", "分團": "sub-club", "主團": "home club", "報名": "sign up", "幹部": "officers", "團員": "members", "跑友": "runners", "活動": "event", "協會": "Association", "行事曆": "calendar", "地點": "spot", "路線": "route", "天氣": "weather", "通知": "notifications", "賽事": "race", "組別": "group", "訓練紀錄": "training log", "內容": "details", "流程": "process", "選擇": "option", "跑法": "how to run", "起跑": "start", "慢跑": "jog", "小時": "hours", "碳水": "carbs", "熱身": "warm-up", "分段": "segments", "強度": "intensity", "主課": "main set", "前段": "first part", "組數": "sets", "比賽日": "race day", "可在": "can be done on"};

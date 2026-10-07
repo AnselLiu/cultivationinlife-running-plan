@@ -2325,8 +2325,9 @@ const api = (async function api(req, env, path, method) {
       const b = await body();
       const e = readEvent(b);
       if (!e) return fail(400, '活動資料不完整');
-      // 三態合併：舊版畫面沒帶這些欄位時保留原值，不會把設定清掉
+      // 三態合併：舊版畫面沒帶這些欄位時保留原值，不會把設定清掉（結束時間以前的表單沒有，編輯一次就被清空）
       for (const k of ['signup_start', 'require_approval', 'notify_signup']) if (e[k] === undefined) e[k] = cur[k] ?? null;
+      if (b.end_time === undefined) e.end_time = cur.end_time || '';
       e.require_approval = e.kind === 'survey' ? 0 : e.require_approval ? 1 : 0;
       e.notify_signup = e.notify_signup ? 1 : 0;
       // 編輯時允許把截止改到過去（表單會先確認「儲存後立即截止」）
@@ -2753,8 +2754,15 @@ const api = (async function api(req, env, path, method) {
         if (shift && isStamp(ev.signup_start) && ev.signup_start > nowTp) nx.signup_start = shiftDays(ev.signup_start, shift);
         if (nx.deadline && nx.deadline > evStart(nx)) nx.deadline = null;
         if (nx.signup_start && (nx.signup_start <= nowTp || nx.signup_start >= signupEnd(nx))) nx.signup_start = null;
-        await env.DB.prepare('UPDATE events SET date = ?, gather_time = ?, deadline = ?, signup_start = ?, remind_hour_at = NULL, remind_day_at = NULL, wx_alert_at = NULL, followup_at = NULL WHERE id = ?')
-          .bind(nx.date, nx.gather_time || null, nx.deadline || null, nx.signup_start || null, ev.id).run();
+        // 結束時間跟著集合時間平移（活動長度不變）；超過當天 23:59 或沒辦法推算就清掉
+        const hm = /^\d{2}:\d{2}$/, mins = (t) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5));
+        nx.end_time = ev.end_time || '';
+        if (time && hm.test(nx.end_time)) {
+          const end = hm.test(ev.gather_time || '') && ev.end_time > ev.gather_time ? mins(time) + mins(ev.end_time) - mins(ev.gather_time) : mins(ev.end_time);
+          nx.end_time = end > mins(time) && end < 1440 ? `${String(Math.floor(end / 60)).padStart(2, '0')}:${String(end % 60).padStart(2, '0')}` : '';
+        }
+        await env.DB.prepare('UPDATE events SET date = ?, gather_time = ?, end_time = ?, deadline = ?, signup_start = ?, remind_hour_at = NULL, remind_day_at = NULL, wx_alert_at = NULL, followup_at = NULL WHERE id = ?')
+          .bind(nx.date, nx.gather_time || null, nx.end_time, nx.deadline || null, nx.signup_start || null, ev.id).run();
       }
       // 報名（含候補、待審核）的人歸「活動異動」（不能關推播）；audience=all 時其他人歸「活動與邀請」
       const ids = (await env.DB.prepare("SELECT member_id FROM signups WHERE event_id = ? AND status IN ('in', 'wait', 'pending') AND member_id IS NOT NULL").bind(ev.id).all()).results.map((r) => r.member_id).filter((x) => x !== member.id);

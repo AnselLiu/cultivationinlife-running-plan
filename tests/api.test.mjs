@@ -1214,6 +1214,30 @@ test('取消紀錄：本人取消記時間與方式、重報保留第一次報�
   assert.ok(mine.cancelled_at && mine.cancel_by === 'organizer');
 });
 
+test('結束時間：建立與編輯都檢查要晚於集合時間；舊版畫面（沒帶 end_time）編輯不會清掉；發布改時間時跟著平移', async () => {
+  const bad = await call('t_chair', '/events', { method: 'POST', body: { ...evBase, date: plus(9), end_time: '06:30' } });
+  assert.equal(bad.status, 400);
+  assert.match(bad.json.error, /結束時間要在開始之後/);
+  const id = await mkEvent({ title: '結束時間', date: plus(9), end_time: '09:00' });
+  const ev = (await call('t_chair', `/events/${id}`)).json;
+  assert.equal(ev.end_time, '09:00');
+  const body = { kind: ev.kind, title: ev.title, date: ev.date, gather_time: ev.gather_time };   // 舊版畫面：沒有 end_time
+  assert.equal((await call('t_chair', `/events/${id}`, { method: 'PUT', body })).status, 200);
+  assert.equal((await call('t_chair', `/events/${id}`)).json.end_time, '09:00', '沒帶就保留');
+  const bad2 = await call('t_chair', `/events/${id}`, { method: 'PUT', body: { ...body, end_time: '06:00' } });
+  assert.equal(bad2.status, 400);
+  assert.match(bad2.json.error, /結束時間要在開始之後/);
+  // 發布改時間：07:00–09:00 改成 19:00 → 19:00–21:00；改到 23:00 超過當天就清掉
+  assert.equal((await call('t_chair', `/events/${id}/notice`, { method: 'POST', body: { type: 'time', gather_time: '19:00' } })).status, 200);
+  assert.equal((await call('t_chair', `/events/${id}`)).json.end_time, '21:00');
+  assert.equal((await call('t_chair', `/events/${id}/notice`, { method: 'POST', body: { type: 'time', gather_time: '23:00' } })).status, 200);
+  assert.equal((await call('t_chair', `/events/${id}`)).json.end_time, '');
+  assert.equal((await call('t_chair', `/events/${id}`, { method: 'PUT', body: { ...body, gather_time: '19:00', end_time: '21:30' } })).status, 200);
+  assert.equal((await call('t_chair', `/events/${id}`)).json.end_time, '21:30');
+  assert.equal((await call('t_chair', `/events/${id}`, { method: 'PUT', body: { ...body, gather_time: '19:00', end_time: '' } })).status, 200);
+  assert.equal((await call('t_chair', `/events/${id}`)).json.end_time, '', '表單清空就清掉');
+});
+
 test('報名通知：開關控制、狀態沒變不重複、代為報名只通知真的報上的人', async () => {
   const id = await mkEvent({ title: '通知測試', capacity: 1, notify_signup: true, fee: 300 });
   assert.equal((await signup('t_lead', id)).json.status, 'in');

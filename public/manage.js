@@ -43,9 +43,10 @@ async function formView(id) {
         <label class="chip"><input type="radio" name="visibility" value="public" ${d.visibility !== 'invite' ? 'checked' : ''}><span>公開</span></label>
         <label class="chip"><input type="radio" name="visibility" value="invite" ${d.visibility === 'invite' ? 'checked' : ''}><span>${IC.lock}邀請制</span></label></div>
         <span class="tiny" id="visHint"></span></fieldset>
-      <div class="grid2">
+      <div class="grid3">
         <label><span data-when="survey">截止日期</span><span data-when="!survey">日期</span><input type="date" name="date" required value="${esc(d.date)}"></label>
         <label data-when="!survey"><span data-when="!party">集合時間</span><span data-when="party">開始時間</span><input type="time" name="gather_time" value="${esc(d.gather_time || '')}"></label>
+        <label data-when="!survey">結束時間（選填）<input type="time" name="end_time" value="${esc(d.end_time || '')}"></label>
       </div>
       <div data-when="!survey">
         <label>地點<input name="place" maxlength="60" value="${esc(d.place || '')}" placeholder="臺北田徑場 400 場"></label>
@@ -238,7 +239,7 @@ async function formView(id) {
     const bad = questions.find((q) => q.type !== 'text' && !q.options.length);
     if (bad) return toast(`「${bad.label}」要有選項`);
     const body = {
-      kind: f.kind.value, team_id: f.team_id.value || null, title: f.title.value, date: f.date.value, gather_time: f.gather_time.value,
+      kind: f.kind.value, team_id: f.team_id.value || null, title: f.title.value, date: f.date.value, gather_time: f.gather_time.value, end_time: f.end_time.value,
       place: f.place.value, address: f.address.value.trim(), lead: f.lead.value, note: f.note.value, plan_text: f.plan_text.value,
       link_url: f.link_url.value, link_label: f.link_label.value, deadline: f.deadline.value, signup_start: f.signup_start.value,
       require_approval: f.kind.value !== 'survey' && f.require_approval.checked, notify_signup: f.notify_signup.checked, reopen: f.reopen?.checked || undefined,
