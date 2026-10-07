@@ -36,7 +36,10 @@ const noteField = (ev, value, id = '') => `<label>給主辦的備註（選填）
 const windowLine = (ev) => `報名期間：${ev.signup_start ? tpShort(ev.signup_start) : '即日起'} – ${tpShort(signupEnd(ev))}${ev.require_approval ? '（需主辦審核）' : ''}`;
 const shareable = (ev) => ['open', 'soon'].includes(signupState(ev, nowTp()));
 // 分享活動：手機跳出分享選單（LINE、訊息…），不支援就複製文字＋連結
-const eventUrl = (id) => `${location.origin}/#/e/${id}`;
+// 分享連結用 /e/:id：伺服器幫 LINE 等的連結預覽加上活動摘要（標題、日期時間、地點、報名狀態），打開後前端轉成 /#/e/:id
+const eventUrl = (id) => `${location.origin}/e/${id}`;
+// 貼到 LINE 的連結：openExternalBrowser=1 讓 LINE 直接用 Safari／Chrome 打開（LINE 內建瀏覽器不能用 Google 登入，也沒有主畫面 App 的登入狀態）
+const forLine = (u) => `${u}${u.includes('?') ? '&' : '?'}openExternalBrowser=1`;
 async function shareEvent(ev, link = eventUrl(ev.id)) {
   const text = `${ev.title}｜${dstr(ev.date)}${ev.gather_time ? ` ${ev.gather_time}` : ''}${ev.place ? `・${ev.place}` : ''}`;
   if (navigator.share) {
@@ -193,7 +196,7 @@ export async function eventView(id) {
     </section>` : ''}`;
   // 邀請制：分享出去的一定是帶邀請代碼的連結；沒開邀請連結就提醒先開
   const shareUrl = () => (inviteOnly ? (ev.invite?.token ? `${eventUrl(ev.id)}?t=${ev.invite.token}` : null) : eventUrl(ev.id));
-  const attendLink = ev.attendToken ? `${eventUrl(ev.id)}/attend?t=${ev.attendToken}` : '';
+  const attendLink = ev.attendToken ? `${location.origin}/#/e/${ev.id}/attend?t=${ev.attendToken}` : '';
   if (attendLink && $('#attendQR')) qrSVG(attendLink, { size: 220, dark: '#0B1B33', light: '#fff' }).then((svg) => { $('#attendQR').innerHTML = svg; }).catch(() => {});
   const setAttend = async (on) => { try { await api(`/events/${ev.id}/attend-token`, { method: 'POST', body: { on } }); eventView(ev.id); } catch (e) { toast(e.message); } };
   $('#attendOn')?.addEventListener('click', () => setAttend(true));
@@ -218,7 +221,7 @@ export async function eventView(id) {
     if (!shareUrl()) return toast('先在下方「邀請連結」開啟，才能分享');
     const price = (ev.options || []).length ? ev.options.map((o) => `${o.name}${o.price ? ` ${money(o.price)}` : ''}`).join('／') : ev.fee ? money(ev.fee) : '';
     const text = [`【${KIND_NAME[ev.kind] || '活動'}】${ev.title}`, `${dstr(ev.date)}${ev.gather_time ? ` ${ev.gather_time}` : ''}${ev.place ? `・${ev.place}` : ''}`,
-      price ? `費用：${price}` : '', ev.cancelled ? '' : windowLine(ev), shareable(ev) ? `${ev.kind === 'survey' ? '填寫' : '報名'}：${shareUrl()}` : ''].filter(Boolean).join('\n');
+      price ? `費用：${price}` : '', ev.cancelled ? '' : windowLine(ev), shareable(ev) ? `${ev.kind === 'survey' ? '填寫' : '報名'}：${forLine(shareUrl())}` : ''].filter(Boolean).join('\n');
     open(`https://line.me/R/share?text=${encodeURIComponent(text)}`, '_blank', 'noopener');
   });
   if (inviteOnly && admin) bindInviteCard(ev);
@@ -401,8 +404,8 @@ async function announceText(ev) {
   } else if (ev.plan_text) { L.push('', ev.plan_text); }
   if (ev.note) L.push('', ev.note);
   if (ev.link_url) L.push('', `${ev.link_label || '登記'}：${ev.link_url}`);
-  if (shareable(ev) && ev.visibility !== 'invite') L.push('', `報名：${location.origin}/#/e/${ev.id}`);
-  if (shareable(ev) && ev.visibility === 'invite' && ev.invite?.token) L.push('', `報名（邀請連結）：${location.origin}/#/e/${ev.id}?t=${ev.invite.token}`);
+  if (shareable(ev) && ev.visibility !== 'invite') L.push('', `報名：${forLine(eventUrl(ev.id))}`);
+  if (shareable(ev) && ev.visibility === 'invite' && ev.invite?.token) L.push('', `報名（邀請連結）：${forLine(`${eventUrl(ev.id)}?t=${ev.invite.token}`)}`);
   return L.join('\n');
 }
 // ---------- 春酒：入場券、報到、抽獎 ----------

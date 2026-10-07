@@ -18,3 +18,10 @@ test('推播摘要：點摘要（nr）不標成已讀；快取版本換新', () 
   assert.match(sw, /data: \{[^}]*nr: !!d\.nr/, 'push 事件把 nr 帶進通知的 data');
   assert.match(sw, /if \(id && !nr\) await fetch\('\/api\/notifications\/read'/, 'nr 時不呼叫已讀');
 });
+
+test('分享連結 /e/:id 的頁面導覽用存好的首頁回應（不會每個活動各存一份）', () => {
+  const sw = readFileSync(new URL('../public/sw.js', import.meta.url), 'utf8');
+  assert.match(sw, /e\.request\.mode === 'navigate' && url\.pathname\.startsWith\('\/e\/'\)\) \{\s*e\.respondWith\(caches\.match\('\/'\)/);
+  const app = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  assert.match(app, /location\.pathname\.match\(\/\^\\\/e\\\/\(\[\\w-\]\{1,32\}\)\\\/\?\$\/\)/, '前端開機時把 /e/:id 轉成 /#/e/:id');
+});

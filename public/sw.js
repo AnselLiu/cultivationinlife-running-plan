@@ -47,6 +47,11 @@ self.addEventListener('fetch', (e) => {
     if (OFFLINE_API.some((r) => r.test(url.pathname))) e.respondWith(networkFirst(e.request));
     return;
   }
+  // 分享連結 /e/:id 的頁面導覽：畫面就是首頁（伺服器只多了給連結預覽看的活動摘要），用存好的 '/' 回應，不會每個活動各存一份；前端開機時轉成 /#/e/:id
+  if (e.request.mode === 'navigate' && url.pathname.startsWith('/e/')) {
+    e.respondWith(caches.match('/').then((hit) => (hit ? clean(hit) : fetch(e.request))));
+    return;
+  }
   // 程式與頁面（js、css、html、json、頁面導覽）有快取就只用快取，不在背景一個一個換新：
   //   不然同一次使用中會新舊版混在一起（新模組配舊主程式就會壞）；換版一律靠新版 Service Worker 整批安裝
   const code = e.request.mode === 'navigate' || url.pathname === '/' || url.pathname === '/coach' || /\.(js|mjs|css|html|json|webmanifest)$/.test(url.pathname);

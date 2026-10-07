@@ -299,6 +299,9 @@ test('尚未開放報名：活動頁顯示開放時間，首頁卡片顯示開�
   await expect(page.locator('#openCountdown')).toContainText('開放報名');
   await page.goto('/#/');
   await expect(page.locator('a.card', { hasText: 'E2E 尚未開放' }).first()).toContainText(/開放/);
+  // 活動卡片（不是最上面的大卡時）的報名狀態：即將開放＋開放時間
+  const lit = page.locator('a.card.lit', { hasText: 'E2E 尚未開放' });
+  if (await lit.count()) await expect(lit.first().locator('.pill.reg-soon')).toContainText('即將開放');
 });
 
 test('報名截止與額滿：顯示報名已截止、排候補', async ({ page, request }) => {
@@ -320,7 +323,38 @@ test('LINE 分享文字含報名期間', async ({ page, request }) => {
   await page.goto(`/#/e/${ev.id}`);
   await page.evaluate(() => { window.open = (u) => { window.__shared = u; return null; }; });
   await page.locator('#shareLine').click();
-  expect(decodeURIComponent(await page.evaluate(() => window.__shared))).toContain('報名期間');
+  const shared = decodeURIComponent(await page.evaluate(() => window.__shared));
+  expect(shared).toContain('報名期間');
+  // 分享連結用 /e/:id（LINE 看得到活動預覽卡），加上 openExternalBrowser=1 直接用 Safari／Chrome 打開
+  expect(shared).toContain(`/e/${ev.id}?openExternalBrowser=1`);
+  expect(shared).not.toContain('#/e/');
+});
+
+test('分享連結 /e/:id：沒登入先看到活動預覽與報名狀態，登入後回到活動頁；已登入直接到活動頁', async ({ page, request }) => {
+  const ev = await apiAs(request, 't_chair', '/events', { method: 'POST', body: { kind: 'track', title: 'E2E 分享連結', date: plus(5), gather_time: '07:00', place: '田徑場', notify: false } });
+  await page.goto(`/e/${ev.id}?openExternalBrowser=1`);
+  await expect(page).toHaveURL(new RegExp(`/#/e/${ev.id}$`));
+  const card = page.locator('#sharedEv .card.shared');
+  await expect(card).toContainText('E2E 分享連結');
+  await expect(card.locator('.pill.reg-open')).toHaveText('報名中');
+  await enter(page);
+  await expect(page).toHaveURL(new RegExp(`#/e/${ev.id}$`));
+  await page.goto('/#/');
+  await page.goto(`/e/${ev.id}`);
+  await expect(page).toHaveURL(new RegExp(`/#/e/${ev.id}$`));
+  await expect(page.locator('h1.evtitle')).toContainText('E2E 分享連結');
+});
+
+test('現場報到 QR：沒登入掃到，登入後回到報到頁（報到代碼不會被當成邀請代碼）', async ({ page, request }) => {
+  const ev = await apiAs(request, 't_chair', '/events', { method: 'POST', body: { kind: 'track', title: 'E2E 掃碼報到', date: plus(0), notify: false } });
+  const { token } = await apiAs(request, 't_chair', `/events/${ev.id}/attend-token`, { method: 'POST', body: { on: true } });
+  await page.goto(`/#/e/${ev.id}/attend?t=${token}`);
+  await expect(page.locator('#sharedEv .card.shared')).toContainText('E2E 掃碼報到');
+  // 報到頁沒有 h1：自己處理隱私權政策同意（這個帳號在前面的測試可能已經同意過）
+  await login(page, 't_staff');
+  await page.waitForSelector('#consentBtn, .attendok', { timeout: 10000 });
+  if (await page.locator('#consentBtn').count()) await page.locator('#consentBtn').click();
+  await expect(page.locator('.attendok h2')).toHaveText('報到完成');
 });
 
 test('附近即時影像：捲到才載縮圖、點開大圖有顯名、省流量時不自動載入（CAM_MOCK 不連外）', async ({ page, request }) => {

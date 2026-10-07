@@ -67,6 +67,14 @@ const parseHMS = (str) => {
 
 // 對外公開的乾淨網址（Google 同意畫面等會連到這裡）：/privacy → #/privacy
 if (location.pathname === '/privacy' && !location.hash) history.replaceState(null, '', '/#/privacy');
+// 分享連結 /e/:id（伺服器只是幫 LINE 等的連結預覽加上活動摘要）：轉成 App 的網址 /#/e/:id，邀請代碼 t 留著，openExternalBrowser（給 LINE 看的）拿掉
+{
+  const m = location.pathname.match(/^\/e\/([\w-]{1,32})\/?$/);
+  if (m) {
+    const t = new URLSearchParams(location.search).get('t');
+    history.replaceState(null, '', location.hash.startsWith('#/') ? `/${location.hash}` : `/#/e/${m[1]}${t ? `?t=${encodeURIComponent(t)}` : ''}`);
+  }
+}
 // 地圖：先連到圖磚主機、下載地圖模組（map.js 一載入就開始抓 Leaflet），跟登入資料同時進行，不用等 /api/me 回來才開始
 let mapWarm = false;
 // 先抓的圖磚：map.js 讓其他圖磚等這幾張到了（或最多 1.2 秒）才開始抓，畫面中間先出來
@@ -819,8 +827,9 @@ const googleHref = (link) => {
 // ---------- 登入 ----------
 function loginView() {
   const err = new URLSearchParams(location.hash.split('?')[1] || '').get('err');
-  const shared = location.hash.match(/^#\/e\/([\w-]+)/)?.[1];
-  const sharedTok = new URLSearchParams(location.hash.split('?')[1] || '').get('t');
+  // 從分享連結進來（#/e/:id）：t 是邀請代碼；入場報到（#/e/:id/attend?t=）等活動底下的頁面，t 是報到代碼，不能當邀請代碼，登入後回到原本那一頁
+  const sm = location.hash.match(/^#\/e\/([\w-]+)(\/[^?]*)?/), shared = sm?.[1], sharedPage = !!sm && !sm[2];
+  const sharedTok = sharedPage ? new URLSearchParams(location.hash.split('?')[1] || '').get('t') : null;
   const feat = [[IC.megaphone, '團練報名', '公告、接龍、候補自動遞補'], [IC.calendar, '分組課表', '照組別換算配速'], [IC.runner, 'GPS 跑步', '自動暫停、分段、GPX'], [ic('<path d="M4 8.2a2 2 0 0 1 2-2h1.9l1.5-2h5.2l1.5 2H18a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2Z"/><circle cx="12" cy="12.6" r="3.6"/>'), '拍照分享', '成績與路線放進照片']];
   const compact = !!(shared || err);
   const lead = `<div id="sharedEv"></div>
@@ -864,11 +873,11 @@ function loginView() {
   for (const b of document.querySelectorAll('[data-lang]')) b.onclick = () => { if (b.dataset.lang !== I18N.lang) I18N.setLang(b.dataset.lang); };
   // 從分享連結進來：記住要去的活動，登入後直接帶過去
   if (shared) {
-    try { sessionStorage.setItem('cil-after-login', `#/e/${shared}${sharedTok ? `?t=${encodeURIComponent(sharedTok)}` : ''}`); } catch {}
+    try { sessionStorage.setItem('cil-after-login', sharedPage ? `#/e/${shared}${sharedTok ? `?t=${encodeURIComponent(sharedTok)}` : ''}` : location.hash); } catch {}
     api(`/public/e/${shared}${sharedTok ? `?t=${encodeURIComponent(sharedTok)}` : ''}`).then(({ event: e }) => {
       $('#sharedEv').innerHTML = `<section class="card shared">
         <span class="tiny">${e.visibility === 'invite' ? `${IC.lock} 你收到一個邀請制活動的邀請` : `有人邀請你${e.kind === 'survey' ? '填寫問卷' : '報名'}`}</span>
-        <div class="row" style="gap:6px">${e.team ? `<span class="pill">${esc(e.team)}</span>` : ''}<span class="pill ${e.kind}">${KIND_NAME[e.kind] || '活動'}</span></div>
+        <div class="row" style="gap:6px">${e.team ? `<span class="pill">${esc(e.team)}</span>` : ''}<span class="pill ${e.kind}">${KIND_NAME[e.kind] || '活動'}</span>${phasePill(e, e.full)}</div>
         <h2 style="margin:0"><span translate="no">${esc(e.title)}</span></h2>
         <p class="muted" style="margin:0">${dstr(e.date)}${e.gather_time ? ` ${e.gather_time}` : ''}${e.place ? `・<span translate="no">${esc(e.place)}</span>` : ''}</p>
         <p class="tiny" style="margin:0">先登入，登入後會直接回到這個活動。</p></section>`;
