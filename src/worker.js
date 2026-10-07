@@ -102,7 +102,8 @@ async function currentMember(req, env) {
   const row = await env.DB.prepare(
     `SELECT m.*, s.last_seen_at AS s_seen, s.role_at_issue AS s_role, s.created_at AS s_created, s.mfa_at AS s_mfa, s.token_hash AS s_th,
        (SELECT json_group_array(json_object('team_id', tm.team_id, 'role', tm.role, 'status', tm.status, 'title', tm.title)) FROM team_members tm WHERE tm.member_id = m.id) AS s_teams,
-       (SELECT 1 FROM push_queue WHERE lease_until IS NULL OR lease_until < datetime('now') LIMIT 1) AS s_pq
+       (SELECT 1 FROM push_queue WHERE lease_until IS NULL OR lease_until < datetime('now') LIMIT 1) AS s_pq,
+       (SELECT COUNT(*) FROM members r WHERE r.referrer_id = m.id AND r.referrer_ack IS NULL) AS s_refq
      FROM sessions s JOIN members m ON m.id = s.member_id
      WHERE s.token_hash = ? AND s.expires_at > datetime('now')`).bind(th).first();
   if (!row) return null;
@@ -274,12 +275,15 @@ const pub = (m) => ({
   member_type: m.member_type || null, member_no: m.member_no || null, paid_until: m.paid_until || null,
   share_logs: !!m.share_logs, show_rank: !!m.show_rank, main_team: m.main_team || null, home_spot: m.home_spot || null, plan_cycle: m.plan_cycle === 'race' ? 'race' : 'club', can: PERMS[norm(m.role)],
   mfaPending: !!m.mfa_pending, realRole: m.real_role ? norm(m.real_role) : null, realRoleName: m.real_role ? ROLES[norm(m.real_role)] : null, mfa: !!m.s_mfa,
+  // 推薦人：has 有填（帳號、名字或推薦人已刪除帳號）｜pending 等我確認的人數｜hide 首頁卡片收起的位元｜findable 讓跑友用 Gmail 找到我｜emailLinked 已存查詢碼（不給查詢碼本身）
+  referral: { has: !!(m.referrer_id || m.referrer_name || m.referrer_gone), pending: m.s_refq || 0, hide: m.referral_hide || 0,
+    findable: m.email_findable !== 0, emailLinked: !!m.email_h },
 });
 
 // ---- 通知中心：推播成功與否都留一份 ----
 // 分類只在伺服器端決定（public/notif-cats.js）；帳號安全只能經由 securityNotify 寫入，群發無法偽裝
 const SEC = Symbol('security');   // 模組私有：沒有任何請求路徑拿得到
-const REF_RE = /^(e|t|spot|log|join|apply|pay|wx|review|sr|ops|wk):[\w:-]{1,70}$/;   // sr＝報名待審核（signup review）、ops＝系統告警（ops:<條件>:<日期>）、wk＝幹部週報（wk:<週一日期>）
+const REF_RE = /^(e|t|spot|log|join|apply|pay|wx|review|sr|ops|wk|rf):[\w:-]{1,70}$/;   // sr＝報名待審核（signup review）、ops＝系統告警（ops:<條件>:<日期>）、wk＝幹部週報（wk:<週一日期>）、rf＝推薦人（rf:<會員 id>，通知內容提到這個人；刪除帳號時一起刪）
 // 寫通知：通知中心與推播佇列各一句（每 1000 位收件人），句數跟人數無關（免費方案一次執行只有 50 個子請求）
 //   items：[通知 id, 收件人, 標題, 內文, 網址, ref, 推播內容 JSON, latest]，後 6 欄沒有就用 o 的共同值
 //   推播佇列只排「沒有關掉這一類」的人的裝置（locked 類別或 force 一律排）；opt.also 的語句放在同一個 batch（同一個交易）
@@ -3109,6 +3113,217 @@ const api = (async function api(req, env, path, method) {
     return json({ text: [`${ev.title}　${ev.date}`, ...lines, ...wait].join('\n') });
   }
 
+  // ---- 推薦人（推薦族譜）：開關 referral（預設關閉）；移除、確認與「不是我」、找我開關、查看一律不受開關影響 ----
+  //   Email 只在 POST／PUT 的 JSON 內文，換成查詢碼比對；不存、不記錄、不放進稽核、錯誤訊息或回應
+  if (path.startsWith('/api/me/referral') || path === '/api/me/email-findable' || path.startsWith('/api/admin/referrals')) {
+    const g = need(); if (g) return g;
+    const R = Ref.REF, ID = /^[\w-]{1,32}$/;
+    const refGate = () => (featOptIn('referral') ? null : fail(403, '推薦人功能目前沒有開放'));
+    const nowSql = () => new Date().toISOString().replace('T', ' ').slice(0, 19);
+    const nick = (n) => (n ? `（${n}）` : '');
+    const markRead = (who, ref) => env.DB.prepare(Ref.MARK_READ_SQL).bind(who, ref);
+    // 查詢次數：每人＋每個 IP 各一組（每天＋10 分鐘）；被擋的請求不寫 D1、不寫稽核
+    const lookupLimit = async () => {
+      const ip = await ipHash(req, env);
+      for (const [d, b, dl, bl] of [[`reflk:${member.id}`, `reflkb:${member.id}`, R.LOOKUP_DAY, R.LOOKUP_BURST], [`reflkip:${ip}`, `reflkipb:${ip}`, R.IP_DAY, R.IP_BURST]]) {
+        const hit = await limitedPair(env, d, dl, b, bl, R.BURST_SEC);
+        if (hit) return fail(429, hit === 'burst' ? '查詢太頻繁，請 10 分鐘後再試' : '今天查詢的次數已達上限，明天再試');
+      }
+      return null;
+    };
+    // Email → 只有一位（沒關掉找我）才算找到；兩筆以上（查詢碼暫時重複）當成找不到
+    const findByEmail = async (n) => {
+      const h = await emailDigest(await emailKey(env), n);
+      const rows = (await env.DB.prepare('SELECT id, name, nickname FROM members WHERE email_h = ?1 AND email_findable = 1 LIMIT 2').bind(h).all()).results;
+      return rows.length === 1 ? rows[0] : null;
+    };
+    const mine = (rec) => (member.referrer_id ? (rec ? { kind: 'member', name: Ref.maskName(rec.name), nickname: rec.nickname || '', at: member.referrer_at, by: member.referrer_by, ack: member.referrer_ack === 'ok' ? 'ok' : null } : { kind: 'gone' })
+      : member.referrer_name ? { kind: 'name', name: member.referrer_name, at: member.referrer_at, by: member.referrer_by }
+      : member.referrer_gone ? { kind: 'gone' } : null);
+    const recPush = { title: '有跑友把你設為推薦人', body: '點開確認是不是你認識的人' };
+
+    // 1. 我的推薦人、推薦我的跑友
+    if (path === '/api/me/referral' && method === 'GET') {
+      const res = await env.DB.batch([
+        ...(member.referrer_id ? [env.DB.prepare('SELECT r.name, r.nickname FROM members r WHERE r.id = ?1').bind(member.referrer_id)] : []),
+        env.DB.prepare(`SELECT id, name, nickname, referrer_at AS at, referrer_ack AS ack, referrer_by AS by FROM members
+          WHERE referrer_id = ?1 ORDER BY referrer_ack IS NOT NULL, referrer_at DESC LIMIT ${R.REFERRED_ROWS}`).bind(member.id),
+      ]);
+      const referrer = mine(member.referrer_id ? res[0].results[0] : null);
+      return json({ on: featOptIn('referral'), google: !!member.google_sub, googleLogin: !!(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET), referrer,
+        denied: !referrer && member.referrer_ack === 'denied',
+        referred: res[res.length - 1].results.map((r) => ({ id: r.id, name: r.name, nickname: r.nickname || '', at: r.at, ack: r.ack === 'ok' ? 'ok' : null, by: r.by })),
+        findable: member.email_findable !== 0, emailLinked: !!member.email_h });
+    }
+    // 2. 用 Gmail 找推薦人（只回遮罩的名字與暱稱，不回 id、大頭貼、Email）
+    if (path === '/api/me/referral/lookup' && method === 'POST') {
+      const gg = refGate(); if (gg) return gg;
+      if (!env.AUDIT_KEY) return fail(503, '現在沒辦法用 Gmail 查詢，可以先只填名字');
+      const n = normalizeEmail((await body()).email);
+      if (!n) return fail(400, '請輸入正確的 Gmail');
+      const lim = await lookupLimit(); if (lim) return lim;
+      const hit = await findByEmail(n), self = hit?.id === member.id;
+      await audit(env, req, member, 'referrer.lookup', 'member', hit?.id || null, !hit ? 'none' : self ? 'self' : 'found');
+      return json(!hit ? { found: false } : self ? { found: true, self: true } : { found: true, name: Ref.maskName(hit.name), nickname: hit.nickname || '' });
+    }
+    // 3. 設定推薦人：{email} 跑友帳號（對方收到通知，可以按「不是我」）｜{name} 只填名字（不通知）
+    if (path === '/api/me/referral' && method === 'PUT') {
+      const gg = refGate(); if (gg) return gg;
+      const b = await body(), old = member.referrer_id;
+      if (typeof b.email === 'string') {
+        if (await limited(env, `refset:${member.id}`, R.SET_DAY, 86400)) return fail(429, '今天改推薦人的次數已達上限，明天再試');
+        if (!env.AUDIT_KEY) return fail(503, '現在沒辦法用 Gmail 查詢，可以先只填名字');
+        const n = normalizeEmail(b.email);
+        if (!n) return fail(400, '請輸入正確的 Gmail');
+        const lim = await lookupLimit(); if (lim) return lim;
+        const hit = await findByEmail(n);
+        if (!hit) return fail(404, '找不到這個 Gmail');
+        if (hit.id === member.id) return fail(400, '推薦人要填別人喔');
+        const referrer = { kind: 'member', name: Ref.maskName(hit.name), nickname: hit.nickname || '', at: member.referrer_at, by: member.referrer_by, ack: member.referrer_ack === 'ok' ? 'ok' : null };
+        if (old === hit.id) return json({ ok: true, unchanged: true, referrer });
+        if (await env.DB.prepare("SELECT 1 FROM rate_limits WHERE key = ?1 AND window_end > datetime('now')").bind(`refno:${member.id}:${hit.id}`).first()) {
+          return fail(409, '這位跑友之前表示不認識你的帳號，沒辦法再設為推薦人。可以只填名字，或請協會幹部協助');
+        }
+        if (await limited(env, `refin:${hit.id}`, R.IN_DAY, 86400)) return fail(429, '這位跑友今天收到太多確認了，明天再試');
+        if (!(await env.DB.prepare(Ref.BIND_SQL).bind(member.id, hit.id, 'self').all()).results.length) {
+          return fail(409, '這位跑友在你的推薦關係裡（例如是你推薦來的），不能設成你的推薦人');
+        }
+        await notify(env, [hit.id], 'membership', { title: '有跑友把你設為推薦人', body: `${member.name}${nick(member.nickname)} 把你設為推薦人。認識的話不用做什麼；不認識，點開按「不是我」。`,
+          url: '/#/me/referral', ref: `rf:${member.id}`, push: recPush },
+        { also: [await auditStmt(env, req, member, 'referrer.set', 'member', member.id, `account｜to=${hit.id}`), ...(old ? [markRead(old, `rf:${member.id}`)] : [])] });
+        return json({ ok: true, referrer: { ...referrer, at: nowSql(), by: 'self', ack: null } });
+      }
+      const name = Ref.validRefName(b.name);
+      if (!name) return fail(400, '名字請填 1–20 個字，不要填 Email、電話或網址');
+      if (await limited(env, `refset:${member.id}`, R.SET_DAY, 86400)) return fail(429, '今天改推薦人的次數已達上限，明天再試');
+      await env.DB.batch([env.DB.prepare(Ref.NAME_SQL).bind(member.id, name), await auditStmt(env, req, member, 'referrer.set', 'member', member.id, 'name'),
+        ...(old ? [markRead(old, `rf:${member.id}`)] : [])]);
+      return json({ ok: true, referrer: { kind: 'name', name, at: nowSql(), by: 'self' } });
+    }
+    // 4. 移除推薦人（撤回：開關關閉也可以；不通知對方）
+    if (path === '/api/me/referral' && method === 'DELETE') {
+      const cleared = (await env.DB.prepare(Ref.CLEAR_SQL).bind(member.id).all()).results.length > 0;
+      if (cleared) await env.DB.batch([await auditStmt(env, req, member, 'referrer.clear', 'member', member.id, ''), ...(member.referrer_id ? [markRead(member.referrer_id, `rf:${member.id}`)] : [])]);
+      return json({ ok: true, cleared });
+    }
+    // 5. 推薦人確認（ok）或「不是我」：只有被設為推薦人的那一位；「不是我」會移除、通知對方，180 天內同一對不能再綁
+    if (path === '/api/me/referral/ack' && method === 'POST') {
+      const b = await body(), child = str(b.member_id, 32), ok = b.ok === true || b.ok === 'ok';
+      if (!ok && b.ok !== false) return fail(400, '請選擇確認或不是我');
+      if (!ID.test(child)) return fail(404, '找不到這筆推薦');
+      if (await limited(env, `refack:${member.id}`, R.ACK_HOUR, 3600)) return fail(429, '操作太頻繁，請稍後再試');
+      if (ok) {
+        if (!(await env.DB.prepare(Ref.ACK_SQL).bind(child, member.id).all()).results.length) return fail(404, '找不到這筆推薦');
+        await env.DB.batch([markRead(member.id, `rf:${child}`), await auditStmt(env, req, member, 'referrer.ack', 'member', child, 'ok')]);
+        return json({ ok: true, ack: 'ok' });
+      }
+      if (!(await env.DB.prepare(Ref.DENY_SQL).bind(child, member.id).all()).results.length) return fail(404, '找不到這筆推薦');
+      await notify(env, [child], 'membership', { title: '推薦人沒有確認', body: `${Ref.maskName(member.name)}${nick(member.nickname)} 表示不認識你的帳號，已經移除這位推薦人。可以再找一次，或只填名字。`,
+        url: '/#/me/referral', ref: `rf:${member.id}`, push: { title: '推薦人沒有確認', body: '點開查看推薦人' } },
+      { also: [env.DB.prepare(Ref.COOLDOWN_SQL).bind(`refno:${child}:${member.id}`), markRead(member.id, `rf:${child}`), await auditStmt(env, req, member, 'referrer.deny', 'member', child, '')] });
+      return json({ ok: true, ack: 'denied' });
+    }
+    // 6. 首頁推薦人卡片收起（位元 1＝填推薦人、2＝用 Google 確認）
+    if (path === '/api/me/referral/hide' && method === 'POST') {
+      const bits = (await body()).bits;
+      if (![1, 2, 3].includes(bits)) return fail(400, '參數不正確');
+      if (await limited(env, `refhide:${member.id}`, R.HIDE_HOUR, 3600)) return fail(429, '操作太頻繁，請稍後再試');
+      await env.DB.prepare('UPDATE members SET referral_hide = referral_hide | ?2 WHERE id = ?1').bind(member.id, bits).run();
+      return json({ ok: true, hide: (member.referral_hide || 0) | bits });
+    }
+    // 7. 讓我推薦的跑友用 Gmail 找到我（撤回：開關關閉也可以）；關掉時查詢碼立刻刪除，打開不會恢復（要再用 Google 確認一次）
+    if (path === '/api/me/email-findable' && method === 'POST') {
+      const on = (await body()).on === true ? 1 : 0;
+      await env.DB.batch([env.DB.prepare('UPDATE members SET email_findable = ?2, email_h = CASE WHEN ?2 = 0 THEN NULL ELSE email_h END WHERE id = ?1').bind(member.id, on),
+        await auditStmt(env, req, member, 'privacy.email_lookup', 'member', member.id, on ? '開啟' : '關閉')]);
+      return json({ ok: true, findable: !!on, emailLinked: !!on && !!member.email_h });
+    }
+
+    // ---- 管理後台「推薦族譜」：會員管理權限（監事唯讀）；每次查看都寫稽核（不記查詢文字） ----
+    if (path.startsWith('/api/admin/referrals')) {
+      if (!can(member, 'members')) return fail(403, '只有會員管理權限的幹部可以看推薦族譜');
+      const ro = !!READONLY[norm(member.role)], u = url0(req).searchParams;
+      const viewLimit = async () => ((await limited(env, `refv:${member.id}`, R.VIEW_HOUR, 3600)) ? fail(429, '查詢太頻繁，請稍後再試') : null);
+      const adminLimit = async () => ((await limited(env, `refadm:${member.id}`, R.ADMIN_HOUR, 3600)) ? fail(429, '操作太頻繁，請稍後再試') : null);
+      const mask = (p) => (p ? `${p.slice(0, 4)}***${p.slice(-3)}` : '');
+      const phone = (p) => (ro ? mask(p) : p || '');
+      const refOfRow = (r) => (r.r_id ? { kind: 'member', id: r.r_id, name: r.r_name, nickname: r.r_nick || '' } : r.referrer_name ? { kind: 'name', name: r.referrer_name } : r.referrer_gone ? { kind: 'gone' } : null);
+      // 8. 摘要＋搜尋（沒有條件只回摘要，不一次列出所有人）
+      if (path === '/api/admin/referrals' && method === 'GET') {
+        const lim = await viewLimit(); if (lim) return lim;
+        const q = str(String(u.get('q') || '').normalize('NFKC'), 20);
+        if (!q) return json({ summary: await env.DB.prepare(Ref.SUMMARY_SQL).first(), needFilter: true });
+        const [sm, ms, ns] = await env.DB.batch([env.DB.prepare(Ref.SUMMARY_SQL), env.DB.prepare(Ref.SEARCH_SQL).bind(q), env.DB.prepare(Ref.NAMES_SQL).bind(q)]);
+        const members = ms.results.slice(0, 30).map((r) => ({ id: r.id, name: r.name, nickname: r.nickname || '', club: r.club || '', member_no: r.member_no || null, membership: r.membership || 'none',
+          referrer: refOfRow(r), ack: r.referrer_ack, by: r.referrer_by, kids: r.kids }));
+        const names = ns.results.slice(0, 30).map((r) => ({ name: r.name, n: r.n }));
+        await audit(env, req, member, 'referrer.view', 'member', null, `search｜n=${members.length + names.length}`);
+        return json({ summary: sm.results[0], members, names, more: { members: ms.results.length > 30, names: ns.results.length > 30 } });
+      }
+      // 9. 以某人為中心：往上（最多 10 層）、往下（1–3 層、最多 300 位）；電話只給中心與上層（監事看到遮罩），下層不給
+      if (path === '/api/admin/referrals/tree' && method === 'GET') {
+        const id = str(u.get('id'), 32), down = Math.max(1, Math.min(Math.round(Number(u.get('down')) || R.DOWN_MAX), R.DOWN_MAX));
+        if (!ID.test(id)) return fail(404, '找不到這位跑友');
+        const lim = await viewLimit(); if (lim) return lim;
+        const [f, up, dn] = await env.DB.batch([env.DB.prepare(Ref.FOCUS_SQL).bind(id), env.DB.prepare(Ref.UP_SQL).bind(id, R.UP_SHOW), env.DB.prepare(Ref.DOWN_SQL).bind(id, down)]);
+        const n = f.results[0];
+        if (!n) return fail(404, '找不到這位跑友');
+        const ups = up.results, top = ups[ups.length - 1];
+        const upEnd = !top ? null : top.ref && top.d >= R.UP_SHOW ? { kind: 'more' } : top.rname ? { kind: 'name', name: top.rname } : top.gone ? { kind: 'gone' } : null;
+        const rows = dn.results.slice(0, R.DOWN_ROWS);
+        await audit(env, req, member, 'referrer.view', 'member', id, `tree｜up=${ups.length}｜down=${rows.length}`);
+        return json({
+          node: { id: n.id, name: n.name, nickname: n.nickname || '', club: n.club || '', membership: n.membership || 'none', member_no: n.member_no || null, phone: phone(n.phone),
+            referrer: n.referrer_id ? { kind: 'member', id: n.referrer_id, name: ups[0]?.name ?? null, nickname: ups[0]?.nickname || '' } : n.referrer_name ? { kind: 'name', name: n.referrer_name } : n.referrer_gone ? { kind: 'gone' } : null,
+            ack: n.referrer_ack, by: n.referrer_by, at: n.referrer_at, kids: n.kids },
+          up: ups.map((r) => ({ d: r.d, id: r.id, name: r.name, nickname: r.nickname || '', club: r.club || '', membership: r.membership || 'none', phone: phone(r.phone) })),
+          upEnd,
+          down: rows.map((r) => ({ id: r.id, parent: r.parent, d: r.d, name: r.name, nickname: r.nickname || '', membership: r.membership || 'none', ack: r.ack, by: r.by, kids: r.kids })),
+          downMore: dn.results.length > R.DOWN_ROWS,
+        });
+      }
+      // 10. 填了同一個名字（只填名字）的跑友
+      if (path === '/api/admin/referrals/named' && method === 'GET') {
+        const name = Ref.validRefName(u.get('name'));
+        if (!name) return fail(400, '名字請填 1–20 個字，不要填 Email、電話或網址');
+        const lim = await viewLimit(); if (lim) return lim;
+        const rows = (await env.DB.prepare(Ref.NAMED_SQL).bind(name).all()).results;
+        await audit(env, req, member, 'referrer.view', 'member', null, `named｜n=${Math.min(rows.length, 100)}`);
+        return json({ name, members: rows.slice(0, 100).map((r) => ({ id: r.id, name: r.name, nickname: r.nickname || '', club: r.club || '', at: r.referrer_at, by: r.referrer_by })), more: rows.length > 100 });
+      }
+      if (method === 'POST' && ro) return fail(403, '監事只能查看，不能修改推薦人');
+      // 11. 把「只填名字」連到跑友帳號（推薦人收到一則、每位跑友各一則；會成環的跳過）
+      if (path === '/api/admin/referrals/relink' && method === 'POST') {
+        const b = await body(), name = Ref.validRefName(b.name), to = str(b.to, 32);
+        if (!name) return fail(400, '名字請填 1–20 個字，不要填 Email、電話或網址');
+        if (!ID.test(to)) return fail(400, '找不到這個帳號');
+        if (b.member_ids != null && (!Array.isArray(b.member_ids) || !b.member_ids.length || b.member_ids.length > 100 || !b.member_ids.every((x) => typeof x === 'string' && ID.test(x)))) return fail(400, '請選擇要連結的跑友');
+        const lim = await adminLimit(); if (lim) return lim;
+        const ids = b.member_ids ? [...new Set(b.member_ids)] : (await env.DB.prepare(Ref.NAMED_SQL).bind(name).all()).results.slice(0, 100).map((r) => r.id);
+        const rec = await env.DB.prepare('SELECT id, name, nickname FROM members WHERE id = ?').bind(to).first();
+        if (!rec) return fail(400, '找不到這個帳號');
+        const linked = ids.length ? (await env.DB.prepare(Ref.RELINK_SQL).bind(JSON.stringify(ids), name, to).all()).results : [];
+        if (!linked.length) return fail(409, '沒有可以連結的跑友（可能已經改過，或會形成循環）');
+        await notifyMany(env, 'membership', [
+          { member_id: to, title: '有跑友把你設為推薦人', body: `協會幹部把 ${linked.length} 位跑友的推薦人連到你的帳號。不認識的話，點開按「不是我」。`, url: '/#/me/referral', push: recPush },
+          ...linked.map((r) => ({ member_id: r.id, title: '推薦人已連到帳號', body: `協會幹部把你填的推薦人「${name}」連到跑友帳號，對方會收到確認通知。`, url: '/#/me/referral', ref: `rf:${to}`,
+            push: { title: '推薦人已連到帳號', body: '點開查看推薦人' } })),
+        ], { also: [await auditManyStmt(env, req, member, 'referrer.relink', 'member', linked.map((r) => [r.id, `｜to=${to}`]))] });
+        return json({ linked: linked.length, skipped: ids.length - linked.length });
+      }
+      // 12. 幹部移除某人的推薦人（個資請求等），通知本人
+      if (path === '/api/admin/referrals/clear' && method === 'POST') {
+        const child = str((await body()).member_id, 32);
+        if (!ID.test(child)) return fail(404, '找不到這筆推薦');
+        const lim = await adminLimit(); if (lim) return lim;
+        if (!(await env.DB.prepare(Ref.CLEAR_SQL).bind(child).all()).results.length) return fail(404, '找不到這筆推薦');
+        await notify(env, [child], 'membership', { title: '推薦人已移除', body: '協會幹部移除了你的推薦人。有問題可以聯絡協會。', url: '/#/me/referral' },
+          { also: [await auditStmt(env, req, member, 'referrer.admin_clear', 'member', child, '')] });
+        return json({ ok: true });
+      }
+    }
+  }
+
   if (path === '/api/me/consent' && method === 'POST') {
     const g = need(); if (g) return g;
     const ver = (await getSettings(env)).privacy.version;
@@ -3123,7 +3338,8 @@ const api = (async function api(req, env, path, method) {
     const q = (sql) => env.DB.prepare(sql).bind(member.id).all().then((r) => r.results);
     const data = {
       exported_at: new Date().toISOString(),
-      profile: (({ s_seen, s_role, s_created, s_mfa, s_th, s_teams, line_id, google_sub, cal_token_hash, ...rest }) => ({ ...rest, google_linked: !!google_sub, calendar_feed: !!cal_token_hash }))(member),
+      // 工作階段欄位（s_*）、權杖與查詢碼、別人的 id 一律不匯出
+      profile: { ...Object.fromEntries(Object.entries(member).filter(([k]) => !k.startsWith('s_') && !EXPORT_OMIT.has(k))), google_linked: !!member.google_sub, calendar_feed: !!member.cal_token_hash },
       signups: await q('SELECT event_id, name, grp, dist, note, status, answers, option, reg_consent_at, items, amount, guests, guest_names, meal, pay_method, pay_ref, pay_reported_at, paid, picked_at, attended_at, created_at, first_at, cancelled_at, cancel_by, review, reviewed_at, review_note FROM signups WHERE member_id = ?'),   // 不含審核人；含你填的攜伴姓名
       teams: await q('SELECT team_id, role, title, status, created_at FROM team_members WHERE member_id = ?'),
       race_profile: await (async () => { const r = await env.DB.prepare('SELECT enc FROM member_private WHERE member_id = ?').bind(member.id).first(); return r ? openPrivate(env, r.enc, member.id).catch(() => null) : null; })(),
@@ -3140,6 +3356,20 @@ const api = (async function api(req, env, path, method) {
       routes: await q('SELECT name, distance, shared, points, created_at FROM routes WHERE created_by = ?'),
       calendar_items: await q('SELECT date, title, kind, url, note, created_at FROM calendar_items WHERE created_by = ?'),
       meetups: await q('SELECT id, title, date, gather_time, end_time, place, lead, status, created_at FROM events WHERE created_by = ? AND owner_managed = 1 ORDER BY date'),   // 自己發起的揪團（活動頁顯示「發起：暱稱」）
+      // 推薦人：名字遮罩（跟 App 一樣），推薦我的跑友只匯出人數（名單是別人的資料），查詢碼本身不匯出
+      referral: await (async () => {
+        const r = await env.DB.prepare(`SELECT (SELECT name FROM members WHERE id = ?2) AS name, (SELECT nickname FROM members WHERE id = ?2) AS nickname,
+          (SELECT COUNT(*) FROM members WHERE referrer_id = ?1) AS n`).bind(member.id, member.referrer_id || null).first();
+        return {
+          recommender: member.referrer_id ? { kind: 'member', name: Ref.maskName(r?.name), nickname: r?.nickname || '', status: member.referrer_ack || 'pending', set_at: member.referrer_at, set_by: member.referrer_by }
+            : member.referrer_name ? { kind: 'name', name: member.referrer_name, set_at: member.referrer_at, set_by: member.referrer_by }
+            : member.referrer_gone ? { kind: 'deleted' } : null,
+          previous_recommender_denied: member.referrer_ack === 'denied' && !member.referrer_id,
+          referred_me: r?.n || 0,
+          gmail_findable: member.email_findable !== 0,
+          gmail_lookup_code_stored: !!member.email_h,
+        };
+      })(),
     };
     await audit(env, req, member, 'privacy.export', 'member', member.id, '');
     return json(data, 200, { 'content-disposition': 'attachment; filename="my-data.json"' });
@@ -3283,7 +3513,8 @@ const api = (async function api(req, env, path, method) {
       //   附近即時影像：staging 實測過 Cache API、出口 IP 與解析 CPU 時間之後才開
       //   跑者休息站：還不認得它的舊版管理畫面存其他開關時不會順手關掉
       //   團員揪團：團員可以在自己參加的分團發起活動（精簡欄位、不推播），由協會決定要不要開放
-      for (const f of ['cams', 'rest', 'meetup']) value[f] = has(f) ? b[f] === true : cur[f] === true;
+      //   推薦人：打開前要先在 Google Cloud 的 OAuth 同意畫面加上 Email 範圍、確認隱私權政策條文（README 部署清單）
+      for (const f of ['cams', 'rest', 'meetup', 'referral']) value[f] = has(f) ? b[f] === true : cur[f] === true;
     } else if (key === 'tabs') {
       // 下方分頁列的名稱（每個最多 4 個字，空白就用預設）
       value = {};
