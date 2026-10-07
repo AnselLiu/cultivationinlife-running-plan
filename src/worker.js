@@ -647,9 +647,13 @@ const RC_LIVE = ['in', 'wait', 'pending'];
 const rcPending = (ev, s) => !!ev?.reconfirm_at && !!s && RC_LIVE.includes(s.status)
   && ((s.confirmed_at || '') > s.created_at ? s.confirmed_at : s.created_at) < ev.reconfirm_at;
 const rcSql = (s, e) => `${e}.reconfirm_at IS NOT NULL AND ${s}.status IN ('in', 'wait', 'pending') AND MAX(COALESCE(${s}.confirmed_at, ''), ${s}.created_at) < ${e}.reconfirm_at`;
+//   還在等回覆：活動沒取消、也還沒開始；取消或已經舉行就不再顯示「請確認」、不算未確認人數、不能提醒（統計與 CSV 的確認狀態照留）
+const rcOpen = (ev) => !!ev?.reconfirm_at && ev.status === 'open' && tpNow() < evStart(ev);
 // 時間後面的標示與動詞：暫定加「（暫定）」；餐敘「開始」、索票不加動詞、其他「集合」
 const tbdTag = (ev) => (ev.time_tbd ? '（暫定）' : '');
 const verbOf = (ev, dflt = '集合') => (ev.kind === 'claim' ? '' : ev.kind === 'party' ? '開始' : dflt);
+//   「19:15 集合（暫定）」：標示放在動詞後面（英文介面才會是 Meet at 19:15 (tentative)）；沒填時間但勾了暫定＝「時間待定」
+const timeOf = (ev, verb = verbOf(ev)) => (ev.gather_time ? `${ev.gather_time}${verb ? ` ${verb}` : ''}${tbdTag(ev)}` : ev.time_tbd && ev.kind !== 'survey' ? '時間待定' : '');
 // 報名問卷：單選、複選、簡答；最多 12 題
 const Q_TYPES = ['single', 'multi', 'text'];
 function readQuestions(v) {
@@ -816,8 +820,10 @@ async function doSignup(env, ev, member, b, { by = null, manager = false, req = 
   // 攜伴：餐敘，或任何有開「可攜伴人數」的活動；姓名選填、只給主辦（舊版畫面沒送 guest_names 時沿用原本的）
   //   餐敘的攜伴與餐點先記在報名上，成為正取才開入場券
   //   索票：張數＝1＋guests（每人上限＝guest_max＋1），不收攜伴姓名
+  //   已經在名單上的人：主辦後來調低上限，改備註不會被默默砍掉張數或攜伴（保留原本的，只是不能再加）
   const party = ev.kind === 'party', claim = ev.kind === 'claim';
-  const guests = party || ev.guest_max > 0 ? Math.max(0, Math.min(Number(b.guests) || 0, ev.guest_max || 0)) : null;
+  const gMax = Math.max(ev.guest_max || 0, was ? Number(mine.guests) || 0 : 0);
+  const guests = party || gMax > 0 ? Math.max(0, Math.min(Number(b.guests) || 0, gMax)) : null;
   const gn = (Array.isArray(b.guest_names) ? b.guest_names : parseQ(mine?.guest_names)).slice(0, 9).map((x) => str(x, 20)).filter(Boolean).slice(0, guests || 0);
   const guestNames = gn.length && !claim ? JSON.stringify(gn) : null;
   const meal = party ? str(b.meal, 20) || member.meal_pref || '' : null;
@@ -880,8 +886,8 @@ async function doSignup(env, ev, member, b, { by = null, manager = false, req = 
       .bind(rid(8), ev.id, member.id, name, grp, dist, note, status, ans.answers, option, itemsJson, q.total, JSON.stringify(q.lines), guests, meal,
         approveNow ? 'approved' : null, approveNow ? approver.id : null, guestNames).run();
     if (!r.meta.changes) {
-      const row = await env.DB.prepare('SELECT status FROM signups WHERE event_id = ? AND member_id = ?').bind(ev.id, member.id).first();
-      return json({ ok: true, status: row?.status || status, amount: q.total, lines: q.lines, full, dup: true });
+      const row = await env.DB.prepare('SELECT status, guests FROM signups WHERE event_id = ? AND member_id = ?').bind(ev.id, member.id).first();
+      return json({ ok: true, status: row?.status || status, guests: row?.guests ?? guests, amount: q.total, lines: q.lines, full, dup: true });
     }
   }
   // 同時很多人報名：寫入後再確認一次（D1 沒有交易鎖）
@@ -932,7 +938,7 @@ async function doSignup(env, ev, member, b, { by = null, manager = false, req = 
         body: `目前候補第 ${await queuePos(env, ev.id, member.id)} 位${claim ? `（${1 + (guests || 0)} 張）` : ''}，有人取消會自動遞補並通知你` });
     }
   }
-  return json({ ok: true, status: final, amount: q.total, lines: q.lines, full, position: final === 'wait' ? await queuePos(env, ev.id, member.id) : null,
+  return json({ ok: true, status: final, guests, amount: q.total, lines: q.lines, full, position: final === 'wait' ? await queuePos(env, ev.id, member.id) : null,
     successMsg: final === 'in' && !by ? ev.success_msg || null : null });   // 報名成功訊息：正取才給（活動頁的提示卡與播報）
 }
 // 入場代碼：去掉容易看錯的 0/O/1/I
@@ -967,7 +973,7 @@ const tpDay = (date) => tpText(`${date}T00:00`).slice(0, -5);
 // 金額只放通知中心，鎖定畫面與推播佇列不放：要繳費時推播改成不含金額的說法
 const duePush = (ev, amount, lead = '') => (amount ? { push: { body: `${lead}${whenText(ev)}；點開看繳費資訊` } } : {});
 const dueText = (ev, amount) => { const p = parseQ(ev.pay_info, {}); return amount ? `；應繳 NT$${amount}${p.due ? `，${p.due.slice(5).replace('-', '/')} 前繳費` : ''}` : ''; };
-const whenText = (ev) => `${tpDay(ev.date)}${ev.gather_time ? ` ${ev.gather_time}${tbdTag(ev)}${verbOf(ev) ? ` ${verbOf(ev)}` : ''}` : ''}${ev.place ? `・${ev.place}` : ''}`;
+const whenText = (ev) => `${tpDay(ev.date)}${timeOf(ev) ? ` ${timeOf(ev)}` : ''}${ev.place ? `・${ev.place}` : ''}`;
 
 // 唯一把 wait 改成 in 的地方：取消、移出、移出受邀名單、調高名額、關閉審核、刪除帳號、每小時的 promoteSweep 都呼叫它
 //   manual：幹部的操作（核准、調名額），活動開始後仍可遞補；自動遞補到活動開始為止
@@ -1309,6 +1315,7 @@ const api = (async function api(req, env, path, method) {
       .bind(member.id, can(member, 'event') ? 1 : 0, ...range, ...(past ? [today()] : [])).all()).results;
     return rows.map(({ questions, options, items, pricing, pay_info, success_msg, ...r }) => {
       if (!teamCan(r.team_id, 'event')) delete r.pending;   // 待審核數只給主辦幹部
+      r.rc = r.rc && rcOpen(r) ? 1 : null;                   // 「請確認」：活動取消或已經開始就不再顯示（跟活動頁的確認卡同一個條件）
       return { ...r, survey: !!questions, options: parseQ(options), items: parseQ(items).map((i) => ({ name: i.name, price: i.price })), peek: JSON.parse(r.peek || '[]') };
     });
   };
@@ -1838,7 +1845,7 @@ const api = (async function api(req, env, path, method) {
     const [events, hol, items, races] = await Promise.all([
       env.DB.prepare(`SELECT events.id, events.title, events.date, events.gather_time, events.place, events.kind, events.team_id, events.series_id, events.owner_managed, events.time_tbd,
           (SELECT CASE WHEN s.status = 'cancel' AND s.review = 'rejected' THEN 'rejected' ELSE s.status END FROM signups s WHERE s.event_id = events.id AND s.member_id = ?1) AS mine,
-          (SELECT COUNT(*) FROM signups s WHERE s.event_id = events.id AND s.status = 'in') AS signed
+          (SELECT COALESCE(SUM(${seatSql('s', 'events.count_guests')}), 0) FROM signups s WHERE s.event_id = events.id AND s.status = 'in') AS signed
         FROM events WHERE events.date BETWEEN ?3 AND ?4 AND ${seeSQL} ORDER BY events.date, events.gather_time LIMIT 300`).bind(member.id, can(member, 'event') ? 1 : 0, from, to).all(),
       env.DB.prepare('SELECT date, name, is_holiday, category FROM holidays WHERE date BETWEEN ? AND ? AND (name IS NOT NULL OR is_holiday = 0)').bind(from, to).all(),
       env.DB.prepare(`SELECT id, date, title, kind, url, note, team_id, created_by FROM calendar_items WHERE date BETWEEN ? AND ?
@@ -2448,7 +2455,7 @@ const api = (async function api(req, env, path, method) {
       notified = to.length;
       const opens = e.signup_start && e.signup_start > tpNow() ? `・${tpText(e.signup_start)} 開放報名` : '';
       await notify(env, to, 'event',
-        { title: `${e.kind === 'survey' ? '新問卷' : series ? '定期揪跑' : '新活動'}：${e.title}`, body: `${series ? `${dates[0]} 起共 ${dates.length} 場${e.gather_time ? `，${e.gather_time} 集合` : ''}　${e.place || ''}` : `${e.date}${e.gather_time ? ` ${e.gather_time}` : ''}　${e.place || ''}`}${opens}`, url: `/#/e/${id}`, ref: `e:${id}`,
+        { title: `${e.kind === 'survey' ? '新問卷' : series ? '定期揪跑' : '新活動'}：${e.title}`, body: `${series ? `${dates[0]} 起共 ${dates.length} 場${timeOf(e) ? `，${timeOf(e)}` : ''}　${e.place || ''}` : `${e.date}${timeOf(e, '') ? ` ${timeOf(e, '')}` : ''}　${e.place || ''}`}${opens}`, url: `/#/e/${id}`, ref: `e:${id}`,
           ...evTiming(env, { ...e, date: dates[0] }) });
     }
     return json({ id, count: dates.length, series, notified, invite: e.visibility === 'invite', meetup });
@@ -2498,8 +2505,8 @@ const api = (async function api(req, env, path, method) {
         mySignedOn: mine && mine.status !== 'cancel' ? tpDate(new Date(`${mine.created_at.replace(' ', 'T')}Z`)) : null,   // 早鳥預覽用
         pendingCount: manage ? await pendingCount(env, id) : undefined,
         // 異動重新確認：本人的報名還沒確認（活動還在、還沒開始）；主辦看未確認的人數
-        myReconfirm: !!mine && rcPending(ev, mine) && ev.status === 'open' && tpNow() < evStart(ev),
-        unconfirmed: manage && ev.reconfirm_at ? (await env.DB.prepare(`SELECT COUNT(*) AS n FROM signups s JOIN events e ON e.id = s.event_id WHERE s.event_id = ? AND ${rcSql('s', 'e')}`).bind(id).first()).n : undefined,
+        myReconfirm: !!mine && rcOpen(ev) && rcPending(ev, mine),
+        unconfirmed: manage && rcOpen(ev) ? (await env.DB.prepare(`SELECT COUNT(*) AS n FROM signups s JOIN events e ON e.id = s.event_id WHERE s.event_id = ? AND ${rcSql('s', 'e')}`).bind(id).first()).n : undefined,
         pendingGuests: manage && (ev.kind === 'party' || ev.guest_max) ? (await env.DB.prepare("SELECT COALESCE(SUM(guests), 0) AS n FROM signups WHERE event_id = ? AND status = 'pending'").bind(id).first()).n : undefined,
         serverNow: Date.now() });
     }
@@ -2839,12 +2846,15 @@ const api = (async function api(req, env, path, method) {
     // 提醒還沒確認的人（活動異動後重新確認）：通知分類是「活動異動」（不能關），同一場一天最多 2 次
     if (op === 'nudge') {
       if (!ev.reconfirm_at) return fail(400, '目前沒有需要重新確認的人');
+      // 取消或已經開始的活動不提醒（先擋，不佔一天 2 次的額度）
+      if (ev.status !== 'open') return fail(400, '這個活動已經取消');
+      if (tpNow() >= evStart(ev)) return fail(400, '活動已經開始，不用再提醒');
       if (await limited(env, `nudge:${ev.id}`, 2, 86400)) return fail(429, '同一個活動一天最多提醒 2 次');
       const ids = (await env.DB.prepare(`SELECT s.member_id FROM signups s JOIN events e ON e.id = s.event_id WHERE s.event_id = ? AND s.member_id IS NOT NULL AND ${rcSql('s', 'e')}`)
         .bind(ev.id).all()).results.map((r) => r.member_id).filter((x) => x !== member.id);
       if (!ids.length) return json({ ok: true, count: 0 });
       const latest = eventLatest(ev, new Date());
-      await notify(env, ids, 'change', { kind: 'event', title: `請確認是否仍參加：${ev.title}`, body: '活動有異動，還沒收到你的確認。請到活動頁按「仍參加」或「取消報名」',
+      await notify(env, ids, 'change', { kind: 'event', title: `請確認是否仍參加：${ev.title}`, body: ev.kind === 'claim' ? '活動有異動，還沒收到你的確認。請到活動頁按「仍參加」或「取消索票」' : '活動有異動，還沒收到你的確認。請到活動頁按「仍參加」或「取消報名」',
         url: `/#/e/${ev.id}?rc=1`, ref: `e:${ev.id}`, tag: `notice-${ev.id}`, latest, now: !latest },
       { also: [await auditStmt(env, req, member, 'event.reconfirm_nudge', 'event', ev.id, `${ids.length} 人`)] });
       return json({ ok: true, count: ids.length });
@@ -4368,7 +4378,7 @@ const api = (async function api(req, env, path, method) {
       title: ev.title, date: ev.date, kind: ev.kind, capacity: ev.capacity, countGuests: !!ev.count_guests, guestMax: ev.guest_max || 0,
       canReview, ownerOnly: !staff, requireApproval: !!ev.require_approval, seatsLeft: ev.capacity ? Math.max(0, ev.capacity - seats) : null,
       payDuePassed: (() => { const due = parseQ(ev.pay_info, {})?.due; return !!due && due < today(); })(),
-      reconfirmAt: ev.reconfirm_at || null,
+      reconfirmAt: ev.reconfirm_at || null, rcOpen: rcOpen(ev),   // rcOpen：還能提醒（活動沒取消、還沒開始）
       // 索票已發出的張數（已領取的正取，每筆 1＋攜伴）
       ticketsPicked: ins.filter((r) => r.picked_at).reduce((n, r) => n + 1 + (r.s_guests || 0), 0),
       total: { in: ins.length, wait: rows.filter((r) => r.status === 'wait').length, pending: pend.length, pendingGuests: pend.reduce((n, r) => n + (r.s_guests || 0), 0),
@@ -4945,7 +4955,7 @@ async function remindEvents(env, now) {
     if (!fits(env, 1 + notifyCost(ids.length), 'events')) return { done: false, result: sent };
     // 集合前提醒到集合時間就過期（最多 1 小時），不會集合之後才收到
     //   時間暫定加「（暫定）」；餐敘寫「開始」、索票不寫動詞也不提暖身
-    await notify(env, ids, 'signup', { kind: 'event', ref: `e:${ev.id}`, title: `${ev.gather_time}${tbdTag(ev)}${verbOf(ev) ? ` ${verbOf(ev)}` : ''}：${ev.title}`,
+    await notify(env, ids, 'signup', { kind: 'event', ref: `e:${ev.id}`, title: `${timeOf(ev)}：${ev.title}`,
       body: ev.kind === 'claim' ? `${ev.place || ''}` : `${ev.place || ''}${ev.kind === 'party' ? '　入場券在「我的入場券」' : '　出門前記得暖身補水'}`, url: ev.kind === 'party' ? '/#/tickets' : `/#/e/${ev.id}`, tag: `hour-${ev.id}`,
       ttl: Math.min(3600, diff * 60), urgency: 'high' }, { also: [env.DB.prepare("UPDATE events SET remind_hour_at = datetime('now') WHERE id = ?").bind(ev.id)] });
     sent += ids.length;
@@ -4958,7 +4968,7 @@ async function remindEvents(env, now) {
       const ids = await signedIds(env, ev.id);
       if (!fits(env, 1 + notifyCost(ids.length), 'events')) return { done: false, result: sent };
       // 提醒標記和通知在同一個 batch：不會標了沒送、也不會送了沒標（下個整點重送）
-      await notify(env, ids, 'signup', { kind: 'event', ref: `e:${ev.id}`, latest: eventLatest(ev, now), title: `明天：${ev.title}`, body: `${ev.gather_time ? `${ev.gather_time}${tbdTag(ev)}${verbOf(ev) ? ` ${verbOf(ev)}` : ''}` : '明天'}${ev.place ? `・${ev.place}` : ''}${ev.kind === 'party' ? '・記得帶入場券 QR Code' : ''}`, url: `/#/e/${ev.id}`, tag: `day-${ev.id}` },
+      await notify(env, ids, 'signup', { kind: 'event', ref: `e:${ev.id}`, latest: eventLatest(ev, now), title: `明天：${ev.title}`, body: `${timeOf(ev) || '明天'}${ev.place ? `・${ev.place}` : ''}${ev.kind === 'party' ? '・記得帶入場券 QR Code' : ''}`, url: `/#/e/${ev.id}`, tag: `day-${ev.id}` },
         { also: [env.DB.prepare("UPDATE events SET remind_day_at = datetime('now') WHERE id = ?").bind(ev.id)] });
       sent += ids.length;
     }
@@ -5323,7 +5333,7 @@ async function auditDigest(env, now) {
 
 // 開放報名推播：到了 signup_start、還沒推過的活動（每小時，最晚 59 分鐘；open_notified_at 就是游標）
 async function signupOpen(env, now) {
-  const evs = (await env.DB.prepare(`SELECT id, title, date, gather_time, place, kind, capacity, team_id, visibility, created_by, signup_start, signup_open, status, deadline
+  const evs = (await env.DB.prepare(`SELECT id, title, date, gather_time, place, kind, capacity, team_id, visibility, created_by, signup_start, signup_open, status, deadline, time_tbd
     FROM events WHERE open_notified_at IS NULL AND signup_start IS NOT NULL AND signup_start <= ? AND status = 'open' AND date >= ? LIMIT 50`)
     .bind(tpNow(now.getTime()), tpDate(now)).all()).results;
   let sent = 0;

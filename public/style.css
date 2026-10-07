@@ -2069,7 +2069,7 @@ details.group > .btn.sm{display:flex;width:fit-content}
 /* 統計頁名單：出席圓圈的框線看得到，停用時淡一點 */
 .attend i{border-color:color-mix(in srgb,var(--ink) 30%,transparent)}
 .attend input:disabled + i{opacity:.4}
-.prow label.picked{font-size:13px;min-height:32px;color:var(--ink-2);gap:8px}
+.prow label.picked{font-size:13px;min-height:44px;color:var(--ink-2);gap:8px}
 /* 手機上名單四欄太擠：繳費選單移到姓名下面，姓名欄就有足夠寬度 */
 @media (max-width:480px){
   .r.prow.rv{grid-template-columns:44px 36px minmax(0,1fr)}

@@ -1728,6 +1728,63 @@ test('異動重新確認：發布通知時勾「請已報名的人重新確認�
   assert.equal((await rc('t_coach', 'yes', all)).json.error, '這個活動已經取消');
 });
 
+test('異動重新確認的收尾：活動已經開始或取消，「請確認」與未確認人數不再出現、提醒先擋下（不佔一天 2 次）；索票的提醒寫「取消索票」', async () => {
+  const body = { kind: 'claim', title: '確認收尾', place: '原地點', guest_max: 1 };
+  const id = await mkEvent(body);
+  assert.equal((await signup('t_runner', id)).json.status, 'in');
+  await sleep(1100);
+  assert.equal((await call('t_chair', `/events/${id}/notice`, { method: 'POST', body: { type: 'place', place: '新地點', reconfirm: true } })).json.reconfirm, 1);
+  assert.equal((await call('t_chair', `/events/${id}/stats`)).json.rcOpen, true);
+  assert.deepEqual((await call('t_chair', `/events/${id}/nudge`, { method: 'POST' })).json, { ok: true, count: 1 });
+  assert.ok((await notesFor('t_runner', id)).some((x) => x.title === '請確認是否仍參加：確認收尾' && x.body.endsWith('「仍參加」或「取消索票」')), '索票寫取消索票');
+  assert.equal((await call('t_chair', `/events/${id}/nudge`, { method: 'POST' })).status, 200);
+  // 已經開始（改成今天 00:00）：列表不標「請確認」、活動頁沒有確認卡與未確認人數、不能提醒；統計的確認狀態照留
+  assert.equal((await call('t_chair', `/events/${id}`, { method: 'PUT', body: { ...evBase, ...body, place: '新地點', date: plus(0), gather_time: '00:00' } })).status, 200);
+  assert.equal((await call('t_runner', '/events')).json.events.find((x) => x.id === id).rc, null, '已經開始不標請確認');
+  assert.equal((await call('t_runner', `/events/${id}`)).json.myReconfirm, false);
+  assert.equal((await call('t_chair', `/events/${id}`)).json.unconfirmed, undefined);
+  const late = await call('t_chair', `/events/${id}/nudge`, { method: 'POST' });
+  assert.deepEqual([late.status, late.json.error], [400, '活動已經開始，不用再提醒'], '已經用完 2 次也先回「已經開始」，不是 429');
+  const st = (await call('t_chair', `/events/${id}/stats`)).json;
+  assert.deepEqual([st.rcOpen, st.total.unconfirmed], [false, 1]);
+  // 取消：一樣不標、不能提醒
+  const c = await mkEvent({ title: '確認後取消' });
+  assert.equal((await signup('t_runner', c)).json.status, 'in');
+  await sleep(1100);
+  assert.equal((await call('t_chair', `/events/${c}/notice`, { method: 'POST', body: { type: 'time', gather_time: '07:30', reconfirm: true } })).json.reconfirm, 1);
+  assert.equal((await call('t_runner', '/events')).json.events.find((x) => x.id === c).rc, 1);
+  assert.equal((await call('t_chair', `/events/${c}/notice`, { method: 'POST', body: { type: 'cancel' } })).status, 200);
+  assert.equal((await call('t_runner', '/events')).json.events.find((x) => x.id === c).rc, null, '取消後不標請確認');
+  assert.equal((await call('t_chair', `/events/${c}`)).json.unconfirmed, undefined);
+  const cn = await call('t_chair', `/events/${c}/nudge`, { method: 'POST' });
+  assert.deepEqual([cn.status, cn.json.error], [400, '這個活動已經取消']);
+});
+
+test('索票細節：主辦調低每人張數，已登記的人改備註不會被砍（只是不能再加），回應帶存下來的張數；行事曆算張數；暫定時間的新活動推播標「（暫定）」或「時間待定」', async () => {
+  const id = await mkEvent({ kind: 'claim', title: '調低張數', guest_max: 3, capacity: 20 });
+  const a = await signup('t_coach', id, { guests: 3 });
+  assert.deepEqual([a.json.status, a.json.guests], ['in', 3]);
+  assert.equal((await signup('t_runner', id, { guests: 1 })).json.guests, 1);
+  const ev = (await call('t_chair', `/events/${id}`)).json;
+  assert.equal((await call('t_chair', `/events/${id}`, { method: 'PUT', body: { ...evBase, kind: 'claim', title: '調低張數', date: ev.date, capacity: 20, guest_max: 1 } })).status, 200);
+  const keep = await signup('t_coach', id, { guests: 3, note: '改備註' });
+  assert.equal(keep.json.guests, 3, '原本的 4 張保留');
+  assert.equal((await signup('t_coach', id, { guests: 2 })).json.guests, 2, '可以減少');
+  assert.equal((await signup('t_coach', id, { guests: 3 })).json.guests, 2, '減少後不能再加回超過上限');
+  assert.equal((await signup('t_lead', id, { guests: 3 })).json.guests, 1, '新登記照新的上限');
+  // 行事曆的數字是張數（跟首頁卡片一樣），不是人數
+  const cal = (await call('t_runner', `/calendar?month=${ev.date.slice(0, 7)}`)).json.events.find((x) => x.id === id);
+  assert.equal(cal.signed, 3 + 2 + 2);
+  assert.equal((await call('t_runner', '/events')).json.events.find((x) => x.id === id).signed, cal.signed);
+  // 新活動推播：暫定時間標「（暫定）」；沒填時間但勾了暫定寫「時間待定」
+  const t1 = await mkEvent({ kind: 'party', title: '暫定推播', gather_time: '19:15', time_tbd: true, notify: true, place: '松菸' });
+  const n1 = (await notesFor('t_runner', t1)).find((x) => x.title === '新活動：暫定推播');
+  assert.ok(n1 && n1.body.includes('19:15（暫定）'), JSON.stringify(n1));
+  const t2 = await mkEvent({ kind: 'party', title: '待定推播', gather_time: '', time_tbd: true, notify: true, place: '松菸' });
+  const n2 = (await notesFor('t_runner', t2)).find((x) => x.title === '新活動：待定推播');
+  assert.ok(n2 && n2.body.includes('時間待定'), JSON.stringify(n2));
+});
+
 test('報名成功訊息：建立與編輯都存得起來（100 字內），舊版畫面編輯不會清掉；只給主辦與正取的人（報名的回應也帶回來），沒報名、候補都拿不到', async () => {
   const id = await mkEvent({ title: '成功訊息', capacity: 1, success_msg: `報名成功！記得帶水${'。'.repeat(120)}` });
   const ev = (await call('t_chair', `/events/${id}`)).json;

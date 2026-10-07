@@ -386,19 +386,22 @@ async function statsView(id) {
         ${x.note ? `<span class="tiny" style="display:block">備註：<span translate="no">${esc(x.note)}</span></span>` : ''}
         ${x.status === 'rejected' && x.reviewNote ? `<span class="tiny" style="display:block">原因：<span translate="no">${esc(x.reviewNote)}</span></span>` : ''}
         ${live && x.payReported && x.paid !== 'paid' ? `<span class="payrep">${PAY_METHOD[x.payMethod] || '已回報'}${x.payRef ? ` 後五碼 <b class="num"><span translate="no">${esc(x.payRef)}</span></b>` : ''}・${ago(x.payReported)} <button type="button" class="btn sm" data-confirm="${esc(x.member_id)}">確認收款</button></span>` : ''}
-        ${((st.items || []).length || claim) && live && staff ? (claim ? `<label class="inline picked"><input type="checkbox" data-pick="${esc(x.member_id)}" aria-label="已發票：${esc(x.name)}" ${x.picked ? 'checked' : ''}> 已發票</label>`
+        ${((st.items || []).length || claim) && live && staff ? (claim ? `<label class="inline picked"><input type="checkbox" data-pick="${esc(x.member_id)}" data-seats="${1 + (x.guests || 0)}" aria-label="已發票：${esc(x.name)}" ${x.picked ? 'checked' : ''}> 已發票</label>`
           : `<label class="inline picked"><input type="checkbox" data-pick="${esc(x.member_id)}" ${x.picked ? 'checked' : ''}> 已領取</label>`) : ''}
         ${st.canReview ? `<span class="row rvbtns" style="gap:6px">${x.status === 'pending' ? `<button type="button" class="btn sm" data-rv="approve" ${off}>核准</button><button type="button" class="btn ghost sm" data-rv="reject" ${off}>婉拒</button>`
           : x.status === 'in' || x.status === 'wait' ? `<button type="button" class="btn ghost sm" data-rv="revoke" ${off}>移出名單</button>`
           : x.status === 'rejected' ? `<button type="button" class="btn ghost sm" data-rv="reopen" ${off}>${st.requireApproval ? '重新審核' : '恢復可報名'}</button>` : ''}</span>` : ''}</span>
       ${money && (live || refund) ? `<select data-pay="${esc(x.member_id)}" aria-label="繳費狀態" class="paysel ${x.paid}">${Object.entries(PAID_NAME).map(([k, v]) => `<option value="${k}" ${x.paid === k ? 'selected' : ''}>${v}</option>`).join('')}</select>` : '<span></span>'}
     </div>`; };
-  const pendingKpi = st.canReview && (t.pending || st.requireApproval) ? [['待審核', `${t.pending}${t.pendingGuests ? `＋攜伴 ${t.pendingGuests}` : ''}`]] : [];
+  // 待審核：索票算張數（每筆 1＋攜伴欄位），其他是筆數＋攜伴
+  const pendingKpi = st.canReview && (t.pending || st.requireApproval) ? [['待審核', claim ? `${t.pending + (t.pendingGuests || 0)} 張` : `${t.pending}${t.pendingGuests ? `＋攜伴 ${t.pendingGuests}` : ''}`]] : [];
   // 異動重新確認：已確認／有效報名（正取、候補、待審核）
   const rcKpi = rcOn ? [['已確認', `${t.confirmed}/${t.confirmed + t.unconfirmed}`]] : [];
   // 索票：張數為主（已登記、候補的張數、已發票），不放攜伴、出席、協會會員數
-  const kpi = claim ? [['已登記', `${t.seats} 張`], ['人數', t.in], ['候補', `${t.wait}${t.waitSeats ? `（${t.waitSeats} 張）` : ''}`], ...pendingKpi,
-    ...(t.rejected ? [['未通過', t.rejected]] : []), ['已取消', t.cancel], ['已發票', `${st.ticketsPicked}/${t.seats} 張`], ...rcKpi]
+  //   第三欄是 id（已發票勾選後就地更新這一格，不重畫整頁）
+  let picked = st.ticketsPicked;
+  const kpi = claim ? [['已登記', `${t.seats} 張`], ['登記人數', t.in], ['候補', `${t.wait}${t.waitSeats ? `（${t.waitSeats} 張）` : ''}`], ...pendingKpi,
+    ...(t.rejected ? [['未通過', t.rejected]] : []), ['已取消', t.cancel], ['已發票', `${picked}/${t.seats} 張`, 'kpiPicked'], ...rcKpi]
     : [[survey ? '回覆' : '正取', t.in], ...(survey ? [] : [['候補', t.wait]]), ...pendingKpi,
     ...(t.rejected ? [['未通過', t.rejected]] : []), ['已取消', t.cancel],
     ...(st.kind === 'party' || st.guestMax || t.guests ? [['攜伴', t.guests]] : []),
@@ -406,7 +409,7 @@ async function statsView(id) {
   const money = st.money, nf = (n) => n.toLocaleString('zh-TW');
   view.innerHTML = `
     ${largeTitle('統計', `<span translate="no">${esc(st.title)}</span>・${dstr(st.date)}`)}
-    <section class="kpis">${kpi.map(([k, v]) => `<div class="card kpi"><span class="tiny">${k}</span><b class="num">${v}</b></div>`).join('')}</section>
+    <section class="kpis">${kpi.map(([k, v, kid]) => `<div class="card kpi"${kid ? ` id="${kid}"` : ''}><span class="tiny">${k}</span><b class="num">${v}</b></div>`).join('')}</section>
     ${claim && !st.capacity ? `<section class="card"><p style="margin:0">已登記 ${t.seats} 張（不限張數）</p></section>` : ''}
     ${st.capacity ? `<section class="card"><div class="row spread"><h2 class="h3">名額</h2><span class="tiny num">${claim ? `已登記 ${t.seats} 張／共 ${st.capacity} 張・剩 ${st.seatsLeft} 張` : `${t.seats ?? t.in}/${st.capacity}・剩 ${st.seatsLeft} 名額${st.countGuests && t.guests ? '（含攜伴）' : ''}`}</span></div>
       <span class="bar big"><i style="width:${Math.min(100, Math.round((t.seats ?? t.in) / st.capacity * 100))}%"></i></span>
@@ -457,7 +460,7 @@ async function statsView(id) {
     ${survey ? '' : `<section class="card">
       <div class="row spread"><h2 class="h3">名單</h2><span class="tiny" id="pcount">${st.people.length} 人</span></div>
       ${chips.length ? `<div class="chips" role="group" aria-label="名單篩選">${chips.map(([k, v]) => `<button type="button" class="chip" data-f="${k}" aria-pressed="${k === filt}">${v} <span class="num">${countOf(k)}</span></button>`).join('')}</div>` : ''}
-      ${t.unconfirmed > 0 && st.canReview && staff ? `<button type="button" class="btn ghost sm" id="rcNudge" ${off}>提醒未確認的 ${t.unconfirmed} 人</button>` : ''}
+      ${t.unconfirmed > 0 && st.rcOpen && st.canReview && staff ? `<button type="button" class="btn ghost sm" id="rcNudge" ${off}>提醒未確認的 ${t.unconfirmed} 人</button>` : ''}
       <input id="pq" placeholder="搜尋姓名" aria-label="搜尋名單" autocomplete="off">
       <div class="roster" id="plist">${st.people.map(prow).join('')}</div>
       <p class="tiny" style="margin:0">${!staff ? '名單只列正取與候補；備註與攜伴姓名只有你和幹部看得到，請不要轉貼。點名由幹部處理' : `${st.kind === 'party' ? '出席以入場券報到為準' : st.canReview ? '方框是整批審核的選取；圓圈是點名出席' : '左邊圓圈是點名出席'}${money ? '；右邊切換繳費狀態，只做紀錄，不串金流' : ''}。點名、繳費、領取只適用正取；已繳費後取消或移出的人，可在右邊改成已退費。`}</p>
@@ -507,7 +510,8 @@ async function statsView(id) {
   for (const c of document.querySelectorAll('[data-pick]')) c.onchange = async () => {
     try {
       await api(`/events/${id}/pickup`, { method: 'POST', body: { member_id: c.dataset.pick, picked: c.checked } }); toast(claim ? (c.checked ? '已標記發票' : '已取消發票') : c.checked ? '已標記領取' : '已取消領取');
-      if (claim) { const y = scrollY; await statsView(id); scrollTo(0, y); }   // 索票：已發票的張數跟著更新
+      // 索票：已發票的張數就地更新（不重畫整頁：搜尋、選取與焦點都留著，現場可以一路勾下去）
+      if (claim) { picked += (c.checked ? 1 : -1) * (Number(c.dataset.seats) || 1); const b = $('#kpiPicked b'); if (b) b.textContent = `${picked}/${t.seats} 張`; }
     } catch (e) { c.checked = !c.checked; toast(e.message); }
   };
   // 提醒還沒按「仍參加」的人（同一場一天最多 2 次，伺服器會擋）

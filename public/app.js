@@ -643,6 +643,12 @@ const KIND_NAME = { track: '田徑場團練', core: '核心日', long: '長跑�
 const tbdTag = (e) => (e.time_tbd ? '<span class="tbdtag">（暫定）</span>' : '');
 const gatherVerb = (e) => (e.kind === 'claim' ? '' : e.kind === 'party' ? '開始' : '集合');
 const unitOf = (e) => (e.kind === 'claim' ? '張' : '人');
+// 時間：「19:15 集合（暫定）」（標示放在動詞後面，英文才會是 Meet at 19:15 (tentative)）；沒填時間但勾了暫定＝「時間待定」
+//   verb 傳 '' 不加動詞（卡片的時間地點列、分享預覽）
+const timeHtml = (e, verb = gatherVerb(e)) => (e.gather_time ? `${esc(e.gather_time)}${verb ? ` ${verb}` : ''}${tbdTag(e)}`
+  : e.time_tbd && e.kind !== 'survey' ? '<span class="tbdtag">時間待定</span>' : '');
+// 自己的報名狀態：索票說「已登記」
+const signedWord = (e) => (e.kind === 'claim' ? '已登記' : '已報名');
 // 伺服器的時間（UTC 'YYYY-MM-DD HH:MM:SS'）→ 台北「10/5 21:03」
 const tpAt = (ts) => (ts ? tpShort(new Date(Date.parse(`${ts.replace(' ', 'T')}Z`) + 8 * 3600e3).toISOString().slice(0, 16)) : '');
 const ROLE_NAME = { chair: '理事長', director: '理事', supervisor: '監事', staff: '行政人員', coach: '教練', member: '團員' };
@@ -897,7 +903,7 @@ function loginView() {
         <span class="tiny">${e.visibility === 'invite' ? `${IC.lock} 你收到一個邀請制活動的邀請` : `有人邀請你${e.kind === 'survey' ? '填寫問卷' : '報名'}`}</span>
         <div class="row" style="gap:6px">${e.team ? `<span class="pill">${esc(e.team)}</span>` : ''}<span class="pill ${e.kind}">${kindLabel(e)}</span>${phasePill(e, e.full)}</div>
         <h2 style="margin:0"><span translate="no">${esc(e.title)}</span></h2>
-        <p class="muted" style="margin:0">${dstr(e.date)}${e.gather_time ? ` ${e.gather_time}${tbdTag(e)}` : ''}${e.place ? `・<span translate="no">${esc(e.place)}</span>` : ''}</p>
+        <p class="muted" style="margin:0">${dstr(e.date)}${timeHtml(e, '') ? ` ${timeHtml(e, '')}` : ''}${e.place ? `・<span translate="no">${esc(e.place)}</span>` : ''}</p>
         <p class="tiny" style="margin:0">先登入，登入後會直接回到這個活動。</p></section>`;
     }).catch(() => {});
   }
@@ -1316,7 +1322,7 @@ async function todayCard(events) {
   return `<section class="card todaycard">
     <div class="row spread"><span class="tiny">今天・${me.dist === 'hm' ? '半馬' : '全馬'} ${esc(me.grp)} 組${personal && wi >= 1 && wi <= 21 ? `・個人 W${wi}` : ''}</span>${done ? `<span class="pill solid">${LOG_ICON[done.status]}${LOG_STATUS_NAME[done.status]}</span>` : ''}</div>
     ${main}
-    ${todays.map((e) => `<a class="todayev" href="#/e/${e.id}">${IC.calendar}<span><b><span translate="no">${esc(e.title)}</span></b><span class="tiny" style="display:block">${e.gather_time ? `${e.gather_time}${tbdTag(e)}${gatherVerb(e) ? ` ${gatherVerb(e)}` : ''}` : ''}${e.place ? `・<span translate="no">${esc(e.place)}</span>` : ''}${e.mine === 'wait' ? '・候補中' : e.mine === 'pending' ? '・審核中' : ''}</span></span><span class="tiny">›</span></a>`).join('')}
+    ${todays.map((e) => `<a class="todayev" href="#/e/${e.id}">${IC.calendar}<span><b><span translate="no">${esc(e.title)}</span></b><span class="tiny" style="display:block">${timeHtml(e)}${e.place ? `${timeHtml(e) ? '・' : ''}<span translate="no">${esc(e.place)}</span>` : ''}${e.mine === 'wait' ? '・候補中' : e.mine === 'pending' ? '・審核中' : ''}</span></span><span class="tiny">›</span></a>`).join('')}
     ${act}
   </section>`;
 }
@@ -1348,7 +1354,7 @@ async function weekStrip() {
 function heroPill(e) {
   const glass = (t) => `<span class="pill" style="background:rgba(255,255,255,.22);color:#fff">${t}</span>`;
   if (e.rc) return '<span class="pill wait">請確認</span>';   // 活動有異動，主辦請已報名的人重新確認
-  if (e.mine === 'in') return '<span class="pill" style="background:#fff;color:#1C4698">已報名</span>';
+  if (e.mine === 'in') return `<span class="pill" style="background:#fff;color:#1C4698">${signedWord(e)}</span>`;
   if (e.mine === 'wait') return '<span class="pill wait">候補中</span>';
   if (e.mine === 'pending') return '<span class="pill wait">審核中</span>';
   if (e.mine === 'rejected') return '<span class="pill no">未通過</span>';
@@ -1368,7 +1374,7 @@ function heroCard(e) {
       <span class="tiny">${days <= 0 ? '就是今天' : days === 1 ? '明天' : `${days} 天後`}</span>
     </div>
     <h2><span translate="no">${esc(e.title)}</span></h2>
-    <p class="muted" style="margin:0">${dstr(e.date)}${e.gather_time ? ` ${e.gather_time}${tbdTag(e)}${gatherVerb(e) ? ` ${gatherVerb(e)}` : ''}` : ''}${e.place ? `・<span translate="no">${esc(e.place)}</span>` : ''}</p>
+    <p class="muted" style="margin:0">${dstr(e.date)}${timeHtml(e) ? ` ${timeHtml(e)}` : ''}${e.place ? `・<span translate="no">${esc(e.place)}</span>` : ''}</p>
     <div class="row spread">
       <span class="row" style="gap:8px">${avatarStack(e.peek || [], e.signed)}<span class="tiny"><span>${e.kind === 'claim' ? `已登記 ${e.signed}${e.capacity ? ` / ${e.capacity}` : ''} 張` : `報名 ${e.signed}${e.capacity ? ` / ${e.capacity}` : ''} 人`}</span>${e.waiting ? `<span>・候補 ${e.waiting}</span>` : ''}</span></span>
       ${heroPill(e)}
@@ -1390,11 +1396,11 @@ function eventCard(e, opt) {
       <span class="body">
         <span class="pills"><span class="pill ${e.kind}">${kindLabel(e)}</span>${teamTag(teamOf(e.team_id))}${e.visibility === 'invite' ? `<span class="pill lock">${IC.lock}邀請制</span>` : ''}</span>
         <span class="t"><span translate="no">${esc(e.title)}</span></span>
-        <span class="tiny meta">${[showPh && phasePill(e, full), e.gather_time && `${e.gather_time}${tbdTag(e)}`, e.place && `<span translate="no">${esc(e.place)}</span>`,
+        <span class="tiny meta">${[showPh && phasePill(e, full), timeHtml(e, ''), e.place && `<span translate="no">${esc(e.place)}</span>`,
           (() => { const ps = [...(e.options || []), ...(e.kind === 'buy' ? e.items || [] : [])].map((o) => o.price).filter(Boolean); return ps.length ? `${money(Math.min(...ps))} 起` : e.fee ? money(e.fee) : ''; })()].filter(Boolean).map((x) => `<span>${x}</span>`).join('')}</span>
         ${e.capacity ? `<span class="bar"><i style="width:${pct}%"></i></span>` : ''}
       </span>
-      <span class="evright">${e.rc ? '<span class="mine wait">請確認</span>' : mine === 'in' ? `<span class="mine">${IC.check}已報名</span>` : mine === 'wait' ? '<span class="mine wait">候補中</span>'
+      <span class="evright">${e.rc ? '<span class="mine wait">請確認</span>' : mine === 'in' ? `<span class="mine">${IC.check}${signedWord(e)}</span>` : mine === 'wait' ? '<span class="mine wait">候補中</span>'
         : mine === 'pending' ? '<span class="mine wait">審核中</span>' : mine === 'rejected' ? '<span class="mine no">未通過</span>' : ''}
         ${e.pending ? `<span class="pill wait">待審核 ${e.pending}</span>` : ''}
         ${e.signed ? `${avatarStack(e.peek || [], e.signed)}<span class="tiny num">${e.signed}${e.capacity ? `/${e.capacity}` : ` ${unitOf(e)}`}</span>` : ''}</span>
@@ -3544,7 +3550,7 @@ addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvt 
 addEventListener('appinstalled', () => { installEvt = null; try { localStorage.setItem('cil-installed', '1'); } catch {} saveStart({ install: 'done' }); document.querySelectorAll('.installcard').forEach((c) => c.remove()); if ($('#startCard')) repaintStart(); });
 
 // 拆出去的模組（admin.js、photo.js…）從這裡拿共用的工具與狀態
-export { tbdTag, gatherVerb, unitOf, tpAt, canMeetup, meetupTeams, refOn, kindLabel, tilePreload, focusEl, legacyData, removeLegacy, addrField, bindAddrField, latest, $, cfg, downloadAuthed, scanSheet, FEEL, IC, KIND_NAME, LOG_ICON, LOG_STATUS_NAME, MI, PAID_NAME, ROLE_NAME, TAB_DEFAULT, TEAM_PERMS, coachTeam, TEAM_ROLE_NAME, ago, allow, api, applyFeatures, avatar, barChart, bars, bindComments, bindStepup, btnRow, choose, coachPrefs, copy, countdownPicker, dayLabel, dstr, emptyState, esc, eventCard, feat, fixText, group, ic, largeTitle, me, mfaBanner, money, myCycle, nrow, org, pad2, paintCountdown, passkey, planSeg, queueLog, raceTarget, refreshMe, render, route, row, setCoachPrefs, squareIcon, startKey, studio, subTitle, teamAllow, teamIcon, teamOf, teams, toast, rich, keep, names, view, ymd, askReason, isOffline, nowTp, signupDefaults, submitLabel, camLazy, openSheet, apiAll, fmtDuration, fmtDistPace, parseHMS,
+export { tbdTag, timeHtml, signedWord, gatherVerb, unitOf, tpAt, canMeetup, meetupTeams, refOn, kindLabel, tilePreload, focusEl, legacyData, removeLegacy, addrField, bindAddrField, latest, $, cfg, downloadAuthed, scanSheet, FEEL, IC, KIND_NAME, LOG_ICON, LOG_STATUS_NAME, MI, PAID_NAME, ROLE_NAME, TAB_DEFAULT, TEAM_PERMS, coachTeam, TEAM_ROLE_NAME, ago, allow, api, applyFeatures, avatar, barChart, bars, bindComments, bindStepup, btnRow, choose, coachPrefs, copy, countdownPicker, dayLabel, dstr, emptyState, esc, eventCard, feat, fixText, group, ic, largeTitle, me, mfaBanner, money, myCycle, nrow, org, pad2, paintCountdown, passkey, planSeg, queueLog, raceTarget, refreshMe, render, route, row, setCoachPrefs, squareIcon, startKey, studio, subTitle, teamAllow, teamIcon, teamOf, teams, toast, rich, keep, names, view, ymd, askReason, isOffline, nowTp, signupDefaults, submitLabel, camLazy, openSheet, apiAll, fmtDuration, fmtDistPace, parseHMS,
   // event.js、me.js
   applyCounts, bellState, canScan, dayPattern, mapsUrl, once, qrSVG, routeSvg, scan, setStopScan, GOOGLE_G, NICON, applyTabs, applyTheme, askLegacyOnLeave,
   bindInstall, clearDeviceData, dropPush, googleHref, iconsOnly, installCard, isStandalone, lsOrNull, pkSupported, reduceMotion, theme, togglePush, setMe,

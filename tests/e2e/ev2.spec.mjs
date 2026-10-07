@@ -61,6 +61,7 @@ test('團員索票選 3 張，幹部在統計頁勾「已發票」；首頁卡�
     await page.goto('/#/');
     const card = page.locator(`a.card[href="#/e/${ev.id}"]`);
     await expect(card.locator('.evright .tiny.num')).toHaveText('3/6');
+    await expect(card.locator('.evright .mine')).toHaveText('已登記');
     await expect(card.locator('.pills .pill').first()).toHaveClass(/\bclaim\b/);
 
     await login(page, 't_chair'); await acceptPrivacyIfAsked(page);
@@ -69,9 +70,16 @@ test('團員索票選 3 張，幹部在統計頁勾「已發票」；首頁卡�
     await expect(kpi('已登記')).toHaveText('3 張');
     await expect(page.getByText('已登記 3 張／共 6 張・剩 3 張')).toBeVisible();
     await expect(kpi('已發票')).toHaveText('0/3 張');
+    await expect(kpi('登記人數')).toHaveText('1');
+    // 勾「已發票」就地更新張數：搜尋字與焦點都留著（現場一路勾下去）
+    await page.locator('#pq').fill(' ');
     await page.locator('.prow [data-pick]').first().click();
     await expect(kpi('已發票')).toHaveText('3/3 張');
     await expect(page.locator('.prow [data-pick]').first()).toBeChecked();
+    await expect(page.locator('.prow [data-pick]').first()).toBeFocused();
+    await expect(page.locator('#pq')).toHaveValue(' ');
+    await page.locator('.prow [data-pick]').first().click();
+    await expect(kpi('已發票')).toHaveText('0/3 張');
     await expect(page.getByText(/^名單格式：1\. 名字 \/ 2張/)).toBeVisible();
   } finally { await drop(request, ev.id); await drop(request, early.id); }
 });
@@ -140,7 +148,7 @@ test('時間暫定：首頁卡片與行事曆標「（暫定）」，英文介�
     await expect(card.locator('.tbdtag')).toHaveText('（暫定）');
     await page.goto(`/#/calendar?m=${date.slice(0, 7)}`);
     await page.locator(`[data-day="${date}"]`).click();
-    await expect(page.locator('#dayBox')).toContainText('06:00（暫定） 集合');
+    await expect(page.locator('#dayBox')).toContainText('06:00 集合（暫定）');
 
     await page.evaluate(() => localStorage.setItem('cil-lang', 'en'));
     try {
