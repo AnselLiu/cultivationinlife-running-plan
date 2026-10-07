@@ -340,6 +340,12 @@ export function dismissAsk() { if (s) { s.askedAt = Date.now(); save(true); } }
 
 // 沒有 GPS（跑步機、操場）時，結束後手動填距離
 export function setDistance(m) { if (s) { s.manualDist = m > 0 ? m : null; save(true); emit(); } }
+// 按「開始」時今天的課表還沒讀到：讀到後補上目標（記錄中才補、已經有目標的不改）；有補上回傳 true
+export function setGoal(goal) {
+  if (!goal || !active() || s.goal) return false;
+  s.goal = goal; s.goalAsked = false; save(true); emit();
+  return true;
+}
 // 重新整理後回到記錄中（或自動暫停中、按了暫停或結束還在等最後那段的定位點）：繼續接 GPS、螢幕保持亮著
 if (tracking() || (s?.settle && s.useGps)) watch();
 if (live()) lock();

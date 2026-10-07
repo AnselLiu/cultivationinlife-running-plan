@@ -2618,6 +2618,8 @@ function routeSvg(route) {
 }
 // 空檔的估算：「螢幕鎖定或訊號弱時以直線估算 620 公尺」
 const estText = (m) => `螢幕鎖定或訊號弱時以直線估算 ${Math.round(m)} 公尺`;
+// 記錄中的今天課表目標進度條（寬度由 paint 每秒更新）
+const goalBar = (g) => `<div class="goalbar"><span class="tiny">今天的課表：${esc(g.text)}</span><span class="bar big"><i id="rGoal" style="width:0%"></i></span></div>`;
 async function runView() {
   clearInterval(runTick);
   await loadRun();
@@ -2687,11 +2689,19 @@ async function runView() {
         <li>到戶外等「GPS 良好」再開始，距離會比較準</li><li>練間歇或在操場跑，可以按「計圈」把每一趟分開記</li>
         <li>跑完按「結束」，再按「存到訓練紀錄」，系統會自動對上今天的課表</li></ol>
         <p class="tiny" style="margin:0">路線只留在你的手機上，協會只會收到你存下來的距離和時間。</p></section>`;
-    const goal = await todayGoal();
-    if (goal) $('.runstart').insertAdjacentHTML('afterbegin', `<span class="pill">今天的課表：${esc(goal.text)}</span>`);
+    // 按鈕先接好再讀今天的課表：讀課表第一次要下載整季的資料，網路慢時要好幾秒；以前讀完才接上，這段時間按「開始」沒反應
+    //   還沒讀到就按了開始：照樣開始記錄，讀到了再補上今天的目標（Run.setGoal）
+    let goal = null, started = false;
+    const go = (useGps) => { started = true; Run.start({ useGps, goal }); runView(); if (pocketPref.get()) pocketOn(); };
     $('#pkPref').onchange = (e) => pocketPref.set(e.target.checked);
-    $('#runGo').onclick = () => { Run.start({ useGps: true, goal }); runView(); if (pocketPref.get()) pocketOn(); };
-    $('#runNoGps').onclick = () => { Run.start({ useGps: false, goal }); runView(); if (pocketPref.get()) pocketOn(); };
+    $('#runGo').onclick = () => go(true);
+    $('#runNoGps').onclick = () => go(false);
+    const box = $('.runstart');
+    goal = await todayGoal().catch(() => null);
+    if (!goal) return;
+    if (!started) { if (box.isConnected) box.insertAdjacentHTML('afterbegin', `<span class="pill">今天的課表：${esc(goal.text)}</span>`); return; }
+    // 記錄中的畫面已經畫好：補上目標進度條（寬度由每秒的 paint 更新）；還沒畫好的話，畫的時候就會帶目標
+    if (Run.setGoal?.(goal) && !$('#rGoal')) $('.runlive .runbtns')?.insertAdjacentHTML('afterend', goalBar(goal));
     return;
   }
   // 記錄中
@@ -2708,7 +2718,7 @@ async function runView() {
           ? '<button class="runbtn lap" id="rLap">計圈</button><button class="runbtn pause" id="rPause">暫停</button>'
           : '<button class="runbtn go" id="rResume">繼續</button><button class="runbtn stop" id="rStop">結束</button>'}
       </div>
-      ${x.goal ? `<div class="goalbar"><span class="tiny">今天的課表：${esc(x.goal.text)}</span><span class="bar big"><i id="rGoal" style="width:0%"></i></span></div>` : ''}
+      ${x.goal ? goalBar(x.goal) : ''}
       <div class="notice wakenote" id="rWake" role="status" hidden><b>螢幕可能會自動關掉</b>
         <p>iPhone 鎖定螢幕時網頁會停住、收不到定位，解鎖後空白的那段只能用直線估算。想記完整：把「設定 › 螢幕顯示與亮度 › 自動鎖定」暫時設為「永不」；低電量模式下要先關掉低電量模式才能改。</p>
         <p id="rWakeAgain">也可以再試一次，或開口袋模式（開的時候會再要一次）。</p>

@@ -348,3 +348,19 @@ test('(i) 等紅燈時按計圈、接著自動暫停：時間往回退後計圈�
   Run.finish();
   for (const l of Run.summary().laps) assert.ok(l.sec >= 0, `第 ${l.n} 圈 ${l.sec} 秒`);
 });
+
+test('(j) 今天的課表還沒讀到就按開始：讀到後補上目標（存進這台手機），目標到了照樣問跑完了嗎；已經有目標、跑完或刪掉的不補', async () => {
+  const Run = await load(); Run.start({ useGps: true });
+  const w = world(Run);
+  w.run(10, 3);
+  assert.equal(Run.setGoal({ km: 1, text: '1 公里' }), true);
+  assert.equal(JSON.parse(localStorage.getItem('cil-run-session')).goal.km, 1, '補上的目標要存起來（重新整理後還在）');
+  assert.equal(Run.setGoal({ km: 5, text: '5 公里' }), false, '已經有目標的不改');
+  assert.equal(Run.session().goal.km, 1);
+  w.run(400, 3);
+  assert.deepEqual(w.asks, ['goal'], '補上的目標到了也會問一次跑完了嗎');
+  Run.finish();
+  assert.equal(Run.setGoal({ km: 1, text: '1 公里' }), false, '跑完了不補');
+  Run.discard();
+  assert.equal(Run.setGoal({ km: 1, text: '1 公里' }), false, '沒有記錄不補');
+});

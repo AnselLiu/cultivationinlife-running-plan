@@ -91,6 +91,9 @@ test('口袋模式：點了沒反應，滑到右邊才解鎖；VoiceOver 用解�
   await page.locator('#runDiscard').click();
   await page.locator('label.switch', { has: page.locator('#pkPref') }).click();
   await expect(page.locator('#pkPref')).toBeChecked();
+  // 重新整理後要重新下載整季課表（讀今天的目標）：故意讓它晚到，還沒讀到就按開始也要有反應
+  //   以前按鈕等課表讀完才接上，電腦忙的時候這裡按了沒反應（偶發失敗）
+  await page.route('**/data/season-2026.json', async (r) => { await new Promise((ok) => setTimeout(ok, 1500)); await r.continue().catch(() => {}); });
   await page.reload();
   await expect(page.locator('#pkPref')).toBeChecked();
   await page.locator('#runGo').click();
@@ -98,4 +101,5 @@ test('口袋模式：點了沒反應，滑到右邊才解鎖；VoiceOver 用解�
   await page.getByRole('button', { name: '解鎖口袋模式' }).focus();
   await page.keyboard.press('Enter');
   await expect(pocket).toHaveCount(0);
+  await page.unrouteAll({ behavior: 'ignoreErrors' });
 });
