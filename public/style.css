@@ -1192,6 +1192,7 @@ details.group[open] > summary{margin-bottom:2px}
 .rcbanner h2{display:flex;align-items:center;gap:8px;margin:0}
 .rcbanner h2 svg{color:var(--warn);flex:none}
 .rcbanner .row .btn{min-height:44px}
+.rclink{display:flex;align-items:center;min-height:44px;justify-self:start}
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .ql.off{color:#5BD07A}:root:not([data-theme="light"]) .payrep{color:#FFB547}}
 :root[data-theme="dark"] .ql.off{color:#5BD07A}:root[data-theme="dark"] .payrep{color:#FFB547}
 
