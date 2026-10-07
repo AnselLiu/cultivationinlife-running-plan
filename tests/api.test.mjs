@@ -1540,6 +1540,194 @@ test('攜伴也佔名額：取消空出的位子不夠候補第一組就跳過�
   assert.ok(au.some((x) => (x.detail || '').includes('攜伴佔名額 關')), JSON.stringify(au));
 });
 
+test('索票：張數＝1＋攜伴欄位、伺服器強制算位子；額滿排候補、減少張數會遞補；LINE 名單「1. 名字 / N張（組別）」；勾已發票寫稽核；CSV 有張數與領票', async () => {
+  const id = await mkEvent({ kind: 'claim', title: '觀賽索票', capacity: 6, guest_max: 3, count_guests: false, notify_signup: true, gather_time: '',
+    items: [{ name: 'T恤', price: 300 }], min_qty: 5, meal_options: '葷,素' });
+  const ev = (await call('t_chair', `/events/${id}`)).json;
+  assert.equal(ev.kind, 'claim');
+  assert.equal(ev.count_guests, 1, '索票一律算位子（送 false 也一樣）');
+  assert.deepEqual(ev.items, []);
+  assert.equal(ev.min_qty, null);
+  assert.equal(ev.meal_options, '');
+  // 4 張 → 正取；再 4 張超過剩下的 2 張 → 候補；之後只要 1 張也排候補（已經有人候補）
+  assert.equal((await signup('t_coach', id, { guests: 3, guest_names: ['不收'] })).json.status, 'in');
+  assert.ok((await notesFor('t_coach', id)).some((n) => n.title === '索票成功：觀賽索票' && n.body.includes('・4 張')), '索票成功的通知寫張數');
+  await sleep(1100);
+  assert.equal((await signup('t_other', id, { guests: 3 })).json.status, 'wait');
+  await sleep(1100);
+  assert.equal((await signup('t_lead', id)).json.status, 'in', '剩下 2 張夠 1 張：候補第一位要 4 張不夠，張數少的先補上');
+  // 改成 1 張：空出 3 張，候補的 4 張補上，剛好 6 張
+  assert.equal((await signup('t_coach', id, { guests: 0 })).json.status, 'in');
+  assert.equal(await stOf('t_other', id), 'in');
+  assert.equal(await stOf('t_lead', id), 'in');
+  // 一次要的比總張數還多：直接擋下
+  const small = await mkEvent({ kind: 'claim', title: '小場索票', capacity: 3, guest_max: 3 });
+  const big = await signup('t_coach', small, { guests: 3 });
+  assert.equal(big.status, 400);
+  assert.equal(big.json.error, '總共只有 3 張，請少選幾張');
+  // 不收攜伴姓名
+  const st = (await call('t_chair', `/events/${id}/stats`)).json;
+  assert.deepEqual(st.people.find((x) => x.member_id === 't_coach').guestNames, []);
+  assert.equal(st.total.seats, 6, '已登記 6 張');
+  assert.equal(st.seatsLeft, 0);
+  assert.equal(st.ticketsPicked, 0);
+  // LINE 名單：照登記先後「1. 名字 / N張」，最後一行總張數
+  const roster = (await call('t_chair', `/events/${id}/roster`)).json.text.split('\n');
+  assert.equal(roster[1], '1. 測試教練 / 1張');
+  assert.equal(roster[2], '2. 路人跑友 / 4張');
+  assert.equal(roster[3], '3. 測試團長 / 1張');
+  assert.equal(roster.at(-1), '共 6 張／上限 6 張');
+  assert.ok(!roster.join('\n').includes('不收'));
+  assert.equal((await call('t_runner', `/events/${id}/roster`)).status, 403);
+  // 主辦定的組別接在後面；沒有上限、有候補的總計
+  const tag = await mkEvent({ kind: 'claim', title: '組別索票', guest_max: 1, options: [{ name: '一般', price: 0 }, { name: '小耕', price: 0 }] });
+  assert.equal((await signup('t_coach', tag, { guests: 1, option: '小耕' })).json.status, 'in');
+  const r2 = (await call('t_chair', `/events/${tag}/roster`)).json.text.split('\n');
+  assert.equal(r2[1], '1. 測試教練 / 2張（小耕）');
+  assert.equal(r2.at(-1), '共 2 張');
+  // 已發票：手動勾選，真的有改才寫稽核
+  assert.equal((await call('t_chair', `/events/${id}/pickup`, { method: 'POST', body: { member_id: 't_other', picked: true } })).status, 200);
+  await call('t_chair', `/events/${id}/pickup`, { method: 'POST', body: { member_id: 't_other', picked: true } });
+  assert.equal((await call('t_chair', `/events/${id}/stats`)).json.ticketsPicked, 4);
+  const au = (await call('t_chair', `/audit?from=${plus(-1)}&to=${plus(1)}&action=event.pickup&target=${id}`)).json.items;
+  assert.equal(au.length, 1, JSON.stringify(au));
+  assert.equal(au[0].detail, '標記領取（t_other）');
+  const csv = (await call('t_chair', `/events/${id}/export.csv`)).text;
+  assert.ok(csv.includes('"張數","領票"') && !csv.includes('"攜伴"'), csv.split('\n')[0]);
+  assert.ok(csv.split('\n').some((l) => l.includes('"路人跑友"') && l.includes('"4","已發"')), csv);
+  assert.equal(ogOf(await (await page(`/e/${id}`)).text(), 'og:image'), `${BASE}/og/claim.png`);
+});
+
+test('時間暫定：活動、列表、預覽、行事曆、ICS 都帶；PUT 可以切換（寫稽核）；問卷與團員揪團一律不暫定；改時間預設清掉（時間沒變是「時間確定」），也可以繼續標暫定', async () => {
+  const d = plus(6), base = { kind: 'long', title: '暫定長跑', date: d, gather_time: '06:00', end_time: '09:00', place: '大佳河濱公園', notify: false };
+  const id = await mkEvent({ ...base, time_tbd: true });
+  assert.equal((await call('t_runner', `/events/${id}`)).json.time_tbd, 1);
+  assert.equal((await call('t_runner', '/events')).json.events.find((x) => x.id === id).time_tbd, 1);
+  assert.equal((await call(null, `/public/e/${id}`)).json.event.time_tbd, 1);
+  assert.equal(ogOf(await (await page(`/e/${id}`)).text(), 'og:description'), `${mdw(d)}06:00–09:00（暫定）・大佳河濱公園・報名中`);
+  assert.equal((await call('t_runner', `/calendar?month=${d.slice(0, 7)}`)).json.events.find((x) => x.id === id).time_tbd, 1);
+  assert.equal((await signup('t_coach', id)).json.status, 'in');
+  const { url } = (await call('t_coach', '/me/calendar', { method: 'POST' })).json;
+  const ics = (await (await fetch(url.replace(/^https?:\/\/[^/]+/, BASE))).text()).replace(/\r\n /g, '');
+  assert.ok(ics.includes('（時間暫定）暫定長跑') && ics.includes('時間暫定，以活動頁為準'), ics);
+  // PUT 關掉（不通知）；稽核寫差異
+  assert.equal((await call('t_chair', `/events/${id}`, { method: 'PUT', body: { ...base, time_tbd: false } })).status, 200);
+  assert.equal((await call('t_chair', `/events/${id}`)).json.time_tbd, 0);
+  const au = (await call('t_chair', `/audit?from=${plus(-1)}&to=${plus(1)}&action=event.update&target=${id}`)).json.items;
+  assert.ok(au.some((x) => (x.detail || '').includes('時間暫定 關')), JSON.stringify(au));
+  // 舊版畫面編輯（沒帶 time_tbd）保留原值
+  assert.equal((await call('t_chair', `/events/${id}`, { method: 'PUT', body: { ...base, time_tbd: true } })).status, 200);
+  assert.equal((await call('t_chair', `/events/${id}`, { method: 'PUT', body: base })).status, 200);
+  assert.equal((await call('t_chair', `/events/${id}`)).json.time_tbd, 1);
+  // 問卷不暫定
+  assert.equal((await call('t_chair', `/events/${await mkEvent({ kind: 'survey', title: '暫定問卷', time_tbd: true, questions: [{ type: 'text', label: '想法' }] })}`)).json.time_tbd, 0);
+  // 改時間、時間沒變：清掉暫定，標題「時間確定」
+  assert.equal((await call('t_chair', `/events/${id}/notice`, { method: 'POST', body: { type: 'time', gather_time: '06:00' } })).status, 200);
+  assert.equal((await call('t_chair', `/events/${id}`)).json.time_tbd, 0);
+  const n1 = (await notesFor('t_coach', id)).find((n) => n.title.startsWith('時間確定：'));
+  assert.ok(n1 && n1.body.startsWith('時間確定：'), JSON.stringify(n1));
+  // 繼續標暫定：改時間後仍是暫定，內文寫「（暫定）」
+  assert.equal((await call('t_chair', `/events/${id}`, { method: 'PUT', body: { ...base, time_tbd: true } })).status, 200);
+  assert.equal((await call('t_chair', `/events/${id}/notice`, { method: 'POST', body: { type: 'time', gather_time: '06:30', keep_tbd: true } })).status, 200);
+  const ev = (await call('t_chair', `/events/${id}`)).json;
+  assert.equal(ev.time_tbd, 1);
+  assert.equal(ev.gather_time, '06:30');
+  assert.ok((await notesFor('t_coach', id)).some((n) => n.title.startsWith('改時間：') && n.body.includes('06:30（暫定）')));
+});
+
+test('異動重新確認：發布通知時勾「請已報名的人重新確認」，本人回覆仍參加（候補順位不變）或取消報名（異動後取消、不送截止後取消的待辦）；提醒未確認的人一天 2 次；統計與 CSV 有確認狀態', async () => {
+  const body = { title: '重新確認', capacity: 1, place: '原地點', notify_signup: true };
+  const id = await mkEvent(body);
+  assert.equal((await signup('t_runner', id)).json.status, 'in');
+  await sleep(1100);
+  assert.equal((await signup('t_other', id)).json.status, 'wait');
+  await sleep(1100);   // 時間只到秒：同一秒報名的人算已確認
+  const n = await call('t_chair', `/events/${id}/notice`, { method: 'POST', body: { type: 'place', place: '新地點', reconfirm: true } });
+  assert.equal(n.status, 200, n.text);
+  assert.deepEqual([n.json.count, n.json.reconfirm], [2, 2]);
+  for (const who of ['t_runner', 't_other']) {
+    const x = (await notesFor(who, id)).find((y) => y.title === '改地點，請確認：重新確認');
+    assert.ok(x && x.url.endsWith(`/e/${id}?rc=1`) && x.body.startsWith('請到活動頁確認是否仍參加。'), `${who}：${JSON.stringify(x)}`);
+  }
+  // 之後才報名的人自動算已確認
+  await sleep(1100);
+  assert.equal((await signup('t_lead', id)).json.status, 'wait');
+  assert.equal((await call('t_runner', `/events/${id}`)).json.myReconfirm, true);
+  assert.equal((await call('t_lead', `/events/${id}`)).json.myReconfirm, false);
+  assert.equal((await call('t_runner', '/events')).json.events.find((x) => x.id === id).rc, 1);
+  assert.equal((await call('t_lead', '/events')).json.events.find((x) => x.id === id).rc, null);
+  assert.equal((await call('t_chair', `/events/${id}`)).json.unconfirmed, 2);
+  assert.equal((await call('t_runner', `/events/${id}`)).json.unconfirmed, undefined, '未確認人數只給主辦');
+  // 錯誤：沒報名、答案不對
+  const rc = (who, answer, eid = id) => call(who, `/events/${eid}/reconfirm`, { method: 'POST', body: { answer } });
+  assert.equal((await rc('t_coach', 'yes')).json.error, '你沒有報名這個活動');
+  assert.equal((await rc('t_other', 'maybe')).json.error, '請選擇仍參加或取消報名');
+  // 候補回覆仍參加：順位不變
+  const pos = (await call('t_other', `/events/${id}`)).json.myPosition;
+  assert.deepEqual((await rc('t_other', 'yes')).json, { ok: true, confirmed: true });
+  const o = (await call('t_other', `/events/${id}`)).json;
+  assert.equal(o.myReconfirm, false);
+  assert.equal(o.myPosition, pos, '候補順位不變');
+  assert.equal((await rc('t_other', 'yes')).json.already, true);
+  const no = await rc('t_other', 'no');
+  assert.equal(no.status, 400);
+  assert.equal(no.json.error, '請用活動頁的「取消報名」');
+  // 正取在截止後回覆取消：記成「異動後取消」，候補遞補，主辦不會收到「截止後取消」的待辦
+  const cur = (await call('t_chair', `/events/${id}`)).json;
+  assert.equal((await call('t_chair', `/events/${id}`, { method: 'PUT', body: { ...evBase, ...body, place: '新地點', date: cur.date, deadline: tp(-60) } })).status, 200);
+  assert.deepEqual((await rc('t_runner', 'no')).json, { ok: true, was: 'in' });
+  assert.equal(await stOf('t_runner', id), null);
+  assert.equal(await stOf('t_other', id), 'in');
+  assert.ok(!(await notesFor('t_chair', id)).some((x) => x.title.includes('有人取消報名')), '異動後取消不送截止後取消的待辦');
+  let st = (await call('t_chair', `/events/${id}/stats`)).json;
+  const pr = st.people.find((x) => x.member_id === 't_runner');
+  assert.deepEqual([pr.status, pr.cancelBy, pr.unconfirmed], ['cancel', 'reconfirm', false]);
+  assert.deepEqual([st.total.confirmed, st.total.unconfirmed, st.total.waitSeats], [2, 0, 1]);
+  assert.ok(st.reconfirmAt);
+  // 再要求一次：之前確認過的人又變成未確認（時間只到秒，隔一秒再發）
+  await sleep(1100);
+  assert.equal((await call('t_chair', `/events/${id}/notice`, { method: 'POST', body: { type: 'place', place: '第三地點', reconfirm: true } })).json.reconfirm, 2);
+  assert.equal((await call('t_other', `/events/${id}`)).json.myReconfirm, true);
+  st = (await call('t_chair', `/events/${id}/stats`)).json;
+  assert.deepEqual([st.total.confirmed, st.total.unconfirmed], [0, 2]);
+  assert.equal(st.people.find((x) => x.member_id === 't_other').unconfirmed, true);
+  const csv = (await call('t_chair', `/events/${id}/export.csv`)).text;
+  assert.ok(csv.split('\n')[0].includes('"異動確認","審核"'), csv.split('\n')[0]);
+  assert.ok(csv.split('\n').some((l) => l.includes('"路人跑友"') && l.includes('"未確認"')));
+  assert.ok(csv.includes('"異動後取消"'));
+  // 提醒未確認的人：只有幹部；一天 2 次
+  assert.equal((await call('t_runner', `/events/${id}/nudge`, { method: 'POST' })).status, 403);
+  assert.deepEqual((await call('t_chair', `/events/${id}/nudge`, { method: 'POST' })).json, { ok: true, count: 2 });
+  assert.ok((await notesFor('t_lead', id)).some((x) => x.title === '請確認是否仍參加：重新確認'));
+  assert.equal((await call('t_chair', `/events/${id}/nudge`, { method: 'POST' })).status, 200);
+  assert.equal((await call('t_chair', `/events/${id}/nudge`, { method: 'POST' })).status, 429);
+  const au = (await call('t_chair', `/audit?from=${plus(-1)}&to=${plus(1)}&action=event.reconfirm&target=${id}`)).json.items;
+  assert.equal(au.length, 2);
+  assert.equal(au[0].detail, '2 人');
+  const nau = (await call('t_chair', `/audit?from=${plus(-1)}&to=${plus(1)}&action=event.notice&target=${id}`)).json.items;
+  assert.ok(nau.some((x) => (x.detail || '').startsWith('改地點（請重新確認）：')), JSON.stringify(nau));
+  // 本人的個資匯出有確認時間
+  assert.ok((await call('t_lead', '/me/export')).json.signups.find((x) => x.event_id === id).confirmed_at === null);
+  await rc('t_lead', 'yes');
+  assert.ok((await call('t_lead', '/me/export')).json.signups.find((x) => x.event_id === id).confirmed_at);
+  // 通知所有人：只有報名的人要確認；發布的幹部自己有報名直接算已確認；取消活動不要求確認
+  const all = await mkEvent({ title: '通知所有人' });
+  assert.equal((await call('t_chair', `/events/${all}/nudge`, { method: 'POST' })).json.error, '目前沒有需要重新確認的人');
+  assert.equal((await signup('t_coach', all)).json.status, 'in');
+  assert.equal((await signup('t_chair', all)).json.status, 'in');
+  await sleep(1100);
+  const a = await call('t_chair', `/events/${all}/notice`, { method: 'POST', body: { type: 'other', message: '集合點改到停車場', audience: 'all', reconfirm: true } });
+  assert.equal(a.json.reconfirm, 1);
+  assert.ok((await notesFor('t_coach', all)).some((x) => x.title === '活動通知，請確認：通知所有人'));
+  const oth = (await notesFor('t_other', all)).find((x) => x.title.startsWith('活動通知'));
+  assert.ok(oth && !oth.title.includes('請確認') && !oth.url.includes('rc=1'), JSON.stringify(oth));
+  assert.equal((await call('t_other', `/events/${all}`)).json.myReconfirm, false);
+  assert.equal((await call('t_chair', `/events/${all}`)).json.myReconfirm, false, '發布的幹部自己不用確認');
+  assert.equal((await call('t_chair', `/events/${all}`)).json.unconfirmed, 1);
+  assert.equal((await call('t_chair', `/events/${all}/notice`, { method: 'POST', body: { type: 'cancel', reconfirm: true } })).json.reconfirm, 0);
+  assert.equal((await rc('t_coach', 'yes', all)).json.error, '這個活動已經取消');
+});
+
 test('報名成功訊息：建立與編輯都存得起來（100 字內），舊版畫面編輯不會清掉；只給主辦與正取的人（報名的回應也帶回來），沒報名、候補都拿不到', async () => {
   const id = await mkEvent({ title: '成功訊息', capacity: 1, success_msg: `報名成功！記得帶水${'。'.repeat(120)}` });
   const ev = (await call('t_chair', `/events/${id}`)).json;
@@ -1578,7 +1766,7 @@ test('團員揪團：功能開關預設關閉；團員只能在自己的分團�
     const r = await mk('t_runner', { kind: 'party', capacity: 5, fee: 500, options: [{ name: '全馬', price: 100 }], items: [{ name: 'T恤', price: 300 }],
       questions: [{ type: 'text', label: '尺寸' }], require_approval: true, link_url: 'https://example.com/x', link_label: '登記', visibility: 'invite', week_no: 3,
       plan_text: '課表', lead: '假帶團', group_reg: true, pricing: { member_off: 50 }, pay_info: { account: '123' }, meal_options: '葷,素', min_qty: 5, address: '臺北市中正區重慶南路一段122號',
-      repeat: { weekdays: [0, 1, 2, 3, 4, 5, 6], until: plus(30) }, notify: true, guest_max: 2, count_guests: true, success_msg: '記得帶水', note: '慢慢跑' });
+      repeat: { weekdays: [0, 1, 2, 3, 4, 5, 6], until: plus(30) }, notify: true, guest_max: 2, count_guests: true, success_msg: '記得帶水', note: '慢慢跑', time_tbd: true });
     assert.equal(r.status, 200, r.text);
     assert.equal(r.json.meetup, true);
     assert.equal(r.json.count, 1, '不能定期');
@@ -1598,6 +1786,7 @@ test('團員揪團：功能開關預設關閉；團員只能在自己的分團�
     assert.equal(ev.guest_max, 2);
     assert.equal(ev.count_guests, 1);
     assert.equal(ev.success_msg, '記得帶水');
+    assert.equal(ev.time_tbd, 0, '團員揪團不能設定時間暫定');
     assert.equal(ev.end_time, '08:00');
     assert.equal(ev.manage, true);
     assert.equal(ev.meetupOwner, true);

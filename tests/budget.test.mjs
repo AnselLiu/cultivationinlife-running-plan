@@ -369,6 +369,51 @@ test('大量輸入：攜伴也佔名額、200 位候補（攜伴 0–3 位），
   assert.deepEqual(await violations(), []);
 });
 
+test('大量輸入：索票 200 位候補（1–4 張），調高總張數、取消遞補、LINE 名單、統計、CSV 都在額度內', async () => {
+  const id = ok50(await call('t_chair', '/events', { method: 'POST', body: evBody({ kind: 'claim', title: '額度索票', capacity: 10, guest_max: 3 }) }), '建立索票').id;
+  await call(null, `/dev/seed-bulk?waitguests=${id}&n=200`);
+  const seats = (ev) => ev.signups.filter((x) => x.status === 'in').reduce((n, x) => n + 1 + (x.guests || 0), 0);
+  // 總張數 10 → 60：每 4 位（1、2、3、4 張）10 張，前 24 位剛好 60 張
+  const cur = (await call('t_chair', `/events/${id}`)).json;
+  assert.equal(cur.count_guests, 1);
+  ok50(await call('t_chair', `/events/${id}`, { method: 'PUT', body: { ...evBody({ kind: 'claim', title: '額度索票', capacity: 60, guest_max: 3 }), date: cur.date } }), '調高總張數');
+  let ev = (await call('t_chair', `/events/${id}`)).json;
+  assert.equal(seats(ev), 60);
+  assert.deepEqual(ev.signups.filter((x) => x.status === 'in').map((x) => x.member_id).sort(), bids(0, 24));
+  // b_0003（4 張）取消：b_0024（1）、b_0025（2）遞補，b_0026（3）、b_0027（4）不夠跳過，b_0028（1）補滿
+  ok50(await call('b_0003', `/events/${id}/signup`, { method: 'DELETE' }), '取消遞補');
+  delete cookies.b_0003;
+  ev = (await call('t_chair', `/events/${id}`)).json;
+  assert.equal(seats(ev), 60);
+  const roster = ok50(await call('t_chair', `/events/${id}/roster`), 'LINE 名單').text.split('\n');
+  assert.equal(roster.at(-1), '共 60 張／上限 60 張，候補 436 張');
+  const s = ok50(await call('t_chair', `/events/${id}/stats`), '統計');
+  assert.deepEqual([s.total.seats, s.total.waitSeats, s.seatsLeft], [60, 436, 0]);
+  const csv = await call('t_chair', `/events/${id}/export.csv`);
+  assert.equal(csv.status, 200);
+  assert.ok(subOf(csv) <= 50, `CSV 用了 ${subOf(csv)} 個子請求`);
+  assert.ok(csv.text.split('\n')[0].includes('"張數","領票"'));
+  assert.deepEqual(await violations(), []);
+});
+
+test('大量輸入：200 人重新確認（發布、統計、提醒、回覆取消與遞補、活動頁）都在額度內', async () => {
+  const id = ok50(await call('t_chair', '/events', { method: 'POST', body: evBody({ title: '額度重新確認', capacity: 5 }) }), '建立活動').id;
+  await call(null, `/dev/seed-bulk?waitguests=${id}&n=200`);
+  const cur = (await call('t_chair', `/events/${id}`)).json;
+  ok50(await call('t_chair', `/events/${id}`, { method: 'PUT', body: { ...evBody({ title: '額度重新確認', capacity: 10 }), date: cur.date } }), '調高名額');
+  const n = ok50(await call('t_chair', `/events/${id}/notice`, { method: 'POST', body: { type: 'time', gather_time: '07:00', reconfirm: true } }), '發布並要求確認');
+  assert.equal(n.reconfirm, 200);
+  assert.equal(ok50(await call('t_chair', `/events/${id}/stats`), '統計').total.unconfirmed, 200);
+  assert.equal(ok50(await call('t_chair', `/events/${id}/nudge`, { method: 'POST' }), '提醒未確認').count, 200);
+  // 正取 b_0003 回覆取消：異動後取消＋遞補
+  assert.equal(ok50(await call('b_0003', `/events/${id}/reconfirm`, { method: 'POST', body: { answer: 'no' } }), '回覆取消').was, 'in');
+  delete cookies.b_0003;
+  const ev = ok50(await call('t_chair', `/events/${id}`), '活動頁（主辦）');
+  assert.equal(ev.unconfirmed, 199);
+  assert.equal(ev.signups.filter((x) => x.status === 'in').length, 10);
+  assert.deepEqual(await violations(), []);
+});
+
 test('大量輸入：國定假日匯入（假資料 365 天）在 16 個子請求以內；主團設定 300 人', async () => {
   const r = await call('t_chair', '/holidays/import', { method: 'POST', body: { year: 2031 } });
   assert.equal(r.status, 200, r.text);
