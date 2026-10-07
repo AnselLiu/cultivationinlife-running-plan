@@ -708,6 +708,29 @@ fieldset.group legend{font-size:13px;font-weight:700;color:var(--ink-2);padding:
 @media (min-width:600px){.kpis > .kpi:nth-child(n+5):last-child:nth-child(odd){grid-column:auto}.kpis:has(> .kpi:nth-child(5):last-child){grid-template-columns:repeat(5,minmax(0,1fr))}.kpis:has(> .kpi:nth-child(6):last-child){grid-template-columns:repeat(3,minmax(0,1fr))}}
 .kpi{gap:2px;padding:14px 16px;align-content:start;grid-template-rows:1fr auto}
 .kpi b{font-size:30px;font-weight:700;letter-spacing:-.02em;line-height:1.1}
+/* 推薦族譜（管理後台 #/admin/tree）：手機一欄；搜尋結果是整列可以點的按鈕，往上是一串推薦人，往下是可以收合的樹；375px 不能水平捲動 */
+.refq{display:flex;gap:8px;align-items:center}
+.refq input{flex:1;min-width:0}
+.reflist .r{grid-template-columns:minmax(0,1fr) auto;width:100%;min-height:44px;margin:0;text-align:start;background:none;border:0;border-bottom:1px solid var(--stroke);color:inherit;font:inherit;cursor:pointer}
+.reflist .r:last-child{border-bottom:0}
+.reflist .r > span{min-width:0;overflow-wrap:anywhere}
+.reflist .r .pill{margin:4px 6px 0 0}
+.reflist .r.rpick{grid-template-columns:32px minmax(0,1fr);cursor:default}
+.reflist label.r.rpick{cursor:pointer}
+.reflist .r.rpick input[type=radio]{width:20px;height:20px;margin:0;justify-self:center;accent-color:var(--accent)}
+.refup{display:grid;gap:6px}
+.refup .r{grid-template-columns:auto minmax(0,1fr) auto;border-bottom:0;padding-block:2px;border-inline-start:2px solid var(--stroke);padding-inline-start:10px}
+.refup .tname{min-width:0;min-height:44px;padding:0;text-align:start;background:none;border:0;color:inherit;font:inherit;cursor:pointer;overflow-wrap:anywhere}
+.refup .tlink{min-height:44px;display:inline-flex;align-items:center;font-size:14px;white-space:nowrap}
+/* 樹：每一層往右縮 12px（巢狀的 details 累加，伺服器最多給 3 層，最深縮 24px）；名字太長就省略 */
+.reftree{display:grid}
+.reftree .tnode .tnode{padding-inline-start:12px;border-inline-start:1px solid var(--stroke);margin-inline-start:4px}
+.reftree .tnode > summary,.reftree .tleaf{display:flex;gap:8px;align-items:center;min-height:44px;min-width:0}
+.reftree .tnode b,.reftree .tnode [translate=no]{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.reftree .tnode .tiny:not([translate]),.reftree .tnode .pill{flex:none}
+.reftree .tdepth{flex:none}
+.reftree .tmore{min-height:44px;padding:0 4px;font-size:14px}
+.reffocus{gap:8px}
 .statgrid{display:grid;gap:12px}
 @media (min-width:860px){.statgrid{grid-template-columns:1fr 1fr;align-items:start}}
 .bars{display:grid;gap:9px}
