@@ -1183,6 +1183,15 @@ details.group[open] > summary{margin-bottom:2px}
 .itr > b.num{grid-row:1/3;grid-column:2;font-size:22px}
 .payrep{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:4px;font-size:13px;color:#B25E00}
 .pill.buy{background:color-mix(in srgb,#AF52DE 14%,transparent);color:#8E3BB8}
+.pill.claim{background:color-mix(in srgb,#1E8FA3 14%,transparent);color:#146C7B}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .pill.claim{color:#6FD3E3}}
+:root[data-theme="dark"] .pill.claim{color:#6FD3E3}
+/* 時間暫定：「（暫定）」標示稍微加粗；活動有異動、請已報名的人重新確認的卡片（黃色細框＋提醒圖示，文字對比跟一般卡片一樣） */
+.tbdtag{font-weight:650}
+.rcbanner{border:1.5px solid color-mix(in srgb,var(--warn) 45%,transparent)}
+.rcbanner h2{display:flex;align-items:center;gap:8px;margin:0}
+.rcbanner h2 svg{color:var(--warn);flex:none}
+.rcbanner .row .btn{min-height:44px}
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .ql.off{color:#5BD07A}:root:not([data-theme="light"]) .payrep{color:#FFB547}}
 :root[data-theme="dark"] .ql.off{color:#5BD07A}:root[data-theme="dark"] .payrep{color:#FFB547}
 
