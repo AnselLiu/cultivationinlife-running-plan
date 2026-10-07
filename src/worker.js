@@ -13,7 +13,7 @@ import { hourOf } from '../public/wxrule.js';
 import { BADGES, earned, weeksOf } from '../public/badges.js';
 import { clubWeekOf, cycleOf, weekIndexOf, RACE_ISO, logFloor } from '../public/plan.js';
 import { CATS, isCat, MUTABLE } from '../public/notif-cats.js';
-import { tpNow, shiftDays, daysBetween, evStart, signupEnd, signupState, STATE_TEXT, tpText, SIGNUP_DEFAULTS, windowError, isStamp } from '../public/signup-window.js';
+import { tpNow, shiftDays, daysBetween, evStart, signupEnd, signupState, STATE_TEXT, tpText, SIGNUP_DEFAULTS, windowError, isStamp, evPhase, PHASE_LABEL } from '../public/signup-window.js';
 import * as Cams from './cams.js';
 import * as Rest from './rest.js';
 import { fold, b64bytes } from './ics.js';
@@ -38,6 +38,16 @@ const SEC_HEADERS = {
   'strict-transport-security': 'max-age=31536000; includeSubDomains',
   'x-frame-options': 'DENY',
   'cross-origin-resource-policy': 'same-origin',
+};
+// 靜態檔的安全標頭（public/_headers 的 /*）：Worker 回的頁面（分享連結 /e/:id）要一模一樣，tests/api.test.mjs 比對兩邊；
+//   CSP 寫在 index.html 的 <meta>（含 upgrade-insecure-requests），分享連結頁原樣保留
+const PAGE_HEADERS = {
+  'x-content-type-options': 'nosniff',
+  'x-frame-options': 'DENY',
+  'referrer-policy': 'strict-origin-when-cross-origin',
+  'strict-transport-security': 'max-age=31536000; includeSubDomains',
+  'permissions-policy': 'camera=(self), geolocation=(self), screen-wake-lock=(self), microphone=(), payment=(), usb=(), interest-cohort=()',
+  'cross-origin-opener-policy': 'same-origin',
 };
 const json = (data, status = 200, headers = {}) => new Response(JSON.stringify(data), { status,
   headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', ...SEC_HEADERS, ...headers } });
@@ -526,6 +536,21 @@ const maskId = (v) => (v ? `${v.slice(0, 2)}${'*'.repeat(Math.max(0, v.length - 
 
 // ---- 活動 ----
 const eventCols = 'id, kind, title, date, gather_time, end_time, place, lead, note, week_no, plan_text, capacity, signup_open, deadline, status, created_at, fee, guest_max, meal_options, link_url, link_label, team_id, questions, visibility, created_by, options, group_reg, items, pricing, pay_info, min_qty, series_id, spot_id, route_id, address, address_zip, signup_start, require_approval, notify_signup';
+
+// 分享連結的公開資料：沒登入的預覽（/api/public/e/:id）與連結預覽卡（/e/:id）共用，一句查詢
+//   私密分團的活動不給；邀請制要帶正確的邀請代碼（不然跟不存在一樣回 null）
+//   只有標題、日期與開始結束時間、地點名稱、類型、分團、報名期間與狀態、滿了沒（full）；不含名字、人數、費用、地址
+//   名額算法跟報名一樣：活動勾了「攜伴也佔名額」就算本人＋攜伴
+async function publicEvent(env, id, tok) {
+  const e = await env.DB.prepare(`SELECT e.title, e.date, e.gather_time, e.end_time, e.place, e.kind, e.status, e.visibility, e.invite_token, e.signup_start, e.deadline, e.require_approval, e.signup_open,
+      t.name AS team, t.private, e.capacity > 0 AND (SELECT COALESCE(SUM(CASE WHEN e.count_guests = 1 THEN 1 + COALESCE(s.guests, 0) ELSE 1 END), 0)
+        FROM signups s WHERE s.event_id = e.id AND s.status = 'in') >= e.capacity AS full
+    FROM events e LEFT JOIN teams t ON t.id = e.team_id WHERE e.id = ?`).bind(id).first();
+  const okInvite = e?.visibility === 'invite' && !!e.invite_token && tok === e.invite_token;
+  if (!e || (e.visibility === 'invite' ? !okInvite : e.private)) return null;
+  const { private: _p, invite_token: _t, full, ...pub } = e;
+  return { ...pub, id, full: !!full };
+}
 
 // 取消方式（signups.cancel_by）：CSV 與統計頁用
 const CANCEL_BY = { self: '本人取消', organizer: '主辦移出', rejected: '主辦婉拒', uninvite: '取消邀請', expired: '申請逾期' };
@@ -2064,17 +2089,11 @@ const api = (async function api(req, env, path, method) {
       ...(rows.length > 400 ? { more: { after: `${last.at}|${last.id}` } } : {}) });
   }
 
-  // 分享連結的預覽：還沒登入的人點進來，先看到是什麼活動（私密分團的活動不顯示）
+  // 分享連結的預覽：還沒登入的人點進來，先看到是什麼活動與報名狀態（私密分團、邀請制沒帶對代碼的不顯示；見 publicEvent）
   const mpv = path.match(/^\/api\/public\/e\/([\w-]{1,32})$/);
   if (mpv && method === 'GET') {
-    const e = await env.DB.prepare(`SELECT e.title, e.date, e.gather_time, e.place, e.kind, e.visibility, e.invite_token, e.signup_start, e.deadline, e.require_approval, e.signup_open, t.name AS team, t.private
-      FROM events e LEFT JOIN teams t ON t.id = e.team_id WHERE e.id = ?`).bind(mpv[1]).first();
-    // 邀請制：要帶正確的邀請代碼才看得到預覽
-    const tok = str(url0(req).searchParams.get('t'), 40);
-    const okInvite = e?.visibility === 'invite' && e.invite_token && tok === e.invite_token;
-    if (!e || (e.visibility === 'invite' ? !okInvite : e.private)) return fail(404, '找不到這個活動');
-    const { private: _, invite_token: _t, ...pub2 } = e;
-    return json({ event: pub2 });
+    const e = await publicEvent(env, mpv[1], str(url0(req).searchParams.get('t'), 40));
+    return e ? json({ event: e }) : fail(404, '找不到這個活動');
   }
 
   // 開啟 App：boot=1 時順便帶回首頁要用的活動與今天的訓練紀錄，少兩輪等待
@@ -5710,6 +5729,53 @@ async function handle(req, env, ctx, url, path) {
   }
 }
 
+// ---- 分享連結 /e/:id（wrangler.jsonc 的 run_worker_first）----
+//   LINE、Facebook 等抓連結預覽時看得到活動卡片：標題、日期與開始結束時間、地點名稱、狀態，圖片是類型的固定圖（public/og/<kind>.png）
+//   不含名字、人數、費用、地址。畫面就是首頁（public/index.html），前端開機時轉成 /#/e/:id；裝了 Service Worker 的直接用存好的首頁
+//   看不到的活動（私密分團、邀請制沒帶對的代碼、不存在）一律回沒改過的首頁、200：不能拿來試哪些活動代碼存在
+//   標頭：安全標頭跟靜態檔一模一樣（PAGE_HEADERS）、可以快取 5 分鐘；D1 一句（publicEvent），讀首頁是 ASSETS（不算子請求，見 budget.js）
+const SITE = '耕跑團';
+const escAttr = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+const mdw = (d) => `${Number(d.slice(5, 7))}/${Number(d.slice(8, 10))}（${'日一二三四五六'[new Date(`${d}T00:00:00Z`).getUTCDay()]}）`;
+// 預覽卡的說明：10/9（四）19:30–21:00・臺北田徑場・報名中
+function shareText(ev, now = tpNow()) {
+  const hm = (t) => /^\d{2}:\d{2}$/.test(t || '');
+  const time = ev.kind !== 'survey' && hm(ev.gather_time) ? `${ev.gather_time}${hm(ev.end_time) ? `–${ev.end_time}` : ''}` : '';
+  return [`${mdw(ev.date)}${time}`, ev.place, PHASE_LABEL[evPhase(ev, now, ev.full)](ev)].filter(Boolean).join('・');
+}
+function sharePage(page, ev, url) {
+  const headers = { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'public, max-age=300', ...PAGE_HEADERS };
+  if (!ev) return new Response(page.body, { status: 200, headers });
+  const desc = shareText(ev), img = `${url.origin}/og/${KINDS.includes(ev.kind) ? ev.kind : 'other'}.png`;
+  const prop = [['og:type', 'website'], ['og:site_name', SITE], ['og:locale', 'zh_TW'], ['og:title', ev.title], ['og:description', desc],
+    ['og:url', `${url.origin}/e/${ev.id}`], ['og:image', img], ['og:image:width', '1200'], ['og:image:height', '630']];
+  const name = [['description', desc], ['robots', 'noindex'], ['twitter:card', 'summary_large_image'], ['twitter:title', ev.title], ['twitter:description', desc], ['twitter:image', img]];
+  const tags = [...prop.map(([k, v]) => `<meta property="${k}" content="${escAttr(v)}">`), ...name.map(([k, v]) => `<meta name="${k}" content="${escAttr(v)}">`)].join('\n');
+  const out = new HTMLRewriter()
+    .on('title', { element: (el) => { el.setInnerContent(`${ev.title}｜${SITE}`); } })
+    .on('meta[name="description"]', { element: (el) => { el.remove(); } })
+    .on('head', { element: (el) => { el.append(`${tags}\n`, { html: true }); } })
+    .transform(page);
+  return new Response(out.body, { status: 200, headers });
+}
+async function shareLink(req, env, ctx, url, path) {
+  const m = path.match(/^\/e\/([\w-]{1,32})\/?$/);
+  if (!m || (req.method !== 'GET' && req.method !== 'HEAD')) return env.ASSETS.fetch(req);
+  const b = new Budget(env, { kind: 'request', name: 'GET /e/:id' }), e = invocationEnv(env, ctx, b);
+  let res;
+  try {
+    const [page, ev] = await Promise.all([env.ASSETS.fetch(new Request(new URL('/', url))),
+      publicEvent(e, m[1], str(url.searchParams.get('t'), 40)).catch((x) => { console.error('share', x); return null; })]);
+    res = page.ok ? sharePage(page, ev, url) : page;
+  } finally {
+    ctx.waitUntil(settled(e).then(() => finishBudget(e, b)));
+  }
+  if (env.DEV_LOGIN === '1' && LOCAL.includes(url.hostname)) {
+    try { const x = b.summary(); res.headers.set('x-budget', `d1=${x.d1};kv=${x.kv};fetch=${x.fetch};rpc=${x.rpc};sub=${x.sub};rows=${x.rows}`); } catch {}
+  }
+  return res;
+}
+
 export default {
   async scheduled(event, env, ctx) {
     const b = new Budget(env, { kind: 'cron', name: 'hourly' }), e = invocationEnv(env, ctx, b);
@@ -5721,6 +5787,7 @@ export default {
   async fetch(req, env, ctx) {
     const url = new URL(req.url);
     const path = decodeURIComponent(url.pathname);
+    if (path.startsWith('/e/')) return shareLink(req, env, ctx, url, path);
     if (!path.startsWith('/api/')) return env.ASSETS.fetch(req);
     // 資安金鑰沒設定就不提供 API（避免用預設值雜湊 IP、稽核紀錄沒有簽章）
     if ((!env.HASH_SALT || !env.AUDIT_KEY) && !LOCAL.includes(url.hostname)) return new Response(JSON.stringify({ error: '系統設定不完整，請聯絡管理員' }), { status: 503, headers: { 'content-type': 'application/json' } });

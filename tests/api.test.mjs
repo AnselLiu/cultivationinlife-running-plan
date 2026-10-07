@@ -103,6 +103,119 @@ test('邀請制：只有受邀的人看得到，移出後立刻看不到', async
   assert.equal((await call('t_other', `/events/${id}`)).status, 200);
 });
 
+// ---- 分享連結 /e/:id：連結預覽卡（LINE 等）＋沒登入的預覽 ----
+const page = (p) => fetch(`${BASE}${p}`, { redirect: 'manual' });
+const ogOf = (html, k) => html.match(new RegExp(`<meta (?:property|name)="${k.replace(/[.:]/g, '\\$&')}" content="([^"]*)">`))?.[1] ?? null;
+const cspOf = (html) => html.match(/<meta http-equiv="Content-Security-Policy" content="([^"]+)">/)?.[1];
+const SEEDED = ['測試理事長', '測試行政', '測試監事', '測試教練', '測試團長', '測試跑友', '路人跑友'];
+// public/_headers 的 /* 區塊（靜態檔的安全標頭）
+async function staticHeaders() {
+  const { readFileSync } = await import('node:fs');
+  const lines = readFileSync(new URL('../public/_headers', import.meta.url), 'utf8').split('\n');
+  const out = {};
+  for (let i = lines.indexOf('/*') + 1; i < lines.length && /^\s+\S/.test(lines[i]); i++) {
+    const [k, ...v] = lines[i].trim().split(':');
+    out[k.trim().toLowerCase()] = v.join(':').trim();
+  }
+  return out;
+}
+const WD = '日一二三四五六', mdw = (d) => `${Number(d.slice(5, 7))}/${Number(d.slice(8, 10))}（${WD[new Date(`${d}T00:00:00Z`).getUTCDay()]}）`;
+
+test('分享連結 /e/:id：公開活動有預覽卡（標題、日期時間、地點名稱、狀態、類型圖），不含名字、人數、費用、地址', async () => {
+  const d = plus(6);
+  const ev = (await call('t_chair', '/events', { method: 'POST', body: { kind: 'long', title: '分享卡 <LSD> & "長跑"', date: d, gather_time: '06:00', end_time: '09:00',
+    place: '大佳河濱公園', address: '台北市中山區濱江街 5 號', fee: 350, capacity: 1, notify: false } })).json;
+  const r = await page(`/e/${ev.id}?openExternalBrowser=1`);
+  assert.equal(r.status, 200);
+  assert.match(r.headers.get('content-type'), /^text\/html/);
+  const html = await r.text();
+  assert.match(html, /<title>分享卡 &lt;LSD&gt; &amp; "長跑"｜耕跑團<\/title>/, '標題要跳脫');
+  assert.equal(ogOf(html, 'og:title'), '分享卡 &lt;LSD&gt; &amp; &quot;長跑&quot;');
+  assert.equal(ogOf(html, 'og:description'), `${mdw(d)}06:00–09:00・大佳河濱公園・報名中`);
+  assert.equal(ogOf(html, 'description'), ogOf(html, 'og:description'));
+  assert.equal(html.match(/<meta name="description"/g).length, 1, '原本首頁的說明換掉，不會有兩個');
+  assert.equal(ogOf(html, 'og:image'), `${BASE}/og/long.png`);
+  assert.equal(ogOf(html, 'og:url'), `${BASE}/e/${ev.id}`, '網址不帶其他參數');
+  assert.equal(ogOf(html, 'twitter:card'), 'summary_large_image');
+  assert.equal(ogOf(html, 'robots'), 'noindex');
+  for (const x of [...SEEDED, '濱江街', '350', '名額']) assert.ok(!html.includes(x), `不能出現：${x}`);
+  // 額滿：狀態變成「額滿可候補」，人數仍然不出現
+  assert.equal((await call('t_coach', `/events/${ev.id}/signup`, { method: 'POST', body: {} })).json.status, 'in');
+  const full = await (await page(`/e/${ev.id}`)).text();
+  assert.equal(ogOf(full, 'og:description'), `${mdw(d)}06:00–09:00・大佳河濱公園・額滿可候補`);
+  assert.ok(!SEEDED.some((x) => full.includes(x)), '報名的人的名字不能出現');
+  // 沒登入的預覽 API：同一份公開資料，只多「滿了沒」，沒有人數
+  const pub = (await call(null, `/public/e/${ev.id}`)).json.event;
+  assert.equal(pub.full, true);
+  assert.equal(pub.status, 'open');
+  assert.equal(pub.end_time, '09:00');
+  for (const k of ['capacity', 'signed', 'signups', 'fee', 'address', 'invite_token', 'private', 'note']) assert.ok(!(k in pub), `預覽 API 不能有 ${k}`);
+  assert.ok(!SEEDED.some((x) => JSON.stringify(pub).includes(x)));
+  // 取消：已取消
+  assert.equal((await call('t_chair', `/events/${ev.id}/notice`, { method: 'POST', body: { type: 'cancel', message: '下雨' } })).status, 200);
+  assert.equal(ogOf(await (await page(`/e/${ev.id}`)).text(), 'og:description'), `${mdw(d)}06:00–09:00・大佳河濱公園・已取消`);
+  assert.equal((await call(null, `/public/e/${ev.id}`)).json.event.status, 'cancelled');
+});
+
+test('分享連結 /e/:id：私密分團、邀請制沒帶對代碼、不存在的活動，一律回沒改過的首頁（200）；安全標頭跟靜態檔一樣、可快取 5 分鐘、D1 一句', async () => {
+  const home = await (await page('/')).text();
+  const team = await call('t_chair', '/teams', { method: 'POST', body: { name: '私密分享團', private: true } });
+  await call('t_chair', `/teams/${team.json.id}`, { method: 'PUT', body: { name: '私密分享團', private: true } });
+  const priv = (await call('t_chair', '/events', { method: 'POST', body: { kind: 'core', title: '私密分享課', date: plus(4), team_id: team.json.id, notify: false } })).json;
+  const inv = (await call('t_chair', '/events', { method: 'POST', body: { kind: 'party', title: '邀請制分享餐敘', date: plus(5), gather_time: '18:30', place: '某餐廳', visibility: 'invite', notify: false } })).json;
+  const tok = (await call('t_chair', `/events/${inv.id}/invite-link`, { method: 'POST', body: { on: true } })).json.token;
+  const want = await staticHeaders();
+  assert.ok(Object.keys(want).length >= 5, JSON.stringify(want));
+  const generic = [`/e/${priv.id}`, `/e/${inv.id}`, `/e/${inv.id}?t=nope`, '/e/nosuchevent1', '/e/'.padEnd(35, 'x')];
+  for (const p of [...generic, `/e/${inv.id}?t=${tok}`]) {
+    const r = await page(p);
+    assert.equal(r.status, 200, p);
+    for (const [k, v] of Object.entries(want)) assert.equal(r.headers.get(k), v, `${p} 的 ${k} 要跟 public/_headers 一樣`);
+    assert.equal(r.headers.get('cache-control'), 'public, max-age=300', p);
+    const html = await r.text();
+    assert.equal(cspOf(html), cspOf(home), `${p} 的 CSP（index.html 的 <meta>）原樣保留`);
+    assert.match(cspOf(html), /upgrade-insecure-requests/);
+    if (generic.includes(p)) {
+      assert.equal(html, home, `${p} 要回沒改過的首頁`);
+      assert.ok(!/私密分享課|邀請制分享餐敘|og:/.test(html), p);
+    }
+  }
+  // 首頁本身（靜態檔）的標頭也一樣：兩邊不能漂移
+  const h = await page('/');
+  for (const [k, v] of Object.entries(want)) if (h.headers.get(k) != null) assert.equal(h.headers.get(k), v, `首頁的 ${k}`);
+  // 邀請制帶對代碼：看得到卡片，網址不帶代碼
+  const ok = await (await page(`/e/${inv.id}?t=${tok}`)).text();
+  assert.equal(ogOf(ok, 'og:title'), '邀請制分享餐敘');
+  assert.equal(ogOf(ok, 'og:image'), `${BASE}/og/party.png`);
+  assert.equal(ogOf(ok, 'og:url'), `${BASE}/e/${inv.id}`);
+  assert.ok(!ok.includes(tok), '邀請代碼不出現在頁面上');
+  // 沒登入的預覽 API 一樣的規則
+  assert.equal((await call(null, `/public/e/${inv.id}`)).status, 404);
+  assert.equal((await call(null, `/public/e/${inv.id}?t=${tok}`)).json.event.title, '邀請制分享餐敘');
+  assert.equal((await call(null, `/public/e/${priv.id}`)).status, 404);
+  // 執行額度：D1 一句；讀首頁走 ASSETS 不算子請求
+  const b = (await page(`/e/${inv.id}?t=${tok}`)).headers.get('x-budget');
+  assert.match(b || '', /^d1=1;kv=0;fetch=0;rpc=0;sub=1;/, b);
+  // 其他 /e/ 底下的網址照舊回靜態檔（單頁 App）
+  assert.equal((await page(`/e/${inv.id}/attend`)).status, 200);
+});
+
+test('連結預覽圖：每個活動類型都有 public/og/<kind>.png（1200×630、小於 100 KB），伺服器回得到', async () => {
+  const { readFileSync, statSync } = await import('node:fs');
+  const kinds = JSON.parse(readFileSync(new URL('../src/worker.js', import.meta.url), 'utf8').match(/const KINDS = (\[[^\]]+\]);/)[1].replace(/'/g, '"'));
+  assert.ok(kinds.length >= 8);
+  for (const k of kinds) {
+    const f = new URL(`../public/og/${k}.png`, import.meta.url), buf = readFileSync(f);
+    assert.equal(buf.subarray(1, 4).toString(), 'PNG', k);
+    assert.deepEqual([buf.readUInt32BE(16), buf.readUInt32BE(20)], [1200, 630], `${k}.png 尺寸`);
+    assert.ok(statSync(f).size < 100 * 1024, `${k}.png 要小於 100 KB`);
+    const r = await page(`/og/${k}.png`);
+    assert.equal(r.status, 200, k);
+    assert.equal(r.headers.get('content-type'), 'image/png');
+    await r.arrayBuffer();
+  }
+});
+
 test('問卷：必填與選項驗證；CSV 擋公式注入', async () => {
   const ev = await call('t_chair', '/events', { method: 'POST', body: { kind: 'other', title: '團服調查', date: plus(6), notify: false,
     questions: [{ type: 'single', label: '尺寸', options: ['S', 'M'], required: true }, { type: 'text', label: '備註' }] } });

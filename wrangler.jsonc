@@ -8,8 +8,9 @@
     "directory": "public",
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
-    // /api/* 一定先進 Worker，其他路徑直接回靜態檔
-    "run_worker_first": ["/api/*"]
+    // /api/* 一定先進 Worker；/e/* 是分享連結（Worker 幫 LINE 等的連結預覽加上活動摘要，畫面是首頁）；其他路徑直接回靜態檔
+    //   assets 是可繼承的設定，env.staging 沒有自己的 assets，用的就是這裡（不要只在一邊加）
+    "run_worker_first": ["/api/*", "/e/*"]
   },
   "d1_databases": [
     {
@@ -37,6 +38,7 @@
   "env": {
     "staging": {
       "name": "cil-run-staging",
+      // assets（含 run_worker_first 的 /api/*、/e/*）沿用上面的設定
       "d1_databases": [
         { "binding": "DB", "database_name": "cil-run-staging", "database_id": "08b71fd7-6681-4363-a670-558e3edf8e97", "migrations_dir": "migrations" }
       ],
