@@ -206,7 +206,7 @@ export async function eventView(id) {
       const r = await apiAll(`/events/${ev.id}/bulk`, { method: 'POST', body: { names: f.names.value, action: f.action.value } }, ['added']);
       // 名字標 translate="no"：英文模式只翻固定的字，不會因為名字是中文就整句保留中文
       const nm = (list) => list.map((x) => `<bdi translate="no">${esc(x)}</bdi>`).join('、');
-      $('#bulkOut').innerHTML = `完成 ${r.added} 人。${r.more ? `<br>還有 ${r.more.names.length} 人沒處理完，請再按一次` : ''}${r.unmatched.length ? `<br>找不到：${nm(r.unmatched)}` : ''}${r.ambiguous.length ? `<br>同名需要手動處理：${nm(r.ambiguous)}` : ''}${r.failed.length ? `<br>沒報成：${nm(r.failed)}` : ''}`;
+      $('#bulkOut').innerHTML = `完成 ${r.added} 人。${r.more ? `<br>還有 ${r.more.names.length} 人沒處理完，請再按一次` : ''}${r.unmatched.length ? `<br>找不到：${nm(r.unmatched)}` : ''}${r.ambiguous.length ? `<br>同名需要手動處理：${nm(r.ambiguous)}` : ''}${r.failed.length ? `<br>沒報成：${nm(r.failed)}` : ''}${r.already?.length ? `<br>已經在名單上，沒有改動：${nm(r.already)}` : ''}`;
       if (r.added) { toast(`已處理 ${r.added} 人`); setTimeout(() => eventView(id), 1200); }
     } catch (err) { toast(err.message); }
   });

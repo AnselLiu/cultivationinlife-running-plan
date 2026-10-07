@@ -1271,6 +1271,26 @@ test('移出（可再報名）：一樣通知本人、空位遞補，但本人�
   assert.equal((await signup('t_staff', id)).json.status, 'wait');
 });
 
+test('報名姓名由伺服器決定（送來的 name 不收）；代為報名跳過已經在名單上的人，不蓋掉本人的備註與問卷', async () => {
+  const id = await mkEvent({ title: '姓名與代報', questions: [{ type: 'text', label: '想法' }] });
+  assert.equal((await signup('t_super', id, { name: '假名', note: '自己的備註', answers: { q1: '好' } })).json.status, 'in');
+  const g = (await call('t_other', `/events/${id}`)).json;
+  assert.equal(g.signups.find((x) => x.member_id === 't_super').name, '測試監事');
+  assert.ok(!JSON.stringify(g).includes('假名'), '公開名單不會出現別的名字');
+  assert.ok(!(await call('t_chair', `/events/${id}/roster`)).json.text.includes('假名'));
+  const bk = await call('t_chair', `/events/${id}/bulk`, { method: 'POST', body: { action: 'signup', names: ['測試監事', '測試行政'] } });
+  assert.equal(bk.status, 200, bk.text);
+  assert.equal(bk.json.added, 1);
+  assert.deepEqual(bk.json.already, ['測試監事']);
+  const mine = (await call('t_super', `/events/${id}`)).json;
+  assert.equal(mine.myNote, '自己的備註', '代為報名沒有蓋掉備註');
+  assert.deepEqual(mine.myAnswers, { q1: '好' });
+  assert.ok(!(await notesFor('t_super', id)).some((n) => n.title.startsWith('已幫你報名')), '已在名單上的人不通知');
+  assert.ok((await notesFor('t_staff', id)).some((n) => n.title.startsWith('已幫你報名')));
+  const au = (await call('t_chair', `/audit?from=${plus(-1)}&to=${plus(1)}&action=event.bulk&target=${id}`)).json.items;
+  assert.ok(au.some((x) => (x.detail || '').includes('已在名單 1')), JSON.stringify(au));
+});
+
 test('報名通知：開關控制、狀態沒變不重複、代為報名只通知真的報上的人', async () => {
   const id = await mkEvent({ title: '通知測試', capacity: 1, notify_signup: true, fee: 300 });
   assert.equal((await signup('t_lead', id)).json.status, 'in');

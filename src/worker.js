@@ -640,7 +640,8 @@ async function eventWithSignups(env, id) {
 // 只有 promote() 能把 wait 改成 in。
 // by：幹部代為報名（member 物件）；manager：本人是這場的主辦幹部（本人報名＝核准）；req：寫稽核用
 async function doSignup(env, ev, member, b, { by = null, manager = false, req = null } = {}) {
-  const name = str(b.name, 40) || member.name;
+  // 名單上的姓名一律用帳號的姓名（伺服器決定），不收用戶端送來的 name：不能用別的名字出現在公開名單上
+  const name = str(member.name, 40);
   const dist = b.dist === 'hm' ? 'hm' : member.dist;
   const grp = (str(b.grp, 2) || member.grp).toUpperCase();
   if (!validGroup(dist, grp)) return fail(400, '組別不正確');
@@ -2844,7 +2845,7 @@ const api = (async function api(req, env, path, method) {
       const names = [...new Set((Array.isArray(b.names) ? b.names : String(b.names || '').split(/[\n,，、\t]+/)).map((x) => str(x, 40)).filter(Boolean))].slice(0, 300);
       const action = b.action === 'invite' ? 'invite' : 'signup';
       if (!names.length) return fail(400, '請貼上姓名');
-      const matched = [], ambiguous = [], unmatched = [], failed = [], rest = [];
+      const matched = [], ambiguous = [], unmatched = [], failed = [], rest = [], already = [];
       // 名字比對一句（json_each JOIN members）
       const hits = (await env.DB.prepare('SELECT j.value AS q_name, m.* FROM json_each(?) j JOIN members m ON m.name = j.value OR m.nickname = j.value').bind(JSON.stringify(names)).all()).results;
       const byName = new Map(), seen = new Set();
@@ -2861,7 +2862,7 @@ const api = (async function api(req, env, path, method) {
         added = fresh.length;
         if (fresh.length) await notify(env, fresh, 'event', { title: `你受邀參加：${ev.title}`, body: `${ev.date}${ev.gather_time ? ` ${ev.gather_time}` : ''}　${ev.place || ''}`, url: `/#/e/${ev.id}`, ref: `e:${ev.id}`, ...evTiming(env, ev) });
       } else {
-        // 只通知這次報名成功的人；原本就已報名（含候補）的不再通知，候補的人用候補文案
+        // 原本就是正取或候補的跳過（不改內容、不通知）；只通知這次報名成功的人，候補的人用候補文案
         const had = new Set((await env.DB.prepare(`SELECT member_id FROM signups WHERE event_id = ? AND status IN ('in','wait') AND member_id IN (SELECT value FROM json_each(?))`)
           .bind(ev.id, JSON.stringify(matched.map((m) => m.id))).all()).results.map((r) => r.member_id));
         const okIn = [], okWait = [];
@@ -2869,6 +2870,8 @@ const api = (async function api(req, env, path, method) {
         //   不夠就停，沒處理到的人放進 more.names，前端（apiAll）再送一次
         let per = 10;
         for (const m of matched) {
+          // 已經是正取或候補的不動：以前會用空白的報名內容蓋掉本人的備註、問卷、加購與攜伴
+          if (had.has(m.id)) { already.push(m.name); continue; }
           if (rest.length || !env.budget.room(per + notifyCost(okIn.length + okWait.length + 1) + 4)) { rest.push(m.q_name); continue; }
           const s0 = env.budget.sub;
           if (ev.visibility === 'invite') await env.DB.prepare("INSERT OR IGNORE INTO event_invites (event_id, member_id, invited_by, via) VALUES (?, ?, ?, 'manual')").bind(ev.id, m.id, member.id).run();
@@ -2876,7 +2879,7 @@ const api = (async function api(req, env, path, method) {
           if (!r.ok) { failed.push(`${m.name}（${(await r.json()).error}）`); continue; }
           added += 1;
           const st = (await r.json()).status;
-          if (!had.has(m.id)) (st === 'wait' ? okWait : okIn).push(m.id);
+          (st === 'wait' ? okWait : okIn).push(m.id);
           if (st === 'in') nIn++; else if (st === 'wait') nWait++;
           per = Math.max(per, env.budget.sub - s0 + 1);
         }
@@ -2884,9 +2887,9 @@ const api = (async function api(req, env, path, method) {
         if (okWait.length) await notify(env, okWait, 'signup', { title: `已幫你排入候補：${ev.title}`, body: '有人取消時會依序遞補，遞補成功會再通知你', url: `/#/e/${ev.id}`, ref: `e:${ev.id}` });
       }
       const outside = action === 'signup' && signupState(ev, tpNow()) !== 'open' ? '（期間外代報）' : '';
-      await audit(env, req, member, 'event.bulk', 'event', ev.id, `${action === 'invite' ? '邀請' : '代為報名'} ${added} 人${action === 'signup' ? `（正取 ${nIn}、候補 ${nWait}）` : ''}，找不到 ${unmatched.length}、同名 ${ambiguous.length}${outside}`);
+      await audit(env, req, member, 'event.bulk', 'event', ev.id, `${action === 'invite' ? '邀請' : '代為報名'} ${added} 人${action === 'signup' ? `（正取 ${nIn}、候補 ${nWait}）` : ''}，找不到 ${unmatched.length}、同名 ${ambiguous.length}${already.length ? `、已在名單 ${already.length}` : ''}${outside}`);
       if (rest.length) env.budget.stop('bulk:more');
-      return json({ added, matched: matched.filter((m) => !rest.includes(m.q_name)).map((m) => m.name), ambiguous, unmatched, failed, ...(rest.length ? { more: { names: rest } } : {}) });
+      return json({ added, matched: matched.filter((m) => !rest.includes(m.q_name)).map((m) => m.name), ambiguous, unmatched, failed, already, ...(rest.length ? { more: { names: rest } } : {}) });
     }
   }
 
