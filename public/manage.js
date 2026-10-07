@@ -330,6 +330,9 @@ const qRow = (q = {}) => `<div class="qrow" data-type="${q.type || 'single'}" da
 // ---------- 活動統計與問卷結果 ----------
 // 名單篩選：預設「全部」＝正取、候補、待審核
 const FILTERS = [['all', '全部'], ['in', '正取'], ['wait', '候補'], ['pending', '待審核'], ['rejected', '未通過'], ['cancel', '已取消']];
+const CANCEL_BY = { self: '本人取消', organizer: '主辦移出', rejected: '主辦婉拒', uninvite: '取消邀請', expired: '申請逾期' };
+// 伺服器的時間（UTC 'YYYY-MM-DD HH:MM:SS'）→ 台北「10/5 21:03」
+const tpAt = (ts) => (ts ? tpShort(new Date(Date.parse(`${ts.replace(' ', 'T')}Z`) + 8 * 3600e3).toISOString().slice(0, 16)) : '');
 async function statsView(id) {
   const st = await api(`/events/${id}/stats`);
   const t = st.total, survey = st.kind === 'survey';
@@ -347,7 +350,8 @@ async function statsView(id) {
       ${live && st.kind !== 'party' ? `<label class="attend" title="出席"><input type="checkbox" data-att="${esc(x.member_id)}" aria-label="出席：${esc(x.name)}" ${x.attended ? 'checked' : ''}><i>${IC.check}</i></label>` : '<span aria-hidden="true"></span>'}
       <span><b><span translate="no">${esc(x.name)}</span></b>${x.nickname ? ` <span class="tiny"><span translate="no">${esc(x.nickname)}</span></span>` : ''}${x.amount ? ` <span class="num tiny">${money2(x.amount)}</span>` : ''} ${STATUS_PILL[x.status] || ''}
         <span class="tiny" style="display:block">${[x.option && esc(x.option), ...itemText(x.items, st.items).map(esc), st.groupReg && (x.regOk ? '報名資料 OK' : '報名資料未提供'), x.guests && `攜伴 ${x.guests}`, x.paid_note && `<span translate="no">${esc(x.paid_note)}</span>`].filter(Boolean).join('・')}</span>
-        ${st.canReview ? `<span class="tiny" style="display:block">${ago(x.created_at)}報名${x.reviewedAt ? `・<span translate="no">${esc(x.reviewerName || '')}</span> ${x.status === 'rejected' ? '婉拒' : x.review === 'approved' ? '核准' : '處理'}・${ago(x.reviewedAt)}` : ''}${x.edited ? '・核准後有修改' : ''}${st.groupReg && !x.regComplete ? '・報名資料不完整' : ''}</span>` : ''}
+        ${st.canReview ? `<span class="tiny" style="display:block"><span title="${tpAt(x.created_at)}">${ago(x.created_at)}報名</span>${x.firstAt && x.firstAt !== x.created_at ? `・第一次報名 <span class="num">${tpAt(x.firstAt)}</span>` : ''}${x.reviewedAt ? `・<span translate="no">${esc(x.reviewerName || '')}</span> ${x.status === 'rejected' ? '婉拒' : x.review === 'approved' ? '核准' : '處理'}・${ago(x.reviewedAt)}` : ''}${x.edited ? '・核准後有修改' : ''}${st.groupReg && !x.regComplete ? '・報名資料不完整' : ''}</span>` : ''}
+        ${x.status === 'cancel' && x.cancelledAt ? `<span class="tiny" style="display:block">取消於 <span class="num">${tpAt(x.cancelledAt)}</span>・${CANCEL_BY[x.cancelBy] || '已取消'}</span>` : ''}
         ${x.note ? `<span class="tiny" style="display:block">備註：<span translate="no">${esc(x.note)}</span></span>` : ''}
         ${x.status === 'rejected' && x.reviewNote ? `<span class="tiny" style="display:block">原因：<span translate="no">${esc(x.reviewNote)}</span></span>` : ''}
         ${live && x.payReported && x.paid !== 'paid' ? `<span class="payrep">${PAY_METHOD[x.payMethod] || '已回報'}${x.payRef ? ` 後五碼 <b class="num"><span translate="no">${esc(x.payRef)}</span></b>` : ''}・${ago(x.payReported)} <button type="button" class="btn sm" data-confirm="${esc(x.member_id)}">確認收款</button></span>` : ''}

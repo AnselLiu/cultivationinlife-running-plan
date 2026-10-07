@@ -3,7 +3,7 @@
 
 -- 取消：最近一次取消的時間（UTC，datetime('now')）與方式；重新報名時兩欄清掉
 ALTER TABLE signups ADD COLUMN cancelled_at TEXT;
-ALTER TABLE signups ADD COLUMN cancel_by TEXT;          -- self 本人｜organizer 主辦移出或婉拒｜uninvite 取消邀請｜expired 申請逾期
+ALTER TABLE signups ADD COLUMN cancel_by TEXT;          -- self 本人｜organizer 主辦移出名單｜rejected 主辦婉拒申請｜uninvite 取消邀請｜expired 申請逾期
 -- 第一次報名時間：取消後重報 created_at 會重設成現在（排到最後），這欄不變
 ALTER TABLE signups ADD COLUMN first_at TEXT;
 UPDATE signups SET first_at = created_at WHERE first_at IS NULL;

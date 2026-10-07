@@ -1137,7 +1137,7 @@ test('名單不洩漏：非管理者的 GET、列表、統計、CSV 都看不到
   assert.equal((await call('t_coach', `/events/${id}/stats`)).status, 200);
 });
 
-test('備註只給主辦：公開名單、名單文字、座位查詢都沒有備註；本人看得到自己的，改報名內容帶回不會清掉；統計頁給審核與報到幹部', async () => {
+test('備註只給主辦：公開名單、名單文字、座位查詢都沒有備註；本人看得到自己的，改報名內容帶回不會清掉；統計頁與 CSV 有', async () => {
   const id = await mkEvent({ title: '備註測試' });
   assert.equal((await signup('t_runner', id, { note: '會晚 10 分鐘到' })).json.status, 'in');
   assert.equal((await signup('t_other', id, { note: '素食' })).json.status, 'in');
@@ -1154,7 +1154,7 @@ test('備註只給主辦：公開名單、名單文字、座位查詢都沒有�
   assert.equal((await call('t_staff', `/events/${id}`)).json.myNote, null, '沒報名的人沒有 myNote');
   const roster = (await call('t_chair', `/events/${id}/roster`)).json.text;
   assert.ok(roster.includes('測試跑友') && !roster.includes('會晚') && !roster.includes('素食'), '名單文字（貼 LINE）不放備註');
-  for (const who of ['t_chair', 't_coach']) {   // 審核幹部與只有報到權限的幹部
+  for (const who of ['t_chair', 't_coach']) {   // 理事長、教練（協會的活動權限）
     const st = (await call(who, `/events/${id}/stats`)).json;
     assert.equal(st.people.find((x) => x.member_id === 't_runner').note, '會晚 10 分鐘到', who);
   }
@@ -1166,6 +1166,52 @@ test('備註只給主辦：公開名單、名單文字、座位查詢都沒有�
   assert.equal(pub.length, 1);
   assert.ok(!('note' in pub[0]), '一般團員查座位看不到備註');
   assert.equal((await call('t_chair', `/events/${pid}/seats`)).json.seats[0].note, '想跟阿明同桌');
+});
+
+test('取消紀錄：本人取消記時間與方式、重報保留第一次報名時間；婉拒、移出、取消邀請各自記方式；CSV 是台北時間；本人匯出看得到', async () => {
+  const tp8 = (s) => new Date(Date.parse(`${s.replace(' ', 'T')}Z`) + 8 * 3600e3).toISOString().slice(0, 19).replace('T', ' ');
+  const who = async (id, mid) => (await call('t_chair', `/events/${id}/stats`)).json.people.find((x) => x.member_id === mid);
+  const id = await mkEvent({ title: '取消紀錄' });
+  assert.equal((await signup('t_runner', id)).json.status, 'in');
+  const p0 = await who(id, 't_runner');
+  assert.equal(p0.firstAt, p0.created_at);
+  assert.equal(p0.cancelledAt, null);
+  await sleep(1100);
+  assert.equal((await unsign('t_runner', id)).json.was, 'in');
+  const p1 = await who(id, 't_runner');
+  assert.equal(p1.status, 'cancel');
+  assert.equal(p1.cancelBy, 'self');
+  assert.ok(p1.cancelledAt > p0.created_at, '記下取消時間');
+  let csv = (await call('t_chair', `/events/${id}/export.csv`)).text;
+  assert.ok(csv.includes('"首次報名","取消時間","取消方式"'), '能審核的人有三個新欄位');
+  assert.ok(csv.includes(`"${tp8(p1.cancelledAt)}","本人取消"`), '取消時間是台北時間');
+  assert.ok(csv.includes(`"${tp8(p0.created_at)}"`) && !csv.includes(`"${p0.created_at}"`), '報名時間是台北時間，不是 UTC');
+  // 取消後重報：排到最後（created_at 重設），第一次報名時間不變，取消紀錄清掉
+  await sleep(1100);
+  assert.equal((await signup('t_runner', id)).json.status, 'in');
+  const p2 = await who(id, 't_runner');
+  assert.equal(p2.firstAt, p0.created_at);
+  assert.ok(p2.created_at > p0.created_at);
+  assert.equal(p2.cancelledAt, null);
+  assert.equal(p2.cancelBy, null);
+  // 主辦移出
+  assert.equal((await review('t_chair', id, { action: 'reject', member_ids: ['t_runner'], revoke: true })).status, 200);
+  assert.equal((await who(id, 't_runner')).cancelBy, 'organizer');
+  // 婉拒申請、取消邀請
+  const aid = await mkEvent({ title: '取消紀錄審核', require_approval: true, visibility: 'invite' });
+  await call('t_chair', `/events/${aid}/invites`, { method: 'POST', body: { member_ids: ['t_other', 't_lead'], notify: false } });
+  assert.equal((await signup('t_other', aid)).json.status, 'pending');
+  assert.equal((await signup('t_lead', aid)).json.status, 'pending');
+  await review('t_chair', aid, { action: 'reject', member_ids: ['t_other'] });
+  assert.equal((await call('t_chair', `/events/${aid}/invites/t_lead`, { method: 'DELETE' })).status, 200);
+  assert.equal((await who(aid, 't_other')).cancelBy, 'rejected');
+  assert.equal((await who(aid, 't_lead')).cancelBy, 'uninvite');
+  csv = (await call('t_chair', `/events/${aid}/export.csv`)).text;
+  assert.ok(csv.includes('"主辦婉拒"') && csv.includes('"取消邀請"'));
+  // 本人匯出
+  const mine = (await call('t_runner', '/me/export')).json.signups.find((x) => x.event_id === id);
+  assert.equal(mine.first_at, p0.created_at);
+  assert.ok(mine.cancelled_at && mine.cancel_by === 'organizer');
 });
 
 test('報名通知：開關控制、狀態沒變不重複、代為報名只通知真的報上的人', async () => {
@@ -1307,6 +1353,7 @@ test('排程：開放報名推播一次、20:00 待審核整理、活動結束�
   await call(null, '/dev/cron?at=2027-06-10T01:30:00Z');
   assert.equal(await stOf('t_other', rid), null);
   assert.ok((await notesFor('t_other', rid)).some((n) => n.title.startsWith('申請已失效')));
+  assert.equal((await call('t_chair', `/events/${rid}/stats`)).json.people.find((x) => x.member_id === 't_other').cancelBy, 'expired', '取消方式：申請逾期');
   const au = (await call('t_chair', `/audit?from=${plus(-1)}&to=${plus(1)}&action=signup.expire`)).json.items;
   assert.ok(au.some((x) => x.target_id === rid));
   // 改期：重設活動提醒

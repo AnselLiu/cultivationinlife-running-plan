@@ -527,6 +527,8 @@ const maskId = (v) => (v ? `${v.slice(0, 2)}${'*'.repeat(Math.max(0, v.length - 
 // ---- 活動 ----
 const eventCols = 'id, kind, title, date, gather_time, end_time, place, lead, note, week_no, plan_text, capacity, signup_open, deadline, status, created_at, fee, guest_max, meal_options, link_url, link_label, team_id, questions, visibility, created_by, options, group_reg, items, pricing, pay_info, min_qty, series_id, spot_id, route_id, address, address_zip, signup_start, require_approval, notify_signup';
 
+// 取消方式（signups.cancel_by）：CSV 與統計頁用
+const CANCEL_BY = { self: '本人取消', organizer: '主辦移出', rejected: '主辦婉拒', uninvite: '取消邀請', expired: '申請逾期' };
 // 報名問卷：單選、複選、簡答；最多 12 題
 const Q_TYPES = ['single', 'multi', 'text'];
 function readQuestions(v) {
@@ -632,7 +634,7 @@ async function eventWithSignups(env, id) {
 //   1. 有入場券 ⇔ status='in'
 //   2. 名額與庫存只算 status='in'
 //   3. 已經有人在 wait 時，新的報名一律進 wait；排隊順序只看 (created_at, id)
-//   4. cancel 重新變成有效報名時，created_at 重設為現在
+//   4. cancel 重新變成有效報名時，created_at 重設為現在、清掉取消時間與方式；第一次報名時間（first_at）不變
 //   5. 每次狀態改變都用 compare-and-set（UPDATE … WHERE … AND status = 預期），並檢查 meta.changes
 //   6. 只有狀態真的改變才通知（舊狀態 ≠ 新狀態），修改內容不通知
 // 只有 promote() 能把 wait 改成 in。
@@ -642,7 +644,7 @@ async function doSignup(env, ev, member, b, { by = null, manager = false, req = 
   const dist = b.dist === 'hm' ? 'hm' : member.dist;
   const grp = (str(b.grp, 2) || member.grp).toUpperCase();
   if (!validGroup(dist, grp)) return fail(400, '組別不正確');
-  const mine = await env.DB.prepare('SELECT id, status, review, reviewed_by, reviewed_at, created_at, amount, paid, items, amount_detail FROM signups WHERE event_id = ? AND member_id = ?').bind(ev.id, member.id).first();
+  const mine = await env.DB.prepare('SELECT id, status, review, reviewed_by, reviewed_at, created_at, cancelled_at, cancel_by, amount, paid, items, amount_detail FROM signups WHERE event_id = ? AND member_id = ?').bind(ev.id, member.id).first();
   const was = mine && mine.status !== 'cancel' ? mine.status : null;
   // 被婉拒：本人不能重報（取消再報也繞不過），幹部要先「重新審核」
   if (mine?.status === 'cancel' && mine.review === 'rejected') return fail(400, by ? '已婉拒，請先到統計頁「重新審核」' : '主辦已婉拒這筆報名，如有疑問請聯絡主辦人');
@@ -711,7 +713,8 @@ async function doSignup(env, ev, member, b, { by = null, manager = false, req = 
     const r = await env.DB.prepare(`UPDATE signups SET name = ?1, grp = ?2, dist = ?3, note = ?4, status = ?5, answers = ?6, option = ?7,
       reg_consent_at = CASE WHEN ?8 THEN COALESCE(reg_consent_at, datetime('now')) ELSE NULL END, items = ?9, amount = ?10, amount_detail = ?11,
       paid = CASE WHEN ?12 THEN 'unpaid' ELSE paid END, paid_note = CASE WHEN ?12 THEN ?13 ELSE paid_note END, guests = ?14, meal = ?15,
-      created_at = CASE WHEN ?16 THEN datetime('now') ELSE created_at END,
+      created_at = CASE WHEN ?16 THEN datetime('now') ELSE created_at END, first_at = COALESCE(first_at, created_at),
+      cancelled_at = CASE WHEN ?16 THEN NULL ELSE cancelled_at END, cancel_by = CASE WHEN ?16 THEN NULL ELSE cancel_by END,
       review = CASE WHEN ?17 THEN 'approved' WHEN ?16 THEN NULL ELSE review END,
       reviewed_by = CASE WHEN ?17 THEN ?18 WHEN ?16 THEN NULL ELSE reviewed_by END,
       reviewed_at = CASE WHEN ?17 THEN datetime('now') WHEN ?16 THEN NULL ELSE reviewed_at END,
@@ -724,8 +727,8 @@ async function doSignup(env, ev, member, b, { by = null, manager = false, req = 
     if (!r.meta.changes) return fail(409, '報名狀態剛被主辦更新，請重新整理再試');
   } else {
     // 連按兩次或兩台裝置同時送出：第二筆什麼都不做，回傳第一筆的狀態（不重複通知）
-    const r = await env.DB.prepare(`INSERT INTO signups (id, event_id, member_id, name, grp, dist, note, status, answers, option, reg_consent_at, items, amount, amount_detail, guests, meal, review, reviewed_by, reviewed_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ${ev.group_reg ? "datetime('now')" : 'NULL'}, ?, ?, ?, ?, ?, ?, ?, ${approveNow ? "datetime('now')" : 'NULL'})
+    const r = await env.DB.prepare(`INSERT INTO signups (id, event_id, member_id, name, grp, dist, note, status, answers, option, reg_consent_at, items, amount, amount_detail, guests, meal, review, reviewed_by, reviewed_at, first_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ${ev.group_reg ? "datetime('now')" : 'NULL'}, ?, ?, ?, ?, ?, ?, ?, ${approveNow ? "datetime('now')" : 'NULL'}, datetime('now'))
       ON CONFLICT(event_id, member_id) DO NOTHING`)
       .bind(rid(8), ev.id, member.id, name, grp, dist, note, status, ans.answers, option, itemsJson, q.total, JSON.stringify(q.lines), guests, meal,
         approveNow ? 'approved' : null, approveNow ? approver.id : null).run();
@@ -748,9 +751,10 @@ async function doSignup(env, ev, member, b, { by = null, manager = false, req = 
     if (sold > d.stock) {
       // 退回原狀也要 compare-and-set：中間被主辦婉拒或移出就不蓋掉；本人核准的審核欄位一起還原
       if (mine) await env.DB.prepare(`UPDATE signups SET items = ?1, amount = ?2, amount_detail = ?3, status = ?4, created_at = ?5,
-          review = CASE WHEN ?6 THEN ?7 ELSE review END, reviewed_by = CASE WHEN ?6 THEN ?8 ELSE reviewed_by END, reviewed_at = CASE WHEN ?6 THEN ?9 ELSE reviewed_at END
+          review = CASE WHEN ?6 THEN ?7 ELSE review END, reviewed_by = CASE WHEN ?6 THEN ?8 ELSE reviewed_by END, reviewed_at = CASE WHEN ?6 THEN ?9 ELSE reviewed_at END,
+          cancelled_at = ?11, cancel_by = ?12
         WHERE id = ?10 AND status = 'in'`)
-        .bind(mine.items, mine.amount, mine.amount_detail, mine.status, mine.created_at, approveNow ? 1 : 0, mine.review, mine.reviewed_by, mine.reviewed_at, row.id).run();
+        .bind(mine.items, mine.amount, mine.amount_detail, mine.status, mine.created_at, approveNow ? 1 : 0, mine.review, mine.reviewed_by, mine.reviewed_at, row.id, mine.cancelled_at, mine.cancel_by).run();
       else await env.DB.prepare("DELETE FROM signups WHERE id = ? AND status = 'in'").bind(row.id).run();
       return fail(409, `「${d.name}」剛好被訂完了，請重新整理看剩餘數量`);
     }
@@ -971,7 +975,7 @@ async function cancelSignup(env, ev, member) {
   if (!mine || mine.status === 'cancel') return json({ ok: true, was: null });
   if (mine.status === 'in' && tpNow() >= evStart(ev)) return fail(400, '活動已經開始，不能取消報名，請直接聯絡主辦人');
   const late = mine.status === 'in' && tpNow() > signupEnd(ev);
-  const r = await env.DB.prepare(`UPDATE signups SET status = 'cancel', reg_consent_at = NULL,
+  const r = await env.DB.prepare(`UPDATE signups SET status = 'cancel', reg_consent_at = NULL, cancelled_at = datetime('now'), cancel_by = 'self',
       paid_note = CASE WHEN paid = 'paid' THEN ? ELSE paid_note END WHERE id = ? AND status = ?`).bind('取消，待退費', mine.id, mine.status).run();
   if (!r.meta.changes) return fail(409, '報名狀態剛被主辦更新，請重新整理再試');
   await dropTicket(env, ev.id, member.id);
@@ -2460,7 +2464,8 @@ const api = (async function api(req, env, path, method) {
       const was = (await env.DB.prepare('SELECT status FROM signups WHERE event_id = ? AND member_id = ?').bind(ev.id, minv[3]).first())?.status;
       await env.DB.batch([
         env.DB.prepare('DELETE FROM event_invites WHERE event_id = ? AND member_id = ?').bind(ev.id, minv[3]),
-        env.DB.prepare("UPDATE signups SET status = 'cancel', reg_consent_at = NULL WHERE event_id = ? AND member_id = ?").bind(ev.id, minv[3]),
+        env.DB.prepare(`UPDATE signups SET reg_consent_at = NULL, cancelled_at = CASE WHEN status = 'cancel' THEN cancelled_at ELSE datetime('now') END,
+          cancel_by = CASE WHEN status = 'cancel' THEN cancel_by ELSE 'uninvite' END, status = 'cancel' WHERE event_id = ? AND member_id = ?`).bind(ev.id, minv[3]),
         env.DB.prepare('DELETE FROM tickets WHERE event_id = ? AND member_id = ?').bind(ev.id, minv[3]),
       ]);
       if (was === 'in') await promote(env, await evById(ev.id));
@@ -2540,7 +2545,7 @@ const api = (async function api(req, env, path, method) {
     const head = ['報名組別', ...keys.map((k) => (k === 'address_zip' ? '郵遞區號' : RACE_FIELDS[k][0])), '繳費', '報名時間'];
     const PAID = { unpaid: '未繳', paid: '已繳', waived: '免繳', refunded: '已退費' };
     const lines = [];
-    for (const r of rows) { const p = splitIdNo(await openPrivate(env, r.enc, r.member_id)); lines.push([r.option || '', ...keys.map((k) => p[k] || ''), PAID[r.paid] || '', r.created_at].map(cell).join(',')); }
+    for (const r of rows) { const p = splitIdNo(await openPrivate(env, r.enc, r.member_id)); lines.push([r.option || '', ...keys.map((k) => p[k] || ''), PAID[r.paid] || '', tpStamp(r.created_at)].map(cell).join(',')); }
     await audit(env, req, member, 'event.reg_export', 'event', ev.id, `${rows.length} 筆（含身分證字號）`);
     return new Response(`﻿${[head.map(cell).join(','), ...lines].join('\r\n')}`, { headers: { ...SEC_HEADERS, 'cache-control': 'no-store',
       'content-type': 'text/csv; charset=utf-8', 'content-disposition': `attachment; filename="registrations.csv"; filename*=UTF-8''${encodeURIComponent(`${ev.date}-${ev.title}-團體報名.csv`)}` } });
@@ -2563,8 +2568,8 @@ const api = (async function api(req, env, path, method) {
       if (mine?.status === 'cancel' && mine.review === 'rejected') return fail(400, '主辦人未核准這筆報名，請洽現場幹部');
       if (mine?.status === 'pending') return fail(400, '你的報名還在等主辦核准，請洽現場幹部');
       if (ev.require_approval && (!mine || mine.status === 'cancel')) return fail(400, '這場要主辦核准才能參加，請洽現場幹部');
-      if (mine) await env.DB.prepare("UPDATE signups SET status = 'in', attended_at = COALESCE(attended_at, datetime('now')) WHERE id = ?").bind(mine.id).run();
-      else await env.DB.prepare("INSERT INTO signups (id, event_id, member_id, name, grp, dist, note, status, attended_at) VALUES (?, ?, ?, ?, ?, ?, '現場報到', 'in', datetime('now'))")
+      if (mine) await env.DB.prepare("UPDATE signups SET status = 'in', attended_at = COALESCE(attended_at, datetime('now')), cancelled_at = NULL, cancel_by = NULL WHERE id = ?").bind(mine.id).run();
+      else await env.DB.prepare("INSERT INTO signups (id, event_id, member_id, name, grp, dist, note, status, attended_at, first_at) VALUES (?, ?, ?, ?, ?, ?, '現場報到', 'in', datetime('now'), datetime('now'))")
         .bind(rid(8), ev.id, member.id, member.name, member.grp, member.dist).run();
       return json({ ok: true, walkIn: !mine });
     }
@@ -2638,6 +2643,7 @@ const api = (async function api(req, env, path, method) {
           return json({ error: '這些人已經在名單上，要確認移出', needRevoke: true, count: listed.length, paid: listed.filter((r) => r.paid === 'paid').length }, 409);
         // 一句改完所有人（每人比對自己原本的狀態，兩句之間被別人處理掉的不會改到）
         const upd = live.length ? new Set((await env.DB.prepare(`UPDATE signups SET status = 'cancel', review = 'rejected', reviewed_by = ?1, reviewed_at = datetime('now'), review_note = ?2, reg_consent_at = NULL,
+            cancelled_at = datetime('now'), cancel_by = CASE WHEN status = 'pending' THEN 'rejected' ELSE 'organizer' END,
             paid_note = CASE WHEN paid = 'paid' THEN '婉拒，待退費' ELSE paid_note END
           WHERE event_id = ?3 AND (id || ':' || status) IN (SELECT value FROM json_each(?4)) RETURNING id`)
           .bind(member.id, note, ev.id, JSON.stringify(live.map((r) => `${r.id}:${r.status}`))).all()).results.map((x) => x.id)) : new Set();
@@ -2669,7 +2675,8 @@ const api = (async function api(req, env, path, method) {
           todo.push(r);
         }
         // 重新審核：保留原本的 created_at（排隊順序不變）
-        const upd = todo.length ? new Set((await env.DB.prepare(`UPDATE signups SET status = 'pending', review = NULL, review_note = NULL, reviewed_by = ?1, reviewed_at = datetime('now')
+        const upd = todo.length ? new Set((await env.DB.prepare(`UPDATE signups SET status = 'pending', review = NULL, review_note = NULL, reviewed_by = ?1, reviewed_at = datetime('now'),
+            cancelled_at = NULL, cancel_by = NULL
           WHERE event_id = ?2 AND status = 'cancel' AND review = 'rejected' AND id IN (SELECT value FROM json_each(?3)) RETURNING id`)
           .bind(member.id, ev.id, JSON.stringify(todo.map((r) => r.id))).all()).results.map((x) => x.id)) : new Set();
         for (const r of todo) {
@@ -2910,7 +2917,7 @@ const api = (async function api(req, env, path, method) {
     const data = {
       exported_at: new Date().toISOString(),
       profile: (({ s_seen, s_role, s_created, s_mfa, s_th, s_teams, line_id, google_sub, cal_token_hash, ...rest }) => ({ ...rest, google_linked: !!google_sub, calendar_feed: !!cal_token_hash }))(member),
-      signups: await q('SELECT event_id, name, grp, dist, note, status, answers, option, reg_consent_at, items, amount, pay_method, pay_ref, pay_reported_at, paid, picked_at, attended_at, created_at, review, reviewed_at, review_note FROM signups WHERE member_id = ?'),   // 不含審核人
+      signups: await q('SELECT event_id, name, grp, dist, note, status, answers, option, reg_consent_at, items, amount, pay_method, pay_ref, pay_reported_at, paid, picked_at, attended_at, created_at, first_at, cancelled_at, cancel_by, review, reviewed_at, review_note FROM signups WHERE member_id = ?'),   // 不含審核人
       teams: await q('SELECT team_id, role, title, status, created_at FROM team_members WHERE member_id = ?'),
       race_profile: await (async () => { const r = await env.DB.prepare('SELECT enc FROM member_private WHERE member_id = ?').bind(member.id).first(); return r ? openPrivate(env, r.enc, member.id).catch(() => null) : null; })(),
       tickets: await q('SELECT event_id, code, guests, meal, table_no, checked_in_at FROM tickets WHERE member_id = ?'),
@@ -3718,7 +3725,7 @@ const api = (async function api(req, env, path, method) {
        WHERE d.event_id = ? ORDER BY d.created_at`).bind(mdc[1]).all()).results;
     const esc2 = (v) => { let x = String(v ?? ''); if (/^[=+\-@\t\r]/.test(x)) x = `'${x}`; return `"${x.replace(/"/g, '""')}"`; };
     const csv = ['時間,階段,獎項,贊助,得獎人,暱稱,桌次',
-      ...rows.map((r) => [r.created_at, r.stage, r.prize, r.sponsor, r.name, r.nickname, r.table_no].map(esc2).join(','))].join('\n');
+      ...rows.map((r) => [tpStamp(r.created_at), r.stage, r.prize, r.sponsor, r.name, r.nickname, r.table_no].map(esc2).join(','))].join('\n');
     return new Response(`\ufeff${csv}`, { headers: { ...SEC_HEADERS, 'content-type': 'text/csv; charset=utf-8', 'cache-control': 'no-store', 'content-disposition': 'attachment; filename="draws.csv"' } });
   }
 
@@ -3757,7 +3764,7 @@ const api = (async function api(req, env, path, method) {
     let rows = (await env.DB.prepare(
       `SELECT s.member_id, s.name, s.grp, s.dist, s.note, s.status, s.answers, s.created_at, s.paid, s.paid_note, s.attended_at, s.option, s.reg_consent_at,
               s.items, s.amount, s.pay_ref, s.pay_method, s.pay_reported_at, s.picked_at,
-              s.review, s.review_note, s.reviewed_at, s.edited_after_review, s.guests AS s_guests, s.meal AS s_meal,
+              s.review, s.review_note, s.reviewed_at, s.edited_after_review, s.guests AS s_guests, s.meal AS s_meal, s.cancelled_at, s.cancel_by, s.first_at,
               m.nickname, m.club, m.phone, m.membership, r.name AS reviewer_name, mp.complete AS reg_complete,
               t.guests, t.meal, t.table_no, t.checked_in_at,
               (SELECT group_concat(tm.team_id) FROM team_members tm WHERE tm.member_id = s.member_id AND tm.status = 'active') AS teams
@@ -3793,14 +3800,16 @@ const api = (async function api(req, env, path, method) {
       const STATUS = { in: '正取', wait: '候補', pending: '待審核', cancel: '已取消' };
       const REVIEW = { approved: '核准', rejected: '婉拒' };
       const PAID = { unpaid: '未繳', paid: '已繳', waived: '免繳', refunded: '已退費' };
-      const head = ['報名時間', '狀態', '姓名', '暱稱', '分團', '跑團', '項目', '組別', ...(ev.options ? ['報名組別'] : []), ...(fullPhone ? ['電話'] : []), ...(ev.fee || ev.options ? ['繳費', '繳費備註'] : []), '出席',
+      // 時間一律台北時間；取消時間與方式、第一次報名只給能審核的人（報到幹部只拿得到正取與候補）
+      const head = ['報名時間', ...(canReview ? ['首次報名', '取消時間', '取消方式'] : []), '狀態', '姓名', '暱稱', '分團', '跑團', '項目', '組別', ...(ev.options ? ['報名組別'] : []), ...(fullPhone ? ['電話'] : []), ...(ev.fee || ev.options ? ['繳費', '繳費備註'] : []), '出席',
         ...(ev.kind === 'party' ? ['攜伴', '餐點', '桌次', '報到時間'] : []), ...qs.map((q) => q.label), '備註', ...(canReview ? ['審核', '審核時間', '審核備註'] : [])];
-      const lines = rows.map((r) => { const a = ans(r); return [r.created_at, isRejected(r) ? '未通過' : STATUS[r.status] || r.status, r.name, r.nickname,
+      const lines = rows.map((r) => { const a = ans(r); return [tpStamp(r.created_at), ...(canReview ? [tpStamp(r.first_at), r.status === 'cancel' ? tpStamp(r.cancelled_at) : '', r.status === 'cancel' ? CANCEL_BY[r.cancel_by] || '' : ''] : []),
+        isRejected(r) ? '未通過' : STATUS[r.status] || r.status, r.name, r.nickname,
         (r.teams || '').split(',').filter(Boolean).map((t) => teamName[t] || t).join('、'), r.club, r.dist === 'hm' ? '半馬' : '全馬', r.grp,
-        ...(ev.options ? [r.option || ''] : []), ...(fullPhone ? [r.phone] : []), ...(ev.fee || ev.options ? [PAID[r.paid] || '', r.paid_note] : []), r.attended_at || r.checked_in_at || '',
-        ...(ev.kind === 'party' ? [r.guests ?? r.s_guests ?? '', r.meal || r.s_meal || '', r.table_no ?? '', r.checked_in_at] : []),
+        ...(ev.options ? [r.option || ''] : []), ...(fullPhone ? [r.phone] : []), ...(ev.fee || ev.options ? [PAID[r.paid] || '', r.paid_note] : []), tpStamp(r.attended_at || r.checked_in_at),
+        ...(ev.kind === 'party' ? [r.guests ?? r.s_guests ?? '', r.meal || r.s_meal || '', r.table_no ?? '', tpStamp(r.checked_in_at)] : []),
         ...qs.map((q) => (Array.isArray(a[q.id]) ? a[q.id].join('、') : a[q.id] ?? '')), r.note,
-        ...(canReview ? [REVIEW[r.review] || '', r.reviewed_at || '', r.review_note || ''] : [])].map(cell).join(','); });
+        ...(canReview ? [REVIEW[r.review] || '', tpStamp(r.reviewed_at), r.review_note || ''] : [])].map(cell).join(','); });
       await audit(env, req, member, 'event.export', 'event', ev.id, `${rows.length} 筆`);
       const fname = encodeURIComponent(`${ev.date}-${ev.title}.csv`);
       return new Response(`﻿${[head.map(cell).join(','), ...lines].join('\r\n')}`, { headers: { ...SEC_HEADERS, 'cache-control': 'no-store',
@@ -3809,7 +3818,7 @@ const api = (async function api(req, env, path, method) {
     const live = rows.filter((r) => r.status !== 'cancel'), ins = live.filter((r) => r.status === 'in');
     const pend = rows.filter((r) => r.status === 'pending');
     const tally = (list, f) => { const o = {}; for (const r of list) for (const k of [].concat(f(r)).filter((x) => x !== '' && x != null)) o[k] = (o[k] || 0) + 1; return o; };
-    const byDay = tally(live, (r) => r.created_at.slice(0, 10));
+    const byDay = tally(live, (r) => tpStamp(r.created_at).slice(0, 10));   // 台北日期（凌晨的報名不會算到前一天）
     return json({
       title: ev.title, date: ev.date, kind: ev.kind, capacity: ev.capacity,
       canReview, requireApproval: !!ev.require_approval, seatsLeft: ev.capacity ? Math.max(0, ev.capacity - ins.length) : null,
@@ -3841,7 +3850,8 @@ const api = (async function api(req, env, path, method) {
         amount: r.amount, items: parseQ(r.items), payRef: r.pay_ref, payMethod: r.pay_method, payReported: r.pay_reported_at, picked: !!r.picked_at,
         paid: r.paid, paid_note: r.paid_note, attended: !!(r.attended_at || r.checked_in_at), created_at: r.created_at, note: r.note || '',
         ...(canReview ? { reviewNote: isRejected(r) ? r.review_note || null : null, reviewedAt: r.reviewed_at || null, reviewerName: r.reviewer_name || null,
-          review: r.review || null, edited: !!r.edited_after_review, regComplete: !!r.reg_complete } : {}) })),
+          review: r.review || null, edited: !!r.edited_after_review, regComplete: !!r.reg_complete,
+          firstAt: r.first_at || null, cancelledAt: r.status === 'cancel' ? r.cancelled_at || null : null, cancelBy: r.status === 'cancel' ? r.cancel_by || null : null } : {}) })),
       byTeam: Object.entries(tally(ins, (r) => (r.teams || '').split(',').filter(Boolean))).map(([k, n]) => ({ k: teamName[k] || k, n })),
       byGroup: tally(ins, (r) => `${r.dist === 'hm' ? '半馬' : '全馬'} ${r.grp}`),
       byMeal: ev.kind === 'party' ? tally(ins, (r) => r.meal || '未指定') : null,
@@ -4330,6 +4340,8 @@ const api = (async function api(req, env, path, method) {
 //   5. 每日備份（own）開自己的執行（ctx.exports.Jobs），不和其他工作擠同一份額度
 const taipei = (d = new Date()) => new Date(d.getTime() + 8 * 3600e3);   // 只拿來讀年月日時，不當成真的時區物件
 const tpDate = (d) => taipei(d).toISOString().slice(0, 10);
+// 資料庫的時間（UTC，datetime('now')：'YYYY-MM-DD HH:MM:SS'）換成台北時間，格式不變；CSV 一律用這個（Excel 直接看得懂）
+const tpStamp = (s) => { const t = s ? Date.parse(`${String(s).replace(' ', 'T')}Z`) : NaN; return Number.isNaN(t) ? (s || '') : taipei(new Date(t)).toISOString().slice(0, 19).replace('T', ' '); };
 
 // 佔用：已完成、別人正在跑（15 分鐘內）、或已經失敗 3 次，都回 null
 //   claim_at 是 NULL（因為額度停下或失敗後釋放）也當作可以接著做
@@ -4814,7 +4826,7 @@ async function signupReviews(env, now) {
     if (ev.status !== 'cancelled' && nowTp < until) continue;
     if (!fits(env, 3 + notifyCost(ev.pn), 'signupReviews')) return { done: false, result: n };
     // RETURNING 只拿真的被這一句改到的人；兩句之間被核准或撤回的不會收到「已失效」
-    const ids = (await env.DB.prepare("UPDATE signups SET status = 'cancel', review_note = ?, reg_consent_at = NULL WHERE event_id = ? AND status = 'pending' RETURNING member_id")
+    const ids = (await env.DB.prepare("UPDATE signups SET status = 'cancel', review_note = ?, reg_consent_at = NULL, cancelled_at = datetime('now'), cancel_by = 'expired' WHERE event_id = ? AND status = 'pending' RETURNING member_id")
       .bind('主辦未處理，申請已失效', ev.id).all()).results.map((r) => r.member_id);
     if (ev.status === 'open' && ids.length) await notify(env, ids, 'change', { kind: 'signup', ref: `e:${ev.id}`, tag: `signup-${ev.id}`, url: `/#/e/${ev.id}`,
       title: `申請已失效：${ev.title}`, body: '主辦在活動結束前沒有處理你的申請' });
