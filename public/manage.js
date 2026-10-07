@@ -506,7 +506,7 @@ async function statsView(id) {
   };
   for (const c of document.querySelectorAll('[data-pick]')) c.onchange = async () => {
     try {
-      await api(`/events/${id}/pickup`, { method: 'POST', body: { member_id: c.dataset.pick, picked: c.checked } }); toast(c.checked ? '已標記領取' : '已取消領取');
+      await api(`/events/${id}/pickup`, { method: 'POST', body: { member_id: c.dataset.pick, picked: c.checked } }); toast(claim ? (c.checked ? '已標記發票' : '已取消發票') : c.checked ? '已標記領取' : '已取消領取');
       if (claim) { const y = scrollY; await statsView(id); scrollTo(0, y); }   // 索票：已發票的張數跟著更新
     } catch (e) { c.checked = !c.checked; toast(e.message); }
   };

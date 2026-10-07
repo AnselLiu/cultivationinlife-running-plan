@@ -168,7 +168,7 @@ export async function eventView(id) {
     ${ev.myReconfirm ? `<section class="card rcbanner" id="rcBanner" role="region" aria-labelledby="rcH" tabindex="-1">
       <h2 class="h3" id="rcH">${IC.calAlert}活動有異動，請確認是否仍參加</h2>
       <p class="tiny" style="margin:0">主辦在 ${tpAt(ev.reconfirm_at)} 更新了活動資訊，以上方為準。${myStatus === 'wait' ? '確認後候補順位不變。' : myStatus === 'pending' ? '確認後仍要等主辦審核。' : ''}</p>
-      <div class="row" style="gap:8px"><button class="btn" id="rcYes">仍參加</button><button class="btn ghost danger" id="rcNo">取消報名</button></div>
+      <div class="row" style="gap:8px"><button class="btn" id="rcYes">仍參加</button><button class="btn ghost danger" id="rcNo">${claim ? '取消索票' : '取消報名'}</button></div>
     </section>` : ''}
     ${inviteOnly && admin && !owner ? inviteCard(ev) : ''}
 
@@ -323,10 +323,11 @@ export async function eventView(id) {
     const lateMsg = myStatus === 'in' && now > signupEnd(ev) ? '截止後取消請先聯絡主辦，費用依主辦規定。' : '';
     return esc(`${lateMsg}${paidMsg}`);
   };
+  // 危險操作用選擇面板（不用 confirm）：選項寫清楚是「取消報名」還是「保留報名」
+  const cancelWords = () => (myStatus === 'pending' ? ['撤回這筆申請？', '撤回申請', '保留申請', '已撤回申請'] : survey ? ['撤回回覆？', '撤回回覆', '保留回覆', '已撤回回覆']
+    : claim ? ['取消索票？', '取消索票', '保留索票', '已取消索票'] : ['取消報名？', '取消報名', '保留報名', '已取消報名']);
   $('#cancel')?.addEventListener('click', async () => {
-    // 危險操作用選擇面板（不用 confirm）：選項寫清楚是「取消報名」還是「保留報名」
-    const [title, yes, keepIt, done] = myStatus === 'pending' ? ['撤回這筆申請？', '撤回申請', '保留申請', '已撤回申請'] : survey ? ['撤回回覆？', '撤回回覆', '保留回覆', '已撤回回覆']
-      : claim ? ['取消索票？', '取消索票', '保留索票', '已取消索票'] : ['取消報名？', '取消報名', '保留報名', '已取消報名'];
+    const [title, yes, keepIt, done] = cancelWords();
     if (await choose(title, cancelMsg(), [{ value: 'yes', label: yes, danger: true }], { cancel: keepIt }) !== 'yes') return;
     try { await api(`/events/${id}/signup`, { method: 'DELETE' }); settled(done); } catch (e) { toast(e.message); }
   });
@@ -335,8 +336,9 @@ export async function eventView(id) {
     try { await api(`/events/${id}/reconfirm`, { method: 'POST', body: { answer: 'yes' } }); settled('已確認，謝謝你'); } catch (e) { toast(e.message); }
   }));
   $('#rcNo')?.addEventListener('click', async () => {
-    if (await choose('取消報名？', cancelMsg(), [{ value: 'yes', label: '取消報名', danger: true }], { cancel: '保留報名' }) !== 'yes') return;
-    try { await api(`/events/${id}/reconfirm`, { method: 'POST', body: { answer: 'no' } }); settled('已取消報名'); } catch (e) { toast(e.message); }
+    const [title, yes, keepIt, done] = claim ? cancelWords() : ['取消報名？', '取消報名', '保留報名', '已取消報名'];
+    if (await choose(title, cancelMsg(), [{ value: 'yes', label: yes, danger: true }], { cancel: keepIt }) !== 'yes') return;
+    try { await api(`/events/${id}/reconfirm`, { method: 'POST', body: { answer: 'no' } }); settled(done); } catch (e) { toast(e.message); }
   });
   // 尚未開放：倒數；剩不到 6 小時改成時間到再向伺服器重新讀取（按鈕由伺服器的狀態決定，前端不自己打開）
   const cd = $('#openCountdown');   // #countdown 是上方的賽事倒數，不能重複

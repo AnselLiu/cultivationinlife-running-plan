@@ -81,6 +81,8 @@ test('異動重新確認：改地點時請已報名的人確認，「仍參加�
   try {
     expect(ev.id, '建立活動失敗').toBeTruthy();
     for (const who of ['t_runner', 't_other']) await apiAs(request, who, `/events/${ev.id}/signup`, { method: 'POST', body: {} });
+    // 時間只到秒：跟發布通知同一秒報名的人算已確認，先等過這一秒
+    await page.waitForTimeout(1100);
     await login(page, 't_chair'); await acceptPrivacyIfAsked(page);
     await page.goto(`/#/e/${ev.id}`);
     await page.getByText('發布通知或異動（改時間、改地點、取消）').click();
