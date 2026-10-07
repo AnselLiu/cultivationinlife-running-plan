@@ -149,7 +149,8 @@ test('分享連結 /e/:id：公開活動有預覽卡（標題、日期時間、�
   assert.equal(pub.full, true);
   assert.equal(pub.status, 'open');
   assert.equal(pub.end_time, '09:00');
-  for (const k of ['capacity', 'signed', 'signups', 'fee', 'address', 'invite_token', 'private', 'note']) assert.ok(!(k in pub), `預覽 API 不能有 ${k}`);
+  assert.equal(pub.ext, false, '外部登記連結只給有沒有');
+  for (const k of ['capacity', 'signed', 'signups', 'fee', 'address', 'invite_token', 'private', 'note', 'link_url']) assert.ok(!(k in pub), `預覽 API 不能有 ${k}`);
   assert.ok(!SEEDED.some((x) => JSON.stringify(pub).includes(x)));
   // 取消：已取消
   assert.equal((await call('t_chair', `/events/${ev.id}/notice`, { method: 'POST', body: { type: 'cancel', message: '下雨' } })).status, 200);
@@ -183,12 +184,25 @@ test('分享連結 /e/:id：私密分團、邀請制沒帶對代碼、不存在�
   // 首頁本身（靜態檔）的標頭也一樣：兩邊不能漂移
   const h = await page('/');
   for (const [k, v] of Object.entries(want)) if (h.headers.get(k) != null) assert.equal(h.headers.get(k), v, `首頁的 ${k}`);
-  // 邀請制帶對代碼：看得到卡片，網址不帶代碼
+  // 邀請制帶對代碼：看得到卡片；沒有 og:url（依 og:url 重抓的平台會抓到沒有代碼的一般首頁），代碼也不出現在頁面上
   const ok = await (await page(`/e/${inv.id}?t=${tok}`)).text();
   assert.equal(ogOf(ok, 'og:title'), '邀請制分享餐敘');
   assert.equal(ogOf(ok, 'og:image'), `${BASE}/og/party.png`);
-  assert.equal(ogOf(ok, 'og:url'), `${BASE}/e/${inv.id}`);
+  assert.equal(ogOf(ok, 'og:url'), null);
   assert.ok(!ok.includes(tok), '邀請代碼不出現在頁面上');
+  assert.ok(!ok.includes('http-equiv="refresh"'), '直接打開（爬蟲、沒有 Service Worker）不轉址');
+  // 舊版 Service Worker 轉送的頁面導覽（Sec-Fetch-Dest: empty）：多一個轉到 /#/e/:id 的 meta refresh，舊版程式也找得到活動；看不到的活動一樣有（不透露存不存在）
+  //   用 node:http 送：fetch（undici）會自己把 Sec-Fetch-Mode 設成 cors
+  const http = await import('node:http');
+  const viaSw = (p) => new Promise((ok, no) => http.get(`${BASE}${p}`, { headers: { 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'empty' } }, (res) => {
+    let b = ''; res.setEncoding('utf8'); res.on('data', (d) => { b += d; }); res.on('end', () => ok(b));
+  }).on('error', no));
+  const refreshOf = (html) => html.match(/<meta http-equiv="refresh" content="0;url=([^"]*)">/)?.[1] ?? null;
+  assert.equal(refreshOf(await viaSw(`/e/${inv.id}?t=${tok}&openExternalBrowser=1`)), `/#/e/${inv.id}?t=${tok}`);
+  assert.equal(refreshOf(await viaSw(`/e/${priv.id}`)), `/#/e/${priv.id}`);
+  assert.equal(refreshOf(await viaSw('/e/nosuchevent1')), '/#/e/nosuchevent1');
+  assert.ok(!/私密分享課|og:/.test(await viaSw(`/e/${priv.id}`)));
+  assert.equal((await page(`/e/${priv.id}`)).headers.get('vary'), 'Sec-Fetch-Dest');
   // 沒登入的預覽 API 一樣的規則
   assert.equal((await call(null, `/public/e/${inv.id}`)).status, 404);
   assert.equal((await call(null, `/public/e/${inv.id}?t=${tok}`)).json.event.title, '邀請制分享餐敘');
@@ -200,11 +214,11 @@ test('分享連結 /e/:id：私密分團、邀請制沒帶對代碼、不存在�
   assert.equal((await page(`/e/${inv.id}/attend`)).status, 200);
 });
 
-test('連結預覽圖：每個活動類型都有 public/og/<kind>.png（1200×630、小於 100 KB），伺服器回得到', async () => {
+test('連結預覽圖：每個活動類型與團員揪團都有 public/og/<kind>.png（1200×630、小於 100 KB），伺服器回得到', async () => {
   const { readFileSync, statSync } = await import('node:fs');
   const kinds = JSON.parse(readFileSync(new URL('../src/worker.js', import.meta.url), 'utf8').match(/const KINDS = (\[[^\]]+\]);/)[1].replace(/'/g, '"'));
   assert.ok(kinds.length >= 8);
-  for (const k of kinds) {
+  for (const k of [...kinds, 'meetup']) {
     const f = new URL(`../public/og/${k}.png`, import.meta.url), buf = readFileSync(f);
     assert.equal(buf.subarray(1, 4).toString(), 'PNG', k);
     assert.deepEqual([buf.readUInt32BE(16), buf.readUInt32BE(20)], [1200, 630], `${k}.png 尺寸`);
@@ -1332,6 +1346,9 @@ test('結束時間：建立與編輯都檢查要晚於集合時間；舊版畫�
   const bad = await call('t_chair', '/events', { method: 'POST', body: { ...evBase, date: plus(9), end_time: '06:30' } });
   assert.equal(bad.status, 400);
   assert.match(bad.json.error, /結束時間要在開始之後/);
+  const onlyEnd = await call('t_chair', '/events', { method: 'POST', body: { ...evBase, date: plus(9), gather_time: '', end_time: '21:00' } });
+  assert.equal(onlyEnd.status, 400, '只有結束時間（活動頁會變成「－21:00」）');
+  assert.match(onlyEnd.json.error, /也要填集合（開始）時間/);
   const id = await mkEvent({ title: '結束時間', date: plus(9), end_time: '09:00' });
   const ev = (await call('t_chair', `/events/${id}`)).json;
   assert.equal(ev.end_time, '09:00');
@@ -1382,6 +1399,56 @@ test('移出（可再報名）：一樣通知本人、空位遞補，但本人�
   assert.equal(await stOf('t_staff', id), null);
   assert.ok((await notesFor('t_staff', id)).some((x) => x.title.startsWith('可以再報名了')));
   assert.equal((await signup('t_staff', id)).json.status, 'wait');
+});
+
+test('待審核：整批代為報名跳過待審核的人（不蓋掉本人填的、不直接核准，另外列出）；退回（可再報名）記成「主辦退回」', async () => {
+  const id = await mkEvent({ title: '待審核代報', require_approval: true, guest_max: 2, questions: [{ type: 'text', label: '想法' }] });
+  assert.equal((await signup('t_other', id, { note: '素食', guests: 2, guest_names: ['阿明', '阿華'], answers: { q1: '好' } })).json.status, 'pending');
+  const bk = await call('t_chair', `/events/${id}/bulk`, { method: 'POST', body: { action: 'signup', names: ['路人跑友'] } });
+  assert.equal(bk.status, 200, bk.text);
+  assert.equal(bk.json.added, 0);
+  assert.deepEqual(bk.json.pending, ['路人跑友']);
+  assert.deepEqual(bk.json.already, []);
+  const mine = (await call('t_other', `/events/${id}`)).json;
+  assert.equal(mine.myStatus, 'pending', '沒有被直接核准');
+  assert.equal(mine.myNote, '素食');
+  assert.equal(mine.myGuests, 2);
+  assert.deepEqual(mine.myGuestNames, ['阿明', '阿華']);
+  assert.deepEqual(mine.myAnswers, { q1: '好' });
+  assert.ok(!(await notesFor('t_other', id)).some((n) => n.title.startsWith('已幫你報名')));
+  const au = (await call('t_chair', `/audit?from=${plus(-1)}&to=${plus(1)}&action=event.bulk&target=${id}`)).json.items;
+  assert.ok(au.some((x) => (x.detail || '').includes('待審核 1')), JSON.stringify(au));
+  // 退回待審核（可再申請）：取消方式是「主辦退回」，不是「主辦婉拒」
+  const r = await review('t_chair', id, { action: 'reject', member_ids: ['t_other'], rebook: true });
+  assert.equal(r.status, 200, r.text);
+  const p = (await call('t_chair', `/events/${id}/stats`)).json.people.find((x) => x.member_id === 't_other');
+  assert.equal(p.status, 'cancel');
+  assert.equal(p.cancelBy, 'returned');
+  const csv = (await call('t_chair', `/events/${id}/export.csv`)).text;
+  assert.ok(csv.includes('"主辦退回"') && !csv.includes('"主辦婉拒"'), csv);
+  assert.ok((await notesFor('t_other', id)).some((n) => n.title.startsWith('申請已退回')));
+  assert.equal((await signup('t_other', id)).json.status, 'pending', '可以再申請');
+});
+
+test('攜伴也佔名額：本人＋攜伴比整個名額多直接擋下（以前會排進永遠補不上的候補）；正取加攜伴在寫入那一句再確認位子', async () => {
+  const id = await mkEvent({ title: '攜伴超過名額', capacity: 3, guest_max: 5, count_guests: true });
+  const big = await signup('t_chair', id, { guests: 3 });
+  assert.equal(big.status, 400);
+  assert.match(big.json.error, /名額只有 3 位，最多帶 2 位攜伴/);
+  assert.equal(await stOf('t_chair', id), null);
+  assert.equal((await signup('t_chair', id, { guests: 2 })).json.status, 'in', '剛好坐滿可以');
+  // 沒勾「攜伴也佔名額」：照舊（每筆 1 位）
+  assert.equal((await signup('t_chair', await mkEvent({ title: '攜伴不佔名額', capacity: 1, guest_max: 5 }), { guests: 5 })).json.status, 'in');
+  // 正取加攜伴：位子夠就改（寫入那一句的條件成立），不夠就擋，原本的攜伴不變
+  const g = await mkEvent({ title: '正取加攜伴', capacity: 4, guest_max: 3, count_guests: true });
+  assert.equal((await signup('t_chair', g, { guests: 1, guest_names: ['甲'] })).json.status, 'in');
+  assert.equal((await signup('t_chair', g, { guests: 2, guest_names: ['甲', '乙'] })).json.status, 'in');
+  assert.equal((await call('t_chair', `/events/${g}/stats`)).json.total.seats, 3);
+  assert.equal((await signup('t_coach', g)).json.status, 'in');
+  const more = await signup('t_chair', g, { guests: 3, guest_names: ['甲', '乙', '丙'] });
+  assert.equal(more.status, 400);
+  assert.deepEqual((await call('t_chair', `/events/${g}`)).json.myGuestNames, ['甲', '乙']);
+  assert.equal((await call('t_chair', `/events/${g}/stats`)).json.total.seats, 4);
 });
 
 test('報名姓名由伺服器決定（送來的 name 不收）；代為報名跳過已經在名單上的人，不蓋掉本人的備註與問卷', async () => {
@@ -1473,20 +1540,30 @@ test('攜伴也佔名額：取消空出的位子不夠候補第一組就跳過�
   assert.ok(au.some((x) => (x.detail || '').includes('攜伴佔名額 關')), JSON.stringify(au));
 });
 
-test('報名成功訊息：建立與編輯都存得起來（100 字內），舊版畫面編輯不會清掉', async () => {
-  const id = await mkEvent({ title: '成功訊息', success_msg: `報名成功！記得帶水${'。'.repeat(120)}` });
-  const ev = (await call('t_other', `/events/${id}`)).json;
+test('報名成功訊息：建立與編輯都存得起來（100 字內），舊版畫面編輯不會清掉；只給主辦與正取的人（報名的回應也帶回來），沒報名、候補都拿不到', async () => {
+  const id = await mkEvent({ title: '成功訊息', capacity: 1, success_msg: `報名成功！記得帶水${'。'.repeat(120)}` });
+  const ev = (await call('t_chair', `/events/${id}`)).json;
   assert.equal(ev.success_msg.length, 100);
   assert.ok(ev.success_msg.startsWith('報名成功！記得帶水'));
-  assert.equal((await call('t_chair', `/events/${id}`, { method: 'PUT', body: { ...evBase, title: '成功訊息', date: ev.date } })).status, 200);
-  assert.ok((await call('t_other', `/events/${id}`)).json.success_msg.startsWith('報名成功'), '沒帶 success_msg 的編輯不會清掉');
-  assert.equal((await call('t_chair', `/events/${id}`, { method: 'PUT', body: { ...evBase, title: '成功訊息', date: ev.date, success_msg: '雨天照跑' } })).status, 200);
-  assert.equal((await call('t_other', `/events/${id}`)).json.success_msg, '雨天照跑');
-  assert.equal((await call('t_chair', `/events/${id}`, { method: 'PUT', body: { ...evBase, title: '成功訊息', date: ev.date, success_msg: '' } })).status, 200);
-  assert.equal((await call('t_other', `/events/${id}`)).json.success_msg, null, '清空');
+  assert.equal((await call('t_other', `/events/${id}`)).json.success_msg, null, '還沒報名的人看不到（主辦可能放只給報名者的 LINE 群組連結）');
+  assert.ok(!(await call('t_other', '/events')).text.includes('記得帶水'), '列表也沒有');
+  assert.equal((await call('t_chair', `/events/${id}`, { method: 'PUT', body: { ...evBase, title: '成功訊息', capacity: 1, date: ev.date } })).status, 200);
+  assert.ok((await call('t_chair', `/events/${id}`)).json.success_msg.startsWith('報名成功'), '沒帶 success_msg 的編輯不會清掉');
+  assert.equal((await call('t_chair', `/events/${id}`, { method: 'PUT', body: { ...evBase, title: '成功訊息', capacity: 1, date: ev.date, success_msg: '雨天照跑' } })).status, 200);
+  const r = await signup('t_lead', id);   // 不是協會幹部（t_coach 是：主辦本來就看得到）
+  assert.equal(r.json.status, 'in');
+  assert.equal(r.json.successMsg, '雨天照跑', '報名的回應帶回來（活動頁的提示卡與播報）');
+  assert.equal((await call('t_lead', `/events/${id}`)).json.manage, false);
+  assert.equal((await call('t_lead', `/events/${id}`)).json.success_msg, '雨天照跑', '正取看得到');
+  const w = await signup('t_other', id);
+  assert.equal(w.json.status, 'wait');
+  assert.equal(w.json.successMsg, null);
+  assert.equal((await call('t_other', `/events/${id}`)).json.success_msg, null, '候補看不到');
+  assert.equal((await call('t_chair', `/events/${id}`, { method: 'PUT', body: { ...evBase, title: '成功訊息', capacity: 1, date: ev.date, success_msg: '' } })).status, 200);
+  assert.equal((await call('t_chair', `/events/${id}`)).json.success_msg, null, '清空');
 });
 
-test('會員揪團：功能開關預設關閉；團員只能在自己的分團發起、欄位精簡、不推播；同時 3 場與每小時 5 次；開團人只管自己的，收款與點名仍是幹部；幹部可以編輯與刪除', async () => {
+test('團員揪團：功能開關預設關閉；團員只能在自己的分團發起、欄位精簡、不推播；同時 3 場與每小時 5 次；開團人只管自己的，收款與點名仍是幹部；幹部可以編輯與刪除', async () => {
   const mk = (who, body) => call(who, '/events', { method: 'POST', body: { kind: 'long', title: '週六河濱揪團', date: plus(4), gather_time: '06:30', end_time: '08:00', place: '大佳河濱', team_id: 'youth', ...body } });
   // 預設關閉：團員一樣不能建立
   assert.notEqual((await call('t_runner', '/me')).json.settings.features.meetup, true);
@@ -1540,7 +1617,7 @@ test('會員揪團：功能開關預設關閉；團員只能在自己的分團�
     assert.equal(e2.visibility, 'public');
     assert.equal(e2.end_time, '08:00', '沒帶結束時間不會清掉');
     assert.equal((await put('t_runner', id, { title: '改名揪團', date: plus(-2) })).status, 400, '不能改到過去');
-    // 幹部（分團團長）可以編輯會員揪團（例如加上費用），開團人之後編輯不會清掉
+    // 幹部（分團團長）可以編輯團員揪團（例如加上費用），開團人之後編輯不會清掉
     assert.equal((await put('t_lead', id, { kind: 'other', title: '改名揪團', fee: 100, capacity: 8 })).status, 200);
     assert.equal((await put('t_runner', id, { title: '改名揪團', capacity: 9 })).status, 200);
     const e3 = (await call('t_runner', `/events/${id}`)).json;
@@ -1558,9 +1635,39 @@ test('會員揪團：功能開關預設關閉；團員只能在自己的分團�
     assert.equal(p.note, '會晚 5 分鐘');
     assert.deepEqual(p.guestNames, ['阿明']);
     assert.ok(!('payRef' in p) && !('paid' in p));
+    // 隱私權政策寫的只有姓名、備註、攜伴姓名：團員參加的其他分團（可能是私密分團）、跑團、金額與加購都不給（幹部替揪團加了費用也一樣）
+    assert.ok(!('amount' in p) && !('items' in p) && !('option' in p), JSON.stringify(p));
+    assert.deepEqual(st.json.byTeam, []);
+    assert.deepEqual(st.json.questions, []);
     const csv = await call('t_runner', `/events/${id}/export.csv`);
     assert.equal(csv.status, 200);
     assert.ok(csv.text.includes('會晚 5 分鐘') && !csv.text.includes('繳費'));
+    const head = csv.text.split('\r\n')[0];
+    assert.ok(!head.includes('"分團"') && !head.includes('"跑團"'), head);
+    assert.ok(!csv.text.includes('耕建築'), '報名者參加的其他分團、跑團不出現');
+    assert.ok((await call('t_lead', `/events/${id}/stats`)).json.byTeam.some((x) => x.k === '耕建築'), '幹部的統計照舊有各分團');
+    // 邀請管理：開團人只看得到受邀名單；新增邀請、移出、邀請連結只有主辦幹部、只用在邀請制活動（揪團一律公開）
+    //   以前開團人可以推「你受邀參加」給任何人、不通知就取消別人的報名
+    assert.equal((await call('t_runner', `/events/${id}/invites`)).status, 200);
+    assert.equal((await call('t_runner', `/events/${id}/invites`, { method: 'POST', body: { member_ids: ['t_other', 't_staff'] } })).status, 403);
+    assert.equal((await call('t_runner', `/events/${id}/invite-link`, { method: 'POST', body: { on: true } })).status, 403);
+    assert.equal((await call('t_runner', `/events/${id}/invites/t_coach`, { method: 'DELETE' })).status, 403);
+    assert.equal(await stOf('t_coach', id), 'in', '沒有被悄悄取消');
+    assert.equal((await notesFor('t_other', id)).length, 0, '沒有收到「你受邀參加」');
+    assert.equal((await call('t_lead', `/events/${id}/invites`, { method: 'POST', body: { member_ids: ['t_other'] } })).status, 400, '公開活動不能邀請');
+    assert.equal((await call('t_lead', `/events/${id}/invites/t_coach`, { method: 'DELETE' })).status, 400);
+    assert.equal(await stOf('t_coach', id), 'in');
+    // 開團人改時間或地點（沒有「發布通知或異動」）：已報名的人收到通知
+    assert.equal((await put('t_runner', id, { title: '改名揪團', capacity: 9, gather_time: '07:00', place: '大稻埕碼頭' })).status, 200);
+    const moved = (await notesFor('t_coach', id)).find((n) => n.title === '改時間與地點：改名揪團');
+    assert.ok(moved && moved.body.includes('07:00') && moved.body.includes('大稻埕碼頭'), JSON.stringify(await notesFor('t_coach', id)));
+    const ua = (await call('t_chair', `/audit?from=${plus(-1)}&to=${plus(1)}&action=event.update&target=${id}`)).json.items;
+    assert.ok(ua.some((x) => (x.detail || '').includes('已通知 1 人')), JSON.stringify(ua));
+    // 連結預覽與沒登入的預覽都叫「揪團」；本人的個資匯出有自己發起的揪團
+    assert.equal(ogOf(await (await page(`/e/${id}`)).text(), 'og:image'), `${BASE}/og/meetup.png`);
+    assert.equal((await call(null, `/public/e/${id}`)).json.event.owner_managed, 1);
+    assert.ok((await call('t_runner', '/me/export')).json.meetups.some((x) => x.id === id && x.title === '改名揪團'), '個資匯出含自己發起的揪團');
+    assert.ok(!(await call('t_lead', '/me/export')).json.meetups.some((x) => x.id === id), '幹部編輯過的不算幹部發起的');
     assert.equal((await call('t_runner', `/events/${id}/roster`)).status, 200);
     assert.equal((await call('t_runner', `/events/${id}/orders.csv`)).status, 403, '訂購單只給幹部');
     assert.equal((await call('t_other', `/events/${id}/stats`)).status, 403);
@@ -1590,13 +1697,13 @@ test('會員揪團：功能開關預設關閉；團員只能在自己的分團�
     assert.equal(again.status, 200, again.text);
     ids.push(again.json.id);
     assert.equal((await mk('t_runner', { title: '第六次' })).status, 429, '一小時最多 5 次');
-    // 幹部可以刪會員揪團；功能開關關掉後不能再發起，開團人仍可以改自己已經開的
+    // 幹部可以刪團員揪團；功能開關關掉後不能再發起，開團人仍可以改自己已經開的
     assert.equal((await call('t_lead', `/events/${ids.pop()}`, { method: 'DELETE' })).status, 200);
     assert.equal((await call('t_chair', '/settings/features', { method: 'POST', body: { meetup: false } })).json.value.meetup, false);
     assert.equal((await mk('t_runner', { title: '關掉之後' })).status, 403);
     assert.equal((await put('t_runner', ids[0], { title: '關掉之後改名' })).status, 200);
     const au = await call('t_chair', `/audit?from=${plus(-1)}&to=${today}&action=event.create&target=${ids[0]}`);
-    assert.ok(au.json.items.some((x) => x.detail.includes('會員揪團')), au.text);
+    assert.ok(au.json.items.some((x) => x.detail.includes('團員揪團')), au.text);
     for (const x of [...ids, other.json.id, official]) await call('t_chair', `/events/${x}`, { method: 'DELETE' });
   } finally {
     await call('t_chair', '/settings/features', { method: 'POST', body: { meetup: false } });

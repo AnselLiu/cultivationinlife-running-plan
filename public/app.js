@@ -712,7 +712,7 @@ const TEAM_PERMS = { lead: ['event', 'checkin', 'lottery', 'layout', 'roster', '
 const TEAM_ROLE_NAME = { lead: '團長', officer: '幹部', member: '團員' };
 const teamAllow = (tid, p) => allow(p) || (!!tid && teamOf(tid)?.my_status === 'active' && !!TEAM_PERMS[teamOf(tid).my_role]?.includes(p));
 const anyTeamAllow = (p) => allow(p) || teams().some((t) => teamAllow(t.id, p));
-// 會員揪團（功能開關 meetup，預設關閉）：沒有建立活動權限的團員，可以在自己參加的分團發起（伺服器會再檢查一次）
+// 團員揪團（功能開關 meetup，預設關閉）：沒有建立活動權限的團員，可以在自己參加的分團發起（伺服器會再檢查一次）
 const meetupTeams = () => (cfg.settings?.features?.meetup === true ? myTeams().filter((t) => !teamAllow(t.id, 'event')) : []);
 const canMeetup = (tid) => meetupTeams().some((t) => !tid || t.id === tid);
 // 活動類型的標籤：團員發起的揪團標「揪團」
@@ -882,7 +882,7 @@ function loginView() {
     api(`/public/e/${shared}${sharedTok ? `?t=${encodeURIComponent(sharedTok)}` : ''}`).then(({ event: e }) => {
       $('#sharedEv').innerHTML = `<section class="card shared">
         <span class="tiny">${e.visibility === 'invite' ? `${IC.lock} 你收到一個邀請制活動的邀請` : `有人邀請你${e.kind === 'survey' ? '填寫問卷' : '報名'}`}</span>
-        <div class="row" style="gap:6px">${e.team ? `<span class="pill">${esc(e.team)}</span>` : ''}<span class="pill ${e.kind}">${KIND_NAME[e.kind] || '活動'}</span>${phasePill(e, e.full)}</div>
+        <div class="row" style="gap:6px">${e.team ? `<span class="pill">${esc(e.team)}</span>` : ''}<span class="pill ${e.kind}">${kindLabel(e)}</span>${phasePill(e, e.full)}</div>
         <h2 style="margin:0"><span translate="no">${esc(e.title)}</span></h2>
         <p class="muted" style="margin:0">${dstr(e.date)}${e.gather_time ? ` ${e.gather_time}` : ''}${e.place ? `・<span translate="no">${esc(e.place)}</span>` : ''}</p>
         <p class="tiny" style="margin:0">先登入，登入後會直接回到這個活動。</p></section>`;
@@ -1073,7 +1073,7 @@ function richText(src) {
 // 隱私權政策每次改版的重點：要重新同意時放在最上面，不用整篇讀完才知道改了什麼
 const PRIVACY_CHANGES = {
   '2026-10-07.1': ['報名時可以替同行的親友填攜伴姓名（選填），只有該活動的主辦看得到，公開名單只顯示「＋人數」；請先徵得對方同意', '報名時給主辦的備註改成只有主辦看得到，不再出現在公開名單',
-    '協會開放「會員揪團」時，團員自己發起的揪團，發起人就是主辦：看得到報名者的姓名、給主辦的備註與攜伴姓名'],
+    '協會開放「團員揪團」時，團員自己發起的揪團，發起人就是主辦：看得到報名者的姓名、給主辦的備註與攜伴姓名'],
   '2026-10-03.4': ['你填的通訊地址（選填）會送到中華郵政的郵遞區號服務核對寫法、補上郵遞區號，只送地址文字，不含姓名'],
   '2026-10-03.3': ['新增「賽事報名資料」：只有要幹部代為團體報名時才填，加密保存，逐場同意後才提供給主辦幹部', '記錄 App 的開啟速度與錯誤訊息，只記裝置類型與頁面，不記是誰'],
 };
@@ -1104,7 +1104,7 @@ function privacyView() {
       <h2 class="h3">三、利用期間、地區、對象與方式</h2>
       <p>期間：${esc(PRIVACY.retention)}。<br>
          地區：台灣，以及雲端服務（Cloudflare）的資料中心所在地。<br>
-         對象：依職務最小權限開放給協會幹部；分團團長與幹部可以看自己分團的名冊（不含電話）與該分團活動的報名及問卷結果；協會開放會員揪團時，團員自己發起的揪團由發起人擔任主辦，看得到報名者的姓名、給主辦的備註與攜伴姓名（不含電話與繳費資料）；電話完整號碼只有行政人員看得到。賽事報名資料只在你報名「代為團體報名」的活動並勾選同意後，提供給該活動的主辦幹部，用來向賽事主辦單位送出團體報名，每次下載都留有稽核紀錄。通訊地址存檔前會送到中華郵政的 3+3 郵遞區號服務核對寫法並補上郵遞區號，只傳送地址文字。練跑地圖的「附近即時影像」由本站伺服器向政府公開攝影機取得畫面再轉給你，你的 IP 與位置不會傳給影像來源，本站也不保存影像。不提供給第三方行銷使用。<br>
+         對象：依職務最小權限開放給協會幹部；分團團長與幹部可以看自己分團的名冊（不含電話）與該分團活動的報名及問卷結果；協會開放團員揪團時，團員自己發起的揪團由發起人擔任主辦，看得到報名者的姓名、給主辦的備註與攜伴姓名（不含電話與繳費資料）；電話完整號碼只有行政人員看得到。賽事報名資料只在你報名「代為團體報名」的活動並勾選同意後，提供給該活動的主辦幹部，用來向賽事主辦單位送出團體報名，每次下載都留有稽核紀錄。通訊地址存檔前會送到中華郵政的 3+3 郵遞區號服務核對寫法並補上郵遞區號，只傳送地址文字。練跑地圖的「附近即時影像」由本站伺服器向政府公開攝影機取得畫面再轉給你，你的 IP 與位置不會傳給影像來源，本站也不保存影像。不提供給第三方行銷使用。<br>
          方式：以電子方式處理，全程加密傳輸。</p>
       <h2 class="h3">四、您的權利</h2>
       <p>您可以隨時行使個人資料保護法第 3 條的權利：</p>
@@ -1299,7 +1299,7 @@ function heroPill(e) {
   if (e.mine === 'rejected') return '<span class="pill no">未通過</span>';
   const st = signupState(e, nowTp());
   if (st === 'cancelled') return glass('已取消');
-  if (st === 'off') return glass('未開放報名');
+  if (st === 'off') return glass(e.link_url ? '前往登記 ›' : '未開放報名');   // 用外部連結登記的（例如慶功宴表單）不說「未開放報名」
   if (st === 'soon') return glass(`${tpShort(e.signup_start)} 開放`);
   if (st === 'ended') return glass('報名已截止');
   return glass(e.capacity && e.signed >= e.capacity ? '額滿・可候補' : '去報名 ›');
@@ -1322,22 +1322,25 @@ function heroCard(e) {
 }
 // 報名狀態標籤（活動卡片、沒登入的分享預覽）：報名中、即將開放、額滿可候補、報名已截止、已結束、已取消
 function phasePill(e, full) { const ph = evPhase(e, nowTp(), full); return `<span class="pill reg-${ph}">${PHASE_LABEL[ph](e)}</span>`; }
-function eventCard(e) {
+//   opt.past：過去的團練（每一張都已結束，不再標「已結束」）；teams.js 用 map(eventCard) 時第二個參數是索引，不影響
+function eventCard(e, opt) {
   const pct = e.capacity ? Math.min(100, Math.round(e.signed / e.capacity * 100)) : 0;
-  // 自己已經報名（右邊有狀態）：只在活動結束或取消時另外標示
-  const full = !!e.capacity && e.signed >= e.capacity, ph = evPhase(e, nowTp(), full), showPh = !e.mine || ph === 'over' || ph === 'cancelled';
+  // 自己已經報名（右邊有狀態）：只在活動結束或取消時另外標示；取消過的報名當成沒報名
+  const mine = e.mine === 'cancel' ? null : e.mine;
+  const full = !!e.capacity && e.signed >= e.capacity, ph = evPhase(e, nowTp(), full), showPh = (!mine || ph === 'over' || ph === 'cancelled') && !(opt?.past === true && ph === 'over');
+  // 報名狀態放在時間地點那一行（可以換行）：放在上面的標籤列會把類型、分團、邀請制擠出畫面（手機卡片很窄、標籤列不換行）
   return `<a class="card lit" href="#/e/${e.id}">
     <div class="ev">
       <span class="cal"><u>${d2(e.date).getMonth() + 1}月</u><b class="num">${e.date.slice(8)}</b><span>週${WD[d2(e.date).getDay()]}</span></span>
       <span class="body">
-        <span class="pills">${showPh ? phasePill(e, full) : ''}<span class="pill ${e.kind}">${kindLabel(e)}</span>${teamTag(teamOf(e.team_id))}${e.visibility === 'invite' ? `<span class="pill lock">${IC.lock}邀請制</span>` : ''}</span>
+        <span class="pills"><span class="pill ${e.kind}">${kindLabel(e)}</span>${teamTag(teamOf(e.team_id))}${e.visibility === 'invite' ? `<span class="pill lock">${IC.lock}邀請制</span>` : ''}</span>
         <span class="t"><span translate="no">${esc(e.title)}</span></span>
-        <span class="tiny meta">${[e.gather_time, e.place && `<span translate="no">${esc(e.place)}</span>`,
+        <span class="tiny meta">${[showPh && phasePill(e, full), e.gather_time, e.place && `<span translate="no">${esc(e.place)}</span>`,
           (() => { const ps = [...(e.options || []), ...(e.kind === 'buy' ? e.items || [] : [])].map((o) => o.price).filter(Boolean); return ps.length ? `${money(Math.min(...ps))} 起` : e.fee ? money(e.fee) : ''; })()].filter(Boolean).map((x) => `<span>${x}</span>`).join('')}</span>
         ${e.capacity ? `<span class="bar"><i style="width:${pct}%"></i></span>` : ''}
       </span>
-      <span class="evright">${e.mine === 'in' ? `<span class="mine">${IC.check}已報名</span>` : e.mine === 'wait' ? '<span class="mine wait">候補中</span>'
-        : e.mine === 'pending' ? '<span class="mine wait">審核中</span>' : e.mine === 'rejected' ? '<span class="mine no">未通過</span>' : ''}
+      <span class="evright">${mine === 'in' ? `<span class="mine">${IC.check}已報名</span>` : mine === 'wait' ? '<span class="mine wait">候補中</span>'
+        : mine === 'pending' ? '<span class="mine wait">審核中</span>' : mine === 'rejected' ? '<span class="mine no">未通過</span>' : ''}
         ${e.pending ? `<span class="pill wait">待審核 ${e.pending}</span>` : ''}
         ${e.signed ? `${avatarStack(e.peek || [], e.signed)}<span class="tiny num">${e.signed}${e.capacity ? `/${e.capacity}` : ' 人'}</span>` : ''}</span>
     </div>
@@ -1352,7 +1355,7 @@ async function pastView(month) {
     <div class="monthbar"><button class="btn ghost sm navbtn" data-m="${shift(-1)}" aria-label="上個月">${IC.chevL}</button>
       <input type="month" id="pm" aria-label="選擇月份" value="${month}" max="${new Date().toISOString().slice(0, 7)}">
       <button class="btn ghost sm navbtn" data-m="${shift(1)}" aria-label="下個月" ${isNow ? 'disabled' : ''}>${IC.chevR}</button></div>
-    <div class="evgrid">${events.map(eventCard).join('') || `<div class="card">${emptyState('calendar', '這個月沒有紀錄')}</div>`}</div>`;
+    <div class="evgrid">${events.map((e) => eventCard(e, { past: true })).join('') || `<div class="card">${emptyState('calendar', '這個月沒有紀錄')}</div>`}</div>`;
   for (const b of document.querySelectorAll('[data-m]')) b.onclick = () => pastView(b.dataset.m);
   $('#pm').onchange = (e) => e.target.value && pastView(e.target.value);
 }

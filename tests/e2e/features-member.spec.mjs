@@ -559,7 +559,7 @@ test.describe('跑者休息站：離線', () => {
   });
 });
 
-test('會員揪團：協會打開開關後，團員從首頁發起（精簡表單、不收費），活動頁標「揪團」，管理區只有統計、編輯與刪除', async ({ page, request }) => {
+test('團員揪團：協會打開開關後，團員從首頁發起（精簡表單、不收費），活動頁標「揪團」，管理區只有統計、編輯與刪除', async ({ page, request }) => {
   await apiAs(request, 't_chair', '/settings/features', { method: 'POST', body: { meetup: true } });
   let id = null, ok = false;
   try {
@@ -595,7 +595,7 @@ test('會員揪團：協會打開開關後，團員從首頁發起（精簡表�
   } finally {
     await tidy([
       ['刪除揪團', () => id && apiAs(request, 't_runner', `/events/${id}`, { method: 'DELETE' })],
-      ['關閉會員揪團', () => apiAs(request, 't_chair', '/settings/features', { method: 'POST', body: { meetup: false } })],
+      ['關閉團員揪團', () => apiAs(request, 't_chair', '/settings/features', { method: 'POST', body: { meetup: false } })],
     ], ok);
   }
 });

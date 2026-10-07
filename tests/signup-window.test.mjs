@@ -72,13 +72,14 @@ test('windowError：格式、截止晚於活動、開始晚於截止、建立時
   assert.equal(tpText(''), '');
 });
 
-test('windowError：結束時間（選填）要晚於集合時間；沒填集合時間、問卷不檢查', () => {
+test('windowError：結束時間（選填）要晚於集合時間、有結束時間就要有集合時間；問卷不檢查', () => {
   const ev = { date: '2026-10-10', gather_time: '07:00' };
   assert.match(windowError({ ...ev, end_time: '06:30' }), /結束時間要在開始之後/);
   assert.match(windowError({ ...ev, end_time: '07:00' }), /結束時間要在開始之後/);
   assert.equal(windowError({ ...ev, end_time: '09:00' }), null);
   assert.equal(windowError({ ...ev, end_time: '' }), null);
-  assert.equal(windowError({ date: '2026-10-10', gather_time: '', end_time: '09:00' }), null);
+  assert.match(windowError({ date: '2026-10-10', gather_time: '', end_time: '09:00' }), /也要填集合（開始）時間/, '只有結束時間，活動頁會變成「－09:00」');
+  assert.equal(windowError({ date: '2026-10-10', gather_time: '', end_time: '' }), null);
   assert.equal(windowError({ ...ev, kind: 'survey', end_time: '06:00' }), null);
 });
 
@@ -97,7 +98,13 @@ test('evPhase：卡片與分享預覽的狀態（取消 > 已結束 > 關閉／�
   assert.equal(evPhase({ ...ev, end_time: null }, '2026-10-11T00:00'), 'over');
   assert.equal(evPhase({ ...ev, status: 'cancelled' }, '2026-10-11T00:00'), 'cancelled', '取消優先');
   assert.equal(evPhase({ ...ev, signup_open: 0 }, '2026-10-06T08:00'), 'off');
+  // 用外部連結登記（App 裡不開放報名）：不說「未開放報名」；沒登入的預覽只給 ext（有沒有連結）
+  assert.equal(evPhase({ ...ev, signup_open: 0, link_url: 'https://forms.example/x' }, '2026-10-06T08:00'), 'ext');
+  assert.equal(evPhase({ ...ev, signup_open: 0, ext: true }, '2026-10-06T08:00'), 'ext');
+  assert.equal(evPhase({ ...ev, signup_open: 1, link_url: 'https://forms.example/x' }, '2026-10-06T08:00'), 'open', 'App 裡也開放報名的照舊');
+  assert.equal(evPhase({ ...ev, signup_open: 0, link_url: 'https://forms.example/x' }, '2026-10-11T00:00'), 'over');
+  assert.equal(PHASE_LABEL.ext(ev), '外部登記');
   assert.equal(PHASE_LABEL.open({ kind: 'survey' }), '填寫中');
   assert.equal(PHASE_LABEL.closed({ kind: 'survey' }), '問卷已截止');
-  for (const k of ['cancelled', 'over', 'off', 'soon', 'closed', 'full', 'open']) assert.equal(typeof PHASE_LABEL[k](ev), 'string');
+  for (const k of ['cancelled', 'over', 'off', 'ext', 'soon', 'closed', 'full', 'open']) assert.equal(typeof PHASE_LABEL[k](ev), 'string');
 });

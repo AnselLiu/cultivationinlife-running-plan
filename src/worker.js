@@ -548,16 +548,17 @@ const seatSql = (s, flag) => `CASE WHEN ${flag} = 1 THEN 1 + COALESCE(${s}.guest
 //   名額算法跟報名一樣：活動勾了「攜伴也佔名額」就算本人＋攜伴
 async function publicEvent(env, id, tok) {
   const e = await env.DB.prepare(`SELECT e.title, e.date, e.gather_time, e.end_time, e.place, e.kind, e.status, e.visibility, e.invite_token, e.signup_start, e.deadline, e.require_approval, e.signup_open,
+      e.owner_managed, COALESCE(e.link_url, '') != '' AS ext,
       t.name AS team, t.private, e.capacity > 0 AND (SELECT COALESCE(SUM(${seatSql('s', 'e.count_guests')}), 0)
         FROM signups s WHERE s.event_id = e.id AND s.status = 'in') >= e.capacity AS full
     FROM events e LEFT JOIN teams t ON t.id = e.team_id WHERE e.id = ?`).bind(id).first();
   const okInvite = e?.visibility === 'invite' && !!e.invite_token && tok === e.invite_token;
   if (!e || (e.visibility === 'invite' ? !okInvite : e.private)) return null;
-  const { private: _p, invite_token: _t, full, ...pub } = e;
-  return { ...pub, id, full: !!full };
+  const { private: _p, invite_token: _t, full, ext, ...pub } = e;
+  return { ...pub, id, full: !!full, ext: !!ext };   // ext：用外部連結登記（不給網址，只給有沒有）
 }
 
-// 會員揪團（功能開關 meetup，預設關閉）：沒有建立活動權限的團員，在自己參加的分團發起
+// 團員揪團（功能開關 meetup，預設關閉）：沒有建立活動權限的團員，在自己參加的分團發起
 //   只留基本欄位（標題、日期、集合與結束時間、地點、練跑地圖的地點與路線、名額、截止、攜伴、說明、報名成功訊息）；
 //   下面這些一律用固定值（發起時）或沿用原值（開團人編輯時，幹部改過的不會被清掉）：不能收費、問卷、審核、外連、課表、邀請制，也不能換分團
 //   帶團欄位放開團人的暱稱（活動頁顯示「發起」）；不推播、不能定期；每人一小時最多發起 5 次、同時最多 3 場還沒舉行的揪團
@@ -575,7 +576,7 @@ function meetupFields(e, cur, member) {
 }
 
 // 取消方式（signups.cancel_by）：CSV 與統計頁用
-const CANCEL_BY = { self: '本人取消', organizer: '主辦移出', rejected: '主辦婉拒', uninvite: '取消邀請', expired: '申請逾期' };
+const CANCEL_BY = { self: '本人取消', organizer: '主辦移出', rejected: '主辦婉拒', returned: '主辦退回', uninvite: '取消邀請', expired: '申請逾期' };
 // 報名問卷：單選、複選、簡答；最多 12 題
 const Q_TYPES = ['single', 'multi', 'text'];
 function readQuestions(v) {
@@ -754,6 +755,9 @@ async function doSignup(env, ev, member, b, { by = null, manager = false, req = 
   const cnt = await env.DB.prepare(`SELECT COALESCE(SUM(CASE WHEN status = 'in' THEN ${seatSql('signups', '?2')} END), 0) AS n, COALESCE(SUM(status = 'wait'), 0) AS w
     FROM signups WHERE event_id = ?1`).bind(ev.id, ev.count_guests ? 1 : 0).first();
   const need = seatsOf(ev, { guests }), others = cnt.n - (was === 'in' ? seatsOf(ev, mine) : 0);
+  // 本人＋攜伴比整個名額還多：永遠補不上（promote 會一直跳過這一組），不要讓人以為排在候補第幾位
+  if (ev.capacity && need > ev.capacity && need > (was ? seatsOf(ev, mine) : 1))   // 已經在名單上的舊資料沒加攜伴就不擋（改備註不會失敗）
+    return fail(400, `名額只有 ${ev.capacity} 位，最多帶 ${Math.max(0, ev.capacity - 1)} 位攜伴`);
   const full = !!ev.capacity && (others + need > ev.capacity || cnt.w > 0);
   // 已經是正取、攜伴加多了：位子不夠就擋下（不會因為改內容掉回候補，也不能多佔候補的位子）
   if (was === 'in' && ev.capacity && ev.count_guests && need > seatsOf(ev, mine) && others + need > ev.capacity)
@@ -771,6 +775,8 @@ async function doSignup(env, ev, member, b, { by = null, manager = false, req = 
   const reset = mine?.status === 'cancel';                           // 取消後重報：排到最後、清掉舊審核
   const edited = approveNow || reset ? 0 : (was === 'in' && mine.review === 'approved' ? 1 : null);   // null＝不改
   const itemsJson = items.length ? JSON.stringify(items) : null;
+  // 正取加攜伴（攜伴也佔名額）：上面的檢查跟寫入之間可能有人報名，所以寫入那一句再確認一次位子（同一句裡算其他正取的位子，D1 一句一句執行）
+  const grow = was === 'in' && !!ev.capacity && !!ev.count_guests && need > seatsOf(ev, mine);
   if (mine) {
     const r = await env.DB.prepare(`UPDATE signups SET name = ?1, grp = ?2, dist = ?3, note = ?4, status = ?5, answers = ?6, option = ?7,
       reg_consent_at = CASE WHEN ?8 THEN COALESCE(reg_consent_at, datetime('now')) ELSE NULL END, items = ?9, amount = ?10, amount_detail = ?11,
@@ -782,11 +788,11 @@ async function doSignup(env, ev, member, b, { by = null, manager = false, req = 
       reviewed_at = CASE WHEN ?17 THEN datetime('now') WHEN ?16 THEN NULL ELSE reviewed_at END,
       review_note = CASE WHEN ?17 OR ?16 THEN NULL ELSE review_note END,
       edited_after_review = COALESCE(?19, edited_after_review)
-      WHERE id = ?20 AND status = ?21`)
+      WHERE id = ?20 AND status = ?21${grow ? ` AND (SELECT COALESCE(SUM(${seatSql('o', '1')}), 0) FROM signups o WHERE o.event_id = ?23 AND o.status = 'in' AND o.id != ?20) + ?24 <= ?25` : ''}`)
       .bind(name, grp, dist, note, status, ans.answers, option, ev.group_reg ? 1 : 0, itemsJson, q.total, JSON.stringify(q.lines),
         repay ? 1 : 0, repay ? `追加 ${q.total - mine.amount} 元` : null, guests, meal, reset ? 1 : 0, approveNow ? 1 : 0, approver?.id || null, edited,
-        mine.id, mine.status, guestNames).run();
-    if (!r.meta.changes) return fail(409, '報名狀態剛被主辦更新，請重新整理再試');
+        mine.id, mine.status, guestNames, ...(grow ? [ev.id, need, ev.capacity] : [])).run();
+    if (!r.meta.changes) return fail(409, grow ? '名額剛被其他人報走，攜伴人數沒有改，請重新整理再試' : '報名狀態剛被主辦更新，請重新整理再試');
   } else {
     // 連按兩次或兩台裝置同時送出：第二筆什麼都不做，回傳第一筆的狀態（不重複通知）
     const r = await env.DB.prepare(`INSERT INTO signups (id, event_id, member_id, name, grp, dist, note, status, answers, option, reg_consent_at, items, amount, amount_detail, guests, meal, review, reviewed_by, reviewed_at, first_at, guest_names)
@@ -845,7 +851,8 @@ async function doSignup(env, ev, member, b, { by = null, manager = false, req = 
       await notify(env, [member.id], 'signup', { ...base, title: `已排入候補：${ev.title}`, body: `目前候補第 ${await queuePos(env, ev.id, member.id)} 位，有人取消會自動遞補並通知你` });
     }
   }
-  return json({ ok: true, status: final, amount: q.total, lines: q.lines, full, position: final === 'wait' ? await queuePos(env, ev.id, member.id) : null });
+  return json({ ok: true, status: final, amount: q.total, lines: q.lines, full, position: final === 'wait' ? await queuePos(env, ev.id, member.id) : null,
+    successMsg: final === 'in' && !by ? ev.success_msg || null : null });   // 報名成功訊息：正取才給（活動頁的提示卡與播報）
 }
 // 入場代碼：去掉容易看錯的 0/O/1/I
 const ticketCode = () => [...crypto.getRandomValues(new Uint8Array(6))].map((b) => 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[b % 32]).join('');
@@ -1143,7 +1150,7 @@ const api = (async function api(req, env, path, method) {
   const need = () => (member ? null : fail(401, '請先加入'));
   // 功能開關（預設開；後台關掉才是 false）
   const featOnServer = (k) => { try { return JSON.parse(setting('features') || '{}')[k] !== false; } catch { return true; } };
-  // 預設關閉的功能開關（明確打開才是 true）：會員揪團
+  // 預設關閉的功能開關（明確打開才是 true）：團員揪團
   const featOptIn = (k) => { try { return JSON.parse(setting('features') || '{}')[k] === true; } catch { return false; } };
   // 我現在的課表週期：協會賽季，或跟自己的一場比賽（比賽被刪掉、功能關閉時回到協會賽季）
   const planCycleOf = async (m) => {
@@ -1191,9 +1198,9 @@ const api = (async function api(req, env, path, method) {
   // 這個活動的主辦幹部：該分團（或全協會）的建立活動權限；建立者後來被撤換就不能再管
   //   收款、對帳、團體報名資料、點名、報到 QR、通知或異動、整批匯入、審核與移出、座位、抽獎只有主辦幹部（與報到、抽獎權限）
   const officerOf = (ev) => teamCan(ev.team_id, 'event');
-  // 會員揪團（owner_managed）的開團人本人，而且還是那個分團的團員；功能開關之後關掉，已經開的揪團仍可以自己改或刪
+  // 團員揪團（owner_managed）的開團人本人，而且還是那個分團的團員；功能開關之後關掉，已經開的揪團仍可以自己改或刪
   const isOwner = (ev) => !!member && !!ev.owner_managed && ev.created_by === member.id && (!ev.team_id || inTeam(ev.team_id));
-  // 管理這個活動（編輯、刪除、邀請、統計、名單與匯出）：主辦幹部，或會員揪團的開團人；幹部一樣可以編輯、刪除會員揪團
+  // 管理這個活動（編輯、刪除、邀請、統計、名單與匯出）：主辦幹部，或團員揪團的開團人；幹部一樣可以編輯、刪除團員揪團
   const canManage = (ev) => officerOf(ev) || isOwner(ev);
   const evById = (id) => env.DB.prepare(`SELECT ${eventCols} FROM events WHERE id = ?`).bind(id).first();
   const teamIds = async () => (await env.DB.prepare('SELECT id FROM teams').all()).results.map((r) => r.id);
@@ -1746,7 +1753,7 @@ const api = (async function api(req, env, path, method) {
     if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(mo || '')) return fail(400, '月份格式不正確');
     const from = `${mo}-01`, to = `${mo}-31`;
     const [events, hol, items, races] = await Promise.all([
-      env.DB.prepare(`SELECT events.id, events.title, events.date, events.gather_time, events.place, events.kind, events.team_id, events.series_id,
+      env.DB.prepare(`SELECT events.id, events.title, events.date, events.gather_time, events.place, events.kind, events.team_id, events.series_id, events.owner_managed,
           (SELECT CASE WHEN s.status = 'cancel' AND s.review = 'rejected' THEN 'rejected' ELSE s.status END FROM signups s WHERE s.event_id = events.id AND s.member_id = ?1) AS mine,
           (SELECT COUNT(*) FROM signups s WHERE s.event_id = events.id AND s.status = 'in') AS signed
         FROM events WHERE events.date BETWEEN ?3 AND ?4 AND ${seeSQL} ORDER BY events.date, events.gather_time LIMIT 300`).bind(member.id, can(member, 'event') ? 1 : 0, from, to).all(),
@@ -2290,7 +2297,7 @@ const api = (async function api(req, env, path, method) {
     const b = await body(), e = readEvent(b);
     if (!e) return fail(400, '活動資料不完整');
     if (e.team_id && !(await teamIds()).includes(e.team_id)) return fail(400, '找不到這個分團');
-    // 沒有這個分團的建立活動權限：協會打開「會員揪團」時，團員可以在自己參加的分團發起（欄位精簡、不推播，見 meetupFields）
+    // 沒有這個分團的建立活動權限：協會打開「團員揪團」時，團員可以在自己參加的分團發起（欄位精簡、不推播，見 meetupFields）
     const meetup = !teamCan(e.team_id, 'event');
     if (meetup) {
       if (!featOptIn('meetup')) return fail(403, e.team_id ? '只有這個分團的團長與幹部可以建立活動' : '只有幹部可以建立全協會活動');
@@ -2308,9 +2315,9 @@ const api = (async function api(req, env, path, method) {
     e.success_msg ??= '';
     { const err = windowError(e, { now: tpNow(), create: true }); if (err) return fail(400, err); }
     if (e.route_id && !(await env.DB.prepare('SELECT 1 FROM routes WHERE id = ? AND (shared = 1 OR created_by = ?)').bind(e.route_id, member.id).first())) return fail(400, '找不到這條路線');
-    // 會員揪團：每人一小時最多發起 5 次（被擋的不寫 D1）
+    // 團員揪團：每人一小時最多發起 5 次（被擋的不寫 D1）
     if (meetup && await limited(env, `event:${member.id}`, 5, 3600)) return fail(429, '發起太頻繁，請稍後再試');
-    // 定期揪跑：每週選幾天、到哪一天為止，一次建立每一場（最多 60 場），可選擇遇到國定假日不開；會員揪團不能定期
+    // 定期揪跑：每週選幾天、到哪一天為止，一次建立每一場（最多 60 場），可選擇遇到國定假日不開；團員揪團不能定期
     const rep = !meetup && b.repeat && Array.isArray(b.repeat.weekdays) ? { days: [...new Set(b.repeat.weekdays.map(Number).filter((d) => d >= 0 && d <= 6))], until: str(b.repeat.until, 10), skip: b.repeat.skip_holidays === true } : null;
     let dates = [e.date];
     if (rep && rep.days.length) {
@@ -2328,14 +2335,14 @@ const api = (async function api(req, env, path, method) {
     // 報名期間：跟著每一場往後推（保持跟活動日的距離）；「立即開放」（開始時間已過或沒填）不位移
     const sh = (x, d) => (x ? shiftDays(x, daysBetween(e.date, d)) : x);
     const shStart = (d) => (e.signup_start && e.signup_start > tpNow() ? sh(e.signup_start, d) : e.signup_start);
-    // 建立時通知：會員揪團一律不推播（只出現在列表，由開團人自己分享）
+    // 建立時通知：團員揪團一律不推播（只出現在列表，由開團人自己分享）
     const notifyAll = !meetup && b.notify !== false;
     // 之後才開放：到了開始時間由排程推播一次（建立時有勾通知、不是定期揪跑）；其他情況直接標成已推播
     const openOwed = notifyAll && !!e.signup_start && e.signup_start > tpNow() && !series;
     const ids = dates.map(() => rid(8)), id = ids[0];
     // 每一場不同的欄位（id、日期、週次、截止、開始）放進 JSON，一句 INSERT … SELECT FROM json_each（句數跟場數無關）
     const dj = JSON.stringify(dates.map((d, i) => [ids[i], d, i ? null : e.week_no ?? null, sh(e.deadline, d) ?? null, shStart(d) ?? null]));
-    //   會員揪團：同一句的 WHERE 檢查這個人還沒舉行、沒取消的揪團不到 MEETUP_MAX 場（同時送出也不會超過）
+    //   團員揪團：同一句的 WHERE 檢查這個人還沒舉行、沒取消的揪團不到 MEETUP_MAX 場（同時送出也不會超過）
     const ins = await env.DB.prepare(`INSERT INTO events (id, kind, title, date, gather_time, end_time, place, lead, note, week_no, plan_text, capacity, signup_open, deadline, created_by, fee, guest_max, meal_options, link_url, link_label, team_id, questions, visibility, options, group_reg, items, pricing, pay_info, min_qty, series_id, spot_id, route_id, address, address_zip, signup_start, require_approval, notify_signup, open_notified_at, success_msg, count_guests, owner_managed)
       SELECT json_extract(value, '$[0]'), ?2, ?3, json_extract(value, '$[1]'), ?4, ?5, ?6, ?7, ?8, json_extract(value, '$[2]'), ?9, ?10, ?11, json_extract(value, '$[3]'), ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31,
         json_extract(value, '$[4]'), ?32, ?33, ${openOwed ? 'NULL' : "datetime('now')"}, ?34, ?35, ?36 FROM json_each(?1)
@@ -2343,13 +2350,13 @@ const api = (async function api(req, env, path, method) {
       .bind(dj, e.kind, e.title, e.gather_time, e.end_time, e.place, e.lead, e.note, e.plan_text, e.capacity, e.signup_open, member.id, e.fee, e.guest_max, e.meal_options, e.link_url, e.link_label, e.team_id, e.questions, e.visibility, e.options, e.group_reg, e.items, e.pricing, e.pay_info, e.min_qty, series, e.spot_id, e.route_id, e.address, e.address_zip || null,
         e.require_approval, e.notify_signup, e.success_msg || null, e.count_guests, meetup ? 1 : 0, ...(meetup ? [today()] : [])).run();
     if (meetup && !ins.meta.changes) return fail(409, '你已經有 3 場還沒舉行的揪團，等其中一場結束或刪掉後再發起');   // 3＝MEETUP_MAX（訊息寫死，英文介面才對得到字典）
-    // 複製活動：沿用原活動的座位圖（獎項每年不同，不複製）；會員揪團不複製
+    // 複製活動：沿用原活動的座位圖（獎項每年不同，不複製）；團員揪團不複製
     const from = meetup ? '' : str(b.copy_from, 32);
     if (from) {
       const src = await evById(from);
       if (src && await canSee(src)) await env.DB.prepare('UPDATE events SET seat_layout = (SELECT seat_layout FROM events WHERE id = ?) WHERE id = ?').bind(from, id).run();
     }
-    await audit(env, req, member, 'event.create', 'event', id, `${e.title}${e.team_id ? `（${e.team_id}）` : ''}${meetup ? '，會員揪團' : ''}${e.visibility === 'invite' ? '，邀請制' : ''}${from ? `，複製自 ${from}` : ''}${series ? `，定期 ${dates.length} 場` : ''}${e.require_approval ? '，需審核' : ''}${e.signup_start || e.deadline ? `，報名 ${e.signup_start || '即日起'}–${e.deadline || '活動開始'}` : ''}`);
+    await audit(env, req, member, 'event.create', 'event', id, `${e.title}${e.team_id ? `（${e.team_id}）` : ''}${meetup ? '，團員揪團' : ''}${e.visibility === 'invite' ? '，邀請制' : ''}${from ? `，複製自 ${from}` : ''}${series ? `，定期 ${dates.length} 場` : ''}${e.require_approval ? '，需審核' : ''}${e.signup_start || e.deadline ? `，報名 ${e.signup_start || '即日起'}–${e.deadline || '活動開始'}` : ''}`);
     // 邀請制不廣播；之後邀請誰就通知誰
     let notified = 0;
     if (notifyAll && e.visibility !== 'invite') {
@@ -2385,6 +2392,8 @@ const api = (async function api(req, env, path, method) {
             token: (await env.DB.prepare('SELECT invite_token FROM events WHERE id = ?').bind(id).first()).invite_token || null } : null;
       const attendTok = officer ? (await env.DB.prepare('SELECT attend_token FROM events WHERE id = ?').bind(id).first()).attend_token : null;
       return json({ ...ev, questions: parseQ(ev.questions), myAnswers: mine?.answers ? JSON.parse(mine.answers) : null,
+        // 報名成功訊息只給主辦（編輯表單）與正取的人（活動頁的提示卡）：主辦可能放只給報名者的東西（LINE 群組連結、集合細節）
+        success_msg: manage || mine?.status === 'in' ? ev.success_msg : null,
         myPaid: mine?.paid || null, myAttended: mine?.attended_at || null, myOption: mine?.option || null, myRegConsent: !!mine?.reg_consent_at,
         myNote: mine && mine.status !== 'cancel' ? mine.note || '' : null,   // 給主辦的備註（只有本人與主辦看得到）；編輯報名時帶回表單
         myGuests: mine && mine.status !== 'cancel' ? mine.guests || 0 : null, myGuestNames: mine && mine.status !== 'cancel' ? parseQ(mine.guest_names) : [],   // 攜伴姓名同樣只有本人與主辦
@@ -2411,7 +2420,7 @@ const api = (async function api(req, env, path, method) {
       const b = await body();
       const e = readEvent(b);
       if (!e) return fail(400, '活動資料不完整');
-      // 會員揪團的開團人（不是主辦幹部）：只能改基本欄位，其他設定與分團沿用原值；已取消的不能改（幹部取消的不能自己恢復）；
+      // 團員揪團的開團人（不是主辦幹部）：只能改基本欄位，其他設定與分團沿用原值；已取消的不能改（幹部取消的不能自己恢復）；
       //   改日期只能改到今天以後，已經過去的不能改日期（不能把舊的揪團搬到未來，繞過同時 3 場的上限）
       const ownerEdit = !officerOf(cur);
       if (ownerEdit) {
@@ -2461,6 +2470,20 @@ const api = (async function api(req, env, path, method) {
       // 名額變多、拿掉上限、或攜伴不再佔名額：遞補候補（名額變少、改成攜伴佔名額不會讓任何人掉回候補）；人多時做不完的由每小時的 promoteSweep 接著遞補
       if (!admitted && cur.capacity && (!e.capacity || e.capacity > cur.capacity || (cur.count_guests && !e.count_guests))) await promote(env, ev, { manual: true, reserve: 4 });
       if (reopen) await audit(env, req, member, 'event.reopen', 'event', id, e.title);
+      // 開團人改日期、集合時間或地點：通知已報名（含候補）的人。開團人沒有「發布通知或異動」，編輯就是唯一的方法，不通知的話大家會照舊的時間地點去
+      //   幹部編輯不在這裡通知（幹部用「發布通知或異動」，可以寫說明、選通知誰）；句數固定（一句查人＋通知）
+      let told = 0;
+      const moved = e.date !== cur.date || (e.gather_time || '') !== (cur.gather_time || ''), placed = (e.place || '') !== (cur.place || '');
+      if (ownerEdit && (moved || placed)) {
+        const ids = (await env.DB.prepare("SELECT member_id FROM signups WHERE event_id = ? AND status IN ('in', 'wait', 'pending') AND member_id IS NOT NULL").bind(id).all()).results.map((r) => r.member_id).filter((x) => x !== member.id);
+        if (ids.length) {
+          const nowD = new Date(), la = eventLatest(cur, nowD), lb = eventLatest(ev, nowD), latest = la && lb ? (la < lb ? la : lb) : null;
+          await notify(env, ids, 'change', { kind: 'event', title: `${moved && placed ? '改時間與地點' : moved ? '改時間' : '改地點'}：${e.title}`,
+            body: [moved ? `改成 ${mdw(e.date)}${e.gather_time ? ` ${e.gather_time}` : ''}` : '', placed ? `地點：${e.place || '待定'}` : ''].filter(Boolean).join('，'),
+            url: `/#/e/${id}`, ref: `e:${id}`, tag: `notice-${id}`, latest, now: !latest });
+          told = ids.length;
+        }
+      }
       const changed = [
         cur.visibility !== e.visibility ? `改為${e.visibility === 'invite' ? '邀請制' : '公開'}` : '',
         !!cur.require_approval !== !!e.require_approval ? `審核 ${cur.require_approval ? '開→關' : '關→開'}` : '',
@@ -2471,6 +2494,8 @@ const api = (async function api(req, env, path, method) {
         (cur.guest_max || null) !== (e.guest_max || null) ? `攜伴 ${cur.guest_max || 0}→${e.guest_max || 0} 位` : '',
         cur.date !== e.date || (cur.gather_time || '') !== (e.gather_time || '') ? '改期' : '',
         !!cur.signup_open !== !!e.signup_open ? `開放報名 ${e.signup_open ? '開' : '關'}` : '',
+        placed ? '改地點' : '',
+        told ? `已通知 ${told} 人` : '',
       ].filter(Boolean);
       await audit(env, req, member, 'event.update', 'event', id, `${e.title}${changed.length ? `（${changed.join('、')}）` : ''}`);
       return json({ ok: true, admitted: admitted ? { in: admitted.in.length, wait: admitted.wait.length, skipped: admitted.skipped } : null });
@@ -2527,6 +2552,12 @@ const api = (async function api(req, env, path, method) {
       return json({ ok: true });
     }
     if (!canManage(ev)) return fail(403, '只有這個活動的主辦幹部可以管理邀請');
+    // 新增邀請、移出、邀請連結：只有主辦幹部、只用在邀請制活動。團員揪團一律公開，開團人只看得到受邀名單（幹部把揪團改成邀請制時）；
+    //   以前開團人對公開的揪團也能呼叫：推播「你受邀參加」給任何團員、不通知就取消別人的報名
+    if (method !== 'GET') {
+      if (!officerOf(ev)) return fail(403, '只有這個活動的主辦幹部可以管理邀請');
+      if (ev.visibility !== 'invite') return fail(400, '這個活動不是邀請制');
+    }
     if (kind === 'invites' && method === 'GET') {
       const rows = (await env.DB.prepare(
         `SELECT m.id, m.name, m.nickname, m.avatar, i.via, i.created_at, s.status
@@ -2696,7 +2727,7 @@ const api = (async function api(req, env, path, method) {
         ref: `pay:${ev.id}:${member.id}`, push: { title: `${ev.title}：有 1 筆繳費回報`, body: '點開確認收款' } });
       return json({ ok: true });
     }
-    // 會員揪團的開團人不能做這些（收款、對帳、點名、報到 QR、通知或異動、整批匯入、審核與移出），由幹部處理
+    // 團員揪團的開團人不能做這些（收款、對帳、點名、報到 QR、通知或異動、整批匯入、審核與移出），由幹部處理
     if (!officerOf(ev) && !(op === 'attendance' && teamCan(ev.team_id, 'checkin'))) return fail(403, '只有這個活動的幹部可以操作');
     // 報名審核：核准、婉拒（含移出正取與候補）、重新審核；只有這場的主辦幹部（canManage）可以
     //   所有查詢都限定這個活動，其他活動的 member_id 一律「找不到這筆報名」
@@ -2745,7 +2776,7 @@ const api = (async function api(req, env, path, method) {
           return json({ error: '這些人已經在名單上，要確認移出', needRevoke: true, count: listed.length, paid: listed.filter((r) => r.paid === 'paid').length }, 409);
         // 一句改完所有人（每人比對自己原本的狀態，兩句之間被別人處理掉的不會改到）
         const upd = live.length ? new Set((await env.DB.prepare(`UPDATE signups SET status = 'cancel', review = CASE WHEN ?5 THEN NULL ELSE 'rejected' END, reviewed_by = ?1, reviewed_at = datetime('now'), review_note = ?2, reg_consent_at = NULL,
-            cancelled_at = datetime('now'), cancel_by = CASE WHEN status = 'pending' THEN 'rejected' ELSE 'organizer' END,
+            cancelled_at = datetime('now'), cancel_by = CASE WHEN status != 'pending' THEN 'organizer' WHEN ?5 THEN 'returned' ELSE 'rejected' END,
             paid_note = CASE WHEN paid = 'paid' THEN CASE WHEN ?5 THEN '移出，待退費' ELSE '婉拒，待退費' END ELSE paid_note END
           WHERE event_id = ?3 AND (id || ':' || status) IN (SELECT value FROM json_each(?4)) RETURNING id`)
           .bind(member.id, note, ev.id, JSON.stringify(live.map((r) => `${r.id}:${r.status}`)), rebook ? 1 : 0).all()).results.map((x) => x.id)) : new Set();
@@ -2943,7 +2974,7 @@ const api = (async function api(req, env, path, method) {
       const names = [...new Set((Array.isArray(b.names) ? b.names : String(b.names || '').split(/[\n,，、\t]+/)).map((x) => str(x, 40)).filter(Boolean))].slice(0, 300);
       const action = b.action === 'invite' ? 'invite' : 'signup';
       if (!names.length) return fail(400, '請貼上姓名');
-      const matched = [], ambiguous = [], unmatched = [], failed = [], rest = [], already = [];
+      const matched = [], ambiguous = [], unmatched = [], failed = [], rest = [], already = [], pending = [];
       // 名字比對一句（json_each JOIN members）
       const hits = (await env.DB.prepare('SELECT j.value AS q_name, m.* FROM json_each(?) j JOIN members m ON m.name = j.value OR m.nickname = j.value').bind(JSON.stringify(names)).all()).results;
       const byName = new Map(), seen = new Set();
@@ -2960,16 +2991,17 @@ const api = (async function api(req, env, path, method) {
         added = fresh.length;
         if (fresh.length) await notify(env, fresh, 'event', { title: `你受邀參加：${ev.title}`, body: `${ev.date}${ev.gather_time ? ` ${ev.gather_time}` : ''}　${ev.place || ''}`, url: `/#/e/${ev.id}`, ref: `e:${ev.id}`, ...evTiming(env, ev) });
       } else {
-        // 原本就是正取或候補的跳過（不改內容、不通知）；只通知這次報名成功的人，候補的人用候補文案
-        const had = new Set((await env.DB.prepare(`SELECT member_id FROM signups WHERE event_id = ? AND status IN ('in','wait') AND member_id IN (SELECT value FROM json_each(?))`)
-          .bind(ev.id, JSON.stringify(matched.map((m) => m.id))).all()).results.map((r) => r.member_id));
+        // 原本就是正取、候補或待審核的跳過（不改內容、不通知）；只通知這次報名成功的人，候補的人用候補文案
+        //   待審核另外列出：請主辦到統計頁核准（核准不會動到本人填的內容）
+        const had = new Map((await env.DB.prepare(`SELECT member_id, status FROM signups WHERE event_id = ? AND status IN ('in','wait','pending') AND member_id IN (SELECT value FROM json_each(?))`)
+          .bind(ev.id, JSON.stringify(matched.map((m) => m.id))).all()).results.map((r) => [r.member_id, r.status]));
         const okIn = [], okWait = [];
         // 分段處理：代為報名要逐人走 doSignup（一人約 5–9 句），每人之前確認額度（用目前為止單人最高用量估），
         //   不夠就停，沒處理到的人放進 more.names，前端（apiAll）再送一次
         let per = 10;
         for (const m of matched) {
-          // 已經是正取或候補的不動：以前會用空白的報名內容蓋掉本人的備註、問卷、加購與攜伴
-          if (had.has(m.id)) { already.push(m.name); continue; }
+          // 已經是正取、候補或待審核的不動：以前會用空白的報名內容蓋掉本人的備註、問卷、加購與攜伴（待審核還會被直接核准）
+          if (had.has(m.id)) { (had.get(m.id) === 'pending' ? pending : already).push(m.name); continue; }
           if (rest.length || !env.budget.room(per + notifyCost(okIn.length + okWait.length + 1) + 4)) { rest.push(m.q_name); continue; }
           const s0 = env.budget.sub;
           if (ev.visibility === 'invite') await env.DB.prepare("INSERT OR IGNORE INTO event_invites (event_id, member_id, invited_by, via) VALUES (?, ?, ?, 'manual')").bind(ev.id, m.id, member.id).run();
@@ -2985,9 +3017,9 @@ const api = (async function api(req, env, path, method) {
         if (okWait.length) await notify(env, okWait, 'signup', { title: `已幫你排入候補：${ev.title}`, body: '有人取消時會依序遞補，遞補成功會再通知你', url: `/#/e/${ev.id}`, ref: `e:${ev.id}` });
       }
       const outside = action === 'signup' && signupState(ev, tpNow()) !== 'open' ? '（期間外代報）' : '';
-      await audit(env, req, member, 'event.bulk', 'event', ev.id, `${action === 'invite' ? '邀請' : '代為報名'} ${added} 人${action === 'signup' ? `（正取 ${nIn}、候補 ${nWait}）` : ''}，找不到 ${unmatched.length}、同名 ${ambiguous.length}${already.length ? `、已在名單 ${already.length}` : ''}${outside}`);
+      await audit(env, req, member, 'event.bulk', 'event', ev.id, `${action === 'invite' ? '邀請' : '代為報名'} ${added} 人${action === 'signup' ? `（正取 ${nIn}、候補 ${nWait}）` : ''}，找不到 ${unmatched.length}、同名 ${ambiguous.length}${already.length ? `、已在名單 ${already.length}` : ''}${pending.length ? `、待審核 ${pending.length}` : ''}${outside}`);
       if (rest.length) env.budget.stop('bulk:more');
-      return json({ added, matched: matched.filter((m) => !rest.includes(m.q_name)).map((m) => m.name), ambiguous, unmatched, failed, already, ...(rest.length ? { more: { names: rest } } : {}) });
+      return json({ added, matched: matched.filter((m) => !rest.includes(m.q_name)).map((m) => m.name), ambiguous, unmatched, failed, already, pending, ...(rest.length ? { more: { names: rest } } : {}) });
     }
   }
 
@@ -3005,7 +3037,7 @@ const api = (async function api(req, env, path, method) {
     return json({ url: `${new URL(req.url).origin}/api/cal/${token}.ics` });
   }
 
-  // 幹部與會員揪團的開團人：匯出報名名單（純文字，貼回 LINE 用）
+  // 幹部與團員揪團的開團人：匯出報名名單（純文字，貼回 LINE 用）
   const m3 = path.match(/^\/api\/events\/([\w-]{1,32})\/roster$/);
   if (m3 && method === 'GET') {
     const g = need(); if (g) return g;
@@ -3049,6 +3081,7 @@ const api = (async function api(req, env, path, method) {
       spot_reports: await q('SELECT s.name AS spot, r.data, r.created_at FROM spot_reports r JOIN spots s ON s.id = r.spot_id WHERE r.member_id = ?'),
       routes: await q('SELECT name, distance, shared, points, created_at FROM routes WHERE created_by = ?'),
       calendar_items: await q('SELECT date, title, kind, url, note, created_at FROM calendar_items WHERE created_by = ?'),
+      meetups: await q('SELECT id, title, date, gather_time, end_time, place, lead, status, created_at FROM events WHERE created_by = ? AND owner_managed = 1 ORDER BY date'),   // 自己發起的揪團（活動頁顯示「發起：暱稱」）
     };
     await audit(env, req, member, 'privacy.export', 'member', member.id, '');
     return json(data, 200, { 'content-disposition': 'attachment; filename="my-data.json"' });
@@ -3191,7 +3224,7 @@ const api = (async function api(req, env, path, method) {
       // 預設關閉的功能：明確送 true 才開，沒送保留原值；不能併進上面預設開的迴圈
       //   附近即時影像：staging 實測過 Cache API、出口 IP 與解析 CPU 時間之後才開
       //   跑者休息站：還不認得它的舊版管理畫面存其他開關時不會順手關掉
-      //   會員揪團：團員可以在自己參加的分團發起活動（精簡欄位、不推播），由協會決定要不要開放
+      //   團員揪團：團員可以在自己參加的分團發起活動（精簡欄位、不推播），由協會決定要不要開放
       for (const f of ['cams', 'rest', 'meetup']) value[f] = has(f) ? b[f] === true : cur[f] === true;
     } else if (key === 'tabs') {
       // 下方分頁列的名稱（每個最多 4 個字，空白就用預設）
@@ -3875,19 +3908,21 @@ const api = (async function api(req, env, path, method) {
     const g = need(); if (g) return g;
     const ev = await evById(mst[1]);
     if (!ev) return fail(404, '找不到這個活動');
-    // 幹部（主辦或報到）；會員揪團的開團人看統計與名單 CSV，跟報到幹部一樣只有正取與候補，沒有收款資料，訂購單只給幹部
+    // 幹部（主辦或報到）；團員揪團的開團人看統計與名單 CSV，跟報到幹部一樣只有正取與候補，沒有收款資料，訂購單只給幹部
     const staff = officerOf(ev) || teamCan(ev.team_id, 'checkin');
     if (!staff && !(isOwner(ev) && mst[2] !== 'orders.csv')) return fail(403, '只有這個活動的幹部可以看統計');
-    const qs = parseQ(ev.questions);
+    // 開團人只看得到隱私權政策寫的：姓名、給主辦的備註、攜伴姓名（加上公開名單本來就有的組別與狀態）；
+    //   不給團員參加的其他分團（含私密分團）、跑團、金額、加購、報名組別、問卷回答（幹部替揪團加了費用或問卷也一樣）
+    const qs = staff ? parseQ(ev.questions) : [];
     // 能審核的人（這場的主辦幹部）看全部狀態；只有報到權限的人只看正取與候補（待審核、未通過、已取消都不給）
     const canReview = officerOf(ev);
     let rows = (await env.DB.prepare(
       `SELECT s.member_id, s.name, s.grp, s.dist, s.note, s.status, s.answers, s.created_at, s.paid, s.paid_note, s.attended_at, s.option, s.reg_consent_at,
               s.items, s.amount, s.pay_ref, s.pay_method, s.pay_reported_at, s.picked_at,
               s.review, s.review_note, s.reviewed_at, s.edited_after_review, s.guests AS s_guests, s.guest_names, s.meal AS s_meal, s.cancelled_at, s.cancel_by, s.first_at,
-              m.nickname, m.club, m.phone, m.membership, r.name AS reviewer_name, mp.complete AS reg_complete,
+              m.nickname, ${staff ? 'm.club' : 'NULL AS club'}, m.phone, m.membership, r.name AS reviewer_name, mp.complete AS reg_complete,
               t.guests, t.meal, t.table_no, t.checked_in_at,
-              (SELECT group_concat(tm.team_id) FROM team_members tm WHERE tm.member_id = s.member_id AND tm.status = 'active') AS teams
+              ${staff ? "(SELECT group_concat(tm.team_id) FROM team_members tm WHERE tm.member_id = s.member_id AND tm.status = 'active')" : 'NULL'} AS teams
        FROM signups s LEFT JOIN members m ON m.id = s.member_id
        LEFT JOIN members r ON r.id = s.reviewed_by
        LEFT JOIN member_private mp ON mp.member_id = s.member_id
@@ -3924,12 +3959,13 @@ const api = (async function api(req, env, path, method) {
       // 攜伴：餐敘或有開攜伴的活動（人數與姓名；姓名只在統計頁與 CSV，公開名單只有人數）
       const withGuests = ev.kind === 'party' || !!ev.guest_max || rows.some((r) => r.s_guests);
       const payCols = staff && !!(ev.fee || ev.options);
-      const head = ['報名時間', ...(canReview ? ['首次報名', '取消時間', '取消方式'] : []), '狀態', '姓名', '暱稱', '分團', '跑團', '項目', '組別', ...(ev.options ? ['報名組別'] : []), ...(fullPhone ? ['電話'] : []), ...(payCols ? ['繳費', '繳費備註'] : []), '出席',
+      const opt = staff && !!ev.options;
+      const head = ['報名時間', ...(canReview ? ['首次報名', '取消時間', '取消方式'] : []), '狀態', '姓名', '暱稱', ...(staff ? ['分團', '跑團'] : []), '項目', '組別', ...(opt ? ['報名組別'] : []), ...(fullPhone ? ['電話'] : []), ...(payCols ? ['繳費', '繳費備註'] : []), '出席',
         ...(withGuests ? ['攜伴', '攜伴姓名'] : []), ...(ev.kind === 'party' ? ['餐點', '桌次', '報到時間'] : []), ...qs.map((q) => q.label), '備註', ...(canReview ? ['審核', '審核時間', '審核備註'] : [])];
       const lines = rows.map((r) => { const a = ans(r); return [tpStamp(r.created_at), ...(canReview ? [tpStamp(r.first_at), r.status === 'cancel' ? tpStamp(r.cancelled_at) : '', r.status === 'cancel' ? CANCEL_BY[r.cancel_by] || '' : ''] : []),
         isRejected(r) ? '未通過' : STATUS[r.status] || r.status, r.name, r.nickname,
-        (r.teams || '').split(',').filter(Boolean).map((t) => teamName[t] || t).join('、'), r.club, r.dist === 'hm' ? '半馬' : '全馬', r.grp,
-        ...(ev.options ? [r.option || ''] : []), ...(fullPhone ? [r.phone] : []), ...(payCols ? [PAID[r.paid] || '', r.paid_note] : []), tpStamp(r.attended_at || r.checked_in_at),
+        ...(staff ? [(r.teams || '').split(',').filter(Boolean).map((t) => teamName[t] || t).join('、'), r.club] : []), r.dist === 'hm' ? '半馬' : '全馬', r.grp,
+        ...(opt ? [r.option || ''] : []), ...(fullPhone ? [r.phone] : []), ...(payCols ? [PAID[r.paid] || '', r.paid_note] : []), tpStamp(r.attended_at || r.checked_in_at),
         ...(withGuests ? [r.guests ?? r.s_guests ?? '', parseQ(r.guest_names).join('、')] : []),
         ...(ev.kind === 'party' ? [r.meal || r.s_meal || '', r.table_no ?? '', tpStamp(r.checked_in_at)] : []),
         ...qs.map((q) => (Array.isArray(a[q.id]) ? a[q.id].join('、') : a[q.id] ?? '')), r.note,
@@ -3954,7 +3990,7 @@ const api = (async function api(req, env, path, method) {
         attended: ins.filter((r) => r.attended_at || r.checked_in_at).length,
         members: ins.filter((r) => r.membership === 'active').length },
       fee: ev.fee || 0, options: parseQ(ev.options), groupReg: !!ev.group_reg,
-      byOption: parseQ(ev.options).length ? tally(ins, (r) => r.option || '未選') : null,
+      byOption: staff && parseQ(ev.options).length ? tally(ins, (r) => r.option || '未選') : null,
       regReady: ev.group_reg ? ins.filter((r) => r.reg_consent_at).length : null,
       money: staff && (ev.fee || parseQ(ev.options).some((o) => o.price) || parseQ(ev.items).some((i) => i.price)) ? (() => { const price = Object.fromEntries(parseQ(ev.options).map((o) => [o.name, o.price]));
         // 新的報名有伺服器算好的金額；舊資料照組別價格推算
@@ -3966,18 +4002,18 @@ const api = (async function api(req, env, path, method) {
           reportedN: owe.filter((r) => r.paid !== 'paid' && r.pay_reported_at).length,
           counts: tally(ins, (r) => r.paid || 'unpaid'), payInfo: parseQ(ev.pay_info, null) }; })() : null,
       // 團購：每項每個尺寸的數量、成團門檻
-      items: parseQ(ev.items).map((d) => { const by = {}; let total = 0;
+      items: (staff ? parseQ(ev.items) : []).map((d) => { const by = {}; let total = 0;
         for (const r of ins) for (const x of parseQ(r.items)) if (x.id === d.id) { by[x.size || '—'] = (by[x.size || '—'] || 0) + x.qty; total += x.qty; }
         return { ...d, total, by }; }),
       minQty: ev.min_qty || null, picked: ins.filter((r) => r.picked_at).length,
       people: (canReview ? rows : live).map((r) => ({ member_id: r.member_id, name: r.name, nickname: r.nickname, status: isRejected(r) ? 'rejected' : r.status,
-        guests: r.guests ?? r.s_guests ?? 0, guestNames: parseQ(r.guest_names), option: r.option || null, regOk: !!r.reg_consent_at,
-        amount: r.amount, items: parseQ(r.items), picked: !!r.picked_at,
-        ...(staff ? { payRef: r.pay_ref, payMethod: r.pay_method, payReported: r.pay_reported_at, paid: r.paid, paid_note: r.paid_note } : {}), attended: !!(r.attended_at || r.checked_in_at), created_at: r.created_at, note: r.note || '',
+        guests: r.guests ?? r.s_guests ?? 0, guestNames: parseQ(r.guest_names),
+        ...(staff ? { option: r.option || null, regOk: !!r.reg_consent_at, amount: r.amount, items: parseQ(r.items), picked: !!r.picked_at,
+          payRef: r.pay_ref, payMethod: r.pay_method, payReported: r.pay_reported_at, paid: r.paid, paid_note: r.paid_note } : {}), attended: !!(r.attended_at || r.checked_in_at), created_at: r.created_at, note: r.note || '',
         ...(canReview ? { reviewNote: isRejected(r) ? r.review_note || null : null, reviewedAt: r.reviewed_at || null, reviewerName: r.reviewer_name || null,
           review: r.review || null, edited: !!r.edited_after_review, regComplete: !!r.reg_complete,
           firstAt: r.first_at || null, cancelledAt: r.status === 'cancel' ? r.cancelled_at || null : null, cancelBy: r.status === 'cancel' ? r.cancel_by || null : null } : {}) })),
-      byTeam: Object.entries(tally(ins, (r) => (r.teams || '').split(',').filter(Boolean))).map(([k, n]) => ({ k: teamName[k] || k, n })),
+      byTeam: staff ? Object.entries(tally(ins, (r) => (r.teams || '').split(',').filter(Boolean))).map(([k, n]) => ({ k: teamName[k] || k, n })) : [],
       byGroup: tally(ins, (r) => `${r.dist === 'hm' ? '半馬' : '全馬'} ${r.grp}`),
       byMeal: ev.kind === 'party' ? tally(ins, (r) => r.meal || '未指定') : null,
       byDay: Object.entries(byDay).sort(([a], [b]) => a.localeCompare(b)),
@@ -5836,19 +5872,26 @@ function shareText(ev, now = tpNow()) {
   const time = ev.kind !== 'survey' && hm(ev.gather_time) ? `${ev.gather_time}${hm(ev.end_time) ? `–${ev.end_time}` : ''}` : '';
   return [`${mdw(ev.date)}${time}`, ev.place, PHASE_LABEL[evPhase(ev, now, ev.full)](ev)].filter(Boolean).join('・');
 }
-function sharePage(page, ev, url) {
-  const headers = { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'public, max-age=300', ...PAGE_HEADERS };
-  if (!ev) return new Response(page.body, { status: 200, headers });
-  const desc = shareText(ev), img = `${url.origin}/og/${KINDS.includes(ev.kind) ? ev.kind : 'other'}.png`;
-  const prop = [['og:type', 'website'], ['og:site_name', SITE], ['og:locale', 'zh_TW'], ['og:title', ev.title], ['og:description', desc],
-    ['og:url', `${url.origin}/e/${ev.id}`], ['og:image', img], ['og:image:width', '1200'], ['og:image:height', '630']];
-  const name = [['description', desc], ['robots', 'noindex'], ['twitter:card', 'summary_large_image'], ['twitter:title', ev.title], ['twitter:description', desc], ['twitter:image', img]];
-  const tags = [...prop.map(([k, v]) => `<meta property="${k}" content="${escAttr(v)}">`), ...name.map(([k, v]) => `<meta name="${k}" content="${escAttr(v)}">`)].join('\n');
-  const out = new HTMLRewriter()
-    .on('title', { element: (el) => { el.setInnerContent(`${ev.title}｜${SITE}`); } })
-    .on('meta[name="description"]', { element: (el) => { el.remove(); } })
-    .on('head', { element: (el) => { el.append(`${tags}\n`, { html: true }); } })
-    .transform(page);
+// 舊版 Service Worker（cil-v68 以前，不認得 /e/）轉送的頁面導覽：Sec-Fetch-Dest 是 empty（直接打開是 document；Chromium 與 WebKit 實測），
+//   這種手機的 /app.js 也是舊版快取、只看 #/e/:id，會停在首頁。加一個立即轉到 /#/e/:id 的 meta refresh（只看請求標頭、跟活動存不存在無關）；
+//   新版 Service Worker 直接用存好的首頁回應 /e/，抓預覽的爬蟲不帶 Sec-Fetch 標頭，都不會拿到
+const viaOldSw = (req) => req.headers.get('sec-fetch-mode') === 'navigate' && req.headers.get('sec-fetch-dest') === 'empty';
+function sharePage(page, ev, url, { id, tok, refresh }) {
+  const headers = { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'public, max-age=300', vary: 'Sec-Fetch-Dest', ...PAGE_HEADERS };
+  if (!ev && !refresh) return new Response(page.body, { status: 200, headers });
+  let head = refresh ? `<meta http-equiv="refresh" content="0;url=${escAttr(`/#/e/${id}${tok ? `?t=${encodeURIComponent(tok)}` : ''}`)}">\n` : '';
+  const rw = new HTMLRewriter();
+  if (ev) {
+    const desc = shareText(ev), img = `${url.origin}/og/${ev.owner_managed && ev.kind === 'other' ? 'meetup' : KINDS.includes(ev.kind) ? ev.kind : 'other'}.png`;
+    // og:url：公開活動是不帶參數的 /e/:id；邀請制不給（網址要帶邀請代碼才看得到，依 og:url 重抓的平台會抓到沒有代碼的一般首頁、分享出去也少了代碼）
+    const prop = [['og:type', 'website'], ['og:site_name', SITE], ['og:locale', 'zh_TW'], ['og:title', ev.title], ['og:description', desc],
+      ...(ev.visibility === 'invite' ? [] : [['og:url', `${url.origin}/e/${ev.id}`]]), ['og:image', img], ['og:image:width', '1200'], ['og:image:height', '630']];
+    const name = [['description', desc], ['robots', 'noindex'], ['twitter:card', 'summary_large_image'], ['twitter:title', ev.title], ['twitter:description', desc], ['twitter:image', img]];
+    head += `${[...prop.map(([k, v]) => `<meta property="${k}" content="${escAttr(v)}">`), ...name.map(([k, v]) => `<meta name="${k}" content="${escAttr(v)}">`)].join('\n')}\n`;
+    rw.on('title', { element: (el) => { el.setInnerContent(`${ev.title}｜${SITE}`); } })
+      .on('meta[name="description"]', { element: (el) => { el.remove(); } });
+  }
+  const out = rw.on('head', { element: (el) => { el.append(head, { html: true }); } }).transform(page);
   return new Response(out.body, { status: 200, headers });
 }
 async function shareLink(req, env, ctx, url, path) {
@@ -5857,9 +5900,10 @@ async function shareLink(req, env, ctx, url, path) {
   const b = new Budget(env, { kind: 'request', name: 'GET /e/:id' }), e = invocationEnv(env, ctx, b);
   let res;
   try {
+    const tok = str(url.searchParams.get('t'), 40);
     const [page, ev] = await Promise.all([env.ASSETS.fetch(new Request(new URL('/', url))),
-      publicEvent(e, m[1], str(url.searchParams.get('t'), 40)).catch((x) => { console.error('share', x); return null; })]);
-    res = page.ok ? sharePage(page, ev, url) : page;
+      publicEvent(e, m[1], tok).catch((x) => { console.error('share', x); return null; })]);
+    res = page.ok ? sharePage(page, ev, url, { id: m[1], tok, refresh: viaOldSw(req) }) : page;
   } finally {
     ctx.waitUntil(settled(e).then(() => finishBudget(e, b)));
   }

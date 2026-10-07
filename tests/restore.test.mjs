@@ -49,7 +49,7 @@ test('重做刪除：帳號、私人資料、訓練紀錄、路線都不在，�
   assert.equal(one(db, "SELECT 1 AS x FROM routes WHERE created_by = 'x1'"), undefined);
   assert.deepEqual({ ...one(db, "SELECT name, member_id FROM draws WHERE id = 'd1'") }, { name: '已刪除帳號', member_id: null });
   assert.equal(one(db, "SELECT created_by FROM events WHERE id = 'e1'").created_by, null);
-  assert.deepEqual({ ...one(db, "SELECT created_by, lead FROM events WHERE id = 'e3'") }, { created_by: null, lead: null }, '會員揪團的發起人暱稱一起匿名');
+  assert.deepEqual({ ...one(db, "SELECT created_by, lead FROM events WHERE id = 'e3'") }, { created_by: null, lead: null }, '團員揪團的發起人暱稱一起匿名');
   assert.ok(one(db, "SELECT 1 AS x FROM members WHERE id = 'x2'"));
   assert.ok(one(db, "SELECT 1 AS x FROM training_logs WHERE member_id = 'x2'"));
 });

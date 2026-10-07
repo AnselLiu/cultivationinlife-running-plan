@@ -1,7 +1,7 @@
 // 耕跑團 PWA — calendar.js：月曆（用到才載入）
 //   一個月一次查完：看得到的活動、國定假日與補班（管理員匯入的新北市資料）、幹部設定的賽事提醒、自己的賽事
 //   點一天看當天的內容；幹部可以新增賽事提醒，團員訂閱行事曆時會一起帶到手機
-import { $, allow, api, canMeetup, esc, IC, KIND_NAME, largeTitle, me, teamAllow, teamOf, teams, toast, view, ymd } from './app.js';
+import { $, allow, api, canMeetup, esc, IC, kindLabel, largeTitle, me, teamAllow, teamOf, teams, toast, view, ymd } from './app.js';
 import { lang, t } from './i18n.js';
 
 const WD = lang === 'en' ? ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] : ['日', '一', '二', '三', '四', '五', '六'];
@@ -50,7 +50,7 @@ async function calendarView() {
     const date = picked, hol = holOn(date), evs = evOn(date), its = itOn(date), races = raceOn(date);
     const x = new Date(`${date}T00:00:00`);
     $('#dayBox').innerHTML = `<div class="row spread"><h3>${x.getMonth() + 1} 月 ${x.getDate()} 日・週${'日一二三四五六'[x.getDay()]}</h3>${hol.filter((h) => h.name || !h.is_holiday).map((h) => `<span class="pill ${h.is_holiday ? 'race' : ''}"><span translate="no">${esc(h.name || '補行上班')}</span></span>`).join('')}</div>
-      ${evs.map((e) => `<a class="todayev" href="#/e/${esc(e.id)}">${IC.calendar}<span><b><span translate="no">${esc(e.title)}</span></b><span class="tiny" style="display:block">${KIND_NAME[e.kind] || '活動'}${e.gather_time ? `・${esc(e.gather_time)} 集合` : ''}${e.place ? `・<span translate="no">${esc(e.place)}</span>` : ''}・${e.signed} 人${e.mine === 'in' ? '・你已報名' : e.mine === 'wait' ? '・候補中' : e.mine === 'pending' ? '・審核中' : ''}${e.series_id ? '・定期' : ''}</span></span><span class="tiny">›</span></a>`).join('')}
+      ${evs.map((e) => `<a class="todayev" href="#/e/${esc(e.id)}">${IC.calendar}<span><b><span translate="no">${esc(e.title)}</span></b><span class="tiny" style="display:block">${kindLabel(e)}${e.gather_time ? `・${esc(e.gather_time)} 集合` : ''}${e.place ? `・<span translate="no">${esc(e.place)}</span>` : ''}・${e.signed} 人${e.mine === 'in' ? '・你已報名' : e.mine === 'wait' ? '・候補中' : e.mine === 'pending' ? '・審核中' : ''}${e.series_id ? '・定期' : ''}</span></span><span class="tiny">›</span></a>`).join('')}
       ${its.map((it) => `<div class="todayev">${IC.megaphone}<span><b>【${ITEM_KIND[it.kind] || '提醒'}】<span translate="no">${esc(it.title)}</span></b>${it.note ? `<span class="tiny" style="display:block"><span translate="no">${esc(it.note)}</span></span>` : ''}${it.url ? `<a class="tiny" href="${esc(it.url)}" target="_blank" rel="noopener">開啟連結 ${IC.external}</a>` : ''}</span>
         ${it.canEdit ? `<button class="btn ghost sm" data-delit="${esc(it.id)}">刪除</button>` : ''}</div>`).join('')}
       ${races.map((r) => `<a class="todayev" href="#/me/races">${IC.runner}<span><b><span translate="no">${esc(r.name)}</span></b><span class="tiny" style="display:block">我的賽事・${esc(r.dist || '')}</span></span><span class="tiny">›</span></a>`).join('')}

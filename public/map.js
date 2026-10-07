@@ -7,7 +7,7 @@
 //   跑者休息站：飲水、廁所、淋浴置物、補給（reststops.js）；開關收在底圖選單，功能開關預設關閉
 //   底圖：內政部國土測繪中心電子地圖與正射影像（政府資料開放授權）、OpenStreetMap；Leaflet 放在 /vendor（不從外部載入程式）
 import { $, allow, announce, api, camLazy, canMeetup, cfg, esc, IC, largeTitle, load, openSheet, teamAllow, teams, tilePreload, toast, view } from './app.js';
-// 開揪跑：協會或分團幹部直接開團；協會打開「會員揪團」時，團員可以在自己參加的分團發起揪團（精簡表單、不推播，幹部可以編輯或刪除）；
+// 開揪跑：協會或分團幹部直接開團；協會打開「團員揪團」時，團員可以在自己參加的分團發起揪團（精簡表單、不推播，幹部可以編輯或刪除）；
 //   兩個都不行就在 LINE 揪人
 const canCreate = () => allow('event') || teams().some((t) => teamAllow(t.id, 'event'));
 const lineShare = (text) => `https://line.me/R/share?text=${encodeURIComponent(text)}`;

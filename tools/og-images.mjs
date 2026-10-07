@@ -1,7 +1,7 @@
 // 連結預覽圖（og:image）：每個活動類型一張 1200×630 的 PNG（public/og/<kind>.png），分享連結 /e/:id 貼到 LINE、Facebook 時顯示
 //   用 Playwright 的 Chromium 把 HTML 樣板畫成圖片：社團名稱、類型名稱、一個線條圖示；顏色取自 public/style.css 的 :root
-//   類型與 src/worker.js 的 KINDS 一致（tests/api.test.mjs 檢查每個類型都有圖、尺寸對、小於 100 KB）
-//   用法：node tools/og-images.mjs（改了類型、名稱或樣式再跑一次，把產生的圖片一起提交）
+//   類型與 src/worker.js 的 KINDS 一致，另外加團員揪團（meetup：kind 是 other、owner_managed 的活動）；tests/api.test.mjs 檢查每張都有、尺寸對、小於 100 KB
+//   用法：node tools/og-images.mjs [類型…]（改了類型、名稱或樣式再跑一次，把產生的圖片一起提交；只給類型就只畫那幾張）
 import { chromium } from '@playwright/test';
 import { readFileSync, writeFileSync, mkdirSync, statSync } from 'node:fs';
 
@@ -21,6 +21,8 @@ const KINDS = {
   survey: ['問卷調查', '<rect x="5" y="4.6" width="14" height="16.4" rx="2.4"/><rect class="cover" x="9" y="3" width="6" height="3.2" rx="1.1"/><path d="M8.4 11.2l1.5 1.5 2.4-2.6M14 11.2h1.8M8.4 16.2l1.5 1.5 2.4-2.6M14 16.2h1.8"/>'],
   buy: ['團購', '<path d="M5.4 8.2h13.2l-1 11.8a1.3 1.3 0 0 1-1.3 1.2H7.7a1.3 1.3 0 0 1-1.3-1.2Z"/><path d="M9 10.4V6.6a3 3 0 0 1 6 0v3.8"/>'],
   other: ['活動', '<rect x="3.2" y="4.8" width="17.6" height="15.4" rx="3.4"/><path d="M3.4 9.6h17.2M8 3.2v3.4M16 3.2v3.4"/><path d="M8.8 14.6l2.2 2.2 4.4-4.6"/>'],
+  // 團員自己發起的揪團（app.js 的 kindLabel）；圖示同 app.js 的 MI.team
+  meetup: ['揪團', '<circle cx="8" cy="9" r="3"/><circle cx="16.5" cy="9.5" r="2.5"/><path d="M2.8 19c.5-3 2.6-4.6 5.2-4.6s4.7 1.6 5.2 4.6M14 14.6c2.6-.4 5 .9 5.7 4.4"/>'],
 };
 
 const page = (label, icon) => `<!doctype html><html lang="zh-Hant-TW"><head><meta charset="utf-8"><style>
@@ -49,7 +51,8 @@ mkdirSync(out, { recursive: true });
 const browser = await chromium.launch();
 try {
   const tab = await browser.newPage({ viewport: { width: 1200, height: 630 }, deviceScaleFactor: 1 });
-  for (const [kind, [label, icon]] of Object.entries(KINDS)) {
+  const only = process.argv.slice(2);
+  for (const [kind, [label, icon]] of Object.entries(KINDS).filter(([k]) => !only.length || only.includes(k))) {
     await tab.setContent(page(label, icon), { waitUntil: 'load' });
     const file = new URL(`${kind}.png`, out);
     writeFileSync(file, await tab.screenshot({ type: 'png' }));

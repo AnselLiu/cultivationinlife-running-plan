@@ -39,11 +39,13 @@ export const STATE_LABEL = {
 };
 // 活動結束：有結束時間用結束時間，沒有就到當天結束（問卷＝截止那天結束）
 export const evEnd = (ev) => `${ev.date}T${ev.kind !== 'survey' && /^\d{2}:\d{2}$/.test(ev.end_time || '') ? ev.end_time : '23:59'}`;
-// 卡片與分享連結預覽的狀態：cancelled 已取消｜over 已結束｜off 幹部關閉｜soon 即將開放｜closed 報名已截止｜full 額滿可候補｜open 報名中
+// 卡片與分享連結預覽的狀態：cancelled 已取消｜over 已結束｜off 幹部關閉｜ext 用外部連結登記｜soon 即將開放｜closed 報名已截止｜full 額滿可候補｜open 報名中
 //   伺服器（連結預覽卡）與前端（活動卡片、沒登入的預覽）共用；full 由呼叫的人給（只要「滿了沒」，不給人數）
+//   ext：App 裡不開放報名、改用「前往登記」的外部連結（例如慶功宴的表單）；不說「未開放報名」，免得以為還不能登記（ev.ext 是沒登入的預覽給的「有沒有連結」）
 export function evPhase(ev, now = tpNow(), full = false) {
   if (ev.status === 'cancelled' || ev.cancelled) return 'cancelled';
   if (now > evEnd(ev)) return 'over';
+  if (!ev.signup_open && (ev.link_url || ev.ext)) return 'ext';
   const st = signupState(ev, now);
   if (st === 'ended') return 'closed';
   if (st !== 'open') return st;
@@ -53,6 +55,7 @@ export const PHASE_LABEL = {
   cancelled: () => '已取消',
   over: () => '已結束',
   off: () => '未開放報名',
+  ext: () => '外部登記',
   soon: (ev) => `即將開放 ${tpShort(ev.signup_start)}`,
   closed: (ev) => (ev.kind === 'survey' ? '問卷已截止' : '報名已截止'),
   full: () => '額滿可候補',
@@ -73,8 +76,10 @@ export function defaultWindow({ date, gather_time, kind }, d = SIGNUP_DEFAULTS, 
 }
 // 驗證；回傳錯誤訊息或 null。create＝新增活動（截止不能已經過去）
 export function windowError(e, { now = tpNow(), create = false } = {}) {
-  // 結束時間（選填）要晚於集合／開始時間；同一天，不跨午夜
-  if (e.kind !== 'survey' && /^\d{2}:\d{2}$/.test(e.end_time || '') && /^\d{2}:\d{2}$/.test(e.gather_time || '') && e.end_time <= e.gather_time) return '結束時間要在開始之後';
+  // 結束時間（選填）要晚於集合／開始時間；同一天，不跨午夜；只有結束沒有開始的話，活動頁會變成「－21:00」
+  const hm = (t) => /^\d{2}:\d{2}$/.test(t || '');
+  if (e.kind !== 'survey' && hm(e.end_time) && !hm(e.gather_time)) return '有結束時間的話，也要填集合（開始）時間';
+  if (e.kind !== 'survey' && hm(e.end_time) && e.end_time <= e.gather_time) return '結束時間要在開始之後';
   if (e.signup_start && !isStamp(e.signup_start)) return '報名開始時間格式不正確';
   if (e.deadline && !isStamp(e.deadline)) return '報名截止時間格式不正確';
   const start0 = evStart(e);

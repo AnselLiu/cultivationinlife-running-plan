@@ -233,7 +233,7 @@ form.row .btn,.row:not(.spotopts) > input ~ .btn,.row:not(.spotopts) > select ~ 
 /* 報名狀態（活動卡片、分享預覽）：報名中綠、即將開放用預設主色、額滿可候補黃、截止與結束灰、取消紅 */
 .pill.reg-open{background:color-mix(in srgb,var(--ok) 14%,transparent);color:color-mix(in srgb,var(--ok-ink) 80%,var(--ink))}
 .pill.reg-full{background:var(--warn-bg);color:var(--warn)}
-.pill.reg-closed,.pill.reg-over,.pill.reg-off{background:color-mix(in srgb,var(--ink) 9%,transparent);color:var(--ink-2)}
+.pill.reg-closed,.pill.reg-over,.pill.reg-off,.pill.reg-ext{background:color-mix(in srgb,var(--ink) 9%,transparent);color:var(--ink-2)}
 .pill.reg-cancelled{background:color-mix(in srgb,var(--race) 12%,var(--glass-2));color:color-mix(in srgb,var(--race) 70%,var(--ink-2))}
 button.pill{cursor:pointer}
 
@@ -2060,7 +2060,8 @@ details.group > .btn.sm{display:flex;width:fit-content}
 /* ---------- 版面掃描修正：首頁、跑步、紀錄、挑戰、報表 ---------- */
 /* 活動卡：標題最多兩行，第一行排滿（balance 會把中文詞從中間切成兩半）；資訊列一段一段排，段落之間不斷字 */
 .ev .body .t{white-space:normal;text-wrap-style:pretty;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;line-height:1.3}
-.ev .meta{display:flex;flex-wrap:wrap;column-gap:10px;row-gap:0}
+.ev .meta{display:flex;flex-wrap:wrap;align-items:center;column-gap:10px;row-gap:2px}
+.ev .meta .pill{padding:1px 8px}
 .ev .meta > span{white-space:nowrap}
 /* 首頁下方的文字連結、卡片右上的「完整課表 ›」：點擊範圍 44pt，版面不變高 */
 a.footlink{display:inline-flex;align-items:center;gap:4px;min-height:44px;padding:0 8px}
@@ -2166,6 +2167,8 @@ a.footlink{display:inline-flex;align-items:center;gap:4px;min-height:44px;paddin
 .welcome.compact{padding-bottom:0}
 .notice.err{background:color-mix(in srgb,var(--race) 12%,transparent);color:var(--race)}
 /* 報名成功的提示卡（主辦的成功訊息＋分享到 LINE 群組）；攜伴姓名欄 */
+.quicksign{display:grid;gap:10px}
+.quicksign > .btn{justify-self:start}
 .notice.signedcard{display:grid;gap:10px;background:color-mix(in srgb,var(--ok) 14%,transparent);color:color-mix(in srgb,var(--ok-ink) 80%,var(--ink))}
 .guestnames{display:grid;gap:8px;grid-template-columns:repeat(auto-fill,minmax(150px,1fr))}
 .guestnames:not(:has(label:not([hidden]))){display:none}

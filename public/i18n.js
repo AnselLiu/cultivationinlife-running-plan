@@ -104,6 +104,11 @@ const PATTERNS = [
   [/(\d{1,2}\/\d{1,2} \d\d:\d\d) 開放/g, 'opens $1'],
   [/^你在候補第 (\d+) 位，有人取消會自動遞補並通知你。$/, "You're number $1 on the waitlist and will be moved up automatically if someone cancels."],
   [/^人數已滿，已排入候補第 (\d+) 位，有人取消會自動遞補並通知你$/, "Event is full. You're number $1 on the waitlist and will be moved up automatically if someone cancels."],
+  [/^剩下的名額不夠你和攜伴一起，已排入候補第 (\d+) 位；人數少的報名可能先遞補$/, "There aren't enough spots left for you and your guests, so you're number $1 on the waitlist. Smaller sign-ups may be moved up first."],
+  // 攜伴：每位的姓名欄、人數選單裡名額不夠的人數
+  [/^攜伴 (\d+) 姓名（選填）$/, 'Guest $1 name (optional)'],
+  [/^(\d+) 位（名額不夠，會排候補）$/, '$1 (not enough spots — goes to the waitlist)'], [/^(\d+) 位（名額不夠）$/, '$1 (not enough spots)'],
+  [/^名額只有 (\d+) 位，最多帶 (\d+) 位攜伴$/, 'Only $1 spots in total — you can bring at most $2 guests'],
   [/候補第 (\d+) 位/g, 'waitlist #$1'], [/^待審核 (\d+)( ›)?$/, 'Pending $1$2'], [/(\d+) 筆待審核/g, '$1 pending'],
   [/剩 (\d+) 個?名額/g, '$1 spots left'], [/^尚有 (\d+) 個名額可核准$/, '$1 spots can still be approved'],
   [/^已核准 (\d+) 人（正取 (\d+)、候補 (\d+)）/, 'Approved $1 (confirmed $2, waitlist $3)'], [/^已選 (\d+) 筆$/, '$1 selected'], [/^全部核准（(\d+)）$/, 'Approve all ($1)'],

@@ -182,15 +182,23 @@ test('倒數選擇、分享 App、選擇面板：焦點進出與 Esc', async ({ 
   await check(() => page.locator('#cancel').click(), page.locator('#cancel'));
   await expect(page.locator('#myStatusMsg')).toContainText('你已報名');
 });
-// 報名後焦點在「我的報名狀態」；記錄頁空白送出：錯誤綁在距離欄、aria-invalid、焦點移過去
-test('報名後焦點在報名狀態；記錄訓練的錯誤標在欄位上', async ({ page, request }) => {
-  const ev = await apiAs(request, 't_chair', '/events', { method: 'POST', body: { kind: 'track', title: '無障礙 報名', date: plus(5), gather_time: '07:00', capacity: 10, notify: false } });
+// 報名後焦點在報名成功的提示卡（主辦的訊息、分享到 LINE 群組），沒有提示卡時在「我的報名狀態」；記錄頁空白送出：錯誤綁在距離欄、aria-invalid、焦點移過去
+test('報名後焦點在報名成功的提示卡（訊息也播報）、備註欄在報名按鈕前；記錄訓練的錯誤標在欄位上', async ({ page, request }) => {
+  const ev = await apiAs(request, 't_chair', '/events', { method: 'POST', body: { kind: 'track', title: '無障礙 報名', date: plus(5), gather_time: '07:00', capacity: 10, notify: false, success_msg: '集合在 3 號門，記得帶毛巾' } });
   await login(page, 't_runner'); await acceptPrivacyIfAsked(page);
   await page.goto(`/#/e/${ev.id}`);
   await expect(page.locator('#signup')).toHaveAttribute('aria-describedby', /evWindow/);
+  // 給主辦的備註在「我要報名」前面（螢幕閱讀器與鍵盤先到備註欄）；報名前看不到只給報名者的成功訊息
+  expect(await page.evaluate(() => !!(document.querySelector('#quickNote').compareDocumentPosition(document.querySelector('#signup')) & Node.DOCUMENT_POSITION_FOLLOWING))).toBe(true);
+  await expect(page.getByText('集合在 3 號門')).toHaveCount(0);
   await page.locator('#signup').click();
-  await expect(page.locator('#myStatusMsg')).toBeFocused();
+  await expect(page.locator('#signedCard')).toBeFocused();
+  await expect(page.locator('#signedCard')).toHaveAccessibleName('報名成功');
+  await expect(page.locator('#signedCard')).toContainText('集合在 3 號門，記得帶毛巾');
+  await expect(page.locator('#signedCard #tellLine')).toHaveAttribute('href', /line\.me\/R\/share\?text=.*openExternalBrowser%3D1/);
   await expect(page.locator('#toasts .toast')).toContainText('報名完成');
+  await expect(page.locator('#toasts .toast')).toContainText('集合在 3 號門', { useInnerText: false });
+  await expect(page.locator('#myStatusMsg')).toContainText('你已報名');
   await page.goto('/#/log?extra=1');
   await page.locator('#lf').getByRole('button', { name: '儲存' }).click();
   await expect(page.locator('#lf [name=km]')).toBeFocused();

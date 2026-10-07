@@ -4,7 +4,7 @@ import { defaultWindow, windowError, shiftDays, daysBetween, evStart, tpText, tp
 
 // ---------- 幹部：新增／編輯活動 ----------
 const DRAFT = 'cil-ev-draft';
-//   會員揪團（功能開關 meetup）：沒有建立活動權限的團員用精簡表單（lite）發起；開團人自己編輯也是精簡表單
+//   團員揪團（功能開關 meetup）：沒有建立活動權限的團員用精簡表單（lite）發起；開團人自己編輯也是精簡表單
 //   只有標題、分團（自己參加的）、日期、集合與結束時間、地點、練跑地圖的地點與路線、名額、報名截止、攜伴、說明、報名成功訊息；
 //   其他欄位還在表單裡但藏起來（data-full），送出的值伺服器一律不採用（meetupFields）
 async function formView(id) {
@@ -347,7 +347,7 @@ const qRow = (q = {}) => `<div class="qrow" data-type="${q.type || 'single'}" da
 // ---------- 活動統計與問卷結果 ----------
 // 名單篩選：預設「全部」＝正取、候補、待審核
 const FILTERS = [['all', '全部'], ['in', '正取'], ['wait', '候補'], ['pending', '待審核'], ['rejected', '未通過'], ['cancel', '已取消']];
-const CANCEL_BY = { self: '本人取消', organizer: '主辦移出', rejected: '主辦婉拒', uninvite: '取消邀請', expired: '申請逾期' };
+const CANCEL_BY = { self: '本人取消', organizer: '主辦移出', rejected: '主辦婉拒', returned: '主辦退回', uninvite: '取消邀請', expired: '申請逾期' };
 // 伺服器的時間（UTC 'YYYY-MM-DD HH:MM:SS'）→ 台北「10/5 21:03」
 const tpAt = (ts) => (ts ? tpShort(new Date(Date.parse(`${ts.replace(' ', 'T')}Z`) + 8 * 3600e3).toISOString().slice(0, 16)) : '');
 async function statsView(id) {
@@ -360,7 +360,7 @@ async function statsView(id) {
   const countOf = (k) => st.people.filter((x) => inFilter(x.status, k)).length;
   const STATUS_PILL = { wait: '<span class="pill wait">候補</span>', pending: '<span class="pill wait">待審核</span>', rejected: '<span class="pill no">未通過</span>', cancel: '<span class="pill">已取消</span>' };
   const off = isOffline() ? 'disabled' : '';
-  // 會員揪團的開團人（ownerOnly）：只看名單與統計（正取與候補、備註與攜伴姓名），點名、收款、領取、團體報名資料由幹部處理
+  // 團員揪團的開團人（ownerOnly）：只看名單與統計（正取與候補、備註與攜伴姓名），點名、收款、領取、團體報名資料由幹部處理
   const staff = !st.ownerOnly;
   // 已繳費後取消、婉拒或移出的人（待退費）也要能改繳費狀態，主辦才能標記已退費、結掉待辦
   const prow = (x) => { const live = x.status === 'in', refund = !live && ['paid', 'refunded'].includes(x.paid);
@@ -423,8 +423,8 @@ async function statsView(id) {
       <p class="tiny" style="margin:0">只包含已同意提供的人。檔案含身分證字號等個資，送出報名後請立刻刪除，下載紀錄會寫進稽核。</p></section>` : ''}
     <div class="statgrid">
       ${st.byOption ? `<section class="card"><h2 class="h3">報名組別</h2>${bars(Object.entries(st.byOption), t.in, true)}</section>` : ''}
-      <section class="card"><h2 class="h3">各分團</h2>${bars(st.byTeam.map((x) => [x.k, x.n]).sort((a, b) => b[1] - a[1]), t.in, true)}
-        <p class="tiny" style="margin:0">同時在兩個分團的人，兩邊都會算到。</p></section>
+      ${staff ? `<section class="card"><h2 class="h3">各分團</h2>${bars(st.byTeam.map((x) => [x.k, x.n]).sort((a, b) => b[1] - a[1]), t.in, true)}
+        <p class="tiny" style="margin:0">同時在兩個分團的人，兩邊都會算到。</p></section>` : ''}
       ${st.byMeal ? `<section class="card"><h2 class="h3">餐點</h2>${bars(Object.entries(st.byMeal), t.in, true)}</section>` : ''}
       ${survey ? '' : `<section class="card"><h2 class="h3">組別</h2>${bars(Object.entries(st.byGroup).sort(), t.in)}</section>`}
       <section class="card"><h2 class="h3">每天新增${survey ? '回覆' : '報名'}</h2>${bars(st.byDay.slice(-14).map(([d, n]) => [d.slice(5).replace('-', '/'), n]))}</section>
