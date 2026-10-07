@@ -16,6 +16,25 @@ const MO3 = MON.map((m) => m.slice(0, 3));
 const DN = { 全馬: 'marathon', 半馬: 'half' };
 // 動態句型：數字、日期、倒數等（先於片段替換）
 const PATTERNS = [
+  // 索票（張數）、異動重新確認：整句，數字在中間；要在片段與數量單位「N 張」之前
+  [/^已登記 (\d+) \/ (\d+) 張$/, '$1 / $2 tickets requested'],
+  [/^已登記 (\d+) 張$/, (_, n) => `${n} ${n === '1' ? 'ticket' : 'tickets'} requested`],
+  [/^已登記 (\d+) 張，應繳 (.+)$/, (_, n, m) => `${n} ${n === '1' ? 'ticket' : 'tickets'} requested. Amount due: ${m}`],
+  [/^已登記 (\d+) 張／共 (\d+) 張・剩 (\d+) 張$/, '$1 of $2 tickets requested · $3 left'],
+  [/^已登記 (\d+) 張（不限張數）$/, (_, n) => `${n} ${n === '1' ? 'ticket' : 'tickets'} requested (no limit)`],
+  [/^每人最多 (\d+) 張(，目前還剩 (\d+) 張)?$/, (_, a, b, c) => `Up to ${a} per person${b ? `, ${c} left` : ''}`],
+  [/^總共只有 (\d+) 張，請少選幾張$/, 'Only $1 tickets in total — please choose fewer'],
+  [/^剩下的票不夠，最多只能登記 (\d+) 張$/, 'Not enough tickets left — you can request at most $1'],
+  [/^剩下的票不夠，已排入候補第 (\d+) 位；張數少的登記可能先遞補$/, 'Not enough tickets left — you’re #$1 on the waitlist; smaller requests may move up first'],
+  [/^目前候補第 (\d+) 位（(\d+) 張），有人取消會自動遞補並通知你$/, (_, p, n) => `You’re #${p} on the waitlist (${n} ${n === '1' ? 'ticket' : 'tickets'}). If someone cancels you’ll move up automatically and we’ll let you know`],
+  [/^你已登記 (\d+) 張(・主辦已發票)?$/, (_, n, p) => `You requested ${n} ${n === '1' ? 'ticket' : 'tickets'}${p ? ' · handed out' : ''}`],
+  [/^目前已登記 (\d+) 張，已超過新的上限。已登記的人不會被取消，有人取消也不會遞補，直到張數低於上限。確定嗎？$/, 'Currently $1 tickets requested, more than the new limit. No one will be removed, and nobody moves up from the waitlist until the total drops below the limit. Continue?'],
+  [/^已通知 (\d+) 人，請 (\d+) 人重新確認$/, 'Notified $1 — asked $2 to reconfirm'],
+  [/^已提醒 (\d+) 人$/, 'Reminded $1'],
+  [/^提醒未確認的 (\d+) 人$/, 'Remind $1 not yet confirmed'],
+  [/^再發一次通知給還沒確認的 (\d+) 人？$/, 'Notify the $1 who haven’t confirmed again?'],
+  [/^(\d+) 人還沒確認是否仍參加 ›$/, '$1 haven’t confirmed yet ›'],
+  [/^主辦在 (\d+\/\d+ \d{2}:\d{2}) 更新了活動資訊，以上方為準。(.*)$/, (_, at, rest) => `The organizer updated this event on ${at} — the details above are current.${rest ? ` ${dict[rest] ?? rest}` : ''}`],
   // 管理後台：系統告警與幹部週報（整句，數字在中間）
   [/^發生中（今天 (\d{1,2}:\d{2}) 起）$/, 'Ongoing (since $1 today)'],
   [/^新增 (\d+)(?:（前一週 (\d+)）)?、取消 (\d+)$/, (_, a, p, c) => `New ${a}${p ? ` (previous week ${p})` : ''}, cancelled ${c}`],
@@ -156,7 +175,7 @@ const PATTERNS = [
   ['FRAG'],
   [/NT\$([\d,]+) 起/g, 'from NT$$$1'],
   [/([\d.]+) 公里/g, '$1 km'], [/([\d.]+) 公尺/g, '$1 m'], [/([\d.]+) 毫秒/g, '$1 ms'], [/([\d.]+) 秒/g, '$1 s'],
-  [/(^|[^\d.,])1 人/g, (_, p) => `${p}1 person`], [/(\d+) 人/g, '$1 people'], [/(\d+) 位/g, '$1'], [/(\d+) 堂/g, '$1 sessions'], [/(\d+) 次/g, '$1×'], [/(\d+) 筆/g, '$1'],
+  [/(^|[^\d.,])1 人/g, (_, p) => `${p}1 person`], [/(\d+) 人/g, '$1 people'], [/(\d+) 張/g, (_, n) => `${n} ${n === '1' ? 'ticket' : 'tickets'}`], [/(\d+) 位/g, '$1'], [/(\d+) 堂/g, '$1 sessions'], [/(\d+) 次/g, '$1×'], [/(\d+) 筆/g, '$1'],
   [/(\d+) 件/g, '$1 pcs'], [/(\d+) 處/g, (_, n) => `${n} ${n === '1' ? 'place' : 'places'}`], [/(\d+) 場/g, '$1 events'], [/(\d+) 週/g, '$1 wk'], [/(\d+) 天/g, '$1 days'], [/(\d+) 則/g, '$1'], [/(\d+) 個/g, '$1'],
   [/(?:^|\s)([A-Z]) 組/g, ' Group\u00a0$1'], [/推估：(\d{4}) W(\d+)/g, 'Estimated from $1 W$2'],
   [/([A-Za-z])\s*或\s*([A-Za-z])/g, '$1 or $2'],
