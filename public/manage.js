@@ -1,16 +1,22 @@
 // 耕跑團 PWA — manage.js：從 app.js 拆出來、用到才載入的畫面（第一次開 App 不用下載）
-import { $, apiAll, addrField, bindAddrField, ago, askReason, downloadAuthed, isOffline, nowTp, scanSheet, signupDefaults, allow, api, bars, copy, dstr, emptyState, esc, feat, group, IC, KIND_NAME, largeTitle, me, money, PAID_NAME, row, teamAllow, teams, toast, rich, keep, names, view } from './app.js';
+import { $, apiAll, addrField, bindAddrField, ago, askReason, canMeetup, cfg, downloadAuthed, isOffline, meetupTeams, nowTp, scanSheet, signupDefaults, allow, api, bars, copy, dstr, emptyState, esc, feat, group, IC, KIND_NAME, largeTitle, me, money, PAID_NAME, row, teamAllow, teams, toast, rich, keep, names, view } from './app.js';
 import { defaultWindow, windowError, shiftDays, daysBetween, evStart, tpText, tpShort } from './signup-window.js';
 
 // ---------- 幹部：新增／編輯活動 ----------
 const DRAFT = 'cil-ev-draft';
+//   會員揪團（功能開關 meetup）：沒有建立活動權限的團員用精簡表單（lite）發起；開團人自己編輯也是精簡表單
+//   只有標題、分團（自己參加的）、日期、集合與結束時間、地點、練跑地圖的地點與路線、名額、報名截止、攜伴、說明、報名成功訊息；
+//   其他欄位還在表單裡但藏起來（data-full），送出的值伺服器一律不採用（meetupFields）
 async function formView(id) {
   const qp = new URLSearchParams(location.hash.split('?')[1] || '');
-  const from = !id && qp.get('from');
+  const officerTeams = [...(allow('event') ? [['', '全協會']] : []), ...teams().filter((t) => teamAllow(t.id, 'event')).map((t) => [t.id, t.name])];
+  const liteNew = !id && (qp.get('meetup') === '1' || !officerTeams.length) && canMeetup();
+  const from = !id && !liteNew && qp.get('from');
   const src = id ? await api(`/events/${id}`) : from ? await api(`/events/${from}`) : null;
+  const lite = id ? !!src.meetupOwner : liteNew;
   // 複製活動：沿用內容、問卷與座位圖，日期往後推一年（每年的春酒）或清空
   const d = src ? { ...src, ...(from ? { title: src.title.replace(/20\d\d/, (y) => String(Number(y) + 1)), date: nextYear(src.date) } : {}) }
-    : { kind: 'track', date: /^\d{4}-\d{2}-\d{2}$/.test(qp.get('date') || '') ? qp.get('date') : nowTp().slice(0, 10), signup_open: 1, team_id: qp.get('team') || null };
+    : { kind: liteNew ? 'other' : 'track', date: /^\d{4}-\d{2}-\d{2}$/.test(qp.get('date') || '') ? qp.get('date') : nowTp().slice(0, 10), signup_open: 1, team_id: qp.get('team') || null };
   // 報名期間：新增活動依後台的「活動報名預設」推算；複製活動依日期差位移（已經過去或空白的改用預設）；編輯用原本存的值
   let winNotes = [];
   if (!id) {
@@ -22,24 +28,27 @@ async function formView(id) {
     } else {
       d.signup_start = w.start; d.deadline = w.end; d.require_approval = def.approval ? 1 : 0; d.notify_signup = def.notify ? 1 : 0;
     }
-    winNotes = w.notes;
+    // 揪團：建立後立即開放（沒有報名開始），預設截止照後台設定；不審核
+    if (lite) { d.signup_start = ''; d.require_approval = 0; } else winNotes = w.notes;
   }
   // 分團選項：協會幹部可以選全協會與任何分團；分團幹部只能選自己帶的分團
   // 練跑地圖的地點與路線：選了地點，活動頁會顯示場地天氣；選了路線，大家可以下載 GPX
   const [{ spots = [] }, { routes = [] }] = await Promise.all([api('/spots').catch(() => ({})), api('/routes').catch(() => ({}))]);
   d.spot_id ||= qp.get('spot') || null; d.route_id ||= qp.get('route') || null;
   if (!id && !d.place && d.spot_id) d.place = spots.find((x) => x.id === d.spot_id)?.name || '';
-  const teamOpts = [...(allow('event') ? [['', '全協會']] : []), ...teams().filter((t) => teamAllow(t.id, 'event')).map((t) => [t.id, t.name])];
-  if (!teamOpts.length) { view.innerHTML = `<div class="card">${emptyState('calendar', '只有幹部與分團幹部可以建立活動')}</div>`; return; }
-  view.innerHTML = `${largeTitle(id ? '編輯活動' : from ? '複製活動' : '新增活動', from ? `從「<span translate="no">${esc(src.title)}</span>」複製，座位圖也會一起帶過來` : '')}
+  // 揪團的分團：新增時是自己參加、沒有建立活動權限的分團；編輯時固定是原本的分團
+  const teamOpts = !lite ? officerTeams : id ? [[src.team?.id || src.team_id || '', src.team?.name || '全協會']] : meetupTeams().map((t) => [t.id, t.name]);
+  if (!teamOpts.length) { view.innerHTML = `<div class="card">${emptyState('calendar', cfg.settings?.features?.meetup === true && !id ? '加入分團後，就能在分團裡發起揪團' : '只有幹部與分團幹部可以建立活動')}</div>`; return; }
+  view.innerHTML = `${largeTitle(lite ? (id ? '編輯揪團' : '發起揪團') : id ? '編輯活動' : from ? '複製活動' : '新增活動',
+    lite ? '不收費、不推播；建立後分享到 LINE 群組，找人一起跑。幹部可以協助編輯或刪除' : from ? `從「<span translate="no">${esc(src.title)}</span>」複製，座位圖也會一起帶過來` : '')}
   <section class="card">
-    <form id="ef">
+    <form id="ef" class="${lite ? 'lite' : ''}">
       <div class="grid2">
-        <label>類型<select name="kind">${Object.entries(KIND_NAME).filter(([k]) => k !== 'party' || feat('party') || d.kind === 'party').map(([k, v]) => `<option value="${k}" ${d.kind === k ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
-        <label>分團<select name="team_id">${teamOpts.map(([k, v]) => `<option value="${esc(k)}" ${(d.team_id || '') === k ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select></label>
+        <label data-full>類型<select name="kind">${Object.entries(KIND_NAME).filter(([k]) => k !== 'party' || feat('party') || d.kind === 'party').map(([k, v]) => `<option value="${k}" ${d.kind === k ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
+        <label>分團<select name="team_id" ${lite && id ? 'disabled' : ''}>${teamOpts.map(([k, v]) => `<option value="${esc(k)}" ${(d.team_id || '') === k ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select></label>
       </div>
-      <label>標題<input name="title" required maxlength="40" value="${esc(d.title || '')}" placeholder="10/8（四）耕跑團練"></label>
-      <fieldset class="qset"><legend>誰看得到</legend><div class="chips">
+      <label>標題<input name="title" required maxlength="40" value="${esc(d.title || '')}" placeholder="${lite ? '週六大佳河濱 15K 輕鬆跑' : '10/8（四）耕跑團練'}"></label>
+      <fieldset class="qset" data-full><legend>誰看得到</legend><div class="chips">
         <label class="chip"><input type="radio" name="visibility" value="public" ${d.visibility !== 'invite' ? 'checked' : ''}><span>公開</span></label>
         <label class="chip"><input type="radio" name="visibility" value="invite" ${d.visibility === 'invite' ? 'checked' : ''}><span>${IC.lock}邀請制</span></label></div>
         <span class="tiny" id="visHint"></span></fieldset>
@@ -50,14 +59,14 @@ async function formView(id) {
       </div>
       <div data-when="!survey">
         <label>地點<input name="place" maxlength="60" value="${esc(d.place || '')}" placeholder="臺北田徑場 400 場"></label>
-        ${addrField('address', '地址', '選填・餐廳或場館，送郵局核對')}
+        ${addrField('address', '地址', '選填・餐廳或場館，送郵局核對').replace('<fieldset ', '<fieldset data-full ')}
         <div class="grid2">
           <label>練跑地圖的地點<select name="spot_id"><option value="">（不指定）</option>${spots.filter((x) => x.status === 'approved').map((x) => `<option value="${esc(x.id)}" translate="no" ${d.spot_id === x.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select></label>
           <label>路線<select name="route_id"><option value="">（不指定）</option>${routes.map((r) => `<option value="${esc(r.id)}" ${d.route_id === r.id ? 'selected' : ''}>${esc(r.name)}・${(r.distance / 1000).toFixed(1)} 公里</option>`).join('')}</select></label>
         </div>
         <p class="tiny" style="margin:0">選了地點，活動頁會顯示當天的場地天氣與跑步建議；選了路線，大家可以下載 GPX。<a href="#/map">到練跑地圖新增 ›</a></p>
         <div class="grid2">
-          <label>帶團<input name="lead" maxlength="30" value="${esc(d.lead || '')}" placeholder="教練或領跑員"></label>
+          <label data-full>帶團<input name="lead" maxlength="30" value="${esc(d.lead || '')}" placeholder="教練或領跑員"></label>
           <label>人數上限<input type="number" name="capacity" min="1" max="999" value="${d.capacity || ''}" placeholder="不限"></label>
         </div>
       </div>
@@ -66,22 +75,22 @@ async function formView(id) {
         <label>餐點選項（逗號分隔）<input name="meal_options" maxlength="60" value="${esc(d.meal_options || '')}" placeholder="葷食,素食"></label>
       </fieldset>
       <fieldset class="group" id="signupBox"><legend>報名設定</legend>
-        <label class="switch"><span>開放報名<span class="tiny" style="display:block">關掉後誰都不能報名（幹部代為報名不受影響）</span></span><input type="checkbox" name="signup_open" ${d.signup_open ? 'checked' : ''}><i></i></label>
+        <label class="switch" data-full><span>開放報名<span class="tiny" style="display:block">關掉後誰都不能報名（幹部代為報名不受影響）</span></span><input type="checkbox" name="signup_open" ${d.signup_open ? 'checked' : ''}><i></i></label>
         <div class="grid2 dt">
-          <label>報名開始<input type="datetime-local" name="signup_start" value="${esc(d.signup_start || '')}" data-auto="${id ? 0 : 1}"></label>
+          <label data-full>報名開始<input type="datetime-local" name="signup_start" value="${esc(d.signup_start || '')}" data-auto="${id ? 0 : 1}"></label>
           <label><span data-when="!survey">報名截止</span><span data-when="survey">回覆截止</span><input type="datetime-local" name="deadline" value="${esc(d.deadline || '')}" data-auto="${id ? 0 : 1}"></label>
         </div>
         <p class="tiny" id="winHint" aria-live="polite" style="margin:0"></p>
-        <label class="switch" data-when="!survey"><span>需要審核<span class="tiny" style="display:block">報名後由主辦幹部核准才算數；核准前不佔名額、不用繳費</span></span><input type="checkbox" name="require_approval" ${d.require_approval ? 'checked' : ''}><i></i></label>
-        <label class="switch" data-when="!survey"><span>通知報名者<span class="tiny" style="display:block">報名成功、排入候補、確認收款時推播給本人；審核結果一律會通知</span></span><input type="checkbox" name="notify_signup" ${d.notify_signup ? 'checked' : ''}><i></i></label>
+        <label class="switch" data-when="!survey" data-full><span>需要審核<span class="tiny" style="display:block">報名後由主辦幹部核准才算數；核准前不佔名額、不用繳費</span></span><input type="checkbox" name="require_approval" ${d.require_approval ? 'checked' : ''}><i></i></label>
+        <label class="switch" data-when="!survey" data-full><span>通知報名者<span class="tiny" style="display:block">報名成功、排入候補、確認收款時推播給本人；審核結果一律會通知</span></span><input type="checkbox" name="notify_signup" ${d.notify_signup ? 'checked' : ''}><i></i></label>
         <label data-when="!survey">可攜伴人數<input type="number" name="guest_max" min="0" max="9" inputmode="numeric" value="${d.guest_max || ''}" placeholder="不開放"></label>
         <label class="switch" data-when="!survey" data-guests><span>攜伴也佔名額<span class="tiny" style="display:block">名額算本人加攜伴，例如帶 2 位就佔 3 個名額；關掉的話每筆報名只算 1 位</span></span><input type="checkbox" name="count_guests" ${(id ? d.count_guests : d.count_guests ?? 1) ? 'checked' : ''}><i></i></label>
-        <p class="tiny" style="margin:0" data-when="!survey" data-guests>攜伴每位跟報名費同價（費用在下方「費用與收款」設定）；報名時可以填攜伴姓名，只有主辦看得到。</p>
+        <p class="tiny" style="margin:0" data-when="!survey" data-guests data-full>攜伴每位跟報名費同價（費用在下方「費用與收款」設定）；報名時可以填攜伴姓名，只有主辦看得到。</p>
         <label>報名成功訊息（選填）<input name="success_msg" maxlength="100" value="${esc(d.success_msg || '')}" placeholder="例如：報名成功！雨天照跑，記得帶水和毛巾"><span class="tiny">報名的人送出後會看到，留空就用預設的說明</span></label>
-        ${id && d.cancelled ? `<label class="switch"><span>恢復這場活動<span class="tiny" style="display:block">這場已取消；打開後儲存會重新開放</span></span><input type="checkbox" name="reopen" ${qp.get('reopen') === '1' ? 'checked' : ''}><i></i></label>` : ''}
+        ${id && d.cancelled && !lite ? `<label class="switch"><span>恢復這場活動<span class="tiny" style="display:block">這場已取消；打開後儲存會重新開放</span></span><input type="checkbox" name="reopen" ${qp.get('reopen') === '1' ? 'checked' : ''}><i></i></label>` : ''}
         ${allow('settings') ? '<a class="tiny" href="#/admin/settings/signup">預設值在後台「活動報名預設」設定 ›</a>' : ''}
       </fieldset>
-      ${id ? ((d.series || []).length > 1 ? `<p class="tiny" style="margin:0">這是定期揪跑的其中一場，這裡只會改這一場。</p>` : '') : `<details class="group" data-when="!survey" id="repBox">
+      ${id ? ((d.series || []).length > 1 ? `<p class="tiny" style="margin:0">這是定期揪跑的其中一場，這裡只會改這一場。</p>` : '') : `<details class="group" data-when="!survey" data-full id="repBox">
         <summary>重複（定期揪跑）</summary>
         <fieldset class="qset"><legend>每週的哪幾天</legend><div class="chips">${['日', '一', '二', '三', '四', '五', '六'].map((w, i) => `<label class="chip"><input type="checkbox" name="rep_wd" value="${i}"><span>週${w}</span></label>`).join('')}</div></fieldset>
         <div class="grid2"><label>到哪一天為止<input type="date" name="rep_until"></label>
@@ -89,21 +98,21 @@ async function formView(id) {
         <p class="tiny" style="margin:0" id="repHint">每一場都是獨立的活動，各自報名與點名；最多一次建立 60 場。</p>
       </details>`}
 
-      <fieldset class="group">
+      <fieldset class="group" data-full>
         <legend>組別與價格</legend>
         <p class="tiny" style="margin:0">例如 全馬 1200、半馬 1000、10K 800。有設定的話，報名時要選一組，統計頁會算好應收金額。</p>
         <div id="optRows" class="qedit">${(d.options || []).map(optRow).join('')}</div>
         <button type="button" class="btn ghost sm" id="addOpt">${IC.plus}新增一組</button>
         <label class="switch"><span>由幹部代為團體報名<span class="tiny" style="display:block">報名的人要先填好賽事報名資料並同意提供，幹部再下載整理送出</span></span><input type="checkbox" name="group_reg" ${d.group_reg ? 'checked' : ''}><i></i></label>
       </fieldset>
-      <details class="group" data-when="!survey" id="itemBox" ${(d.items || []).length || d.kind === 'buy' ? 'open' : ''}>
+      <details class="group" data-when="!survey" data-full id="itemBox" ${(d.items || []).length || d.kind === 'buy' ? 'open' : ''}>
         <summary>加購與團購商品${(d.items || []).length ? `・${d.items.length} 項` : ''}</summary>
         <p class="tiny" style="margin:0">團服、毛巾、號碼布扣…報名時一起訂。尺寸用逗號分隔；有庫存就填，賣完會自動擋下。類型選「團購」時，報名的人至少要選一項。</p>
         <div id="itemRows" class="qedit">${(d.items || []).map(itemRow).join('')}</div>
         <button type="button" class="btn ghost sm" id="addItem">${IC.plus}新增商品</button>
         <label>成團門檻（選填）<input type="number" name="min_qty" min="1" max="99999" inputmode="numeric" value="${d.min_qty || ''}" placeholder="例如 20 件以上才下單"></label>
       </details>
-      <details class="group" data-when="!survey" ${d.fee || d.pricing || d.payInfo ? 'open' : ''}>
+      <details class="group" data-when="!survey" data-full ${d.fee || d.pricing || d.payInfo ? 'open' : ''}>
         <summary>費用與收款</summary>
         <label>報名費（元，沒有分組別時使用）<input type="number" name="fee" min="0" value="${d.fee ?? ''}" placeholder="0"></label>
         <div class="grid3">
@@ -118,7 +127,7 @@ async function formView(id) {
         <label>繳費說明（選填）<input name="pay_note" maxlength="200" value="${esc(d.payInfo?.note || '')}" placeholder="例如：轉帳後在 App 回報後五碼"></label>
         <p class="tiny" style="margin:0">App 只做紀錄與對帳，不經手金流。團員回報後五碼，你在統計頁確認收款。</p>
       </details>
-      <fieldset class="group">
+      <fieldset class="group" data-full>
         <legend>報名問卷</legend>
         <p class="tiny" style="margin:0">想知道大家的尺寸、交通方式、要不要參加慶功宴…都可以加題目。報名時一起填，統計頁會自動算好。</p>
         <div id="qRows" class="qedit">${(d.questions || []).map(qRow).join('')}</div>
@@ -129,7 +138,7 @@ async function formView(id) {
         </div>
       </fieldset>
 
-      <details class="group" data-when="!survey" ${d.week_no || d.plan_text || d.link_url ? 'open' : ''}>
+      <details class="group" data-when="!survey" data-full ${d.week_no || d.plan_text || d.link_url ? 'open' : ''}>
         <summary>課表與外部連結</summary>
         <label>課表週次<input type="number" name="week_no" min="1" max="21" value="${d.week_no || ''}" placeholder="自動帶課表"></label>
         <div class="grid2">
@@ -139,7 +148,7 @@ async function formView(id) {
         <label>自填課表（沒填週次時使用）<textarea name="plan_text" placeholder="S：…">${esc(d.plan_text || '')}</textarea></label>
       </details>
       <label>說明與注意事項<textarea name="note" placeholder="攜帶瑜珈墊、水、彈力帶、毛巾">${esc(d.note || '')}</textarea></label>
-      ${id ? '' : '<label class="inline"><input type="checkbox" name="notify" checked> 建立後通知（選了分團就只通知那個分團；邀請制只通知受邀的人）</label>'}
+      ${id ? '' : '<label class="inline" data-full><input type="checkbox" name="notify" checked> 建立後通知（選了分團就只通知那個分團；邀請制只通知受邀的人）</label>'}
       <div class="grid2 formactions"><a class="btn ghost block" href="${id ? `#/e/${esc(id)}` : '#/'}">取消</a><button class="btn block">${id ? '儲存' : '建立'}</button></div>
     </form>
   </section>`;
@@ -150,9 +159,9 @@ async function formView(id) {
     const autoS = f.signup_start.dataset.auto === '1', autoE = f.deadline.dataset.auto === '1';
     if ((autoS || autoE) && f.date.value) {
       const w = defaultWindow(evOf(), signupDefaults(), nowTp());
-      if (autoS) f.signup_start.value = w.start;
+      if (autoS) f.signup_start.value = lite ? '' : w.start;   // 揪團：建立後立即開放
       if (autoE) f.deadline.value = w.end;
-      winNotes = w.notes;
+      winNotes = lite ? [] : w.notes;
     } else if (force) winNotes = [];
     winHint();
   }
@@ -175,11 +184,12 @@ async function formView(id) {
     if (f.visibility.value === 'invite' && !f.require_approval.dataset.touched) f.require_approval.checked = false;
     winHint();
   });
-  // 新增活動時自動暫存一般欄位（例如先去地圖新增地點再回來，不用重填）；建立成功就清掉
+  // 新增活動時自動暫存一般欄位（例如先去地圖新增地點再回來，不用重填）；建立成功就清掉；揪團的草稿分開存
+  const dkey = lite ? `${DRAFT}-meetup` : DRAFT;
   if (!id && !from) {
     const keyOf = (el) => el.name + (el.type === 'checkbox' || el.type === 'radio' ? `=${el.value}` : '');
     try {
-      const d = JSON.parse(sessionStorage.getItem(DRAFT) || 'null');
+      const d = JSON.parse(sessionStorage.getItem(dkey) || 'null');
       if (d) {
         for (const el of f.elements) { if (!el.name || !(keyOf(el) in d)) continue; if (el.type === 'checkbox' || el.type === 'radio') el.checked = d[keyOf(el)]; else el.value = d[keyOf(el)]; }
         // 報名時間：草稿帶回來的值當成手動填的；已經過去的改用預設重算
@@ -190,13 +200,13 @@ async function formView(id) {
         }
         if (stale) recalcWindow(true);
         f.insertAdjacentHTML('afterbegin', `<p class="notice row spread" style="margin:0" id="draftNote"><span>${stale ? '草稿的報名時間已過，已重新套用預設。' : ''}已帶回剛才填到一半的內容</span><button type="button" class="btn ghost sm" id="draftClear">清除重填</button></p>`);
-        $('#draftClear').onclick = () => { try { sessionStorage.removeItem(DRAFT); } catch {} formView(); };
+        $('#draftClear').onclick = () => { try { sessionStorage.removeItem(dkey); } catch {} formView(); };
       }
     } catch {}
     f.addEventListener('input', () => {
       const o = {};
       for (const el of f.elements) if (el.name && el.type !== 'file') o[keyOf(el)] = el.type === 'checkbox' || el.type === 'radio' ? el.checked : el.value;
-      try { sessionStorage.setItem(DRAFT, JSON.stringify(o)); } catch {}
+      try { sessionStorage.setItem(dkey, JSON.stringify(o)); } catch {}
     });
   }
   // 依類型顯示欄位：data-when="party"、"survey"、"!survey"
@@ -256,7 +266,7 @@ async function formView(id) {
       min_qty: num(f.min_qty), spot_id: f.spot_id.value || null, route_id: f.route_id.value || null,
       pricing: { early_until: f.early_until.value, early_off: Number(f.early_off.value) || 0, member_off: Number(f.member_off.value) || 0 },
       pay_info: { account: f.pay_account.value.trim(), due: f.pay_due.value, note: f.pay_note.value.trim(), methods: [...f.querySelectorAll('[name=pay_methods]:checked')].map((c) => c.value) },
-      notify: f.notify ? f.notify.checked : undefined, copy_from: from || undefined,
+      notify: lite ? false : f.notify ? f.notify.checked : undefined, copy_from: from || undefined,
       repeat: f.rep_until && [...f.querySelectorAll('[name=rep_wd]:checked')].length ? { weekdays: [...f.querySelectorAll('[name=rep_wd]:checked')].map((c) => Number(c.value)), until: f.rep_until.value, skip_holidays: f.rep_skip.checked } : undefined,
     };
     // 報名期間先在前端檢查一次（伺服器還會再檢查）
@@ -283,8 +293,9 @@ async function formView(id) {
     }
     try {
       const r = await api('/events', { method: 'POST', body });
-      try { sessionStorage.removeItem(DRAFT); } catch {}
+      try { sessionStorage.removeItem(dkey); } catch {}
       location.hash = `#/e/${r.id}`;
+      if (r.meetup) return toast('已發起揪團，分享到 LINE 群組找人一起跑吧');
       // 建好後告訴幹部發生了什麼、下一步做什麼
       const opens = body.signup_start && body.signup_start > nowTp() ? `，${tpShort(body.signup_start)} 開放報名` : '';
       toast(r.invite ? `已建立邀請制活動${opens}，下一步：在活動頁邀請人或開邀請連結` : `已建立${r.count > 1 ? ` ${r.count} 場定期揪跑` : ''}${r.notified ? `，已通知 ${r.notified} 人` : ''}${opens}`);
@@ -349,11 +360,13 @@ async function statsView(id) {
   const countOf = (k) => st.people.filter((x) => inFilter(x.status, k)).length;
   const STATUS_PILL = { wait: '<span class="pill wait">候補</span>', pending: '<span class="pill wait">待審核</span>', rejected: '<span class="pill no">未通過</span>', cancel: '<span class="pill">已取消</span>' };
   const off = isOffline() ? 'disabled' : '';
+  // 會員揪團的開團人（ownerOnly）：只看名單與統計（正取與候補、備註與攜伴姓名），點名、收款、領取、團體報名資料由幹部處理
+  const staff = !st.ownerOnly;
   // 已繳費後取消、婉拒或移出的人（待退費）也要能改繳費狀態，主辦才能標記已退費、結掉待辦
   const prow = (x) => { const live = x.status === 'in', refund = !live && ['paid', 'refunded'].includes(x.paid);
     return `<div class="r prow ${st.canReview ? 'rv' : ''} ${x.payReported && x.paid !== 'paid' ? 'reported' : ''}" data-st="${x.status}" data-mid="${esc(x.member_id)}" data-name="${esc(`${x.name} ${x.nickname || ''}`)}">
       ${st.canReview ? `<label class="selhit"><input type="checkbox" class="sel" data-sel aria-label="選取 ${esc(x.name)}" ${off}></label>` : ''}
-      ${live && st.kind !== 'party' ? `<label class="attend" title="出席"><input type="checkbox" data-att="${esc(x.member_id)}" aria-label="出席：${esc(x.name)}" ${x.attended ? 'checked' : ''}><i>${IC.check}</i></label>` : '<span aria-hidden="true"></span>'}
+      ${live && st.kind !== 'party' && staff ? `<label class="attend" title="出席"><input type="checkbox" data-att="${esc(x.member_id)}" aria-label="出席：${esc(x.name)}" ${x.attended ? 'checked' : ''}><i>${IC.check}</i></label>` : '<span aria-hidden="true"></span>'}
       <span><b><span translate="no">${esc(x.name)}</span></b>${x.nickname ? ` <span class="tiny"><span translate="no">${esc(x.nickname)}</span></span>` : ''}${x.amount ? ` <span class="num tiny">${money2(x.amount)}</span>` : ''} ${STATUS_PILL[x.status] || ''}
         <span class="tiny" style="display:block">${[x.option && esc(x.option), ...itemText(x.items, st.items).map(esc), st.groupReg && (x.regOk ? '報名資料 OK' : '報名資料未提供'), x.guests && `攜伴 ${x.guests}${(x.guestNames || []).length ? `（<span translate="no">${x.guestNames.map(esc).join('、')}</span>）` : ''}`, x.paid_note && `<span translate="no">${esc(x.paid_note)}</span>`].filter(Boolean).join('・')}</span>
         ${st.canReview ? `<span class="tiny" style="display:block"><span title="${tpAt(x.created_at)}">${ago(x.created_at)}報名</span>${x.firstAt && x.firstAt !== x.created_at ? `・第一次報名 <span class="num">${tpAt(x.firstAt)}</span>` : ''}${x.reviewedAt ? `・<span translate="no">${esc(x.reviewerName || '')}</span> ${x.status === 'rejected' ? '婉拒' : x.review === 'approved' ? '核准' : '處理'}・${ago(x.reviewedAt)}` : ''}${x.edited ? '・核准後有修改' : ''}${st.groupReg && !x.regComplete ? '・報名資料不完整' : ''}</span>` : ''}
@@ -361,7 +374,7 @@ async function statsView(id) {
         ${x.note ? `<span class="tiny" style="display:block">備註：<span translate="no">${esc(x.note)}</span></span>` : ''}
         ${x.status === 'rejected' && x.reviewNote ? `<span class="tiny" style="display:block">原因：<span translate="no">${esc(x.reviewNote)}</span></span>` : ''}
         ${live && x.payReported && x.paid !== 'paid' ? `<span class="payrep">${PAY_METHOD[x.payMethod] || '已回報'}${x.payRef ? ` 後五碼 <b class="num"><span translate="no">${esc(x.payRef)}</span></b>` : ''}・${ago(x.payReported)} <button type="button" class="btn sm" data-confirm="${esc(x.member_id)}">確認收款</button></span>` : ''}
-        ${(st.items || []).length && live ? `<label class="inline picked"><input type="checkbox" data-pick="${esc(x.member_id)}" ${x.picked ? 'checked' : ''}> 已領取</label>` : ''}
+        ${(st.items || []).length && live && staff ? `<label class="inline picked"><input type="checkbox" data-pick="${esc(x.member_id)}" ${x.picked ? 'checked' : ''}> 已領取</label>` : ''}
         ${st.canReview ? `<span class="row rvbtns" style="gap:6px">${x.status === 'pending' ? `<button type="button" class="btn sm" data-rv="approve" ${off}>核准</button><button type="button" class="btn ghost sm" data-rv="reject" ${off}>婉拒</button>`
           : x.status === 'in' || x.status === 'wait' ? `<button type="button" class="btn ghost sm" data-rv="revoke" ${off}>移出名單</button>`
           : x.status === 'rejected' ? `<button type="button" class="btn ghost sm" data-rv="reopen" ${off}>${st.requireApproval ? '重新審核' : '恢復可報名'}</button>` : ''}</span>` : ''}</span>
@@ -393,7 +406,7 @@ async function statsView(id) {
         <label class="btn ghost sm filebtn">匯入銀行明細對帳<input type="file" accept=".csv,text/csv,.txt" id="bankCsv" hidden></label></div>
       <div id="reconOut"></div>
       <p class="tiny" style="margin:0">從網路銀行下載入帳明細（CSV），系統用「金額＋轉帳後五碼」比對團員回報的資料，先預覽再確認標記已繳。檔案只在你的手機裡讀取，只送出金額與數字。</p></section>` : ''}
-    ${(st.items || []).length ? `<section class="card"><div class="row spread"><h2 class="h3">團購數量</h2>${st.minQty ? `<span class="tiny">成團門檻 ${st.minQty} 件</span>` : ''}</div>
+    ${(st.items || []).length && staff ? `<section class="card"><div class="row spread"><h2 class="h3">團購數量</h2>${st.minQty ? `<span class="tiny">成團門檻 ${st.minQty} 件</span>` : ''}</div>
       ${st.minQty ? (() => { const sum = st.items.reduce((n, i) => n + i.total, 0); return `<div class="row spread"><span>${sum >= st.minQty ? `${IC.check} 已成團` : `還差 ${st.minQty - sum} 件成團`}</span><span class="tiny num">${sum}/${st.minQty}</span></div>
         <span class="bar big"><i style="width:${Math.min(100, Math.round(sum / st.minQty * 100))}%"></i></span>`; })() : ''}
       <div class="itemtable">${st.items.map((i) => `<div class="itr"><b><span translate="no">${esc(i.name)}</span></b><span class="tiny">${money2(i.price)}${i.stock ? `・庫存 ${i.stock}，剩 ${Math.max(0, i.stock - i.total)}` : ''}</span>
@@ -404,7 +417,7 @@ async function statsView(id) {
         <p class="tiny" style="margin:0">通知後，每位訂購的人會有自己的領取 QR；現場用下面的按鈕掃描就會記錄已領取。</p>
         <button class="btn ghost sm iconbtn" id="pickScan" type="button">${IC.check}掃描領取 QR</button>
       </details></section>` : ''}
-    ${st.groupReg ? `<section class="card"><div class="row spread"><h2 class="h3">團體報名資料</h2><span class="tiny">${st.regReady}/${t.in} 人已同意提供</span></div>
+    ${st.groupReg && staff ? `<section class="card"><div class="row spread"><h2 class="h3">團體報名資料</h2><span class="tiny">${st.regReady}/${t.in} 人已同意提供</span></div>
       <span class="bar big"><i style="width:${t.in ? Math.round(st.regReady / t.in * 100) : 0}%"></i></span>
       <button class="btn ghost sm" id="regCsv">下載團體報名資料（含身分證字號）</button>
       <p class="tiny" style="margin:0">只包含已同意提供的人。檔案含身分證字號等個資，送出報名後請立刻刪除，下載紀錄會寫進稽核。</p></section>` : ''}
@@ -427,7 +440,7 @@ async function statsView(id) {
       ${st.canReview ? `<div class="chips" role="group" aria-label="名單篩選">${FILTERS.map(([k, v]) => `<button type="button" class="chip" data-f="${k}" aria-pressed="${k === filt}">${v} <span class="num">${countOf(k)}</span></button>`).join('')}</div>` : ''}
       <input id="pq" placeholder="搜尋姓名" aria-label="搜尋名單" autocomplete="off">
       <div class="roster" id="plist">${st.people.map(prow).join('')}</div>
-      <p class="tiny" style="margin:0">${st.kind === 'party' ? '出席以入場券報到為準' : st.canReview ? '方框是整批審核的選取；圓圈是點名出席' : '左邊圓圈是點名出席'}${money ? '；右邊切換繳費狀態，只做紀錄，不串金流' : ''}。點名、繳費、領取只適用正取；已繳費後取消或移出的人，可在右邊改成已退費。</p>
+      <p class="tiny" style="margin:0">${!staff ? '名單只列正取與候補；備註與攜伴姓名只有你和幹部看得到，請不要轉貼。點名由幹部處理' : `${st.kind === 'party' ? '出席以入場券報到為準' : st.canReview ? '方框是整批審核的選取；圓圈是點名出席' : '左邊圓圈是點名出席'}${money ? '；右邊切換繳費狀態，只做紀錄，不串金流' : ''}。點名、繳費、領取只適用正取；已繳費後取消或移出的人，可在右邊改成已退費。`}</p>
       ${st.canReview ? `<div class="rvbar" role="toolbar" aria-label="整批審核" hidden><span id="selN" aria-live="polite"></span>
         <button type="button" class="btn sm" data-bulk="approve">核准</button><button type="button" class="btn ghost sm" data-bulk="reject">婉拒</button>
         <button type="button" class="btn ghost sm" data-bulk="clear">取消選取</button></div>

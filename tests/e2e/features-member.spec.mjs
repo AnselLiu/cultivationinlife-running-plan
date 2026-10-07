@@ -558,3 +558,38 @@ test.describe('跑者休息站：離線', () => {
     await context.setOffline(false);
   });
 });
+
+test('會員揪團：協會打開開關後，團員從首頁發起（精簡表單、不收費），活動頁標「揪團」，管理區只有統計、編輯與刪除', async ({ page, request }) => {
+  await apiAs(request, 't_chair', '/settings/features', { method: 'POST', body: { meetup: true } });
+  let id = null;
+  try {
+    await enter(page);
+    await page.goto('/#/');
+    await page.getByRole('link', { name: '發起揪團' }).click();
+    await expect(page.locator('#view h1')).toHaveText('發起揪團');
+    // 精簡表單：類型、誰看得到、收費、問卷、審核、外連、建立後通知都不顯示；分團只有自己參加的
+    for (const n of ['kind', 'visibility', 'fee', 'require_approval', 'link_url', 'notify', 'signup_start']) await expect(page.locator(`#ef [name=${n}]`).first()).toBeHidden();
+    await expect(page.locator('#ef [name=team_id] option')).not.toHaveCount(0);
+    await expect(page.locator('#ef [name=capacity]')).toBeVisible();
+    await expect(page.locator('#ef [name=deadline]')).toBeVisible();
+    await page.locator('#ef [name=title]').fill(`E2E 揪團 ${Date.now().toString(36).slice(-4)}`);
+    await page.locator('#ef [name=date]').fill(plus(5));
+    await page.locator('#ef [name=date]').dispatchEvent('change');
+    await page.locator('#ef [name=gather_time]').fill('06:30');
+    await page.locator('#ef [name=place]').fill('大佳河濱');
+    await page.getByRole('button', { name: '建立' }).click();
+    await expect(page).toHaveURL(/#\/e\/[\w-]+$/);
+    id = page.url().match(/#\/e\/([\w-]+)$/)[1];
+    await expect(page.locator('.hero .pill').first()).toHaveText('揪團');
+    await expect(page.locator('.hero')).toContainText(/發起：.*跑友/);   // 帶團欄位是開團人的暱稱（前面的測試可能改過暱稱）
+    await expect(page.getByRole('link', { name: '報名統計' })).toBeVisible();
+    await expect(page.locator('#del')).toBeVisible();
+    for (const s of ['#noticeForm', '#bulkForm', '#attendWrap']) await expect(page.locator(s)).toHaveCount(0);
+    await page.getByRole('link', { name: '編輯', exact: true }).click();
+    await expect(page.locator('#view h1')).toHaveText('編輯揪團');
+    await expect(page.locator('#ef [name=team_id]')).toBeDisabled();
+  } finally {
+    if (id) await apiAs(request, 't_runner', `/events/${id}`, { method: 'DELETE' });
+    await apiAs(request, 't_chair', '/settings/features', { method: 'POST', body: { meetup: false } });
+  }
+});

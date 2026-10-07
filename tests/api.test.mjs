@@ -1486,6 +1486,123 @@ test('報名成功訊息：建立與編輯都存得起來（100 字內），舊�
   assert.equal((await call('t_other', `/events/${id}`)).json.success_msg, null, '清空');
 });
 
+test('會員揪團：功能開關預設關閉；團員只能在自己的分團發起、欄位精簡、不推播；同時 3 場與每小時 5 次；開團人只管自己的，收款與點名仍是幹部；幹部可以編輯與刪除', async () => {
+  const mk = (who, body) => call(who, '/events', { method: 'POST', body: { kind: 'long', title: '週六河濱揪團', date: plus(4), gather_time: '06:30', end_time: '08:00', place: '大佳河濱', team_id: 'youth', ...body } });
+  // 預設關閉：團員一樣不能建立
+  assert.notEqual((await call('t_runner', '/me')).json.settings.features.meetup, true);
+  assert.equal((await mk('t_runner', {})).status, 403, '開關關閉時團員不能建立');
+  assert.equal((await call('t_chair', '/settings/features', { method: 'POST', body: { meetup: true } })).json.value.meetup, true);
+  assert.equal((await call('t_chair', '/settings/features', { method: 'POST', body: { gps: true } })).json.value.meetup, true, '沒送的開關保留原值');
+  try {
+    assert.equal((await mk('t_runner', { team_id: 'main' })).status, 403, '不是自己參加的分團');
+    assert.equal((await mk('t_runner', { team_id: null })).status, 403, '不能發起全協會的');
+    assert.equal((await mk('t_runner', { date: plus(-1) })).status, 400, '不能是過去的日期');
+    // 不能收費、問卷、審核、外連、課表、邀請制、定期；分類固定是「其他」；帶團是本人暱稱；不推播
+    const r = await mk('t_runner', { kind: 'party', capacity: 5, fee: 500, options: [{ name: '全馬', price: 100 }], items: [{ name: 'T恤', price: 300 }],
+      questions: [{ type: 'text', label: '尺寸' }], require_approval: true, link_url: 'https://example.com/x', link_label: '登記', visibility: 'invite', week_no: 3,
+      plan_text: '課表', lead: '假帶團', group_reg: true, pricing: { member_off: 50 }, pay_info: { account: '123' }, meal_options: '葷,素', min_qty: 5, address: '臺北市中正區重慶南路一段122號',
+      repeat: { weekdays: [0, 1, 2, 3, 4, 5, 6], until: plus(30) }, notify: true, guest_max: 2, count_guests: true, success_msg: '記得帶水', note: '慢慢跑' });
+    assert.equal(r.status, 200, r.text);
+    assert.equal(r.json.meetup, true);
+    assert.equal(r.json.count, 1, '不能定期');
+    assert.equal(r.json.notified, 0, '不推播');
+    const id = r.json.id;
+    const ev = (await call('t_runner', `/events/${id}`)).json;
+    assert.equal(ev.owner_managed, 1);
+    assert.equal(ev.kind, 'other');
+    assert.equal(ev.visibility, 'public');
+    for (const k of ['fee', 'week_no', 'pricing', 'payInfo']) assert.equal(ev[k], null, k);
+    for (const k of ['options', 'items', 'questions']) assert.deepEqual(ev[k], [], k);
+    assert.equal(ev.require_approval, 0);
+    assert.equal(ev.group_reg, 0);
+    assert.ok(!ev.link_url && !ev.plan_text && !ev.meal_options && !ev.address && !ev.min_qty);
+    assert.equal(ev.lead, '跑友', '發起人是本人暱稱');
+    assert.equal(ev.capacity, 5);
+    assert.equal(ev.guest_max, 2);
+    assert.equal(ev.count_guests, 1);
+    assert.equal(ev.success_msg, '記得帶水');
+    assert.equal(ev.end_time, '08:00');
+    assert.equal(ev.manage, true);
+    assert.equal(ev.meetupOwner, true);
+    assert.equal(ev.attendToken, null);
+    assert.equal((await notesFor('t_lead', id)).length, 0, '分團的人沒有收到通知');
+    assert.equal((await call('t_lead', `/events/${id}`)).json.meetupOwner, false, '分團團長是主辦幹部');
+    // 開團人編輯：只改得到基本欄位，分團與其他設定沿用原值
+    const put = (who, eid, body) => call(who, `/events/${eid}`, { method: 'PUT', body: { kind: 'track', title: '週六河濱揪團', date: plus(4), gather_time: '06:30', team_id: 'youth', guest_max: 2, ...body } });
+    assert.equal((await put('t_runner', id, { title: '改名揪團', capacity: 8, fee: 300, team_id: 'main', require_approval: true, visibility: 'invite' })).status, 200);
+    const e2 = (await call('t_runner', `/events/${id}`)).json;
+    assert.equal(e2.title, '改名揪團');
+    assert.equal(e2.capacity, 8);
+    assert.equal(e2.team_id, 'youth');
+    assert.equal(e2.kind, 'other');
+    assert.equal(e2.fee, null);
+    assert.equal(e2.require_approval, 0);
+    assert.equal(e2.visibility, 'public');
+    assert.equal(e2.end_time, '08:00', '沒帶結束時間不會清掉');
+    assert.equal((await put('t_runner', id, { title: '改名揪團', date: plus(-2) })).status, 400, '不能改到過去');
+    // 幹部（分團團長）可以編輯會員揪團（例如加上費用），開團人之後編輯不會清掉
+    assert.equal((await put('t_lead', id, { kind: 'other', title: '改名揪團', fee: 100, capacity: 8 })).status, 200);
+    assert.equal((await put('t_runner', id, { title: '改名揪團', capacity: 9 })).status, 200);
+    const e3 = (await call('t_runner', `/events/${id}`)).json;
+    assert.equal(e3.fee, 100, '幹部設的費用留著');
+    assert.equal(e3.capacity, 9);
+    assert.equal(e3.owner_managed, 1);
+    // 統計與名單：開團人看得到備註與攜伴姓名（跟報到幹部一樣只有正取與候補），沒有收款資料；其他團員不行
+    assert.equal((await signup('t_coach', id, { note: '會晚 5 分鐘', guests: 1, guest_names: ['阿明'] })).json.status, 'in');
+    const st = await call('t_runner', `/events/${id}/stats`);
+    assert.equal(st.status, 200, st.text);
+    assert.equal(st.json.ownerOnly, true);
+    assert.equal(st.json.canReview, false);
+    assert.equal(st.json.money, null, '開團人看不到收款');
+    const p = st.json.people.find((x) => x.member_id === 't_coach');
+    assert.equal(p.note, '會晚 5 分鐘');
+    assert.deepEqual(p.guestNames, ['阿明']);
+    assert.ok(!('payRef' in p) && !('paid' in p));
+    const csv = await call('t_runner', `/events/${id}/export.csv`);
+    assert.equal(csv.status, 200);
+    assert.ok(csv.text.includes('會晚 5 分鐘') && !csv.text.includes('繳費'));
+    assert.equal((await call('t_runner', `/events/${id}/roster`)).status, 200);
+    assert.equal((await call('t_runner', `/events/${id}/orders.csv`)).status, 403, '訂購單只給幹部');
+    assert.equal((await call('t_other', `/events/${id}/stats`)).status, 403);
+    assert.equal((await call('t_other', `/events/${id}/roster`)).status, 403);
+    for (const op of ['attendance', 'payments', 'notice', 'attend-token', 'review', 'bulk', 'reconcile'])
+      assert.equal((await call('t_runner', `/events/${id}/${op}`, { method: 'POST', body: { member_ids: ['t_coach'], member_id: 't_coach', present: true, paid: 'paid', type: 'other', message: 'x', on: true, action: 'reject', names: '測試教練' } })).status, 403, op);
+    // 只管自己的：別人的揪團與幹部開的活動都不能改、不能刪
+    // 路人跑友在前面的測試換過主團、當了耕建築團長：用他還是一般團員的分團
+    const oteam = (await call('t_other', '/me')).json.teams.find((t) => t.my_status === 'active' && t.my_role === 'member')?.id;
+    assert.ok(oteam);
+    const other = await mk('t_other', { team_id: oteam, title: '別人的揪團' });
+    assert.equal(other.status, 200, other.text);
+    assert.equal((await put('t_runner', other.json.id, { team_id: oteam, title: '搶來的' })).status, 403);
+    assert.equal((await call('t_runner', `/events/${other.json.id}`, { method: 'DELETE' })).status, 403);
+    const official = await mkEvent({ title: '青年團練', team_id: 'youth' }, 't_lead');
+    assert.equal((await put('t_runner', official, { title: '搶來的' })).status, 403);
+    assert.equal((await call('t_runner', `/events/${official}`, { method: 'DELETE' })).status, 403);
+    assert.equal((await call('t_runner', `/events/${official}/stats`)).status, 403);
+    // 同時最多 3 場還沒舉行的揪團（寫在同一句 INSERT）；每人一小時最多發起 5 次
+    const ids = [id];
+    for (let i = 2; i <= 3; i++) { const x = await mk('t_runner', { title: `揪團 ${i}`, date: plus(4 + i) }); assert.equal(x.status, 200, x.text); ids.push(x.json.id); }
+    const over = await mk('t_runner', { title: '第四場' });
+    assert.equal(over.status, 409);
+    assert.match(over.json.error, /3 場還沒舉行/);
+    assert.equal((await call('t_runner', `/events/${ids.pop()}`, { method: 'DELETE' })).status, 200, '開團人可以刪自己的');
+    const again = await mk('t_runner', { title: '刪掉一場再發起' });
+    assert.equal(again.status, 200, again.text);
+    ids.push(again.json.id);
+    assert.equal((await mk('t_runner', { title: '第六次' })).status, 429, '一小時最多 5 次');
+    // 幹部可以刪會員揪團；功能開關關掉後不能再發起，開團人仍可以改自己已經開的
+    assert.equal((await call('t_lead', `/events/${ids.pop()}`, { method: 'DELETE' })).status, 200);
+    assert.equal((await call('t_chair', '/settings/features', { method: 'POST', body: { meetup: false } })).json.value.meetup, false);
+    assert.equal((await mk('t_runner', { title: '關掉之後' })).status, 403);
+    assert.equal((await put('t_runner', ids[0], { title: '關掉之後改名' })).status, 200);
+    const au = await call('t_chair', `/audit?from=${plus(-1)}&to=${today}&action=event.create&target=${ids[0]}`);
+    assert.ok(au.json.items.some((x) => x.detail.includes('會員揪團')), au.text);
+    for (const x of [...ids, other.json.id, official]) await call('t_chair', `/events/${x}`, { method: 'DELETE' });
+  } finally {
+    await call('t_chair', '/settings/features', { method: 'POST', body: { meetup: false } });
+  }
+});
+
 test('報名通知：開關控制、狀態沒變不重複、代為報名只通知真的報上的人', async () => {
   const id = await mkEvent({ title: '通知測試', capacity: 1, notify_signup: true, fee: 300 });
   assert.equal((await signup('t_lead', id)).json.status, 'in');

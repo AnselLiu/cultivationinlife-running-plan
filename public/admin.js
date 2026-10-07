@@ -654,13 +654,14 @@ function bindEventsPanel() {
 // ---------- 系統設定（理事長、行政人員）----------
 const FEATURE_NAME = { gps: '跑步記錄（計時＋GPS）', studio: '拍照分享', health: 'Apple 健康匯入', file: 'GPX／TCX 檔匯入', coach: '課表教練（全季、賽事準備、配速與用語）',
   plan_cycle: '個人課表週期（跟自己的比賽排 20 週）', plan_export: '分享與匯出課表（複製、PDF、行事曆）', party: '餐敘活動（春酒、慶功宴、尾牙）', cams: '附近即時影像（政府公開攝影機）',
-  rest: '跑者休息站（飲水、廁所、淋浴置物、補給）' };
+  rest: '跑者休息站（飲水、廁所、淋浴置物、補給）', meetup: '會員揪團（團員自己發起活動）' };
 // 功能開關的說明：關掉會影響什麼（課表教練與教練身分容易搞混，寫清楚）
 const FEATURE_HELP = { coach: '關閉後所有人都看不到這些頁面；不影響每週課表與訓練紀錄',
   plan_cycle: '關閉後所有人都照協會賽季排課；已選的週期會保留，打開後恢復',
-  plan_export: '教練已同意分享，預設開啟；關閉後所有人都看不到分享按鈕' };
+  plan_export: '教練已同意分享，預設開啟；關閉後所有人都看不到分享按鈕',
+  meetup: '團員可以在自己參加的分團發起揪跑：不能收費、不推播，每人同時最多 3 場；分團與協會幹部可以編輯或刪除。關閉後不能再發起，已經開的照常' };
 // 預設關閉的功能（要明確打開才有）
-const FEATURE_OFF = new Set(['cams', 'rest']);
+const FEATURE_OFF = new Set(['cams', 'rest', 'meetup']);
 // 系統設定：第一層是分組清單（跟「我的」一樣的列，副標是目前的值），點一列進到子頁才是表單；常用的在前、少用但重要的放最後
 //   網址：#/admin/settings（等於 #/admin?tab=settings）、#/admin/settings/<段>；表單、儲存 API、稽核名稱都跟拆開前一樣
 const yrs = (n, none = '不自動刪除') => (Number(n) ? `${Number(n)} 年` : none);
@@ -785,7 +786,7 @@ const camsCard = () => `<section class="card" id="camSrcCard">
     <div id="camSrcList" class="toggles"><p class="tiny" style="margin:0">載入中…</p></div>
   </section>`;
 // 功能開關分三組：訓練、活動、地圖（地圖的兩項旁邊有「設定來源 ›」）
-const FEATURE_GROUPS = [['訓練', ['gps', 'studio', 'health', 'file', 'coach', 'plan_cycle', 'plan_export']], ['活動', ['party']], ['地圖', ['cams', 'rest']]];
+const FEATURE_GROUPS = [['訓練', ['gps', 'studio', 'health', 'file', 'coach', 'plan_cycle', 'plan_export']], ['活動', ['party', 'meetup']], ['地圖', ['cams', 'rest']]];
 const featuresCard = () => `<section class="card">
     <form id="featForm" class="toggles">
       ${FEATURE_GROUPS.map(([g, ks]) => `<fieldset class="qset featgrp"><legend>${g}</legend>${ks.map((k) => `<label class="switch"><span>${FEATURE_NAME[k]}${FEATURE_HELP[k] ? `<span class="tiny" style="display:block">${FEATURE_HELP[k]}</span>` : ''}</span><input type="checkbox" name="${k}" ${featOn(k) ? 'checked' : ''}><i></i></label>${k === 'cams' || k === 'rest' ? `<a class="tiny tlink featsrc" href="#/admin/settings/${k}">${k === 'cams' ? '設定影像來源 ›' : '設定休息站來源 ›'}</a>` : ''}`).join('')}</fieldset>`).join('')}

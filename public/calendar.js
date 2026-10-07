@@ -1,7 +1,7 @@
 // 耕跑團 PWA — calendar.js：月曆（用到才載入）
 //   一個月一次查完：看得到的活動、國定假日與補班（管理員匯入的新北市資料）、幹部設定的賽事提醒、自己的賽事
 //   點一天看當天的內容；幹部可以新增賽事提醒，團員訂閱行事曆時會一起帶到手機
-import { $, allow, api, esc, IC, KIND_NAME, largeTitle, me, teamAllow, teamOf, teams, toast, view, ymd } from './app.js';
+import { $, allow, api, canMeetup, esc, IC, KIND_NAME, largeTitle, me, teamAllow, teamOf, teams, toast, view, ymd } from './app.js';
 import { lang, t } from './i18n.js';
 
 const WD = lang === 'en' ? ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] : ['日', '一', '二', '三', '四', '五', '六'];
@@ -54,7 +54,8 @@ async function calendarView() {
       ${its.map((it) => `<div class="todayev">${IC.megaphone}<span><b>【${ITEM_KIND[it.kind] || '提醒'}】<span translate="no">${esc(it.title)}</span></b>${it.note ? `<span class="tiny" style="display:block"><span translate="no">${esc(it.note)}</span></span>` : ''}${it.url ? `<a class="tiny" href="${esc(it.url)}" target="_blank" rel="noopener">開啟連結 ${IC.external}</a>` : ''}</span>
         ${it.canEdit ? `<button class="btn ghost sm" data-delit="${esc(it.id)}">刪除</button>` : ''}</div>`).join('')}
       ${races.map((r) => `<a class="todayev" href="#/me/races">${IC.runner}<span><b><span translate="no">${esc(r.name)}</span></b><span class="tiny" style="display:block">我的賽事・${esc(r.dist || '')}</span></span><span class="tiny">›</span></a>`).join('')}
-      ${!evs.length && !its.length && !races.length ? `<p class="muted" style="margin:0">這天沒有安排。${allow('event') || teams().some((t) => teamAllow(t.id, 'event')) ? `<a href="#/new?date=${date}">在這天開團 ›</a>` : ''}</p>` : ''}`;
+      ${!evs.length && !its.length && !races.length ? `<p class="muted" style="margin:0">這天沒有安排。${allow('event') || teams().some((t) => teamAllow(t.id, 'event')) ? `<a href="#/new?date=${date}">在這天開團 ›</a>`
+        : canMeetup() && date >= ymd(new Date()) ? `<a href="#/new?meetup=1&date=${date}">在這天發起揪團 ›</a>` : ''}</p>` : ''}`;
     for (const b of document.querySelectorAll('[data-delit]')) b.onclick = async () => {
       if (!confirm('刪除這筆提醒？')) return;
       try { await api(`/calendar/items/${b.dataset.delit}`, { method: 'DELETE' }); toast('已刪除'); calendarView(); } catch (e) { toast(e.message); }

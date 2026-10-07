@@ -3,7 +3,7 @@
 //   共用的工具與狀態從 app.js 拿（app.js 已經載入，不會重複下載）
 import {
   $, addrField, ago, allow, api, apiAll, applyCounts, avatar, bellState, bindAddrField, canScan, choose, copy, dayPattern, downloadAuthed, dstr,
-  emptyState, esc, fixText, IC, isOffline, KIND_NAME, largeTitle, latest, mapsUrl, me, money, myCycle, nowTp, once, qrSVG, render, routeSvg, scan,
+  emptyState, esc, fixText, IC, isOffline, kindLabel, largeTitle, latest, mapsUrl, me, money, myCycle, nowTp, once, qrSVG, render, routeSvg, scan,
   scanSheet, setStopScan, submitLabel, teamAllow, teams, toast, view, ymd, fieldError, focusAfterRender, announce
 } from './app.js';
 import * as P from './plan.js';
@@ -89,6 +89,8 @@ export async function eventView(id) {
   if (bellState.unread > 0) api('/notifications/read', { method: 'POST', body: { ref: `e:${id}` } }).then(applyCounts).catch(() => {});
   const inviteOnly = ev.visibility === 'invite';
   const admin = ev.manage;
+  // 會員揪團的開團人（不是主辦幹部）：管理區只有統計、編輯、刪除、複製名單與 LINE 公告文字；收款、點名、報到 QR、通知或異動、整批匯入由幹部處理
+  const owner = !!ev.meetupOwner;
   const survey = ev.kind === 'survey', qs = ev.questions || [];
   const useForm = ev.kind === 'party' || ev.guest_max > 0 || qs.length > 0 || (ev.options || []).length > 0 || !!ev.group_reg || (ev.items || []).length > 0 || charges(ev);
   const ins = ev.signups.filter((s) => s.status === 'in'), waits = ev.signups.filter((s) => s.status === 'wait');
@@ -115,11 +117,11 @@ export async function eventView(id) {
   view.innerHTML = `
     <section class="card hero">
       <div class="row spread">
-        <span class="row" style="gap:6px"><span class="pill" style="background:rgba(255,255,255,.22);color:#fff">${KIND_NAME[ev.kind]}</span>${ev.team ? `<a class="pill" style="background:rgba(255,255,255,.14);color:#fff" href="#/t/${esc(ev.team.id)}"><span translate="no">${esc(ev.team.name)}</span></a>` : ''}${inviteOnly ? `<span class="pill" style="background:rgba(255,255,255,.14);color:#fff">${IC.lock}邀請制</span>` : ''}</span>
+        <span class="row" style="gap:6px"><span class="pill" style="background:rgba(255,255,255,.22);color:#fff">${kindLabel(ev)}</span>${ev.team ? `<a class="pill" style="background:rgba(255,255,255,.14);color:#fff" href="#/t/${esc(ev.team.id)}"><span translate="no">${esc(ev.team.name)}</span></a>` : ''}${inviteOnly ? `<span class="pill" style="background:rgba(255,255,255,.14);color:#fff">${IC.lock}邀請制</span>` : ''}</span>
         <span class="tiny">${survey ? `${dstr(ev.date)} 前` : dstr(ev.date)}</span>
       </div>
       <h1 class="evtitle"><span translate="no">${esc(ev.title)}</span></h1>
-      <p class="muted" style="margin:0">${ev.gather_time ? `${ev.gather_time} ${party ? '開始' : '集合'}` : ''}${ev.end_time ? `－${ev.end_time}` : ''}${ev.place ? `　<span translate="no">${esc(ev.place)}</span>` : ''}${ev.lead ? `　帶團：<span translate="no">${esc(ev.lead)}</span>` : ''}</p>
+      <p class="muted" style="margin:0">${ev.gather_time ? `${ev.gather_time} ${party ? '開始' : '集合'}` : ''}${ev.end_time ? `－${ev.end_time}` : ''}${ev.place ? `　<span translate="no">${esc(ev.place)}</span>` : ''}${ev.lead ? `　${ev.owner_managed ? '發起' : '帶團'}：<span translate="no">${esc(ev.lead)}</span>` : ''}</p>
       ${ev.address || (ev.place && !ev.spot) ? `<a class="navlink" href="${mapsUrl(ev.address || ev.place)}" target="_blank" rel="noopener">${IC.pin}<span>${ev.address ? `${ev.address_zip ? `<span class="num">${esc(ev.address_zip)}</span> ` : ''}<span translate="no">${esc(ev.address)}</span>` : '在地圖上查看'}</span><b>導航</b></a>` : ''}
       ${(ev.options || []).length || (ev.items || []).length ? `<div class="pricechips">${[...(ev.options || []), ...(ev.items || [])].map((o) => `<span><b><span translate="no">${esc(o.name)}</span></b>${o.price ? `<span class="num">${money(o.price)}</span>` : ''}</span>`).join('')}</div>`
         : ev.fee ? `<div class="pricechips"><span><b>費用</b><span class="num">${money(ev.fee)}</span></span></div>` : ''}
@@ -186,18 +188,19 @@ export async function eventView(id) {
     ${party && ev.checkin ? await partyAdmin(ev) : ''}
 
     ${admin ? `<section class="card">
-      <div class="row spread"><h3>管理</h3><span class="tiny">${ev.team ? `<span translate="no">${esc(ev.team.name)}</span>的活動` : '全協會的活動'}</span></div>
+      <div class="row spread"><h3>管理</h3><span class="tiny">${owner ? '你發起的揪團' : ev.team ? `<span translate="no">${esc(ev.team.name)}</span>的活動` : '全協會的活動'}</span></div>
       <div class="row">
         ${ev.pendingCount > 0 ? `<a class="btn sm" href="#/e/${ev.id}/stats?f=pending">待審核 ${ev.pendingCount} ›</a>` : ''}
         <a class="btn sm" href="#/e/${ev.id}/stats">報名統計${qs.length ? '與問卷' : ''}</a>
-        ${ev.cancelled ? `<a class="btn sm" href="#/edit/${ev.id}?reopen=1">恢復這場活動</a>` : ''}
-        <a class="btn ghost sm" href="#/edit/${ev.id}">編輯</a>
-        <a class="btn ghost sm" href="#/new?from=${ev.id}">複製成新活動</a>
-        ${ev.group_reg ? `<button class="btn ghost sm" data-regcsv="${ev.id}">下載團體報名資料</button>` : ''}
-        ${ev.arrived ? '<button class="btn ghost sm" id="pickScanEv" type="button">掃描領取</button>' : ''}
+        ${ev.cancelled && !owner ? `<a class="btn sm" href="#/edit/${ev.id}?reopen=1">恢復這場活動</a>` : ''}
+        ${ev.cancelled && owner ? '' : `<a class="btn ghost sm" href="#/edit/${ev.id}">編輯</a>`}
+        ${owner ? '' : `<a class="btn ghost sm" href="#/new?from=${ev.id}">複製成新活動</a>`}
+        ${ev.group_reg && !owner ? `<button class="btn ghost sm" data-regcsv="${ev.id}">下載團體報名資料</button>` : ''}
+        ${ev.arrived && !owner ? '<button class="btn ghost sm" id="pickScanEv" type="button">掃描領取</button>' : ''}
         <button class="btn danger sm" id="del">刪除</button>
       </div>
-      ${ev.cancelled ? '' : `<details id="noticeWrap"><summary class="tiny" style="cursor:pointer">發布通知或異動（改時間、改地點、取消）</summary>
+      ${owner ? '<p class="tiny" style="margin:0">改時間或地點請直接編輯；要取消就刪除，已報名的人會收到通知。</p>' : ''}
+      ${ev.cancelled || owner ? '' : `<details id="noticeWrap"><summary class="tiny" style="cursor:pointer">發布通知或異動（改時間、改地點、取消）</summary>
         <form id="noticeForm" class="noticeform">
           <div class="chips">${[['time', '改時間'], ['place', '改地點'], ['other', '提醒或通知'], ['cancel', '取消活動']].map(([k, v], i) => `<label class="chip"><input type="radio" name="type" value="${k}" ${i ? '' : 'checked'}><span>${v}</span></label>`).join('')}</div>
           <div class="grid2" data-nt="time"><label>新的日期<input type="date" name="date" value="${esc(ev.date)}"></label><label>${party ? '新的開始時間' : '新的集合時間'}<input type="time" name="gather_time" value="${esc(ev.gather_time || '')}"></label></div>
@@ -209,19 +212,19 @@ export async function eventView(id) {
             <span class="tiny">用外部表單登記的活動（例如慶功宴）沒有人在 App 報名，要選第二個。</span></fieldset>
           <button class="btn sm">送出並通知</button>
         </form></details>`}
-      ${party || survey ? '' : `<details id="attendWrap" ${ev.attendToken ? 'open' : ''}><summary class="tiny" style="cursor:pointer">現場報到 QR（團員自己掃）</summary>
+      ${party || survey || owner ? '' : `<details id="attendWrap" ${ev.attendToken ? 'open' : ''}><summary class="tiny" style="cursor:pointer">現場報到 QR（團員自己掃）</summary>
         ${ev.attendToken ? `<div class="qrbox" id="attendQR"></div><p class="tiny center" style="margin:0">請團員用手機相機掃描，登入後就完成報到；沒報名的人掃了會自動加入。只在活動當天有效。</p>
           <div class="row"><button class="btn ghost sm" id="attendRotate">換一組 QR</button><button class="btn ghost sm" id="attendOff">關閉</button></div>`
           : '<button class="btn sm" id="attendOn">開啟現場報到 QR</button>'}
       </details>`}
-      <details><summary class="tiny" style="cursor:pointer">整批匯入（從 Excel 貼上姓名）</summary>
+      ${owner ? '' : `<details><summary class="tiny" style="cursor:pointer">整批匯入（從 Excel 貼上姓名）</summary>
         <form id="bulkForm" style="display:grid;gap:10px;margin-top:10px">
           <textarea name="names" placeholder="一行一個姓名或暱稱，可以直接從 Excel 複製一整欄貼上" style="min-height:120px"></textarea>
           <div class="row" style="gap:8px"><select name="action" style="width:auto"><option value="signup">代為報名</option><option value="invite">只邀請（邀請制）</option></select>
           <button class="btn sm">匯入</button></div>
           <div id="bulkOut" class="tiny"></div>
         </form>
-      </details>
+      </details>`}
       <details><summary class="tiny" style="cursor:pointer">LINE 公告文字</summary>
         <pre class="out" id="announce">產生中…</pre>
         <button class="btn sm" id="copyAnn">複製公告</button>
@@ -252,7 +255,7 @@ export async function eventView(id) {
     e.preventDefault();
     if (!shareUrl()) return toast('先在下方「邀請連結」開啟，才能分享');
     const price = (ev.options || []).length ? ev.options.map((o) => `${o.name}${o.price ? ` ${money(o.price)}` : ''}`).join('／') : ev.fee ? money(ev.fee) : '';
-    const text = [`【${KIND_NAME[ev.kind] || '活動'}】${ev.title}`, `${dstr(ev.date)}${ev.gather_time ? ` ${ev.gather_time}` : ''}${ev.place ? `・${ev.place}` : ''}`,
+    const text = [`【${kindLabel(ev)}】${ev.title}`, `${dstr(ev.date)}${ev.gather_time ? ` ${ev.gather_time}` : ''}${ev.place ? `・${ev.place}` : ''}`,
       price ? `費用：${price}` : '', ev.cancelled ? '' : windowLine(ev), shareable(ev) ? `${ev.kind === 'survey' ? '填寫' : '報名'}：${forLine(shareUrl())}` : ''].filter(Boolean).join('\n');
     open(`https://line.me/R/share?text=${encodeURIComponent(text)}`, '_blank', 'noopener');
   });
@@ -421,13 +424,13 @@ export async function eventView(id) {
 
 // 依活動資料組出 LINE 公告（格式照團裡原本的貼文）
 async function announceText(ev) {
-  const L = [`【${KIND_NAME[ev.kind] || '活動'}】${/\d{1,2}\/\d{1,2}/.test(ev.title) ? '' : `${dstr(ev.date)} `}${ev.title}`];
+  const L = [`【${kindLabel(ev)}】${/\d{1,2}\/\d{1,2}/.test(ev.title) ? '' : `${dstr(ev.date)} `}${ev.title}`];
   L.push(`時間：${dstr(ev.date)}${ev.gather_time ? ` ${ev.gather_time}${ev.end_time ? `–${ev.end_time}` : ''} 集合` : ''}`);
   if (ev.place) L.push(`地點：${ev.place}`);
   if ((ev.options || []).length) L.push(`組別與費用：${ev.options.map((o) => `${o.name}${o.price ? ` ${money(o.price)}` : ''}`).join('／')}`);
   else if (ev.fee) L.push(`費用：${money(ev.fee)}`);
   if (!ev.cancelled) L.push(windowLine(ev));
-  if (ev.lead) L.push(`帶團：${ev.lead}`);
+  if (ev.lead) L.push(`${ev.owner_managed ? '發起' : '帶團'}：${ev.lead}`);
   if (ev.week_no) {
     const info = await P.weekInfo(ev.week_no);
     L.push('', `【全馬組】W${ev.week_no}・${info?.phase || ''}`);

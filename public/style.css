@@ -2001,6 +2001,8 @@ details > summary.setsum .tiny{font-weight:400}
 /* ---------- 版面掃描修正：活動表單與統計 ---------- */
 /* 活動表單：包在 data-when 區塊裡的欄位也保持 12px 間距 */
 #ef > div[data-when]{display:grid;gap:12px}
+/* 揪團的精簡表單：其他欄位留在表單裡但不顯示（data-full） */
+#ef.lite [data-full]{display:none!important}
 /* details 的內容不吃 grid gap（瀏覽器把內容放在 ::details-content）：用 margin 補上一樣的間距 */
 details.group > :not(summary) + :not(summary){margin-top:12px}
 details.group[open] > summary{margin-bottom:12px}

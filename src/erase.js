@@ -4,7 +4,8 @@
 export const ERASE_MEMBER = [
   "UPDATE draws SET name = '已刪除帳號', member_id = NULL WHERE member_id = ?1",
   'DELETE FROM member_private WHERE member_id = ?1',
-  'UPDATE events SET created_by = NULL WHERE created_by = ?1',
+  // 會員揪團的「發起」欄位是開團人的暱稱，跟著匿名（幹部開的活動，帶團欄位是幹部自己填的，不動）
+  'UPDATE events SET lead = CASE WHEN owner_managed = 1 THEN NULL ELSE lead END, created_by = NULL WHERE created_by = ?1',
   'UPDATE plan_posts SET author_id = NULL WHERE author_id = ?1',
   "UPDATE log_comments SET author_name = '已刪除帳號' WHERE author_id = ?1",
   "UPDATE team_posts SET author_name = '已刪除帳號' WHERE author_id = ?1",

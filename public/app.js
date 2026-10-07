@@ -712,6 +712,11 @@ const TEAM_PERMS = { lead: ['event', 'checkin', 'lottery', 'layout', 'roster', '
 const TEAM_ROLE_NAME = { lead: '團長', officer: '幹部', member: '團員' };
 const teamAllow = (tid, p) => allow(p) || (!!tid && teamOf(tid)?.my_status === 'active' && !!TEAM_PERMS[teamOf(tid).my_role]?.includes(p));
 const anyTeamAllow = (p) => allow(p) || teams().some((t) => teamAllow(t.id, p));
+// 會員揪團（功能開關 meetup，預設關閉）：沒有建立活動權限的團員，可以在自己參加的分團發起（伺服器會再檢查一次）
+const meetupTeams = () => (cfg.settings?.features?.meetup === true ? myTeams().filter((t) => !teamAllow(t.id, 'event')) : []);
+const canMeetup = (tid) => meetupTeams().some((t) => !tid || t.id === tid);
+// 活動類型的標籤：團員發起的揪團標「揪團」
+const kindLabel = (e) => (e.owner_managed && e.kind === 'other' ? '揪團' : KIND_NAME[e.kind] || '活動');
 const teamTag = (t) => (t ? `<span class="pill team" style="--tc:${esc(t.color || '#1C4698')}">${t.icon ? `<img class="ticon xs" src="${esc(t.icon)}" alt="">` : ''}<span translate="no">${esc(t.name)}</span></span>` : '');
 // 分團小圖：有上傳就用圖，沒有就用團色＋第一個字
 const teamIcon = (t, cls = '') => (t.icon ? `<img class="ticon ${cls}" src="${esc(t.icon)}" alt="" decoding="async">`
@@ -1067,7 +1072,8 @@ function richText(src) {
 }
 // 隱私權政策每次改版的重點：要重新同意時放在最上面，不用整篇讀完才知道改了什麼
 const PRIVACY_CHANGES = {
-  '2026-10-07.1': ['報名時可以替同行的親友填攜伴姓名（選填），只有該活動的主辦幹部看得到，公開名單只顯示「＋人數」；請先徵得對方同意', '報名時給主辦的備註改成只有主辦幹部看得到，不再出現在公開名單'],
+  '2026-10-07.1': ['報名時可以替同行的親友填攜伴姓名（選填），只有該活動的主辦看得到，公開名單只顯示「＋人數」；請先徵得對方同意', '報名時給主辦的備註改成只有主辦看得到，不再出現在公開名單',
+    '協會開放「會員揪團」時，團員自己發起的揪團，發起人就是主辦：看得到報名者的姓名、給主辦的備註與攜伴姓名'],
   '2026-10-03.4': ['你填的通訊地址（選填）會送到中華郵政的郵遞區號服務核對寫法、補上郵遞區號，只送地址文字，不含姓名'],
   '2026-10-03.3': ['新增「賽事報名資料」：只有要幹部代為團體報名時才填，加密保存，逐場同意後才提供給主辦幹部', '記錄 App 的開啟速度與錯誤訊息，只記裝置類型與頁面，不記是誰'],
 };
@@ -1088,7 +1094,7 @@ function privacyView() {
       <h2 class="h3">二、蒐集的資料</h2>
       <p>識別類（C001）：姓名、暱稱、Google 帳號的顯示名稱與大頭貼（不取得 Email）、電話（選填）。<br>
          活動相關：項目與組別、所屬跑團、加入的分團與分團身分、餐點偏好、報名與報到紀錄、給主辦的備註、活動問卷的回答、中獎紀錄。<br>
-         攜伴姓名（選填）：你報名時替同行親友填的姓名，只有該活動的主辦幹部看得到，公開名單只顯示攜伴人數；請先徵得對方同意。<br>
+         攜伴姓名（選填）：你報名時替同行親友填的姓名，只有該活動的主辦看得到，公開名單只顯示攜伴人數；請先徵得對方同意。<br>
          系統紀錄：登入時間、裝置型號摘要、IP 位址的單向雜湊值（無法還原）；App 的開啟速度與錯誤訊息只記裝置類型與頁面，不記是誰，保留 90 天。<br>
          個人賽事：你自己加入的賽事名稱、日期與目標成績（用於倒數）。<br>
          訓練紀錄：你照課表記錄的日期、距離、時間、心率、自覺強度、感覺與備註；預設只有你看得到，你打開分享後，教練與分團幹部只看得到完成率、里程與平均強度，看不到備註。<br>
@@ -1098,7 +1104,7 @@ function privacyView() {
       <h2 class="h3">三、利用期間、地區、對象與方式</h2>
       <p>期間：${esc(PRIVACY.retention)}。<br>
          地區：台灣，以及雲端服務（Cloudflare）的資料中心所在地。<br>
-         對象：依職務最小權限開放給協會幹部；分團團長與幹部可以看自己分團的名冊（不含電話）與該分團活動的報名及問卷結果；電話完整號碼只有行政人員看得到。賽事報名資料只在你報名「代為團體報名」的活動並勾選同意後，提供給該活動的主辦幹部，用來向賽事主辦單位送出團體報名，每次下載都留有稽核紀錄。通訊地址存檔前會送到中華郵政的 3+3 郵遞區號服務核對寫法並補上郵遞區號，只傳送地址文字。練跑地圖的「附近即時影像」由本站伺服器向政府公開攝影機取得畫面再轉給你，你的 IP 與位置不會傳給影像來源，本站也不保存影像。不提供給第三方行銷使用。<br>
+         對象：依職務最小權限開放給協會幹部；分團團長與幹部可以看自己分團的名冊（不含電話）與該分團活動的報名及問卷結果；協會開放會員揪團時，團員自己發起的揪團由發起人擔任主辦，看得到報名者的姓名、給主辦的備註與攜伴姓名（不含電話與繳費資料）；電話完整號碼只有行政人員看得到。賽事報名資料只在你報名「代為團體報名」的活動並勾選同意後，提供給該活動的主辦幹部，用來向賽事主辦單位送出團體報名，每次下載都留有稽核紀錄。通訊地址存檔前會送到中華郵政的 3+3 郵遞區號服務核對寫法並補上郵遞區號，只傳送地址文字。練跑地圖的「附近即時影像」由本站伺服器向政府公開攝影機取得畫面再轉給你，你的 IP 與位置不會傳給影像來源，本站也不保存影像。不提供給第三方行銷使用。<br>
          方式：以電子方式處理，全程加密傳輸。</p>
       <h2 class="h3">四、您的權利</h2>
       <p>您可以隨時行使個人資料保護法第 3 條的權利：</p>
@@ -1161,7 +1167,8 @@ async function listView() {
     </div><div style="display:grid;gap:12px">
     <div class="section-h">
       <h2>接下來</h2>
-      ${anyTeamAllow('event') ? `<a class="btn ghost sm iconbtn" href="#/new${pick && pick !== 'assoc' ? `?team=${esc(pick)}` : ''}">${IC.plus}新增活動</a>` : ''}
+      ${anyTeamAllow('event') ? `<a class="btn ghost sm iconbtn" href="#/new${pick && pick !== 'assoc' ? `?team=${esc(pick)}` : ''}">${IC.plus}新增活動</a>`
+        : canMeetup() ? `<a class="btn ghost sm iconbtn" href="#/new?meetup=1${pick && canMeetup(pick) ? `&team=${esc(pick)}` : ''}">${IC.plus}發起揪團</a>` : ''}
     </div>
     <div class="evgrid">${events.slice(1).map(eventCard).join('') || `<div class="card">${emptyState('calendar', '目前沒有其他排定的活動')}</div>`}</div>
     <div class="row center" style="gap:18px;justify-content:center"><a class="tiny footlink" href="#/calendar">${IC.calendar} 行事曆</a><a class="tiny footlink" href="#/past">看過去的團練 ›</a></div>
@@ -1302,7 +1309,7 @@ function heroCard(e) {
   return `<a class="card hero" href="#/e/${e.id}">
     <span class="sweep" aria-hidden="true"></span>
     <div class="row spread">
-      <span class="row" style="gap:6px"><span class="pill" style="background:rgba(255,255,255,.22);color:#fff">${KIND_NAME[e.kind]}</span>${e.team_id && teamOf(e.team_id) ? `<span class="pill" style="background:rgba(255,255,255,.14);color:#fff"><span translate="no">${esc(teamOf(e.team_id).name)}</span></span>` : ''}</span>
+      <span class="row" style="gap:6px"><span class="pill" style="background:rgba(255,255,255,.22);color:#fff">${kindLabel(e)}</span>${e.team_id && teamOf(e.team_id) ? `<span class="pill" style="background:rgba(255,255,255,.14);color:#fff"><span translate="no">${esc(teamOf(e.team_id).name)}</span></span>` : ''}</span>
       <span class="tiny">${days <= 0 ? '就是今天' : days === 1 ? '明天' : `${days} 天後`}</span>
     </div>
     <h2><span translate="no">${esc(e.title)}</span></h2>
@@ -1323,7 +1330,7 @@ function eventCard(e) {
     <div class="ev">
       <span class="cal"><u>${d2(e.date).getMonth() + 1}月</u><b class="num">${e.date.slice(8)}</b><span>週${WD[d2(e.date).getDay()]}</span></span>
       <span class="body">
-        <span class="pills">${showPh ? phasePill(e, full) : ''}<span class="pill ${e.kind}">${KIND_NAME[e.kind] || '活動'}</span>${teamTag(teamOf(e.team_id))}${e.visibility === 'invite' ? `<span class="pill lock">${IC.lock}邀請制</span>` : ''}</span>
+        <span class="pills">${showPh ? phasePill(e, full) : ''}<span class="pill ${e.kind}">${kindLabel(e)}</span>${teamTag(teamOf(e.team_id))}${e.visibility === 'invite' ? `<span class="pill lock">${IC.lock}邀請制</span>` : ''}</span>
         <span class="t"><span translate="no">${esc(e.title)}</span></span>
         <span class="tiny meta">${[e.gather_time, e.place && `<span translate="no">${esc(e.place)}</span>`,
           (() => { const ps = [...(e.options || []), ...(e.kind === 'buy' ? e.items || [] : [])].map((o) => o.price).filter(Boolean); return ps.length ? `${money(Math.min(...ps))} 起` : e.fee ? money(e.fee) : ''; })()].filter(Boolean).map((x) => `<span>${x}</span>`).join('')}</span>
@@ -3443,7 +3450,7 @@ addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvt 
 addEventListener('appinstalled', () => { installEvt = null; try { localStorage.setItem('cil-installed', '1'); } catch {} saveStart({ install: 'done' }); document.querySelectorAll('.installcard').forEach((c) => c.remove()); if ($('#startCard')) repaintStart(); });
 
 // 拆出去的模組（admin.js、photo.js…）從這裡拿共用的工具與狀態
-export { tilePreload, focusEl, legacyData, removeLegacy, addrField, bindAddrField, latest, $, cfg, downloadAuthed, scanSheet, FEEL, IC, KIND_NAME, LOG_ICON, LOG_STATUS_NAME, MI, PAID_NAME, ROLE_NAME, TAB_DEFAULT, TEAM_PERMS, coachTeam, TEAM_ROLE_NAME, ago, allow, api, applyFeatures, avatar, barChart, bars, bindComments, bindStepup, btnRow, choose, coachPrefs, copy, countdownPicker, dayLabel, dstr, emptyState, esc, eventCard, feat, fixText, group, ic, largeTitle, me, mfaBanner, money, myCycle, nrow, org, pad2, paintCountdown, passkey, planSeg, queueLog, raceTarget, refreshMe, render, route, row, setCoachPrefs, squareIcon, startKey, studio, subTitle, teamAllow, teamIcon, teamOf, teams, toast, rich, keep, names, view, ymd, askReason, isOffline, nowTp, signupDefaults, submitLabel, camLazy, openSheet, apiAll, fmtDuration, fmtDistPace, parseHMS,
+export { canMeetup, meetupTeams, kindLabel, tilePreload, focusEl, legacyData, removeLegacy, addrField, bindAddrField, latest, $, cfg, downloadAuthed, scanSheet, FEEL, IC, KIND_NAME, LOG_ICON, LOG_STATUS_NAME, MI, PAID_NAME, ROLE_NAME, TAB_DEFAULT, TEAM_PERMS, coachTeam, TEAM_ROLE_NAME, ago, allow, api, applyFeatures, avatar, barChart, bars, bindComments, bindStepup, btnRow, choose, coachPrefs, copy, countdownPicker, dayLabel, dstr, emptyState, esc, eventCard, feat, fixText, group, ic, largeTitle, me, mfaBanner, money, myCycle, nrow, org, pad2, paintCountdown, passkey, planSeg, queueLog, raceTarget, refreshMe, render, route, row, setCoachPrefs, squareIcon, startKey, studio, subTitle, teamAllow, teamIcon, teamOf, teams, toast, rich, keep, names, view, ymd, askReason, isOffline, nowTp, signupDefaults, submitLabel, camLazy, openSheet, apiAll, fmtDuration, fmtDistPace, parseHMS,
   // event.js、me.js
   applyCounts, bellState, canScan, dayPattern, mapsUrl, once, qrSVG, routeSvg, scan, setStopScan, GOOGLE_G, NICON, applyTabs, applyTheme, askLegacyOnLeave,
   bindInstall, clearDeviceData, dropPush, googleHref, iconsOnly, installCard, isStandalone, lsOrNull, pkSupported, reduceMotion, theme, togglePush, setMe,

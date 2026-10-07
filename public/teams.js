@@ -1,5 +1,5 @@
 // 耕跑團 PWA — teams.js：從 app.js 拆出來、用到才載入的畫面（第一次開 App 不用下載）
-import { latest, $, ago, allow, api, avatar, emptyState, esc, eventCard, largeTitle, me, refreshMe, row, squareIcon, TEAM_ROLE_NAME, teamAllow, teamIcon, teamOf, teams, toast, view } from './app.js';
+import { latest, $, ago, allow, api, avatar, canMeetup, emptyState, esc, eventCard, largeTitle, me, refreshMe, row, squareIcon, TEAM_ROLE_NAME, teamAllow, teamIcon, teamOf, teams, toast, view } from './app.js';
 
 // ---------- 分團 ----------
 const POLICY_NAME = { open: '直接加入', approve: '需團長或幹部審核' };
@@ -41,7 +41,8 @@ async function teamView(tid, q = '') {
       ${t.self_managed ? `<p class="tiny" style="margin:0"><span translate="no">${esc(t.name)}</span>的成員由<span translate="no">${esc(t.name)}</span>的團長與幹部處理。</p>` : ''}
     </section>
 
-    <div class="section-h"><h2>分團活動</h2>${teamAllow(tid, 'event') ? `<a class="btn ghost sm" href="#/new?team=${esc(tid)}">＋ 新增</a>` : ''}</div>
+    <div class="section-h"><h2>分團活動</h2>${teamAllow(tid, 'event') ? `<a class="btn ghost sm" href="#/new?team=${esc(tid)}">＋ 新增</a>`
+      : canMeetup(tid) ? `<a class="btn ghost sm" href="#/new?meetup=1&team=${esc(tid)}">＋ 發起揪團</a>` : ''}</div>
     <div class="evgrid">${evs.map(eventCard).join('') || `<div class="card">${emptyState('calendar', '近期沒有分團活動')}</div>`}</div>
 
     ${canEdit ? `<section class="card">

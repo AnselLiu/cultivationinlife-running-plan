@@ -25,6 +25,7 @@ function backupData() {
     INSERT INTO training_logs (id, member_id, date, km) VALUES ('l1', 'x1', '2026-10-01', 10), ('l2', 'x2', '2026-10-01', 5);
     INSERT INTO routes (id, name, points, distance, created_by) VALUES ('r1', '私人路線', '[]', 1000, 'x1');
     INSERT INTO events (id, kind, title, date, created_by) VALUES ('e1', 'track', '團練', '2026-10-10', 'x1');
+    INSERT INTO events (id, kind, title, date, created_by, lead, owner_managed) VALUES ('e3', 'other', '揪團', '2026-10-11', 'x1', '要被刪的暱稱', 1);
     INSERT INTO prizes (id, event_id, name) VALUES ('p1', 'e1', '獎品');
     INSERT INTO draws (id, event_id, prize_id, name, member_id) VALUES ('d1', 'e1', 'p1', '要被刪的人', 'x1');`);
   const tables = {};
@@ -48,6 +49,7 @@ test('重做刪除：帳號、私人資料、訓練紀錄、路線都不在，�
   assert.equal(one(db, "SELECT 1 AS x FROM routes WHERE created_by = 'x1'"), undefined);
   assert.deepEqual({ ...one(db, "SELECT name, member_id FROM draws WHERE id = 'd1'") }, { name: '已刪除帳號', member_id: null });
   assert.equal(one(db, "SELECT created_by FROM events WHERE id = 'e1'").created_by, null);
+  assert.deepEqual({ ...one(db, "SELECT created_by, lead FROM events WHERE id = 'e3'") }, { created_by: null, lead: null }, '會員揪團的發起人暱稱一起匿名');
   assert.ok(one(db, "SELECT 1 AS x FROM members WHERE id = 'x2'"));
   assert.ok(one(db, "SELECT 1 AS x FROM training_logs WHERE member_id = 'x2'"));
 });

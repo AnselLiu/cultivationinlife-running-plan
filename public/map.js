@@ -6,8 +6,9 @@
 //   附近即時影像：1.5 公里內（沒有就 3 公里內最近一支）的政府公開攝影機，畫面由本站轉送、不保存；幹部可以加官方直播的外連；功能開關預設關閉
 //   跑者休息站：飲水、廁所、淋浴置物、補給（reststops.js）；開關收在底圖選單，功能開關預設關閉
 //   底圖：內政部國土測繪中心電子地圖與正射影像（政府資料開放授權）、OpenStreetMap；Leaflet 放在 /vendor（不從外部載入程式）
-import { $, allow, announce, api, camLazy, cfg, esc, IC, largeTitle, load, openSheet, teamAllow, teams, tilePreload, toast, view } from './app.js';
-// 開揪跑要有建立活動的權限（協會或分團幹部）；團員改成在 LINE 揪人、請幹部開團
+import { $, allow, announce, api, camLazy, canMeetup, cfg, esc, IC, largeTitle, load, openSheet, teamAllow, teams, tilePreload, toast, view } from './app.js';
+// 開揪跑：協會或分團幹部直接開團；協會打開「會員揪團」時，團員可以在自己參加的分團發起揪團（精簡表單、不推播，幹部可以編輯或刪除）；
+//   兩個都不行就在 LINE 揪人
 const canCreate = () => allow('event') || teams().some((t) => teamAllow(t.id, 'event'));
 const lineShare = (text) => `https://line.me/R/share?text=${encodeURIComponent(text)}`;
 import * as W from './weather.js';
@@ -591,6 +592,7 @@ async function openSpot(id, fly, { focus = false } = {}) {
       <div class="row spread" style="flex-wrap:nowrap;align-items:flex-start"><div class="row" style="gap:12px;align-items:center;flex-wrap:nowrap;min-width:0">${kindTile(s.kind)}<div style="min-width:0"><span class="tiny">${KIND[s.kind]}${s.city ? `・${esc(s.city)}` : ''}</span>${s.status === 'pending' ? ' <span class="pill wait">審核中</span>' : ''}<h2 style="margin:2px 0 0" id="spotName" tabindex="-1"><span translate="no">${esc(s.name)}</span></h2></div></div>
         <button class="xbtn" id="backList" aria-label="關閉，回地點清單"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7 7 17"/></svg></button></div>
       <div class="spotacts"><a class="btn sm" href="${nav}" target="_blank" rel="noopener">導航 ${IC.external}</a><button class="btn ghost sm" id="offBtn">下載離線地圖</button>${s.status !== 'approved' ? '' : canCreate() ? `<a class="btn ghost sm" href="#/new?spot=${esc(s.id)}">在這裡開揪跑</a>`
+        : canMeetup() ? `<a class="btn ghost sm" href="#/new?meetup=1&spot=${esc(s.id)}">在這裡發起揪團</a>`
         : `<a class="btn ghost sm" href="${lineShare(`我想在「${s.name}」揪跑，有人要一起嗎？ ${location.origin}/#/map?spot=${s.id}`)}" target="_blank" rel="noopener">在 LINE 揪人</a>`}
         ${data.editor || (s.mine && s.status === 'pending') ? '<button class="btn ghost sm" id="editSpot">編輯</button>' : ''}</div>
       ${s.status === 'pending' && d.editor ? '<div class="row" style="gap:8px"><button class="btn sm" id="approve">通過</button><button class="btn danger sm" id="reject">不通過</button></div>' : ''}
@@ -984,6 +986,7 @@ async function showRoute(id, fly) {
   $('#panel').innerHTML = `<section class="card"><div class="row spread"><div><span class="pill">路線</span><h2 style="margin:6px 0 0"><span translate="no">${esc(r.name)}</span></h2></div><button class="xbtn" id="backList" aria-label="關閉，回地點清單"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7 7 17"/></svg></button></div>
     <div class="lstats"><span><b class="num">${(r.distance / 1000).toFixed(2)}</b> 公里</span><span>${r.points.length} 個點</span>${r.shared ? '' : '<span>只有我看得到</span>'}</div>
     <div class="row" style="gap:8px">${canCreate() ? `<a class="btn sm" href="#/new?route=${esc(r.id)}${r.spot_id ? `&spot=${esc(r.spot_id)}` : ''}">用這條路線開揪跑</a>`
+      : canMeetup() ? `<a class="btn sm" href="#/new?meetup=1&route=${esc(r.id)}${r.spot_id ? `&spot=${esc(r.spot_id)}` : ''}">用這條路線發起揪團</a>`
       : `<a class="btn sm" href="${lineShare(`一起跑這條路線：${r.name}（${(r.distance / 1000).toFixed(1)} 公里） ${location.origin}/#/map?route=${r.id}`)}" target="_blank" rel="noopener">在 LINE 揪人</a>`}<button class="btn ghost sm" id="gpxBtn">下載 GPX</button>
       <button class="btn ghost sm" id="shareRt">分享</button>${r.mine || data.editor ? '<button class="btn danger sm" id="delRt">刪除</button>' : ''}</div>
     <p class="tiny" style="margin:0">GPX 可以匯入 Garmin Connect、COROS、Strava 的路線功能，跑的時候在手錶上導航。</p></section>`;
