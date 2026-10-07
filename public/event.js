@@ -19,6 +19,19 @@ function signupToast(r, ev) {
   if (r.amount) return `報名完成，應繳 ${money(r.amount)}`;
   return ev.kind === 'party' ? '報名完成，入場券在上方' : `報名完成，${dstr(ev.date)} 見`;
 }
+// 給主辦的備註：每次打開換一個例子（團員常寫的事），讓人知道可以寫什麼；只有主辦看得到
+const NOTE_HINTS = {
+  track: ['會晚 10 分鐘到', '想跟阿明同一組', '間歇想跑慢一組', '第一次來，請多指教'],
+  core: ['膝蓋有點緊，強度會放低', '會晚 10 分鐘到', '想借一張瑜珈墊', '第一次來，請多指教'],
+  long: ['只跑前 15 公里', '想跟 6 分速的一起跑', '會自己帶補給', '會晚 10 分鐘到'],
+  race: ['想一起搭車到會場', '這場想破四', '需要幫忙寄物', '會直接到起點'],
+  party: ['素食', '想跟阿明同桌', '會晚半小時到', '不吃牛'],
+  buy: ['週四團練現場領', '想跟阿明一起領', '尺寸還在猶豫'],
+  other: ['會晚 10 分鐘到', '第一次來，請多指教', '想跟阿明同一組'],
+};
+const noteHint = (kind) => { const l = NOTE_HINTS[kind] || NOTE_HINTS.other; return `例如：${l[Math.floor(Math.random() * l.length)]}`; };
+const noteField = (ev, value, id = '') => `<label>給主辦的備註（選填）<span class="tiny" style="display:block">只有主辦看得到，不會出現在名單上</span>
+  <input name="note"${id ? ` id="${id}"` : ''} maxlength="100" value="${esc(value || '')}" placeholder="${esc(noteHint(ev.kind))}" autocomplete="off"></label>`;
 // 分享與公告用的報名期間文字；只有開放或即將開放時才附連結
 const windowLine = (ev) => `報名期間：${ev.signup_start ? tpShort(ev.signup_start) : '即日起'} – ${tpShort(signupEnd(ev))}${ev.require_approval ? '（需主辦審核）' : ''}`;
 const shareable = (ev) => ['open', 'soon'].includes(signupState(ev, nowTp()));
@@ -114,6 +127,8 @@ export async function eventView(id) {
           : !canSubmit ? `<span class="tiny">${STATE_LABEL[st](ev)}</span>` : (useForm ? '' : `<button class="btn sm" id="signup">${submitLabel(ev, null, full)}</button>`)}
       </div>
       ${useForm && canSubmit ? signupForm(ev, myStatus, full) : ''}
+      ${!useForm && !survey && canSubmit && !live ? `${noteField(ev, '', 'quickNote')}` : ''}
+      ${!useForm && live && ev.myNote ? `<p class="tiny" style="margin:0">給主辦的備註：<span translate="no">${esc(ev.myNote)}</span></p>` : ''}
       ${isOffline() && (canSubmit || live) ? '<p class="tiny" style="margin:0">目前離線，連上網路後再報名</p>' : ''}
       ${party && (ev.fee || ev.guest_max || ev.meal_options) ? `<p class="tiny">${ev.fee ? `費用 ${ev.fee} 元　` : ''}${ev.guest_max ? `可攜伴 ${ev.guest_max} 位　` : ''}${ev.meal_options ? `餐點：${esc(ev.meal_options)}` : ''}</p>` : ''}
       ${myStatus === 'in' ? `<p class="tiny mystat" id="myStatusMsg" style="margin:0">${IC.check}${survey ? '你已回覆' : '你已報名'}</p>` : ''}
@@ -124,7 +139,7 @@ export async function eventView(id) {
       ${!myStatus && canSubmit && ev.require_approval && !admin && (ev.capacity || (ev.items || []).some((i) => i.stock)) ? '<p class="tiny" id="evHold" style="margin:0">審核期間不保留名額與庫存</p>' : ''}
       ${live && ev.myAttended ? `<div class="row" style="gap:6px"><span class="pill solid">${IC.check}已出席</span></div>` : ''}
       <div class="roster">
-        ${ins.map((s) => `<div class="r">${avatar(s)}<span><span translate="no">${esc(s.name)}</span>${s.note ? ` <span class="tiny"><span translate="no">${esc(s.note)}</span></span>` : ''}</span><span class="pill">${esc(s.grp)}</span></div>`).join('')
+        ${ins.map((s) => `<div class="r">${avatar(s)}<span><span translate="no">${esc(s.name)}</span></span><span class="pill">${esc(s.grp)}</span></div>`).join('')
           || '<p class="muted" style="margin:0">還沒有人報名，當第一個吧。</p>'}
         ${waits.map((s) => `<div class="r">${avatar(s)}<span><span translate="no">${esc(s.name)}</span></span><span class="pill wait">候補</span></div>`).join('')}
       </div>
@@ -218,7 +233,7 @@ export async function eventView(id) {
   const sb = $('#signup');
   sb?.addEventListener('click', once(sb, async () => {
     try {
-      const r = await api(`/events/${id}/signup`, { method: 'POST', body: { name: me.name, grp: me.grp, dist: me.dist } });
+      const r = await api(`/events/${id}/signup`, { method: 'POST', body: { grp: me.grp, dist: me.dist, note: $('#quickNote')?.value.trim() || '' } });
       settled(signupToast(r, ev));
     } catch (e) { toast(e.message); }
   }));
@@ -283,7 +298,7 @@ export async function eventView(id) {
       if (miss) return fieldError(miss.type === 'text' ? f.querySelector(`[data-q="${CSS.escape(miss.id)}"]`) : f.querySelector(`input[name="q_${CSS.escape(miss.id)}"]`), `請回答「${miss.label}」`, { also: miss.type === 'text' ? [] : [...f.querySelectorAll(`input[name="q_${CSS.escape(miss.id)}"]`)].slice(1) });
       if (ev.group_reg && ev.regProfile !== 'ok') { goReg(); return; }
       const r = await api(`/events/${id}/signup`, { method: 'POST', body: {
-        name: me.name, grp: me.grp, dist: me.dist, note: f.note?.value || '', answers,
+        grp: me.grp, dist: me.dist, note: f.note?.value.trim() || '', answers,
         option: f.querySelector('[name=option]:checked')?.value || null, reg_consent: !!f.reg_consent?.checked,
         guests: Number(f.guests?.value || 0), meal: f.meal?.value || '', items: readItems(f) } });
       settled(signupToast(r, ev));
@@ -465,7 +480,7 @@ function signupForm(ev, myStatus, full) {
     ${charges(ev) ? '<div class="quote" id="quote" aria-live="polite"></div>' : ''}
     ${questionFields(ev.questions || [], ev.myAnswers || {})}
     ${draft ? '<p class="notice" style="margin:0">已帶回你剛才選的內容，確認後送出報名。</p>' : ''}
-    ${survey ? '' : `<label>備註（選填）<input name="note" maxlength="40" value="${esc(ev.draftNote || '')}" placeholder="${party ? '素食、座位需求…' : '晚到、只跑前半段…'}"></label>`}
+    ${survey ? '' : noteField(ev, ev.draftNote ?? ev.myNote)}
     <button class="btn block">${submitLabel(ev, myStatus, full)}</button>
   </form>`;
 }

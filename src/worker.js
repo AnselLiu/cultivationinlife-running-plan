@@ -622,7 +622,7 @@ async function eventWithSignups(env, id) {
   const ev = await env.DB.prepare(`SELECT ${eventCols} FROM events WHERE id = ?`).bind(id).first();
   if (!ev) return null;
   const signups = (await env.DB.prepare(
-    "SELECT id, member_id, name, grp, dist, note, status, created_at FROM signups WHERE event_id = ? AND status IN ('in','wait') ORDER BY created_at, id").bind(id).all()).results;   // 待審核與婉拒不公開
+    "SELECT id, member_id, name, grp, dist, status, created_at FROM signups WHERE event_id = ? AND status IN ('in','wait') ORDER BY created_at, id").bind(id).all()).results;   // 待審核與婉拒不公開；備註只給主辦（統計頁、CSV），公開名單不帶
   return { ...ev, signups };
 }
 
@@ -2282,7 +2282,7 @@ const api = (async function api(req, env, path, method) {
     if (!cur || !(await canSee(cur))) return fail(404, '找不到這個活動');
     if (method === 'GET') {
       const ev = await eventWithSignups(env, id);
-      const mine = await env.DB.prepare('SELECT status, review, review_note, reviewed_at, created_at, answers, paid, attended_at, option, reg_consent_at, items, amount, amount_detail, pay_ref, pay_method, pay_reported_at, picked_at, paid_note, pick_code FROM signups WHERE event_id = ? AND member_id = ?').bind(id, member.id).first();
+      const mine = await env.DB.prepare('SELECT status, review, review_note, reviewed_at, created_at, note, answers, paid, attended_at, option, reg_consent_at, items, amount, amount_detail, pay_ref, pay_method, pay_reported_at, picked_at, paid_note, pick_code FROM signups WHERE event_id = ? AND member_id = ?').bind(id, member.id).first();
       const arr = await env.DB.prepare('SELECT arrived_at, pickup_note, status FROM events WHERE id = ?').bind(id).first();
       // 團購：每項已訂數量（算剩餘庫存與成團進度）
       const itemDefs = parseQ(ev.items), sold = {};
@@ -2297,6 +2297,7 @@ const api = (async function api(req, env, path, method) {
       const attendTok = manage ? (await env.DB.prepare('SELECT attend_token FROM events WHERE id = ?').bind(id).first()).attend_token : null;
       return json({ ...ev, questions: parseQ(ev.questions), myAnswers: mine?.answers ? JSON.parse(mine.answers) : null,
         myPaid: mine?.paid || null, myAttended: mine?.attended_at || null, myOption: mine?.option || null, myRegConsent: !!mine?.reg_consent_at,
+        myNote: mine && mine.status !== 'cancel' ? mine.note || '' : null,   // 給主辦的備註（只有本人與主辦看得到）；編輯報名時帶回表單
         myItems: parseQ(mine?.items), myAmount: mine?.amount ?? null, myLines: parseQ(mine?.amount_detail), myPayRef: mine?.pay_ref || null, myPayMethod: mine?.pay_method || null,
         myPayReported: mine?.pay_reported_at || null, myPicked: mine?.picked_at || null, myPaidNote: mine?.paid_note || null,
         arrived: arr?.arrived_at || null, pickupNote: arr?.pickup_note || null, myPickCode: arr?.arrived_at && mine?.status === 'in' ? mine.pick_code || null : null, cancelled: arr?.status === 'cancelled',
@@ -2889,7 +2890,7 @@ const api = (async function api(req, env, path, method) {
     const ev = await eventWithSignups(env, m3[1]);
     if (!ev) return fail(404, '找不到這個活動');
     if (!teamCan(ev.team_id, 'event') && !teamCan(ev.team_id, 'checkin')) return fail(403, '只有幹部可以匯出名單');
-    const lines = ev.signups.filter((s) => s.status === 'in').map((s, i) => `${i + 1}. ${s.grp}　${s.name}${s.note ? `（${s.note}）` : ''}`);
+    const lines = ev.signups.filter((s) => s.status === 'in').map((s, i) => `${i + 1}. ${s.grp}　${s.name}`);   // 會貼到 LINE 群組：不放備註（只給主辦）
     const wait = ev.signups.filter((s) => s.status === 'wait').map((s, i) => `候補${i + 1}. ${s.grp}　${s.name}`);
     return json({ text: [`${ev.title}　${ev.date}`, ...lines, ...wait].join('\n') });
   }
@@ -3581,6 +3582,8 @@ const api = (async function api(req, env, path, method) {
        FROM tickets t JOIN members m ON m.id = t.member_id
        WHERE t.event_id = ? ORDER BY t.table_no, m.name`).bind(ms[1]).all()).results;
     const ly = await env.DB.prepare('SELECT seat_layout FROM events WHERE id = ?').bind(ms[1]).first();
+    // 座位備註（報名時的備註會帶進入場券）只給報到幹部；一般團員查座位只看到姓名、跑團與桌次
+    if (!teamCan(sev.team_id, 'checkin') && !canManage(sev)) for (const r of rows) delete r.note;
     return json({ seats: rows, layout: ly?.seat_layout ? JSON.parse(ly.seat_layout) : null,
       tables: [...new Set(rows.map((r) => r.table_no).filter(Boolean))].sort((a, b) => a - b) });
   }
@@ -3836,7 +3839,7 @@ const api = (async function api(req, env, path, method) {
       people: (canReview ? rows : live).map((r) => ({ member_id: r.member_id, name: r.name, nickname: r.nickname, status: isRejected(r) ? 'rejected' : r.status,
         guests: r.guests ?? r.s_guests ?? 0, option: r.option || null, regOk: !!r.reg_consent_at,
         amount: r.amount, items: parseQ(r.items), payRef: r.pay_ref, payMethod: r.pay_method, payReported: r.pay_reported_at, picked: !!r.picked_at,
-        paid: r.paid, paid_note: r.paid_note, attended: !!(r.attended_at || r.checked_in_at), created_at: r.created_at,
+        paid: r.paid, paid_note: r.paid_note, attended: !!(r.attended_at || r.checked_in_at), created_at: r.created_at, note: r.note || '',
         ...(canReview ? { reviewNote: isRejected(r) ? r.review_note || null : null, reviewedAt: r.reviewed_at || null, reviewerName: r.reviewer_name || null,
           review: r.review || null, edited: !!r.edited_after_review, regComplete: !!r.reg_complete } : {}) })),
       byTeam: Object.entries(tally(ins, (r) => (r.teams || '').split(',').filter(Boolean))).map(([k, n]) => ({ k: teamName[k] || k, n })),

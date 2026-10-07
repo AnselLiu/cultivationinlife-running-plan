@@ -1137,6 +1137,37 @@ test('名單不洩漏：非管理者的 GET、列表、統計、CSV 都看不到
   assert.equal((await call('t_coach', `/events/${id}/stats`)).status, 200);
 });
 
+test('備註只給主辦：公開名單、名單文字、座位查詢都沒有備註；本人看得到自己的，改報名內容帶回不會清掉；統計頁給審核與報到幹部', async () => {
+  const id = await mkEvent({ title: '備註測試' });
+  assert.equal((await signup('t_runner', id, { note: '會晚 10 分鐘到' })).json.status, 'in');
+  assert.equal((await signup('t_other', id, { note: '素食' })).json.status, 'in');
+  const g = (await call('t_other', `/events/${id}`)).json;
+  assert.equal(g.signups.length, 2);
+  assert.ok(g.signups.every((x) => !('note' in x)), '公開名單沒有 note 欄位');
+  assert.ok(!JSON.stringify(g.signups).includes('會晚'));
+  assert.equal(g.myNote, '素食', '本人拿得到自己的備註');
+  // 改報名內容：表單帶回 myNote 再送出，備註還在
+  const mine = (await call('t_runner', `/events/${id}`)).json;
+  assert.equal(mine.myNote, '會晚 10 分鐘到');
+  assert.equal((await signup('t_runner', id, { note: mine.myNote })).status, 200);
+  assert.equal((await call('t_runner', `/events/${id}`)).json.myNote, '會晚 10 分鐘到');
+  assert.equal((await call('t_staff', `/events/${id}`)).json.myNote, null, '沒報名的人沒有 myNote');
+  const roster = (await call('t_chair', `/events/${id}/roster`)).json.text;
+  assert.ok(roster.includes('測試跑友') && !roster.includes('會晚') && !roster.includes('素食'), '名單文字（貼 LINE）不放備註');
+  for (const who of ['t_chair', 't_coach']) {   // 審核幹部與只有報到權限的幹部
+    const st = (await call(who, `/events/${id}/stats`)).json;
+    assert.equal(st.people.find((x) => x.member_id === 't_runner').note, '會晚 10 分鐘到', who);
+  }
+  assert.ok((await call('t_chair', `/events/${id}/export.csv`)).text.includes('會晚 10 分鐘到'));
+  // 餐敘：報名備註會帶進入場券；座位查詢（所有看得到活動的人）不給備註，報到幹部才有
+  const pid = await mkEvent({ kind: 'party', title: '備註餐敘' });
+  assert.equal((await signup('t_runner', pid, { note: '想跟阿明同桌' })).json.status, 'in');
+  const pub = (await call('t_other', `/events/${pid}/seats`)).json.seats;
+  assert.equal(pub.length, 1);
+  assert.ok(!('note' in pub[0]), '一般團員查座位看不到備註');
+  assert.equal((await call('t_chair', `/events/${pid}/seats`)).json.seats[0].note, '想跟阿明同桌');
+});
+
 test('報名通知：開關控制、狀態沒變不重複、代為報名只通知真的報上的人', async () => {
   const id = await mkEvent({ title: '通知測試', capacity: 1, notify_signup: true, fee: 300 });
   assert.equal((await signup('t_lead', id)).json.status, 'in');
