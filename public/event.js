@@ -4,7 +4,7 @@
 import {
   $, addrField, ago, allow, api, apiAll, applyCounts, avatar, bellState, bindAddrField, canScan, choose, copy, dayPattern, downloadAuthed, dstr,
   emptyState, esc, fixText, IC, isOffline, kindLabel, largeTitle, latest, mapsUrl, me, money, myCycle, nowTp, once, qrSVG, render, routeSvg, scan,
-  scanSheet, setStopScan, submitLabel, teamAllow, teams, toast, view, ymd, fieldError, focusAfterRender, announce
+  scanSheet, setStopScan, submitLabel, teamAllow, teams, toast, view, ymd, fieldError, focusAfterRender, announce, gatherVerb, tpAt
 } from './app.js';
 import * as P from './plan.js';
 import * as Party from './party.js';
@@ -15,6 +15,9 @@ import { evStart, signupEnd, signupState, STATE_LABEL, tpShort, tpText } from '.
 function signupToast(r, ev) {
   if (ev.kind === 'survey') return '已送出，謝謝你的回覆';
   if (r.status === 'pending') return r.full ? '已送出申請，目前額滿，核准後會排入候補' : '已送出申請，等主辦幹部審核，結果會通知你';
+  // 索票：張數＝本人＋guests（伺服器沒回傳就用送出的值）
+  if (ev.kind === 'claim' && r.status === 'wait') return `剩下的票不夠，已排入候補第 ${r.position || 1} 位；張數少的登記可能先遞補`;
+  if (ev.kind === 'claim') return `已登記 ${1 + (r.guests ?? ev.myGuests ?? 0)} 張${r.amount ? `，應繳 ${money(r.amount)}` : ''}`;
   if (r.status === 'wait' && r.party) return `剩下的名額不夠你和攜伴一起，已排入候補第 ${r.position || 1} 位；人數少的報名可能先遞補`;
   if (r.status === 'wait') return `人數已滿，已排入候補第 ${r.position || 1} 位，有人取消會自動遞補並通知你`;
   if (r.amount) return `報名完成，應繳 ${money(r.amount)}`;
@@ -29,9 +32,11 @@ function signedCard(ev, done, link) {
   const msg = done.status === 'in' && (done.msg || ev.success_msg);
   const share = (done.status === 'in' || done.status === 'wait') && link && ev.kind !== 'survey';
   if (!msg && !share) return '';
-  const what = `【${ev.title}】${dstr(ev.date)}${ev.gather_time ? ` ${ev.gather_time}` : ''}${ev.place ? `・${ev.place}` : ''}`;
-  // 候補：不說「一起來」（已經額滿，朋友點了也是候補），只附活動連結
-  const text = share ? (done.status === 'wait' ? [`我排了${what} 的候補`, `活動：${forLine(link)}`] : [`我報名了${what}`, `一起來：${forLine(link)}`]).join('\n') : '';
+  const what = `【${ev.title}】${dstr(ev.date)}${ev.gather_time ? ` ${ev.gather_time}${ev.time_tbd ? '（暫定）' : ''}` : ''}${ev.place ? `・${ev.place}` : ''}`;
+  // 候補：不說「一起來」（已經額滿，朋友點了也是候補），只附活動連結；索票說「登記了…的票」
+  const claim = ev.kind === 'claim';
+  const text = share ? (done.status === 'wait' ? [claim ? `我排了${what} 的索票候補` : `我排了${what} 的候補`, `活動：${forLine(link)}`]
+    : [claim ? `我登記了${what} 的票` : `我報名了${what}`, `一起來：${forLine(link)}`]).join('\n') : '';
   return `<div class="notice signedcard" id="signedCard" role="group" aria-labelledby="signedH" tabindex="-1">
     <h3 class="sr" id="signedH">${done.status === 'wait' ? '已排入候補' : '報名成功'}</h3>
     ${msg ? `<p style="margin:0;white-space:pre-wrap"><span translate="no">${esc(msg)}</span></p>` : ''}
@@ -48,6 +53,10 @@ const guestFields = (ev) => {
   const left = seatLeft(ev), top = Math.max(n, ev.capacity && ev.count_guests ? Math.min(ev.guest_max, ev.capacity - 1) : ev.guest_max);
   // 剩下的位子不夠「本人＋i 位」：只在還有位子時標（已經額滿的整場都是排候補，按鈕本來就寫了）
   const short = (i) => left != null && left > 0 && 1 + i > left && ev.myStatus !== 'wait' && ev.myStatus !== 'pending';
+  // 索票：選「要幾張」（本人那張也算在內，所以 i＋1 張），不收攜伴姓名
+  if (ev.kind === 'claim') return `<fieldset class="qset guests"><legend>要幾張？</legend>
+    <label class="sr" for="gsel">張數</label><select id="gsel" name="guests">${Array.from({ length: top + 1 }, (_, i) => `<option value="${i}" ${i === n ? 'selected' : ''} ${short(i) ? 'data-short' : ''}>${i + 1} 張${short(i) ? (ev.myStatus === 'in' ? '（票不夠）' : '（票不夠，會排候補）') : ''}</option>`).join('')}</select>
+    <span class="tiny">每人最多 ${ev.guest_max + 1} 張${left != null ? `，目前還剩 ${left} 張` : ''}</span></fieldset>`;
   return `<fieldset class="qset guests"><legend>攜伴</legend>
     <label>人數<select name="guests">${Array.from({ length: top + 1 }, (_, i) => `<option value="${i}" ${i === n ? 'selected' : ''} ${short(i) ? 'data-short' : ''}>${i ? `${i} 位` : '不帶'}${short(i) ? (ev.myStatus === 'in' ? '（名額不夠）' : '（名額不夠，會排候補）') : ''}</option>`).join('')}</select></label>
     <div class="guestnames">${Array.from({ length: top }, (_, i) => `<label data-g="${i}" ${i < n ? '' : 'hidden'}>攜伴 ${i + 1} 姓名（選填）<input name="guest_name" maxlength="20" value="${esc(names[i] || '')}" autocomplete="off"></label>`).join('')}</div>
@@ -62,6 +71,7 @@ const NOTE_HINTS = {
   race: ['想一起搭車到會場', '這場想破四', '需要幫忙寄物', '會直接到起點'],
   party: ['素食', '想跟阿明同桌', '會晚半小時到', '不吃牛'],
   buy: ['週四團練現場領', '想跟阿明一起領', '尺寸還在猶豫'],
+  claim: ['想跟阿明坐在一起', '其中一張給家人', '週四團練現場領票'],
   other: ['會晚 10 分鐘到', '第一次來，請多指教', '想跟阿明同一組'],
 };
 const noteHint = (kind) => { const l = NOTE_HINTS[kind] || NOTE_HINTS.other; return `例如：${l[Math.floor(Math.random() * l.length)]}`; };
@@ -70,8 +80,8 @@ const noteField = (ev, value, id = '') => `<label>給主辦的備註（選填）
 // 分享與公告用的報名期間文字；只有開放或即將開放時才附連結
 const windowLine = (ev) => `報名期間：${ev.signup_start ? tpShort(ev.signup_start) : '即日起'} – ${tpShort(signupEnd(ev))}${ev.require_approval ? '（需主辦審核）' : ''}`;
 const shareable = (ev) => ['open', 'soon'].includes(signupState(ev, nowTp()));
-// 名單上的攜伴：只顯示人數（姓名只有主辦看得到）
-const plusN = (s) => (s.guests ? ` <span class="tiny num">＋${s.guests}</span>` : '');
+// 名單上的攜伴：只顯示人數（姓名只有主辦看得到）；索票一律顯示張數（1 張也顯示）
+const plusN = (s, ev) => (ev.kind === 'claim' ? ` <span class="tiny num">${1 + (s.guests || 0)} 張</span>` : s.guests ? ` <span class="tiny num">＋${s.guests}</span>` : '');
 // 分享活動：手機跳出分享選單（LINE、訊息…），不支援就複製文字＋連結
 // 分享連結用 /e/:id：伺服器幫 LINE 等的連結預覽加上活動摘要（標題、日期時間、地點、報名狀態），打開後前端轉成 /#/e/:id
 const eventUrl = (id) => `${location.origin}/e/${id}`;
@@ -80,7 +90,7 @@ const forLine = (u) => `${u}${u.includes('?') ? '&' : '?'}openExternalBrowser=1`
 // 能分享的連結：邀請制一定要帶邀請代碼，只有主辦（開了邀請連結）拿得到；其他人分享不了邀請制活動（回傳 null）
 const shareLink = (ev) => (ev.visibility === 'invite' ? (ev.manage && ev.invite?.token ? `${eventUrl(ev.id)}?t=${ev.invite.token}` : null) : eventUrl(ev.id));
 async function shareEvent(ev, link = eventUrl(ev.id)) {
-  const text = `${ev.title}｜${dstr(ev.date)}${ev.gather_time ? ` ${ev.gather_time}` : ''}${ev.place ? `・${ev.place}` : ''}`;
+  const text = `${ev.title}｜${dstr(ev.date)}${ev.gather_time ? ` ${ev.gather_time}${ev.time_tbd ? '（暫定）' : ''}` : ''}${ev.place ? `・${ev.place}` : ''}`;
   if (navigator.share) {
     try { await navigator.share({ title: ev.title, text, url: link }); return; }
     catch (e) { if (e.name === 'AbortError') return; }
@@ -90,12 +100,15 @@ async function shareEvent(ev, link = eventUrl(ev.id)) {
 // ---------- 活動詳情 ----------
 export async function eventView(id) {
   // 從邀請連結進來：先把自己加進受邀名單
-  const tok = new URLSearchParams(location.hash.split('?')[1] || '').get('t');
+  const qp = new URLSearchParams(location.hash.split('?')[1] || ''), tok = qp.get('t');
+  // 從「請確認是否仍參加」的通知進來（?rc=1）：畫完後焦點移到確認卡；網址的參數清掉（重新整理不會再跳過去）
+  const rcQ = qp.get('rc') === '1';
   if (tok) {
     try { await api(`/events/${id}/accept`, { method: 'POST', body: { t: tok } }); } catch (e) { toast(e.message); }
     history.replaceState(null, '', `#/e/${id}`);
   }
   const ev = await api(`/events/${id}`);
+  if (rcQ) { history.replaceState(null, '', `#/e/${id}`); if (ev.myReconfirm) focusAfterRender('#rcBanner'); }
   // 打開活動頁＝這個活動的通知都看過了（伺服器會排除幹部待辦與帳號安全）
   if (bellState.unread > 0) api('/notifications/read', { method: 'POST', body: { ref: `e:${id}` } }).then(applyCounts).catch(() => {});
   const inviteOnly = ev.visibility === 'invite';
@@ -115,7 +128,7 @@ export async function eventView(id) {
   const canSubmit = st === 'open' && myStatus !== 'rejected', started = now >= evStart(ev);
   // 一般團練（沒有報名表）：給主辦的備註在前、「我要報名」在後（螢幕閱讀器與鍵盤的順序先到備註欄，不會沒看到就送出）
   const quick = !useForm && !survey && canSubmit && !live;
-  const party = ev.kind === 'party';
+  const party = ev.kind === 'party', claim = ev.kind === 'claim';
   // 入場券、座位、當週課表同時載入
   const [myTicket, seatInfo, plan] = await Promise.all([
     party ? api('/my/tickets').then((r) => r.tickets.find((t) => t.event_id === ev.id)) : null,
@@ -134,7 +147,7 @@ export async function eventView(id) {
         <span class="tiny">${survey ? `${dstr(ev.date)} 前` : dstr(ev.date)}</span>
       </div>
       <h1 class="evtitle"><span translate="no">${esc(ev.title)}</span></h1>
-      <p class="muted" style="margin:0">${ev.gather_time ? `${ev.gather_time} ${party ? '開始' : '集合'}${ev.end_time ? `－${ev.end_time}` : ''}` : ev.end_time ? `${ev.end_time} 結束` : ''}${ev.place ? `　<span translate="no">${esc(ev.place)}</span>` : ''}${ev.lead ? `　${ev.owner_managed ? '發起' : '帶團'}：<span translate="no">${esc(ev.lead)}</span>` : ''}</p>
+      <p class="muted" style="margin:0">${ev.gather_time ? `${ev.gather_time}${gatherVerb(ev) ? ` ${gatherVerb(ev)}` : ''}${ev.end_time ? `－${ev.end_time}` : ''}` : ev.end_time ? `${ev.end_time} 結束` : ''}${ev.time_tbd ? ' <span class="pill" style="background:rgba(255,255,255,.22);color:#fff">時間暫定</span>' : ''}${ev.place ? `　<span translate="no">${esc(ev.place)}</span>` : ''}${ev.lead ? `　${ev.owner_managed ? '發起' : '帶團'}：<span translate="no">${esc(ev.lead)}</span>` : ''}</p>
       ${ev.address || (ev.place && !ev.spot) ? `<a class="navlink" href="${mapsUrl(ev.address || ev.place)}" target="_blank" rel="noopener">${IC.pin}<span>${ev.address ? `${ev.address_zip ? `<span class="num">${esc(ev.address_zip)}</span> ` : ''}<span translate="no">${esc(ev.address)}</span>` : '在地圖上查看'}</span><b>導航</b></a>` : ''}
       ${(ev.options || []).length || (ev.items || []).length ? `<div class="pricechips">${[...(ev.options || []), ...(ev.items || [])].map((o) => `<span><b><span translate="no">${esc(o.name)}</span></b>${o.price ? `<span class="num">${money(o.price)}</span>` : ''}</span>`).join('')}</div>`
         : ev.fee ? `<div class="pricechips"><span><b>費用</b><span class="num">${money(ev.fee)}</span></span></div>` : ''}
@@ -152,6 +165,11 @@ export async function eventView(id) {
         <button class="btn sm glassbtn" id="copyLink">${inviteOnly ? '複製邀請連結' : '複製報名連結'}</button>
       </div>`}
     </section>
+    ${ev.myReconfirm ? `<section class="card rcbanner" id="rcBanner" role="region" aria-labelledby="rcH" tabindex="-1">
+      <h2 class="h3" id="rcH">${IC.calAlert}活動有異動，請確認是否仍參加</h2>
+      <p class="tiny" style="margin:0">主辦在 ${tpAt(ev.reconfirm_at)} 更新了活動資訊，以上方為準。${myStatus === 'wait' ? '確認後候補順位不變。' : myStatus === 'pending' ? '確認後仍要等主辦審核。' : ''}</p>
+      <div class="row" style="gap:8px"><button class="btn" id="rcYes">仍參加</button><button class="btn ghost danger" id="rcNo">取消報名</button></div>
+    </section>` : ''}
     ${inviteOnly && admin && !owner ? inviteCard(ev) : ''}
 
     ${myDay ? `<section class="card">
@@ -170,9 +188,9 @@ export async function eventView(id) {
 
     <section class="card" id="myStatus" aria-labelledby="myStatusH">
       <div class="row spread">
-        <h2 class="h3" id="myStatusH">${survey ? '已回覆' : '報名'} ${ev.seatsIn}${ev.capacity ? ` / ${ev.capacity}` : ''} 人</h2>
+        <h2 class="h3" id="myStatusH">${claim ? `已登記 ${ev.seatsIn}${ev.capacity ? ` / ${ev.capacity}` : ''} 張` : `${survey ? '已回覆' : '報名'} ${ev.seatsIn}${ev.capacity ? ` / ${ev.capacity}` : ''} 人`}</h2>
         ${live
-          ? `<span class="row" style="gap:6px">${myStatus === 'in' && started ? '<span class="tiny">活動已開始</span>' : ''}<button class="btn danger sm" id="cancel" ${myStatus === 'in' && started ? 'disabled' : ''}>${myStatus === 'pending' ? '撤回申請' : survey ? '撤回回覆' : '取消報名'}</button></span>`
+          ? `<span class="row" style="gap:6px">${myStatus === 'in' && started ? '<span class="tiny">活動已開始</span>' : ''}<button class="btn danger sm" id="cancel" ${myStatus === 'in' && started ? 'disabled' : ''}>${myStatus === 'pending' ? '撤回申請' : survey ? '撤回回覆' : claim ? '取消索票' : '取消報名'}</button></span>`
           : myStatus === 'rejected' ? '<span class="tiny">未通過審核</span>'
           : !canSubmit ? `<span class="tiny">${STATE_LABEL[st](ev)}</span>` : (useForm || quick ? '' : `<button class="btn sm" id="signup">${submitLabel(ev, null, full)}</button>`)}
       </div>
@@ -181,8 +199,9 @@ export async function eventView(id) {
       ${quick ? `<div class="quicksign">${noteField(ev, '', 'quickNote')}<button class="btn sm" id="signup">${submitLabel(ev, null, full)}</button></div>` : ''}
       ${!useForm && live && ev.myNote ? `<p class="tiny" style="margin:0">給主辦的備註：<span translate="no">${esc(ev.myNote)}</span></p>` : ''}
       ${isOffline() && (canSubmit || live) ? '<p class="tiny" style="margin:0">目前離線，連上網路後再報名</p>' : ''}
-      ${(party && (ev.fee || ev.meal_options)) || ev.guest_max ? `<p class="tiny">${party && ev.fee ? `費用 ${ev.fee} 元　` : ''}${ev.guest_max ? `可攜伴 ${ev.guest_max} 位${ev.count_guests && ev.capacity ? '（攜伴也佔名額）' : ''}　` : ''}${party && ev.meal_options ? `餐點：${esc(ev.meal_options)}` : ''}</p>` : ''}
-      ${myStatus === 'in' ? `<p class="tiny mystat" id="myStatusMsg" style="margin:0">${IC.check}${survey ? '你已回覆' : '你已報名'}</p>` : ''}
+      ${claim ? `<p class="tiny">${ev.guest_max ? `每人最多 ${ev.guest_max + 1} 張` : '每人 1 張'}</p>`
+        : (party && (ev.fee || ev.meal_options)) || ev.guest_max ? `<p class="tiny">${party && ev.fee ? `費用 ${ev.fee} 元　` : ''}${ev.guest_max ? `可攜伴 ${ev.guest_max} 位${ev.count_guests && ev.capacity ? '（攜伴也佔名額）' : ''}　` : ''}${party && ev.meal_options ? `餐點：${esc(ev.meal_options)}` : ''}</p>` : ''}
+      ${myStatus === 'in' ? `<p class="tiny mystat" id="myStatusMsg" style="margin:0">${IC.check}${claim ? `你已登記 ${1 + (ev.myGuests || 0)} 張${ev.myPicked ? '・主辦已發票' : ''}` : survey ? '你已回覆' : '你已報名'}</p>` : ''}
       ${myStatus === 'pending' ? `<p class="notice" id="myStatusMsg" style="margin:0">你的報名在等主辦幹部審核，結果會通知你${charges(ev) ? '；核准後再繳費' : ''}。</p>`
         : myStatus === 'rejected' ? `<p class="notice" id="myStatusMsg" style="margin:0">主辦未通過這筆報名${ev.myReviewNote ? `：<span translate="no">${esc(ev.myReviewNote)}</span>` : ''}。有疑問請聯絡主辦人。</p>`
         : myStatus === 'wait' ? `<p class="notice" id="myStatusMsg" style="margin:0">你在候補第 ${ev.myPosition || 1} 位，有人取消會自動遞補並通知你。</p>`
@@ -190,9 +209,9 @@ export async function eventView(id) {
       ${!myStatus && canSubmit && ev.require_approval && !admin && (ev.capacity || (ev.items || []).some((i) => i.stock)) ? '<p class="tiny" id="evHold" style="margin:0">審核期間不保留名額與庫存</p>' : ''}
       ${live && ev.myAttended ? `<div class="row" style="gap:6px"><span class="pill solid">${IC.check}已出席</span></div>` : ''}
       <div class="roster">
-        ${ins.map((s) => `<div class="r">${avatar(s)}<span><span translate="no">${esc(s.name)}</span>${plusN(s)}</span><span class="pill">${esc(s.grp)}</span></div>`).join('')
+        ${ins.map((s) => `<div class="r">${avatar(s)}<span><span translate="no">${esc(s.name)}</span>${plusN(s, ev)}</span><span class="pill">${esc(s.grp)}</span></div>`).join('')
           || '<p class="muted" style="margin:0">還沒有人報名，當第一個吧。</p>'}
-        ${waits.map((s) => `<div class="r">${avatar(s)}<span><span translate="no">${esc(s.name)}</span>${plusN(s)}</span><span class="pill wait">候補</span></div>`).join('')}
+        ${waits.map((s) => `<div class="r">${avatar(s)}<span><span translate="no">${esc(s.name)}</span>${plusN(s, ev)}</span><span class="pill wait">候補</span></div>`).join('')}
       </div>
       ${admin ? '<button class="btn ghost sm" id="copyRoster">複製名單</button>' : ''}
     </section>
@@ -213,19 +232,22 @@ export async function eventView(id) {
         <button class="btn danger sm" id="del">刪除</button>
       </div>
       ${owner ? '<p class="tiny" style="margin:0">改日期、時間或地點就直接編輯，存檔後已報名的人會收到通知；要取消就刪除，一樣會通知。</p>' : ''}
+      ${ev.unconfirmed > 0 ? `<a class="tiny rclink" href="#/e/${ev.id}/stats?f=unconfirmed">${ev.unconfirmed} 人還沒確認是否仍參加 ›</a>` : ''}
       ${ev.cancelled || owner ? '' : `<details id="noticeWrap"><summary class="tiny" style="cursor:pointer">發布通知或異動（改時間、改地點、取消）</summary>
         <form id="noticeForm" class="noticeform">
           <div class="chips">${[['time', '改時間'], ['place', '改地點'], ['other', '提醒或通知'], ['cancel', '取消活動']].map(([k, v], i) => `<label class="chip"><input type="radio" name="type" value="${k}" ${i ? '' : 'checked'}><span>${v}</span></label>`).join('')}</div>
           <div class="grid2" data-nt="time"><label>新的日期<input type="date" name="date" value="${esc(ev.date)}"></label><label>${party ? '新的開始時間' : '新的集合時間'}<input type="time" name="gather_time" value="${esc(ev.gather_time || '')}"></label></div>
+          ${ev.time_tbd ? '<label class="inline" data-nt="time"><input type="checkbox" name="keep_tbd"> 時間還沒確定（繼續標「暫定」）</label>' : ''}
           <div data-nt="place" hidden style="display:grid;gap:12px"><label>新的地點<input name="place" maxlength="120" placeholder="例如 改到大佳河濱公園"></label>${addrField('address', '地址', '選填・送郵局核對')}</div>
           <label>說明（會一起推播）<textarea name="message" maxlength="300" placeholder="例如 下雨改室內，帶瑜珈墊"></textarea></label>
+          <label class="switch" data-nt="time,place,other"><span>請已報名的人重新確認<span class="tiny" style="display:block">他們會收到通知，在活動頁按「仍參加」或「取消報名」；統計頁看得到誰還沒確認</span></span><input type="checkbox" name="reconfirm"><i></i></label>
           <fieldset class="qset"><legend>通知誰</legend><div class="chips">
             <label class="chip"><input type="radio" name="audience" value="signed" ${ev.signups.length + (ev.pendingCount || 0) ? 'checked' : ''}><span>已報名的人（${ev.signups.length + (ev.pendingCount || 0)}）</span></label>
             <label class="chip"><input type="radio" name="audience" value="all" ${ev.signups.length + (ev.pendingCount || 0) ? '' : 'checked'}><span>${inviteOnly ? '所有受邀的人' : ev.team ? '整個分團' : '全協會'}</span></label></div>
             <span class="tiny">用外部表單登記的活動（例如慶功宴）沒有人在 App 報名，要選第二個。</span></fieldset>
           <button class="btn sm">送出並通知</button>
         </form></details>`}
-      ${party || survey || owner ? '' : `<details id="attendWrap" ${ev.attendToken ? 'open' : ''}><summary class="tiny" style="cursor:pointer">現場報到 QR（團員自己掃）</summary>
+      ${party || survey || claim || owner ? '' : `<details id="attendWrap" ${ev.attendToken ? 'open' : ''}><summary class="tiny" style="cursor:pointer">現場報到 QR（團員自己掃）</summary>
         ${ev.attendToken ? `<div class="qrbox" id="attendQR"></div><p class="tiny center" style="margin:0">請團員用手機相機掃描，登入後就完成報到；沒報名的人掃了會自動加入。只在活動當天有效。</p>
           <div class="row"><button class="btn ghost sm" id="attendRotate">換一組 QR</button><button class="btn ghost sm" id="attendOff">關閉</button></div>`
           : '<button class="btn sm" id="attendOn">開啟現場報到 QR</button>'}
@@ -268,14 +290,14 @@ export async function eventView(id) {
     e.preventDefault();
     if (!shareUrl()) return toast('先在下方「邀請連結」開啟，才能分享');
     const price = (ev.options || []).length ? ev.options.map((o) => `${o.name}${o.price ? ` ${money(o.price)}` : ''}`).join('／') : ev.fee ? money(ev.fee) : '';
-    const text = [`【${kindLabel(ev)}】${ev.title}`, `${dstr(ev.date)}${ev.gather_time ? ` ${ev.gather_time}` : ''}${ev.place ? `・${ev.place}` : ''}`,
+    const text = [`【${kindLabel(ev)}】${ev.title}`, `${dstr(ev.date)}${ev.gather_time ? ` ${ev.gather_time}${ev.time_tbd ? '（暫定）' : ''}` : ''}${ev.place ? `・${ev.place}` : ''}`,
       price ? `費用：${price}` : '', ev.cancelled ? '' : windowLine(ev), shareable(ev) ? `${ev.kind === 'survey' ? '填寫' : '報名'}：${forLine(shareUrl())}` : ''].filter(Boolean).join('\n');
     open(`https://line.me/R/share?text=${encodeURIComponent(text)}`, '_blank', 'noopener');
   });
   if (inviteOnly && admin && !owner) bindInviteCard(ev);   // 管理邀請只有主辦幹部（揪團的開團人沒有）
 
   // 離線：報名、取消都不排進離線佇列，按鈕直接停用
-  if (isOffline()) for (const b of [$('#signup'), $('#cancel'), $('#pform button:not([type=button])')]) if (b) b.disabled = true;
+  if (isOffline()) for (const b of [$('#signup'), $('#cancel'), $('#rcYes'), $('#rcNo'), $('#pform button:not([type=button])')]) if (b) b.disabled = true;
   // 報名按鈕的補充說明：報名期間、需要審核、審核期間不保留名額（VoiceOver 停在按鈕上就唸得到）
   const desc = ['evWindow', 'evHold'].filter((x) => document.getElementById(x)).join(' ');
   for (const b of [$('#signup'), $('#pform > button.btn:last-of-type')]) if (b && desc) b.setAttribute('aria-describedby', desc);
@@ -286,7 +308,7 @@ export async function eventView(id) {
     justSigned = { id, status: r.status, msg: r.successMsg || '' };
     // 攜伴也佔名額、還有位子但不夠本人＋攜伴：排候補的原因跟「額滿」不同
     const party = r.status === 'wait' && guests > 0 && (seatLeft(ev) ?? 0) > 0 && !ev.signups.some((x) => x.status === 'wait');
-    settled(signupToast({ ...r, party }, ev), { say: r.successMsg || '', first: willShowCard(ev, justSigned, shareLink(ev)) ? ['#signedCard'] : [] });
+    settled(signupToast({ ...r, party, guests: r.guests ?? guests }, ev), { say: r.successMsg || '', first: willShowCard(ev, justSigned, shareLink(ev)) ? ['#signedCard'] : [] });
   };
   const sb = $('#signup');
   sb?.addEventListener('click', once(sb, async () => {
@@ -295,13 +317,26 @@ export async function eventView(id) {
       signedUp(r);
     } catch (e) { toast(e.message); }
   }));
-  $('#cancel')?.addEventListener('click', async () => {
+  // 取消前的選擇面板：已繳費、截止後取消的說明（一般取消與異動後的「取消報名」共用）
+  const cancelMsg = () => {
     const paidMsg = ev.myPaid === 'paid' ? '你已經繳費，取消後的退費由主辦幹部處理。' : ev.myPayReported ? '你已經回報繳費，取消後請跟主辦幹部聯絡退費。' : '';
     const lateMsg = myStatus === 'in' && now > signupEnd(ev) ? '截止後取消請先聯絡主辦，費用依主辦規定。' : '';
+    return esc(`${lateMsg}${paidMsg}`);
+  };
+  $('#cancel')?.addEventListener('click', async () => {
     // 危險操作用選擇面板（不用 confirm）：選項寫清楚是「取消報名」還是「保留報名」
-    const [title, yes, keepIt] = myStatus === 'pending' ? ['撤回這筆申請？', '撤回申請', '保留申請'] : survey ? ['撤回回覆？', '撤回回覆', '保留回覆'] : ['取消報名？', '取消報名', '保留報名'];
-    if (await choose(title, esc(`${lateMsg}${paidMsg}`), [{ value: 'yes', label: yes, danger: true }], { cancel: keepIt }) !== 'yes') return;
-    try { await api(`/events/${id}/signup`, { method: 'DELETE' }); settled(myStatus === 'pending' ? '已撤回申請' : survey ? '已撤回回覆' : '已取消報名'); } catch (e) { toast(e.message); }
+    const [title, yes, keepIt, done] = myStatus === 'pending' ? ['撤回這筆申請？', '撤回申請', '保留申請', '已撤回申請'] : survey ? ['撤回回覆？', '撤回回覆', '保留回覆', '已撤回回覆']
+      : claim ? ['取消索票？', '取消索票', '保留索票', '已取消索票'] : ['取消報名？', '取消報名', '保留報名', '已取消報名'];
+    if (await choose(title, cancelMsg(), [{ value: 'yes', label: yes, danger: true }], { cancel: keepIt }) !== 'yes') return;
+    try { await api(`/events/${id}/signup`, { method: 'DELETE' }); settled(done); } catch (e) { toast(e.message); }
+  });
+  // 活動有異動：「仍參加」只記下確認（候補順位不變）；「取消報名」跟一般取消一樣先問，伺服器記成「異動後取消」
+  $('#rcYes')?.addEventListener('click', once($('#rcYes'), async () => {
+    try { await api(`/events/${id}/reconfirm`, { method: 'POST', body: { answer: 'yes' } }); settled('已確認，謝謝你'); } catch (e) { toast(e.message); }
+  }));
+  $('#rcNo')?.addEventListener('click', async () => {
+    if (await choose('取消報名？', cancelMsg(), [{ value: 'yes', label: '取消報名', danger: true }], { cancel: '保留報名' }) !== 'yes') return;
+    try { await api(`/events/${id}/reconfirm`, { method: 'POST', body: { answer: 'no' } }); settled('已取消報名'); } catch (e) { toast(e.message); }
   });
   // 尚未開放：倒數；剩不到 6 小時改成時間到再向伺服器重新讀取（按鈕由伺服器的狀態決定，前端不自己打開）
   const cd = $('#openCountdown');   // #countdown 是上方的賽事倒數，不能重複
@@ -325,7 +360,7 @@ export async function eventView(id) {
   for (const b of document.querySelectorAll('[data-regcsv]')) b.onclick = () => downloadAuthed(`/api/events/${b.dataset.regcsv}/registrations.csv`, `${ev.title}-團體報名資料.csv`).catch((e) => toast(e.message));
   const nf = $('#noticeForm');
   if (nf) {
-    const sync = () => { const t = nf.querySelector('[name=type]:checked').value; for (const el of nf.querySelectorAll('[data-nt]')) el.hidden = el.dataset.nt !== t; };
+    const sync = () => { const t = nf.querySelector('[name=type]:checked').value; for (const el of nf.querySelectorAll('[data-nt]')) el.hidden = !el.dataset.nt.split(',').includes(t); };
     nf.addEventListener('change', sync); sync();
     bindAddrField(nf, 'address');
     nf.onsubmit = async (e) => {
@@ -333,8 +368,9 @@ export async function eventView(id) {
       const t = nf.querySelector('[name=type]:checked').value;
       if (t === 'cancel' && !confirm('確定取消這場活動？選的通知對象都會收到通知。')) return;
       try {
-        const r = await api(`/events/${ev.id}/notice`, { method: 'POST', body: { type: t, date: nf.date.value, gather_time: nf.gather_time.value, place: nf.place.value.trim(), address: nf.address.value.trim(), message: nf.message.value.trim(), audience: nf.querySelector('[name=audience]:checked')?.value } });
-        toast(r.count ? `已通知 ${r.count} 人` : '已更新，沒有需要通知的人'); render();
+        const r = await api(`/events/${ev.id}/notice`, { method: 'POST', body: { type: t, date: nf.date.value, gather_time: nf.gather_time.value, place: nf.place.value.trim(), address: nf.address.value.trim(), message: nf.message.value.trim(), audience: nf.querySelector('[name=audience]:checked')?.value,
+          reconfirm: !!nf.reconfirm?.checked && t !== 'cancel', keep_tbd: !!nf.keep_tbd?.checked } });
+        toast(r.reconfirm ? `已通知 ${r.count} 人，請 ${r.reconfirm} 人重新確認` : r.count ? `已通知 ${r.count} 人` : '已更新，沒有需要通知的人'); render();
       }
       catch (err) { toast(err.message); }
     };
@@ -358,7 +394,7 @@ export async function eventView(id) {
       const r = await api(`/events/${id}/signup`, { method: 'POST', body: {
         grp: me.grp, dist: me.dist, note: f.note?.value.trim() || '', answers,
         option: f.querySelector('[name=option]:checked')?.value || null, reg_consent: !!f.reg_consent?.checked,
-        guests: Number(f.guests?.value || 0), guest_names: readGuestNames(f), meal: f.meal?.value || '', items: readItems(f) } });
+        guests: Number(f.guests?.value || 0), guest_names: ev.kind === 'claim' ? [] : readGuestNames(f), meal: f.meal?.value || '', items: readItems(f) } });
       signedUp(r, Number(f.guests?.value || 0));
     } catch (err) { toast(err.message); }
   });
@@ -443,10 +479,13 @@ export async function eventView(id) {
 // 依活動資料組出 LINE 公告（格式照團裡原本的貼文）
 async function announceText(ev) {
   const L = [`【${kindLabel(ev)}】${/\d{1,2}\/\d{1,2}/.test(ev.title) ? '' : `${dstr(ev.date)} `}${ev.title}`];
-  L.push(`時間：${dstr(ev.date)}${ev.gather_time ? ` ${ev.gather_time}${ev.end_time ? `–${ev.end_time}` : ''} 集合` : ''}`);
+  L.push(`時間：${dstr(ev.date)}${ev.gather_time ? ` ${ev.gather_time}${ev.end_time ? `–${ev.end_time}` : ''}${gatherVerb(ev) ? ` ${gatherVerb(ev)}` : ''}${ev.time_tbd ? '（暫定，待確認）' : ''}` : ''}`);
   if (ev.place) L.push(`地點：${ev.place}`);
+  const claim = ev.kind === 'claim';
   if ((ev.options || []).length) L.push(`組別與費用：${ev.options.map((o) => `${o.name}${o.price ? ` ${money(o.price)}` : ''}`).join('／')}`);
-  else if (ev.fee) L.push(`費用：${money(ev.fee)}`);
+  // 索票：每人最多幾張、總張數、每張價格（免費）；有組別時接在組別那行後面
+  if (claim) L.push(`索票：每人最多 ${(ev.guest_max || 0) + 1} 張${ev.capacity ? `・共 ${ev.capacity} 張` : ''}・${ev.fee ? `每張 ${money(ev.fee)}` : '免費'}`);
+  else if (!(ev.options || []).length && ev.fee) L.push(`費用：${money(ev.fee)}`);
   if (!ev.cancelled) L.push(windowLine(ev));
   if (ev.lead) L.push(`${ev.owner_managed ? '發起' : '帶團'}：${ev.lead}`);
   if (ev.week_no) {
@@ -459,8 +498,8 @@ async function announceText(ev) {
   } else if (ev.plan_text) { L.push('', ev.plan_text); }
   if (ev.note) L.push('', ev.note);
   if (ev.link_url) L.push('', `${ev.link_label || '登記'}：${ev.link_url}`);
-  if (shareable(ev) && ev.visibility !== 'invite') L.push('', `報名：${forLine(eventUrl(ev.id))}`);
-  if (shareable(ev) && ev.visibility === 'invite' && ev.invite?.token) L.push('', `報名（邀請連結）：${forLine(`${eventUrl(ev.id)}?t=${ev.invite.token}`)}`);
+  if (shareable(ev) && ev.visibility !== 'invite') L.push('', `${claim ? '索票' : '報名'}：${forLine(eventUrl(ev.id))}`);
+  if (shareable(ev) && ev.visibility === 'invite' && ev.invite?.token) L.push('', `${claim ? '索票（邀請連結）' : '報名（邀請連結）'}：${forLine(`${eventUrl(ev.id)}?t=${ev.invite.token}`)}`);
   return L.join('\n');
 }
 // ---------- 春酒：入場券、報到、抽獎 ----------
