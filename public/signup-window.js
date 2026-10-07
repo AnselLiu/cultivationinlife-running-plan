@@ -35,11 +35,11 @@ export const STATE_LABEL = {
   cancelled: () => '活動已取消',
   off: () => '幹部已關閉報名',
   soon: (ev) => `尚未開放報名・${tpText(ev.signup_start)} 開始`,
-  ended: (ev) => (ev.kind === 'survey' ? '問卷已截止' : '報名已截止'),
+  ended: (ev) => (ev.kind === 'survey' ? '問卷已截止' : ev.kind === 'claim' ? '索票已截止' : '報名已截止'),
 };
 // 活動結束：有結束時間用結束時間，沒有就到當天結束（問卷＝截止那天結束）
 export const evEnd = (ev) => `${ev.date}T${ev.kind !== 'survey' && /^\d{2}:\d{2}$/.test(ev.end_time || '') ? ev.end_time : '23:59'}`;
-// 卡片與分享連結預覽的狀態：cancelled 已取消｜over 已結束｜off 幹部關閉｜ext 用外部連結登記｜soon 即將開放｜closed 報名已截止｜full 額滿可候補｜open 報名中
+// 卡片與分享連結預覽的狀態：cancelled 已取消｜over 已結束｜off 幹部關閉｜ext 用外部連結登記｜soon 即將開放｜closed 報名已截止｜full 額滿可候補｜open 報名中（索票：開放索票、索票已截止）
 //   伺服器（連結預覽卡）與前端（活動卡片、沒登入的預覽）共用；full 由呼叫的人給（只要「滿了沒」，不給人數）
 //   ext：App 裡不開放報名、改用「前往登記」的外部連結（例如慶功宴的表單）；不說「未開放報名」，免得以為還不能登記（ev.ext 是沒登入的預覽給的「有沒有連結」）
 export function evPhase(ev, now = tpNow(), full = false) {
@@ -57,9 +57,9 @@ export const PHASE_LABEL = {
   off: () => '未開放報名',
   ext: () => '外部登記',
   soon: (ev) => `即將開放 ${tpShort(ev.signup_start)}`,
-  closed: (ev) => (ev.kind === 'survey' ? '問卷已截止' : '報名已截止'),
+  closed: (ev) => (ev.kind === 'survey' ? '問卷已截止' : ev.kind === 'claim' ? '索票已截止' : '報名已截止'),
   full: () => '額滿可候補',
-  open: (ev) => (ev.kind === 'survey' ? '填寫中' : '報名中'),
+  open: (ev) => (ev.kind === 'survey' ? '填寫中' : ev.kind === 'claim' ? '開放索票' : '報名中'),
 };
 // 系統預設（settings 沒有 'signup' 這一列時使用）
 export const SIGNUP_DEFAULTS = { approval: false, notify: true, open_days: null, open_time: '20:00', close_days: null, close_time: '22:00' };

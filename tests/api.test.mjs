@@ -1549,6 +1549,7 @@ test('索票：張數＝1＋攜伴欄位、伺服器強制算位子；額滿排�
   assert.deepEqual(ev.items, []);
   assert.equal(ev.min_qty, null);
   assert.equal(ev.meal_options, '');
+  assert.ok(ogOf(await (await page(`/e/${id}`)).text(), 'og:description').endsWith('・開放索票'), '索票活動還沒額滿時，預覽卡狀態是開放索票');
   // 4 張 → 正取；再 4 張超過剩下的 2 張 → 候補；之後只要 1 張也排候補（已經有人候補）
   assert.equal((await signup('t_coach', id, { guests: 3, guest_names: ['不收'] })).json.status, 'in');
   assert.ok((await notesFor('t_coach', id)).some((n) => n.title === '索票成功：觀賽索票' && n.body.includes('・4 張')), '索票成功的通知寫張數');

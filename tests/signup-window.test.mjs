@@ -106,5 +106,10 @@ test('evPhase：卡片與分享預覽的狀態（取消 > 已結束 > 關閉／�
   assert.equal(PHASE_LABEL.ext(ev), '外部登記');
   assert.equal(PHASE_LABEL.open({ kind: 'survey' }), '填寫中');
   assert.equal(PHASE_LABEL.closed({ kind: 'survey' }), '問卷已截止');
+  // 索票：開放索票、索票已截止（活動頁的截止字樣也一樣）
+  assert.equal(PHASE_LABEL.open({ kind: 'claim' }), '開放索票');
+  assert.equal(PHASE_LABEL.closed({ kind: 'claim' }), '索票已截止');
+  assert.equal(STATE_LABEL.ended({ kind: 'claim' }), '索票已截止');
+  assert.equal(PHASE_LABEL.open({ kind: 'track' }), '報名中');
   for (const k of ['cancelled', 'over', 'off', 'ext', 'soon', 'closed', 'full', 'open']) assert.equal(typeof PHASE_LABEL[k](ev), 'string');
 });

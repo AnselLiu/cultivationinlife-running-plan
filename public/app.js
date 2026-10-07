@@ -1362,8 +1362,8 @@ function heroPill(e) {
   if (st === 'cancelled') return glass('已取消');
   if (st === 'off') return glass(e.link_url ? '前往登記 ›' : '未開放報名');   // 用外部連結登記的（例如慶功宴表單）不說「未開放報名」
   if (st === 'soon') return glass(`${tpShort(e.signup_start)} 開放`);
-  if (st === 'ended') return glass('報名已截止');
-  return glass(e.capacity && e.signed >= e.capacity ? '額滿・可候補' : '去報名 ›');
+  if (st === 'ended') return glass(e.kind === 'claim' ? '索票已截止' : '報名已截止');
+  return glass(e.capacity && e.signed >= e.capacity ? '額滿・可候補' : e.kind === 'claim' ? '去索票 ›' : '去報名 ›');
 }
 function heroCard(e) {
   const d = d2(e.date), days = Math.round((d - new Date().setHours(0, 0, 0, 0)) / 864e5);
@@ -1381,7 +1381,7 @@ function heroCard(e) {
     </div>
   </a>`;
 }
-// 報名狀態標籤（活動卡片、沒登入的分享預覽）：報名中、即將開放、額滿可候補、報名已截止、已結束、已取消
+// 報名狀態標籤（活動卡片、沒登入的分享預覽）：報名中、即將開放、額滿可候補、報名已截止、已結束、已取消（索票活動是開放索票、索票已截止）
 function phasePill(e, full) { const ph = evPhase(e, nowTp(), full); return `<span class="pill reg-${ph}">${PHASE_LABEL[ph](e)}</span>`; }
 //   opt.past：過去的團練（每一張都已結束，不再標「已結束」）；teams.js 用 map(eventCard) 時第二個參數是索引，不影響
 function eventCard(e, opt) {
