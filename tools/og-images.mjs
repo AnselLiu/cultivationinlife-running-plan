@@ -20,6 +20,8 @@ const KINDS = {
   party: ['餐敘聚會', '<circle cx="12.5" cy="12" r="5.4"/><circle cx="12.5" cy="12" r="2.6"/><path d="M3.6 4v4.8a1.5 1.5 0 0 0 3 0V4M5.1 9.8V20"/><path d="M20.6 4c-1.6 1-2.4 3-2.4 6.2h2.4V20"/>'],
   survey: ['問卷調查', '<rect x="5" y="4.6" width="14" height="16.4" rx="2.4"/><rect class="cover" x="9" y="3" width="6" height="3.2" rx="1.1"/><path d="M8.4 11.2l1.5 1.5 2.4-2.6M14 11.2h1.8M8.4 16.2l1.5 1.5 2.4-2.6M14 16.2h1.8"/>'],
   buy: ['團購', '<path d="M5.4 8.2h13.2l-1 11.8a1.3 1.3 0 0 1-1.3 1.2H7.7a1.3 1.3 0 0 1-1.3-1.2Z"/><path d="M9 10.4V6.6a3 3 0 0 1 6 0v3.8"/>'],
+  // 索票（觀賽票、公關票、電影票）；圖示同 app.js 的 IC.ticket
+  claim: ['索票', '<path d="M3 8a2 2 0 0 0 2-2h14a2 2 0 0 0 2 2v2a2 2 0 0 0 0 4v2a2 2 0 0 0-2 2H5a2 2 0 0 0-2-2v-2a2 2 0 0 0 0-4Z"/><path d="M14 6v12" stroke-dasharray="2 2.5"/>'],
   other: ['活動', '<rect x="3.2" y="4.8" width="17.6" height="15.4" rx="3.4"/><path d="M3.4 9.6h17.2M8 3.2v3.4M16 3.2v3.4"/><path d="M8.8 14.6l2.2 2.2 4.4-4.6"/>'],
   // 團員自己發起的揪團（app.js 的 kindLabel）；圖示同 app.js 的 MI.team
   meetup: ['揪團', '<circle cx="8" cy="9" r="3"/><circle cx="16.5" cy="9.5" r="2.5"/><path d="M2.8 19c.5-3 2.6-4.6 5.2-4.6s4.7 1.6 5.2 4.6M14 14.6c2.6-.4 5 .9 5.7 4.4"/>'],
