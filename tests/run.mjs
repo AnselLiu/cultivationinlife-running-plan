@@ -3,8 +3,8 @@
 import { spawn, spawnSync, execSync } from 'node:child_process';
 import { rmSync } from 'node:fs';
 
-// 先跑不需要伺服器的單元測試（課表引擎、課表教練計算、舊版資料搬移、共用裝置換人、還原備份重做刪除與隱私撤回、跑步記錄）；失敗就不用啟動伺服器
-const UNIT = ['tests/plan.test.mjs', 'tests/coachcalc.test.mjs', 'tests/migrate.test.mjs', 'tests/device.test.mjs', 'tests/restore.test.mjs', 'tests/run-record.test.mjs'];
+// 先跑不需要伺服器的單元測試（課表引擎、課表教練計算、舊版資料搬移、共用裝置換人、還原備份重做刪除與隱私撤回、跑步記錄、Email 查詢碼、推薦人 SQL）；失敗就不用啟動伺服器
+const UNIT = ['tests/plan.test.mjs', 'tests/coachcalc.test.mjs', 'tests/migrate.test.mjs', 'tests/device.test.mjs', 'tests/restore.test.mjs', 'tests/run-record.test.mjs', 'tests/email.test.mjs', 'tests/referral-sql.test.mjs'];
 const unit = spawnSync(process.execPath, ['--test', ...UNIT], { stdio: 'inherit', env: { ...process.env, TZ: 'Asia/Taipei' } });
 if (unit.status !== 0) process.exit(unit.status ?? 1);
 
@@ -38,5 +38,5 @@ for (let i = 0; ; i++) {
   if (i > 120) { console.error(log); stop(); process.exit(1); }
   await new Promise((r) => setTimeout(r, 500));
 }
-const t = spawn(process.execPath, ['--test', '--test-concurrency=1', 'tests/hours.test.mjs', 'tests/ics.test.mjs', 'tests/push.test.mjs', 'tests/cams-sync.test.mjs', 'tests/sql-limits.test.mjs', 'tests/rest-parse.test.mjs', 'tests/rest-sync.test.mjs', 'tests/signup-window.test.mjs', 'tests/sw-shell.test.mjs', 'tests/api.test.mjs', 'tests/passkey.test.mjs', 'tests/budget.test.mjs'], { stdio: 'inherit', env: { ...process.env, BASE: base } });
+const t = spawn(process.execPath, ['--test', '--test-concurrency=1', 'tests/hours.test.mjs', 'tests/ics.test.mjs', 'tests/push.test.mjs', 'tests/cams-sync.test.mjs', 'tests/sql-limits.test.mjs', 'tests/rest-parse.test.mjs', 'tests/rest-sync.test.mjs', 'tests/signup-window.test.mjs', 'tests/sw-shell.test.mjs', 'tests/api.test.mjs', 'tests/passkey.test.mjs', 'tests/referral.test.mjs', 'tests/budget.test.mjs'], { stdio: 'inherit', env: { ...process.env, BASE: base } });
 t.on('exit', (code) => { stop(); process.exit(code ?? 1); });

@@ -274,3 +274,77 @@ test('身分名稱對照跟 src/worker.js 的 ROLES、TEAM_ROLES 一致', () => 
   assert.deepEqual(obj('ROLES'), ROLE_LABELS);
   assert.deepEqual(obj('TEAM_ROLES'), TEAM_ROLE_LABELS);
 });
+
+// ---- 推薦人：備份之後關掉「用 Gmail 找到我」、移除推薦人、推薦人按「不是我」；members 用更新而不是 REPLACE ----
+function backupWithReferral() {
+  const db = freshDb();
+  db.exec(`INSERT INTO members (id, name, email_h) VALUES ('ra', '推薦人甲', 'HA'), ('rb', '推薦人乙', 'HB'), ('rc', '跑友丙', NULL), ('rd', '跑友丁', NULL), ('re', '跑友戊', NULL), ('rf', '跑友己', 'HF');
+    UPDATE members SET referrer_id = 'ra', referrer_by = 'self' WHERE id IN ('rc', 'rd');
+    UPDATE members SET referrer_name = '王大明', referrer_by = 'self' WHERE id = 're';
+    INSERT INTO events (id, kind, title, date) VALUES ('ev9', 'track', '團練', '2026-10-10');
+    INSERT INTO signups (id, event_id, member_id, name, grp) VALUES ('sg9', 'ev9', 'ra', '推薦人甲', 'D');`);
+  const tables = {};
+  for (const t of ['members', 'events', 'signups']) tables[t] = db.prepare(`SELECT * FROM "${t}"`).all().map((r) => ({ ...r }));
+  return { format: 'cil-backup', version: 2, at: '2026-10-01T19:00:00.000Z', tables };
+}
+const REFERRAL = [
+  A('k1', '2026-10-02 08:00:00', 'privacy.email_lookup', 'ra', '關閉'),
+  A('k2', '2026-10-02 08:00:00', 'privacy.email_lookup', 'rf', '關閉'),             // 關了又開：照最後一次（開啟），備份的查詢碼保留
+  A('k3', '2026-10-02 09:00:00', 'privacy.email_lookup', 'rf', '開啟'),
+  A('k4', '2026-10-02 08:01:00', 'referrer.clear', 're'),
+  A('k5', '2026-10-02 08:02:00', 'referrer.deny', 'rc', '', { actor_id: 'ra' }),      // 推薦人 ra 對 rc 按「不是我」
+  A('k6', '2026-10-02 08:03:00', 'referrer.deny', 'rd', '', { actor_id: 'rb' }),      // 之後 rd 的推薦人換過（備份裡是 ra）：不動
+  A('k7', '2026-10-02 08:04:00', 'referrer.admin_clear', 'rf', '', { actor_id: 't_staff' }),
+];
+
+test('還原後重做推薦人撤回：Gmail 查詢關閉、移除推薦人、「不是我」與冷卻', () => {
+  const rows = auditRowsFrom(wranglerJson(REFERRAL), '2026-10-01T19:00:00.000Z');
+  assert.equal(rows.length, REFERRAL.length);
+  const { plan } = replaySql(rows);
+  assert.match(planSummary(plan), /Gmail 查詢關閉 1/);
+  assert.match(planSummary(plan), /推薦人移除 2/);
+  assert.match(planSummary(plan), /推薦人「不是我」 2/);
+  const db = freshDb();
+  db.exec(`BEGIN;\n${toSql(backupWithReferral(), { audit: rows }).join('\n')}\nCOMMIT;`);
+  const m = (id) => ({ ...one(db, `SELECT email_h, email_findable, referrer_id, referrer_name, referrer_ack FROM members WHERE id = '${id}'`) });
+  assert.deepEqual(m('ra'), { email_h: null, email_findable: 0, referrer_id: null, referrer_name: null, referrer_ack: null });
+  assert.equal(m('rf').email_h, 'HF', '最後一次是開啟：備份的查詢碼保留');
+  assert.equal(m('rf').email_findable, 1);
+  assert.equal(m('re').referrer_name, null, '本人移除的推薦人不會回來');
+  assert.deepEqual(m('rc'), { email_h: null, email_findable: 1, referrer_id: null, referrer_name: null, referrer_ack: 'denied' });
+  assert.equal(m('rd').referrer_id, 'ra', '「不是我」的是 rb，rd 的推薦人是 ra：不動');
+  const cd = (k) => one(db, `SELECT count, window_end FROM rate_limits WHERE key = '${k}'`);
+  assert.deepEqual({ ...cd('refno:rc:ra') }, { count: 1000000, window_end: '2027-03-31 08:02:00' }, '冷卻 180 天從按下的時間算');
+  assert.ok(cd('refno:rd:rb'));
+  // 跑兩次（Time Travel）結果一樣；冷卻不會被縮短
+  db.exec("UPDATE rate_limits SET window_end = '2030-01-01 00:00:00' WHERE key = 'refno:rc:ra'");
+  db.exec(`BEGIN;\n${['PRAGMA defer_foreign_keys = true;', ...replaySql(rows, { timeTravel: true }).lines].join('\n')}\nCOMMIT;`);
+  assert.equal(cd('refno:rc:ra').window_end, '2030-01-01 00:00:00');
+  // 「不是我」一定要有推薦人（actor_id）：看起來被改過，整份擋下
+  assert.throws(() => auditRowsFrom(wranglerJson([{ ...REFERRAL[4], actor_id: null }])));
+  assert.throws(() => replaySql([{ ...REFERRAL[4], at: "2026-10-02'; --" }]));
+});
+
+test('還原 members 用更新（不是 REPLACE）：不在備份裡的人推薦關係保留，子表不被 CASCADE 刪掉', () => {
+  const db = freshDb();
+  db.exec(`BEGIN;\n${toSql(backupWithReferral(), {}).join('\n')}\nCOMMIT;`);
+  // 備份之後新加入的 rz，推薦人是備份裡的 rb；還原 --only members 不能讓 rz 的推薦人不見
+  db.exec("INSERT INTO members (id, name, referrer_id) VALUES ('rz', '新跑友', 'rb')");
+  db.exec(`BEGIN;\n${toSql(backupWithReferral(), { only: 'members' }).join('\n')}\nCOMMIT;`);
+  assert.equal(one(db, "SELECT referrer_id FROM members WHERE id = 'rz'").referrer_id, 'rb');
+  assert.ok(one(db, "SELECT 1 AS x FROM signups WHERE id = 'sg9'"), '報名不會被 CASCADE 刪掉');
+  assert.equal(one(db, "SELECT referrer_id FROM members WHERE id = 'rc'").referrer_id, 'ra', '備份的值照樣寫回');
+  const sql = toSql(backupWithReferral(), { only: 'members' }).filter((l) => l.includes('"members"'));
+  assert.ok(sql.length && sql.every((l) => /^INSERT INTO "members" .* ON CONFLICT\(id\) DO UPDATE SET /.test(l)) && !sql.some((l) => l.includes('OR REPLACE')));
+  assert.ok(toSql(backupWithReferral(), { only: 'signups' }).some((l) => l.startsWith('INSERT OR REPLACE INTO "signups"')), '其他表照舊');
+});
+
+test('撤回清單：worker.js 裡的隱私撤回、推薦人移除與「不是我」、退出分團都會在還原時重做', () => {
+  const src = readFileSync(new URL('../src/worker.js', import.meta.url), 'utf8');
+  const acts = new Set([...src.matchAll(/audit(?:Stmt|ManyStmt)?\(env, \w+, [^,]+, '([a-z_]+\.[a-z_.]+)'/g)].map((m) => m[1]));
+  const NOT_WITHDRAWAL = ['privacy.consent', 'privacy.export', 'privacy.race_profile'];
+  const must = [...acts].filter((a) => (a.startsWith('privacy.') && !NOT_WITHDRAWAL.includes(a))
+    || ['referrer.clear', 'referrer.deny', 'referrer.admin_clear', 'team.leave', 'session.revoke_all', 'push.unsubscribe', 'passkey.remove', 'calendar.off', 'log.delete', 'route.delete', 'team.post_delete'].includes(a));
+  assert.ok(must.includes('privacy.email_lookup') && must.includes('referrer.deny'), '掃描有抓到');
+  assert.deepEqual(must.filter((a) => !REPLAY_ACTIONS.includes(a)), []);
+});

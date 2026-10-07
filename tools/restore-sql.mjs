@@ -14,6 +14,11 @@
 //     detail 結尾有 ｜team=分團 id 就照 id，舊紀錄照分團名稱。之後又重新加入的，還原後要再加入一次（隱私優先）
 //   - 停用或重新產生行事曆訂閱 calendar.off／calendar.on：清掉 cal_token_hash（倒回來的舊網址可能外流過；本人重新產生一個）
 //   - 刪掉自己的訓練紀錄 log.delete、路線 route.delete、分團公告 team.post_delete：照 id 再刪一次
+//   - 關掉「讓推薦的跑友用 Gmail 找到我」privacy.email_lookup：最後一次是「關閉」就關掉並刪掉查詢碼（同一秒有開有關，以關閉為準）
+//   - 移除推薦人 referrer.clear（本人）、referrer.admin_clear（幹部）：清掉推薦人
+//   - 推薦人按「不是我」referrer.deny（actor＝推薦人、target＝被推薦的人）：只清掉推薦人還是這位的那一筆，並補回 180 天的冷卻（rate_limits）
+//   members 用 INSERT … ON CONFLICT(id) DO UPDATE（不是 INSERT OR REPLACE）：REPLACE 會先刪掉舊的那一列，
+//     觸發 referrer_id 的 ON DELETE SET NULL（已經還原的人推薦關係不見）與子表的 ON DELETE CASCADE
 //   最後把抓到的稽核紀錄原樣補回 audit_log（INSERT OR IGNORE，簽章照原本的，驗得過）：Time Travel 會連稽核紀錄一起倒回，
 //   補回來之後，下次再從更舊的備份還原時也查得到這些撤回
 import { ERASE_MEMBER, ERASE_ACTIONS } from '../src/erase.js';
@@ -26,7 +31,8 @@ export const sqlTime = (at) => String(at || '').replace('T', ' ').slice(0, 19);
 export const AUDIT_COLS = ['id', 'at', 'actor_id', 'actor_name', 'actor_role', 'action', 'target_type', 'target_id', 'detail', 'ip_hash', 'mac'];
 // 本人的撤回
 export const WITHDRAW_ACTIONS = ['privacy.race_profile_delete', 'privacy.share_logs', 'privacy.show_rank', 'notif.prefs', 'push.unsubscribe', 'session.revoke_all', 'passkey.remove',
-  'team.leave', 'team.remove', 'team.reject', 'calendar.off', 'calendar.on', 'log.delete', 'route.delete', 'team.post_delete'];
+  'team.leave', 'team.remove', 'team.reject', 'calendar.off', 'calendar.on', 'log.delete', 'route.delete', 'team.post_delete',
+  'privacy.email_lookup', 'referrer.clear', 'referrer.deny', 'referrer.admin_clear'];
 // 身分：照時間順序重設成最後一次（跟 team.leave／remove 一起照順序做）
 export const ROLE_ACTIONS = ['role.change', 'role.handover', 'bootstrap.chair', 'team.role'];
 // 中文名稱 → 代碼（跟 src/worker.js 的 ROLES、TEAM_ROLES 一樣；tests/restore.test.mjs 會比對）
@@ -34,7 +40,7 @@ export const ROLE_LABELS = { 理事長: 'chair', 理事: 'director', 監事: 'su
 export const TEAM_ROLE_LABELS = { 團長: 'lead', 幹部: 'officer', 團員: 'member' };
 const ROLE_OF = Object.fromEntries(Object.entries(ROLE_LABELS).map(([k, v]) => [v, k])), TEAM_ROLE_OF = Object.fromEntries(Object.entries(TEAM_ROLE_LABELS).map(([k, v]) => [v, k]));
 // 一定要有做這件事的人（actor_id）才能重做
-const NEED_ACTOR = ['team.leave', 'log.delete'];
+const NEED_ACTOR = ['team.leave', 'log.delete', 'referrer.deny'];
 // 讓某人的登入失效的動作（target_id；理事長移交另外連 actor_id）
 export const REVOKE_ACTIONS = ['role.change', 'role.handover', 'bootstrap.chair', 'session.revoke_all'];
 export const REPLAY_ACTIONS = [...new Set([...ERASE_ACTIONS, ...WITHDRAW_ACTIONS, ...REVOKE_ACTIONS, ...ROLE_ACTIONS])];
@@ -130,6 +136,9 @@ export function planReplay(rows) {
     logs: rows.filter((r) => r.action === 'log.delete').map((r) => [r.target_id, r.actor_id]),
     routes: ids((r) => r.action === 'route.delete'),
     posts: rows.filter((r) => r.action === 'team.post_delete' && ID.test(r.detail || '')).map((r) => [r.target_id, r.detail]),
+    emailOff: offAtLast(rows, 'privacy.email_lookup'),
+    refClear: ids((r) => r.action === 'referrer.clear' || r.action === 'referrer.admin_clear'),
+    refDeny: rows.filter((r) => r.action === 'referrer.deny').map((r) => [r.target_id, r.actor_id, sqlTime(r.at)]),
   };
 }
 // 分團：team.leave（actor 退出 target 這個分團）、team.remove／reject（target 被移出，分團看 detail）、team.role（分團身分）
@@ -187,6 +196,7 @@ export const planSummary = (p) => [
   ['刪除帳號', p.erased.length], ['刪除賽事報名資料', p.raceDelete.length], ['停止分享訓練', p.shareOff.length], ['退出排行榜', p.rankOff.length],
   ['通知分類設定', p.mute.size], ['推播訂閱刪除', p.pushOff.length], ['通行金鑰刪除', p.passkeys.length], ['登入失效', p.revoke.length],
   ['身分與分團成員', p.steps.length], ['行事曆訂閱停用', p.calOff.length], ['訓練紀錄刪除', p.logs.length], ['路線刪除', p.routes.length], ['分團公告刪除', p.posts.length],
+  ['Gmail 查詢關閉', p.emailOff.length], ['推薦人移除', p.refClear.length], ['推薦人「不是我」', p.refDeny.length],
   ['看不懂、要人工確認的身分或分團紀錄', p.unresolved.length],
 ].filter(([, n]) => n).map(([k, n]) => `${k} ${n}`).join('、') || '沒有要重做的撤回';
 
@@ -204,6 +214,13 @@ export function replaySql(rows, { timeTravel = false } = {}) {
   each(p.revoke, ['DELETE FROM sessions WHERE member_id = ?1']);
   for (const s of p.steps) L.push(...stepSql(s));
   each(p.calOff, ['UPDATE members SET cal_token_hash = NULL WHERE id = ?1']);
+  each(p.emailOff, ['UPDATE members SET email_findable = 0, email_h = NULL WHERE id = ?1']);
+  each(p.refClear, ['UPDATE members SET referrer_id = NULL, referrer_name = NULL, referrer_at = NULL, referrer_by = NULL, referrer_ack = NULL, referrer_gone = 0 WHERE id = ?1']);
+  for (const [child, by, at] of p.refDeny) {
+    if (!ID.test(child) || !ID.test(by) || !AT.test(at)) throw new Error(`看不懂的 id：${child}`);
+    L.push(`UPDATE members SET referrer_id = NULL, referrer_name = NULL, referrer_ack = 'denied', referrer_by = NULL WHERE id = ${lit(child)} AND referrer_id = ${lit(by)};`);
+    L.push(`INSERT INTO rate_limits (key, count, window_end) VALUES (${lit(`refno:${child}:${by}`)}, 1000000, datetime(${lit(at)}, '+180 days')) ON CONFLICT(key) DO UPDATE SET count = excluded.count, window_end = MAX(window_end, excluded.window_end);`);
+  }
   for (const [id, by] of p.logs) { if (!ID.test(id) || !ID.test(by)) throw new Error(`看不懂的 id：${id}`); L.push(`DELETE FROM training_logs WHERE id = ${lit(id)} AND member_id = ${lit(by)};`); }
   each(p.routes, ['DELETE FROM routes WHERE id = ?1', 'UPDATE events SET route_id = NULL WHERE route_id = ?1']);
   for (const [tid, pid] of p.posts) L.push(`DELETE FROM team_posts WHERE id = ${lit(pid)} AND team_id = ${lit(tid)};`);
@@ -218,7 +235,12 @@ export function toSql(data, { only = null, erased = [], audit = [] } = {}) {
   const lines = ['PRAGMA defer_foreign_keys = true;'];
   for (const [t, rows] of Object.entries(data.tables)) {
     if (only && t !== only) continue;
-    for (const r of rows) { const cols = Object.keys(r); lines.push(`INSERT OR REPLACE INTO "${t}" (${cols.map((c) => `"${c}"`).join(', ')}) VALUES (${cols.map((c) => lit(r[c])).join(', ')});`); }
+    for (const r of rows) {
+      const cols = Object.keys(r), head = `INTO "${t}" (${cols.map((c) => `"${c}"`).join(', ')}) VALUES (${cols.map((c) => lit(r[c])).join(', ')})`;
+      // members：更新原本那一列（REPLACE 會先刪除，觸發推薦人的 ON DELETE SET NULL 與子表的 CASCADE）
+      const set = cols.filter((c) => c !== 'id');
+      lines.push(t === 'members' && cols.includes('id') ? `INSERT ${head} ON CONFLICT(id) DO ${set.length ? `UPDATE SET ${set.map((c) => `"${c}" = excluded."${c}"`).join(', ')}` : 'NOTHING'};` : `INSERT OR REPLACE ${head};`);
+    }
   }
   // 跑者休息站：備份只有幹部整理、新增、修正、隱藏或補充說明過的列；把來源的版本標記清掉，下次同步（維護工具與排程）才會整份重寫官方資料
   if (data.tables.rest_sources && (!only || only === 'rest_sources' || only === 'rest_stops')) lines.push('UPDATE rest_sources SET etag = NULL, cursor = NULL;');
