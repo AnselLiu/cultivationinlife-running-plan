@@ -17,6 +17,10 @@ export const ERASE_MEMBER = [
   'UPDATE rest_stops SET updated_by = NULL WHERE updated_by = ?1',
   'UPDATE rest_reports SET member_id = NULL WHERE member_id = ?1',
   'UPDATE calendar_items SET created_by = NULL WHERE created_by = ?1',
+  // 推薦人：被我推薦的人標成「推薦人已刪除帳號」（不留名字）；要在刪除之前做，刪掉後外鍵已經把 referrer_id 清掉、找不到人了
+  'UPDATE members SET referrer_id = NULL, referrer_ack = NULL, referrer_gone = 1 WHERE referrer_id = ?1',
+  // 別人通知中心裡提到我的推薦通知（ref＝rf:<我的 id>）一起刪掉
+  "DELETE FROM notifications WHERE category = 'membership' AND ref = 'rf:' || ?1",
   'DELETE FROM members WHERE id = ?1',
 ];
 // 稽核紀錄裡代表「帳號已刪除」的動作（target_id＝會員 id）
