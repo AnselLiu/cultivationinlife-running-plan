@@ -2163,7 +2163,8 @@ a.footlink{display:inline-flex;align-items:center;gap:4px;min-height:44px;paddin
 /* 登入頁：從分享連結或錯誤回來時只留品牌，不放介紹磚 */
 .welcome.compact{padding-bottom:0}
 .notice.err{background:color-mix(in srgb,var(--race) 12%,transparent);color:var(--race)}
-/* 攜伴姓名欄 */
+/* 報名成功的提示卡（主辦的成功訊息＋分享到 LINE 群組）；攜伴姓名欄 */
+.notice.signedcard{display:grid;gap:10px;background:color-mix(in srgb,var(--ok) 14%,transparent);color:color-mix(in srgb,var(--ok-ink) 80%,var(--ink))}
 .guestnames{display:grid;gap:8px;grid-template-columns:repeat(auto-fill,minmax(150px,1fr))}
 .guestnames:not(:has(label:not([hidden]))){display:none}
 .wfeat li{align-content:start}

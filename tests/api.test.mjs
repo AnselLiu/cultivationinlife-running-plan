@@ -1473,6 +1473,19 @@ test('攜伴也佔名額：取消空出的位子不夠候補第一組就跳過�
   assert.ok(au.some((x) => (x.detail || '').includes('攜伴佔名額 關')), JSON.stringify(au));
 });
 
+test('報名成功訊息：建立與編輯都存得起來（100 字內），舊版畫面編輯不會清掉', async () => {
+  const id = await mkEvent({ title: '成功訊息', success_msg: `報名成功！記得帶水${'。'.repeat(120)}` });
+  const ev = (await call('t_other', `/events/${id}`)).json;
+  assert.equal(ev.success_msg.length, 100);
+  assert.ok(ev.success_msg.startsWith('報名成功！記得帶水'));
+  assert.equal((await call('t_chair', `/events/${id}`, { method: 'PUT', body: { ...evBase, title: '成功訊息', date: ev.date } })).status, 200);
+  assert.ok((await call('t_other', `/events/${id}`)).json.success_msg.startsWith('報名成功'), '沒帶 success_msg 的編輯不會清掉');
+  assert.equal((await call('t_chair', `/events/${id}`, { method: 'PUT', body: { ...evBase, title: '成功訊息', date: ev.date, success_msg: '雨天照跑' } })).status, 200);
+  assert.equal((await call('t_other', `/events/${id}`)).json.success_msg, '雨天照跑');
+  assert.equal((await call('t_chair', `/events/${id}`, { method: 'PUT', body: { ...evBase, title: '成功訊息', date: ev.date, success_msg: '' } })).status, 200);
+  assert.equal((await call('t_other', `/events/${id}`)).json.success_msg, null, '清空');
+});
+
 test('報名通知：開關控制、狀態沒變不重複、代為報名只通知真的報上的人', async () => {
   const id = await mkEvent({ title: '通知測試', capacity: 1, notify_signup: true, fee: 300 });
   assert.equal((await signup('t_lead', id)).json.status, 'in');

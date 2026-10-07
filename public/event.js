@@ -19,6 +19,20 @@ function signupToast(r, ev) {
   if (r.amount) return `報名完成，應繳 ${money(r.amount)}`;
   return ev.kind === 'party' ? '報名完成，入場券在上方' : `報名完成，${dstr(ev.date)} 見`;
 }
+// 報名成功的提示卡（報名送出後那一次重畫）：主辦自訂的「報名成功訊息」（正取才顯示），
+//   正取、候補可以「分享到 LINE 群組」跟大家說一聲（本人自己選群組，App 不代發）；一般的提示照樣用 toast
+let justSigned = null;
+function signedCard(ev, done, link) {
+  const msg = done.status === 'in' && ev.success_msg;
+  const share = (done.status === 'in' || done.status === 'wait') && link && ev.kind !== 'survey';
+  if (!msg && !share) return '';
+  const text = [`我報名了【${ev.title}】${dstr(ev.date)}${ev.gather_time ? ` ${ev.gather_time}` : ''}${ev.place ? `・${ev.place}` : ''}`, `一起來：${share ? forLine(link) : ''}`].join('\n');
+  return `<div class="notice signedcard" id="signedCard">
+    ${msg ? `<p style="margin:0;white-space:pre-wrap"><span translate="no">${esc(msg)}</span></p>` : ''}
+    ${share ? `<div class="row" style="gap:8px"><a class="btn sm" id="tellLine" href="https://line.me/R/share?text=${encodeURIComponent(text)}" target="_blank" rel="noopener">分享到 LINE 群組</a>
+      <span class="tiny">告訴大家你報名了，連結點了就能報名</span></div>` : ''}
+  </div>`;
+}
 // 攜伴：人數選單＋每位的姓名（選填，只有主辦看得到）；餐敘或有開「可攜伴人數」的活動
 const guestFields = (ev) => {
   const n = ev.myGuests || 0, names = ev.myGuestNames || [];
@@ -52,6 +66,8 @@ const plusN = (s) => (s.guests ? ` <span class="tiny num">＋${s.guests}</span>`
 const eventUrl = (id) => `${location.origin}/e/${id}`;
 // 貼到 LINE 的連結：openExternalBrowser=1 讓 LINE 直接用 Safari／Chrome 打開（LINE 內建瀏覽器不能用 Google 登入，也沒有主畫面 App 的登入狀態）
 const forLine = (u) => `${u}${u.includes('?') ? '&' : '?'}openExternalBrowser=1`;
+// 能分享的連結：邀請制一定要帶邀請代碼，只有主辦（開了邀請連結）拿得到；其他人分享不了邀請制活動（回傳 null）
+const shareLink = (ev) => (ev.visibility === 'invite' ? (ev.manage && ev.invite?.token ? `${eventUrl(ev.id)}?t=${ev.invite.token}` : null) : eventUrl(ev.id));
 async function shareEvent(ev, link = eventUrl(ev.id)) {
   const text = `${ev.title}｜${dstr(ev.date)}${ev.gather_time ? ` ${ev.gather_time}` : ''}${ev.place ? `・${ev.place}` : ''}`;
   if (navigator.share) {
@@ -81,6 +97,8 @@ export async function eventView(id) {
   // 名額算位子：勾了「攜伴也佔名額」的活動，正取的本人＋攜伴都算
   ev.seatsIn = ins.reduce((n, s) => n + (ev.count_guests ? 1 + (s.guests || 0) : 1), 0);
   const now = nowTp(), st = signupState(ev, now), full = !!ev.capacity && ev.seatsIn >= ev.capacity;
+  const done = justSigned?.id === id ? justSigned : null;
+  justSigned = null;
   const canSubmit = st === 'open' && myStatus !== 'rejected', started = now >= evStart(ev);
   const party = ev.kind === 'party';
   // 入場券、座位、當週課表同時載入
@@ -143,6 +161,7 @@ export async function eventView(id) {
           : myStatus === 'rejected' ? '<span class="tiny">未通過審核</span>'
           : !canSubmit ? `<span class="tiny">${STATE_LABEL[st](ev)}</span>` : (useForm ? '' : `<button class="btn sm" id="signup">${submitLabel(ev, null, full)}</button>`)}
       </div>
+      ${done ? signedCard(ev, done, shareLink(ev)) : ''}
       ${useForm && canSubmit ? signupForm(ev, myStatus, full) : ''}
       ${!useForm && !survey && canSubmit && !live ? `${noteField(ev, '', 'quickNote')}` : ''}
       ${!useForm && live && ev.myNote ? `<p class="tiny" style="margin:0">給主辦的備註：<span translate="no">${esc(ev.myNote)}</span></p>` : ''}
@@ -208,8 +227,7 @@ export async function eventView(id) {
         <button class="btn sm" id="copyAnn">複製公告</button>
       </details>
     </section>` : ''}`;
-  // 邀請制：分享出去的一定是帶邀請代碼的連結；沒開邀請連結就提醒先開
-  const shareUrl = () => (inviteOnly ? (ev.invite?.token ? `${eventUrl(ev.id)}?t=${ev.invite.token}` : null) : eventUrl(ev.id));
+  const shareUrl = () => shareLink(ev);
   const attendLink = ev.attendToken ? `${location.origin}/#/e/${ev.id}/attend?t=${ev.attendToken}` : '';
   if (attendLink && $('#attendQR')) qrSVG(attendLink, { size: 220, dark: '#0B1B33', light: '#fff' }).then((svg) => { $('#attendQR').innerHTML = svg; }).catch(() => {});
   const setAttend = async (on) => { try { await api(`/events/${ev.id}/attend-token`, { method: 'POST', body: { on } }); eventView(ev.id); } catch (e) { toast(e.message); } };
@@ -247,11 +265,13 @@ export async function eventView(id) {
   for (const b of [$('#signup'), $('#pform > button.btn:last-of-type')]) if (b && desc) b.setAttribute('aria-describedby', desc);
   // 報名、撤回之後整頁重畫，按下的按鈕不見了：焦點移到「我的報名狀態」（已報名／候補第幾位／審核中），不會掉回頁首
   const settled = (msg) => { toast(msg); focusAfterRender(['#myStatusMsg', '#myStatus']); render(); };
+  // 報名成功：一樣 toast＋焦點到報名狀態；重畫後多一張提示卡（主辦的成功訊息、分享到 LINE 群組）
+  const signedUp = (r) => { justSigned = { id, status: r.status }; settled(signupToast(r, ev)); };
   const sb = $('#signup');
   sb?.addEventListener('click', once(sb, async () => {
     try {
       const r = await api(`/events/${id}/signup`, { method: 'POST', body: { grp: me.grp, dist: me.dist, note: $('#quickNote')?.value.trim() || '' } });
-      settled(signupToast(r, ev));
+      signedUp(r);
     } catch (e) { toast(e.message); }
   }));
   $('#cancel')?.addEventListener('click', async () => {
@@ -318,7 +338,7 @@ export async function eventView(id) {
         grp: me.grp, dist: me.dist, note: f.note?.value.trim() || '', answers,
         option: f.querySelector('[name=option]:checked')?.value || null, reg_consent: !!f.reg_consent?.checked,
         guests: Number(f.guests?.value || 0), guest_names: readGuestNames(f), meal: f.meal?.value || '', items: readItems(f) } });
-      settled(signupToast(r, ev));
+      signedUp(r);
     } catch (err) { toast(err.message); }
   });
   $('#cform')?.addEventListener('submit', async (e) => {

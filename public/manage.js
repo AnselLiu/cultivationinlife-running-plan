@@ -77,6 +77,7 @@ async function formView(id) {
         <label data-when="!survey">可攜伴人數<input type="number" name="guest_max" min="0" max="9" inputmode="numeric" value="${d.guest_max || ''}" placeholder="不開放"></label>
         <label class="switch" data-when="!survey" data-guests><span>攜伴也佔名額<span class="tiny" style="display:block">名額算本人加攜伴，例如帶 2 位就佔 3 個名額；關掉的話每筆報名只算 1 位</span></span><input type="checkbox" name="count_guests" ${(id ? d.count_guests : d.count_guests ?? 1) ? 'checked' : ''}><i></i></label>
         <p class="tiny" style="margin:0" data-when="!survey" data-guests>攜伴每位跟報名費同價（費用在下方「費用與收款」設定）；報名時可以填攜伴姓名，只有主辦看得到。</p>
+        <label>報名成功訊息（選填）<input name="success_msg" maxlength="100" value="${esc(d.success_msg || '')}" placeholder="例如：報名成功！雨天照跑，記得帶水和毛巾"><span class="tiny">報名的人送出後會看到，留空就用預設的說明</span></label>
         ${id && d.cancelled ? `<label class="switch"><span>恢復這場活動<span class="tiny" style="display:block">這場已取消；打開後儲存會重新開放</span></span><input type="checkbox" name="reopen" ${qp.get('reopen') === '1' ? 'checked' : ''}><i></i></label>` : ''}
         ${allow('settings') ? '<a class="tiny" href="#/admin/settings/signup">預設值在後台「活動報名預設」設定 ›</a>' : ''}
       </fieldset>
@@ -247,7 +248,7 @@ async function formView(id) {
       place: f.place.value, address: f.address.value.trim(), lead: f.lead.value, note: f.note.value, plan_text: f.plan_text.value,
       link_url: f.link_url.value, link_label: f.link_label.value, deadline: f.deadline.value, signup_start: f.signup_start.value,
       require_approval: f.kind.value !== 'survey' && f.require_approval.checked, notify_signup: f.notify_signup.checked, reopen: f.reopen?.checked || undefined,
-      week_no: num(f.week_no), capacity: num(f.capacity), fee: num(f.fee), guest_max: num(f.guest_max), count_guests: f.count_guests.checked, meal_options: f.meal_options.value,
+      week_no: num(f.week_no), capacity: num(f.capacity), fee: num(f.fee), guest_max: num(f.guest_max), count_guests: f.count_guests.checked, success_msg: f.success_msg.value.trim(), meal_options: f.meal_options.value,
       signup_open: f.signup_open.checked, questions, visibility: f.visibility.value, group_reg: f.group_reg.checked,
       options: [...f.querySelectorAll('.optrow')].map((r) => ({ name: r.querySelector('[data-k=name]').value.trim(), price: Number(r.querySelector('[data-k=price]').value) || 0 })).filter((o) => o.name),
       items: [...f.querySelectorAll('.itemrow')].map((r) => { const v = (k) => r.querySelector(`[data-k=${k}]`).value.trim();
