@@ -11,11 +11,15 @@ export async function login(page, id, { start = false } = {}) {
   await page.waitForURL(/#\//);
 }
 // 以某個帳號呼叫 API（測試資料準備用）
+//   登入失敗或回應不是 JSON（伺服器當掉、磁碟滿）時丟出看得懂的錯誤（狀態碼與回應開頭），不要只看到 undefined.split
 export async function apiAs(request, id, path, { method = 'GET', body } = {}) {
   const r = await request.get(`/api/dev/login?id=${id}`, { maxRedirects: 0 });
-  const cookie = r.headers()['set-cookie'].split(';')[0];
+  const sc = r.headers()['set-cookie'];
+  if (!sc) throw new Error(`apiAs：以 ${id} 登入失敗（HTTP ${r.status()}）${(await r.text()).slice(0, 200)}`);
+  const cookie = sc.split(';')[0];
   const res = await request.fetch(`/api${path}`, { method, headers: { cookie, origin: base(), 'content-type': 'application/json' }, data: body ? JSON.stringify(body) : undefined });
-  return res.json();
+  const text = await res.text();
+  try { return JSON.parse(text); } catch { throw new Error(`apiAs：${method} ${path} 的回應不是 JSON（HTTP ${res.status()}）${text.slice(0, 200)}`); }
 }
 // 第一次進來要同意隱私權政策（測試帳號的同意版本較舊）
 export async function acceptPrivacyIfAsked(page) {

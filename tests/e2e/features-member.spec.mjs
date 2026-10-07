@@ -561,7 +561,7 @@ test.describe('跑者休息站：離線', () => {
 
 test('會員揪團：協會打開開關後，團員從首頁發起（精簡表單、不收費），活動頁標「揪團」，管理區只有統計、編輯與刪除', async ({ page, request }) => {
   await apiAs(request, 't_chair', '/settings/features', { method: 'POST', body: { meetup: true } });
-  let id = null;
+  let id = null, ok = false;
   try {
     await enter(page);
     await page.goto('/#/');
@@ -577,9 +577,12 @@ test('會員揪團：協會打開開關後，團員從首頁發起（精簡表�
     await page.locator('#ef [name=date]').dispatchEvent('change');
     await page.locator('#ef [name=gather_time]').fill('06:30');
     await page.locator('#ef [name=place]').fill('大佳河濱');
+    // 代碼從建立的回應拿：後面哪一步失敗，收尾都刪得掉這場（留著會佔「同時最多 3 場」，重試時跟著失敗）
+    const created = page.waitForResponse((r) => new URL(r.url()).pathname === '/api/events' && r.request().method() === 'POST', { timeout: 10000 });
     await page.getByRole('button', { name: '建立' }).click();
-    await expect(page).toHaveURL(/#\/e\/[\w-]+$/);
-    id = page.url().match(/#\/e\/([\w-]+)$/)[1];
+    id = (await (await created).json()).id;
+    expect(id, '建立揪團失敗').toBeTruthy();
+    await expect(page).toHaveURL(new RegExp(`#/e/${id}$`));
     await expect(page.locator('.hero .pill').first()).toHaveText('揪團');
     await expect(page.locator('.hero')).toContainText(/發起：.*跑友/);   // 帶團欄位是開團人的暱稱（前面的測試可能改過暱稱）
     await expect(page.getByRole('link', { name: '報名統計' })).toBeVisible();
@@ -588,8 +591,21 @@ test('會員揪團：協會打開開關後，團員從首頁發起（精簡表�
     await page.getByRole('link', { name: '編輯', exact: true }).click();
     await expect(page.locator('#view h1')).toHaveText('編輯揪團');
     await expect(page.locator('#ef [name=team_id]')).toBeDisabled();
+    ok = true;
   } finally {
-    if (id) await apiAs(request, 't_runner', `/events/${id}`, { method: 'DELETE' });
-    await apiAs(request, 't_chair', '/settings/features', { method: 'POST', body: { meetup: false } });
+    await tidy([
+      ['刪除揪團', () => id && apiAs(request, 't_runner', `/events/${id}`, { method: 'DELETE' })],
+      ['關閉會員揪團', () => apiAs(request, 't_chair', '/settings/features', { method: 'POST', body: { meetup: false } })],
+    ], ok);
   }
 });
+// 收尾：每一步都做（前一步失敗也一樣）；測試本身已經失敗時，收尾的錯誤只記在報告（annotation），不蓋掉真正的錯誤
+async function tidy(steps, ok) {
+  const errs = [];
+  for (const [what, fn] of steps) {
+    try { const r = await fn(); if (r?.error) throw new Error(r.error); } catch (e) { errs.push(`${what}：${e.message}`); }
+  }
+  if (!errs.length) return;
+  if (ok) throw new Error(`收尾失敗：${errs.join('；')}`);
+  test.info().annotations.push({ type: '收尾失敗', description: errs.join('；') });
+}
