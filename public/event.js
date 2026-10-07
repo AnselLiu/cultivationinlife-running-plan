@@ -71,6 +71,7 @@ const NOTE_HINTS = {
   race: ['想一起搭車到會場', '這場想破四', '需要幫忙寄物', '會直接到起點'],
   party: ['素食', '想跟阿明同桌', '會晚半小時到', '不吃牛'],
   buy: ['週四團練現場領', '想跟阿明一起領', '尺寸還在猶豫'],
+  claim: ['想跟阿明坐在一起', '其中一張給家人', '週四團練現場領票'],
   other: ['會晚 10 分鐘到', '第一次來，請多指教', '想跟阿明同一組'],
 };
 const noteHint = (kind) => { const l = NOTE_HINTS[kind] || NOTE_HINTS.other; return `例如：${l[Math.floor(Math.random() * l.length)]}`; };
