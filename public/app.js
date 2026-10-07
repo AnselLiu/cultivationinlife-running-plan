@@ -714,6 +714,9 @@ const teamAllow = (tid, p) => allow(p) || (!!tid && teamOf(tid)?.my_status === '
 const anyTeamAllow = (p) => allow(p) || teams().some((t) => teamAllow(t.id, p));
 // 團員揪團（功能開關 meetup，預設關閉）：沒有建立活動權限的團員，可以在自己參加的分團發起（伺服器會再檢查一次）
 const meetupTeams = () => (cfg.settings?.features?.meetup === true ? myTeams().filter((t) => !teamAllow(t.id, 'event')) : []);
+// 推薦人（協會在功能開關打開才有）：首頁卡、開始使用的第 4 步、登入頁的說明、「我的 → 推薦人」的表單
+//   關掉後已經填的推薦人、推薦我的跑友照樣看得到，也照樣可以移除、按「不是我」
+const refOn = () => cfg.settings?.features?.referral === true;
 const canMeetup = (tid) => meetupTeams().some((t) => !tid || t.id === tid);
 // 活動類型的標籤：團員發起的揪團標「揪團」
 const kindLabel = (e) => (e.owner_managed && e.kind === 'other' ? '揪團' : KIND_NAME[e.kind] || '活動');
@@ -824,8 +827,10 @@ function bindStepup() {
 const GOOGLE_G = '<svg viewBox="0 0 48 48" width="20" height="20" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9.1 3.6l6.8-6.8C35.8 2.4 30.3 0 24 0 14.6 0 6.6 5.4 2.6 13.3l7.9 6.1C12.4 13.7 17.7 9.5 24 9.5z"/><path fill="#4285F4" d="M46.1 24.5c0-1.6-.1-3.1-.4-4.5H24v9h12.4c-.5 2.9-2.2 5.3-4.6 6.9l7.4 5.7c4.3-4 6.9-9.9 6.9-17.1z"/><path fill="#FBBC05" d="M10.5 28.6c-.5-1.4-.8-3-.8-4.6s.3-3.2.8-4.6l-7.9-6.1C1 16.6 0 20.2 0 24s1 7.4 2.6 10.7l7.9-6.1z"/><path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.4-5.7c-2.1 1.4-4.8 2.3-8.5 2.3-6.3 0-11.6-4.2-13.5-9.9l-7.9 6.1C6.6 42.6 14.6 48 24 48z"/></svg>';
 // Google 不允許在 App 內建瀏覽器登入（LINE、Facebook、Instagram）：LINE 可以用 openExternalBrowser=1 直接跳到 Safari／Chrome
 const inAppBrowser = () => (/Line\//i.test(navigator.userAgent) ? 'line' : /FBAN|FBAV|Instagram/i.test(navigator.userAgent) ? 'meta' : '');
-const googleHref = (link) => {
-  const path = `/api/google/start${link ? '?link=1' : ''}`;
+// from: 'ref'＝從推薦人頁綁定或確認（登入後回到推薦人頁）；basic：只用名稱與大頭貼登入（不給 Email）
+const googleHref = (link, { from, basic } = {}) => {
+  const q = [link && 'link=1', link && from && `from=${encodeURIComponent(from)}`, basic && 'basic=1'].filter(Boolean).join('&');
+  const path = `/api/google/start${q ? `?${q}` : ''}`;
   return inAppBrowser() === 'line' ? `${location.origin}/?openExternalBrowser=1${location.hash || '#/'}` : path;
 };
 
@@ -850,10 +855,11 @@ function loginView() {
     ${lead}
     <section class="card authcard">
       ${cfg.googleLogin ? `<a class="btn google block" href="${googleHref()}">${GOOGLE_G}<span>${inAppBrowser() === 'line' ? '用瀏覽器開啟並以 Google 登入' : '使用 Google 帳號登入'}</span></a>
+      ${refOn() && /取消/.test(err || '') ? `<p class="tiny center" style="margin:0">不想提供 Email 也可以只用名稱與大頭貼登入，跑友就沒辦法用 Gmail 找到你。</p><a class="btn ghost block" href="${googleHref(false, { basic: true })}">只用名稱與大頭貼登入</a>` : ''}
       ${inAppBrowser() === 'line' ? '<p class="tiny center" style="margin:0">Google 不允許在 LINE 裡登入，按上面的按鈕會改用 Safari 或 Chrome 打開這個網站。</p>' : ''}
       ${inAppBrowser() === 'meta' ? '<p class="notice" style="margin:0">Google 不允許在 Facebook／Instagram 裡登入：請點右上角「⋯」選「在瀏覽器開啟」。</p>' : ''}
       ${pkSupported() ? `<button class="btn ghost block iconbtn" id="pkLogin">${IC.lock}用通行金鑰登入</button>` : ''}
-      <p class="tiny center">只取得你的 Google 名稱和大頭貼，不會取得 Email、不會讀取你的信件或雲端資料。<br>登入即表示你已閱讀並同意<a href="#/privacy">隱私權政策</a>。</p>` : ''}
+      <p class="tiny center">${refOn() ? '只取得你的 Google 名稱和大頭貼；Email 只拿來算一組無法還原的查詢碼，讓你推薦的跑友找得到你，Email 本身不保存。不會讀取你的信件或雲端資料。' : '只取得你的 Google 名稱和大頭貼，不會取得 Email、不會讀取你的信件或雲端資料。'}<br>登入即表示你已閱讀並同意<a href="#/privacy">隱私權政策</a>。</p>` : ''}
       <details ${cfg.googleLogin ? '' : 'open'}>
         <summary class="muted" style="cursor:pointer">用邀請碼加入</summary>
         <form id="joinForm" style="margin-top:12px">
@@ -1073,7 +1079,9 @@ function richText(src) {
 // 隱私權政策每次改版的重點：要重新同意時放在最上面，不用整篇讀完才知道改了什麼
 const PRIVACY_CHANGES = {
   '2026-10-07.1': ['報名時可以替同行的親友填攜伴姓名（選填），只有該活動的主辦看得到，公開名單只顯示「＋人數」；請先徵得對方同意', '報名時給主辦的備註改成只有主辦看得到，不再出現在公開名單',
-    '協會開放「團員揪團」時，團員自己發起的揪團，發起人就是主辦：看得到報名者的姓名、給主辦的備註與攜伴姓名'],
+    '協會開放「團員揪團」時，團員自己發起的揪團，發起人就是主辦：看得到報名者的姓名、給主辦的備註與攜伴姓名',
+    '協會開放「推薦人」時，可以填是誰介紹你來的：選跑友帳號（對方會收到通知，可以按「不是我」移除），或只填名字（最多 20 字）；推薦關係只有會員管理權限的協會幹部看得到，每次查看都有稽核紀錄',
+    '用 Google 登入時，Email 只拿來算一組無法還原的查詢碼，讓你推薦的跑友用 Gmail 找到你；Email 本身不保存，可以在「我的 → 隱私」關閉'],
   '2026-10-03.4': ['你填的通訊地址（選填）會送到中華郵政的郵遞區號服務核對寫法、補上郵遞區號，只送地址文字，不含姓名'],
   '2026-10-03.3': ['新增「賽事報名資料」：只有要幹部代為團體報名時才填，加密保存，逐場同意後才提供給主辦幹部', '記錄 App 的開啟速度與錯誤訊息，只記裝置類型與頁面，不記是誰'],
 };
@@ -1092,9 +1100,10 @@ function privacyView() {
       <h2 class="h3">一、蒐集目的</h2>
       <p>〇五二 法人或團體對會員之內部管理（團練報名、分組課表、會籍管理）；〇六九 契約、類似契約或其他法律關係事務（活動報名、入場與抽獎）；一三五 資（通）訊服務（通知推播）。</p>
       <h2 class="h3">二、蒐集的資料</h2>
-      <p>識別類（C001）：姓名、暱稱、Google 帳號的顯示名稱與大頭貼（不取得 Email）、電話（選填）。<br>
+      <p>識別類（C001）：姓名、暱稱、Google 帳號的顯示名稱與大頭貼、電話（選填）；協會開放「推薦人」時，另外保存一組由你的 Google Email 算出、無法還原的查詢碼（不保存 Email 本身），讓你推薦的跑友輸入你的 Gmail 時找得到你，可以在「我的 → 隱私」關閉，關閉後立即刪除。<br>
          活動相關：項目與組別、所屬跑團、加入的分團與分團身分、餐點偏好、報名與報到紀錄、給主辦的備註、活動問卷的回答、中獎紀錄。<br>
          攜伴姓名（選填）：你報名時替同行親友填的姓名，只有該活動的主辦看得到，公開名單只顯示攜伴人數；請先徵得對方同意。<br>
+         推薦人（選填）：誰介紹你加入，可以選跑友帳號或只填名字；用途是團購或活動聯絡不上時，協會幹部能透過介紹人協助聯繫。選跑友帳號時，對方會收到通知並看得到你的名字，對方可以按「不是我」移除；推薦人刪除帳號後只顯示「已刪除」，不留名字。<br>
          系統紀錄：登入時間、裝置型號摘要、IP 位址的單向雜湊值（無法還原）；App 的開啟速度與錯誤訊息只記裝置類型與頁面，不記是誰，保留 90 天。<br>
          個人賽事：你自己加入的賽事名稱、日期與目標成績（用於倒數）。<br>
          訓練紀錄：你照課表記錄的日期、距離、時間、心率、自覺強度、感覺與備註；預設只有你看得到，你打開分享後，教練與分團幹部只看得到完成率、里程與平均強度，看不到備註。<br>
@@ -1104,7 +1113,7 @@ function privacyView() {
       <h2 class="h3">三、利用期間、地區、對象與方式</h2>
       <p>期間：${esc(PRIVACY.retention)}。<br>
          地區：台灣，以及雲端服務（Cloudflare）的資料中心所在地。<br>
-         對象：依職務最小權限開放給協會幹部；分團團長與幹部可以看自己分團的名冊（不含電話）與該分團活動的報名及問卷結果；協會開放團員揪團時，團員自己發起的揪團由發起人擔任主辦，看得到報名者的姓名、給主辦的備註與攜伴姓名（不含電話與繳費資料）；電話完整號碼只有行政人員看得到。賽事報名資料只在你報名「代為團體報名」的活動並勾選同意後，提供給該活動的主辦幹部，用來向賽事主辦單位送出團體報名，每次下載都留有稽核紀錄。通訊地址存檔前會送到中華郵政的 3+3 郵遞區號服務核對寫法並補上郵遞區號，只傳送地址文字。練跑地圖的「附近即時影像」由本站伺服器向政府公開攝影機取得畫面再轉給你，你的 IP 與位置不會傳給影像來源，本站也不保存影像。不提供給第三方行銷使用。<br>
+         對象：依職務最小權限開放給協會幹部；分團團長與幹部可以看自己分團的名冊（不含電話）與該分團活動的報名及問卷結果；協會開放團員揪團時，團員自己發起的揪團由發起人擔任主辦，看得到報名者的姓名、給主辦的備註與攜伴姓名（不含電話與繳費資料）；電話完整號碼只有行政人員看得到。賽事報名資料只在你報名「代為團體報名」的活動並勾選同意後，提供給該活動的主辦幹部，用來向賽事主辦單位送出團體報名，每次下載都留有稽核紀錄。通訊地址存檔前會送到中華郵政的 3+3 郵遞區號服務核對寫法並補上郵遞區號，只傳送地址文字。練跑地圖的「附近即時影像」由本站伺服器向政府公開攝影機取得畫面再轉給你，你的 IP 與位置不會傳給影像來源，本站也不保存影像。推薦關係（誰推薦誰）只有具會員管理權限的協會幹部（理事長、理事、監事、行政人員）在管理後台看得到，監事只能查看，每次查看都留有稽核紀錄；分團幹部看不到。不提供給第三方行銷使用。<br>
          方式：以電子方式處理，全程加密傳輸。</p>
       <h2 class="h3">四、您的權利</h2>
       <p>您可以隨時行使個人資料保護法第 3 條的權利：</p>
@@ -1153,10 +1162,13 @@ async function listView() {
   const teamLink = mine.length ? `<a class="chiplink" href="#/teams" aria-label="分團">${IC.plus}<span class="cltx">分團</span></a>` : '<a class="chiplink" href="#/teams">加入分團 ›</a>';
   // 新帳號（邀請碼加入是 #/?welcome=1）與還沒加到主畫面、還沒開推播的人：最上面是「開始使用」卡（取代以前的歡迎文字與安裝提示卡）
   const welcome = new URLSearchParams(location.hash.split('?')[1] || '').get('welcome');
+  // 開始使用卡已經有「填推薦人」這一步：推薦人卡就不再問一次
+  const start = startShown(welcome) ? startCard() : '';
   view.innerHTML = `
     ${largeTitle('團練', todayLabel())}
     ${mfaBanner()}
-    ${startShown(welcome) ? startCard() : ''}
+    ${start}
+    ${refCard(start.includes('data-step="ref"'))}
     <div class="chiprow">${chips}${teamLink}</div>
     <div class="dash"><div style="display:grid;gap:14px">
     ${today}
@@ -1178,6 +1190,7 @@ async function listView() {
   bindTodayCard();
   if (anyTeamAllow('event')) reviewCard();
   bindStart();
+  bindRefCard();
   bindStepup();
   flushLogQueue();
 }
@@ -1187,6 +1200,40 @@ async function reviewCard() {
   if (!r?.events?.length || !box?.isConnected) return;
   box.innerHTML = `<h3>報名待審核</h3>${r.events.map((e) => `<a class="todayev" href="#/e/${esc(e.id)}/stats?f=pending">${IC.calendar}<span><b><span translate="no">${esc(e.title)}</span></b><span class="tiny" style="display:block">${dstr(e.date, 1)}・${e.n} 筆${e.seatsLeft != null ? `・剩 ${e.seatsLeft} 個名額` : ''}</span></span><span class="tiny">›</span></a>`).join('')}`;
   box.hidden = false;
+}
+// 首頁「推薦人」卡（協會開放推薦人才有）：用 /api/me 帶的 referral 直接畫，不另外讀資料；一列都不適用就不出現
+//   A 還沒填推薦人（開始使用卡已經有這一步就不重複）　B 讓推薦的跑友用 Gmail 找到你（要先用 Google 確認一次）　C 有跑友把你設為推薦人，等你確認
+//   A、B 可以收起（記在伺服器，換手機也不會再出現）；C 只要還有人等確認就會出現
+function refCard(skipA) {
+  const r = me?.referral;
+  if (!refOn() || !r) return '';
+  const rows = [];
+  if (!r.has && !(r.hide & 1) && !skipA) rows.push(['A', MI.referral, '是誰介紹你來耕跑團的？', '填上推薦人，團購或活動聯絡不上時，協會幹部找得到人幫忙。',
+    '<a class="btn sm" href="#/me/referral">填推薦人</a><button type="button" class="linkbtn tiny" data-refhide="1">沒有推薦人</button>']);
+  if (cfg.googleLogin && r.findable && !r.emailLinked && !(r.hide & 2)) rows.push(['B', MI.shield, '讓你推薦的跑友找得到你',
+    me.google ? '用 Google 確認一次，跑友輸入你的 Gmail 就能找到你；只存一組無法還原的查詢碼，不存 Email。' : '用 Google 確認一次，跑友輸入你的 Gmail 就能找到你；只存一組無法還原的查詢碼，不存 Email。也會把 Google 綁到你的帳號。',
+    `<a class="btn google sm" href="${googleHref(true, { from: 'ref' })}">${GOOGLE_G}<span>用 Google 確認</span></a><button type="button" class="linkbtn tiny" data-refhide="2">不用了</button>`]);
+  if (r.pending > 0) rows.push(['C', MI.team, `${r.pending} 位跑友把你設為推薦人`, '看看是不是你認識的人。', '<a class="btn sm" href="#/me/referral">去確認</a>']);
+  if (!rows.length) return '';
+  return `<section class="card refcard" id="refCard" aria-labelledby="refTitle">
+    <div class="sthead"><h2 id="refTitle" class="h3" tabindex="-1">推薦人</h2>${rows.some(([k]) => k !== 'C') ? `<button type="button" class="iconx" id="refX" aria-label="收起推薦人提示">${ic('<path d="M7 7l10 10M17 7 7 17"/>')}</button>` : ''}</div>
+    <ul class="reflist">${rows.map(([k, icon, title, sub, acts]) => `<li data-row="${k}"><span class="stic" aria-hidden="true">${icon}</span>
+      <div class="stbody"><b>${title}</b><span class="tiny">${sub}</span><div class="stacts">${acts}</div></div></li>`).join('')}</ul></section>`;
+}
+// 收起 A（沒有推薦人）、B（不用了）或整張卡的 ✕（A＋B）：先記到伺服器，成功才拿掉；最後一列拿掉時整張卡收起，焦點回到頁面標題
+function bindRefCard() {
+  const card = $('#refCard');
+  card?.addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-refhide], #refX'); if (!b) return;
+    const bits = b.id === 'refX' ? 3 : Number(b.dataset.refhide);
+    try { await api('/me/referral/hide', { method: 'POST', body: { bits } }); } catch (err) { toast(err.message); return; }
+    if (me?.referral) me.referral.hide = (me.referral.hide || 0) | bits;
+    for (const li of card.querySelectorAll('li[data-row]')) if ((li.dataset.row === 'A' && bits & 1) || (li.dataset.row === 'B' && bits & 2)) li.remove();
+    announce('已收起，之後可以在「我的 → 推薦人」填寫');
+    if (!card.querySelector('li[data-row]')) { card.remove(); focusEl(view.querySelector('h1')); return; }
+    if (!card.querySelector('li[data-row="A"], li[data-row="B"]')) $('#refX')?.remove();
+    focusEl(card.querySelector('.stacts > :is(a,button)') || $('#refTitle'));
+  });
 }
 // 首頁天氣：今天報名的活動有指定地點就用那裡，否則用「常跑地點」；畫面畫好後才載入，不拖慢開啟
 async function homeWeather(events) {
@@ -1376,7 +1423,7 @@ const NICON = { security: IC.shieldAlert, change: IC.calAlert, signup: IC.ticket
 // 整句都是伺服器範本的標題：英文介面可以翻；夾帶活動或分團名稱的標題、內文一律不翻
 const NFIXED = new Set(['新裝置登入', '新增了一把通行金鑰', '移除了一把通行金鑰', '已登出所有裝置', '幹部需要兩步驟驗證', '你已成為理事長', '你已卸任理事長',
   '身分更新', '候補遞補成功', '入會完成', '會籍已到期', '會費今天到期', '有人申請入會', '練跑地圖：有新的地點提議', '每季權限檢視', '跑完了嗎？', '這週練得很兇，注意恢復', '教練回饋了你的訓練', '每日備份還沒做完',
-  '上週幹部週報', ...['每日備份', '每日額度', '排程工作停下', '前端錯誤', '推播', '排程工作失敗'].map((x) => `系統狀態：${x}`)]);
+  '上週幹部週報', '有跑友把你設為推薦人', '推薦人已連到帳號', '推薦人沒有確認', '推薦人已移除', ...['每日備份', '每日額度', '排程工作停下', '前端錯誤', '推播', '排程工作失敗'].map((x) => `系統狀態：${x}`)]);
 // 夾帶活動名稱的範本：開頭的範本字（「待審核：」）英文介面可以翻，後面的名稱不翻；內文只有固定句型可以翻
 const NPREFIX = /^(待審核：|還有 \d+ 筆待審核：|上週分團週報：)/, NBODY = [/^目前 \d+ 筆報名等你核准$/];
 const nTitle = (t) => { if (NFIXED.has(t)) return esc(t); const m = t.match(NPREFIX); return m ? `${esc(m[1])}<span translate="no">${esc(t.slice(m[1].length))}</span>` : `<span translate="no">${esc(t)}</span>`; };
@@ -1969,8 +2016,14 @@ function pushMode() {
   return Notification.permission === 'denied' ? 'denied' : 'ok';
 }
 // 每一步的狀態：done／skip／na（這台裝置不適用，算完成）／null（還沒做）
+//   ④ 填推薦人（選填，協會開放推薦人才有）：狀態以伺服器為準（已填＝完成、按過「沒有推薦人」＝略過），不記在 cil-start
+//      這次打開已經出現過就一直留著（填好打勾，不會做完就整步消失）；refStepSeen 記是誰的，共用手機換人登入重新判斷
+let refStepSeen = null;
 function startSteps(st = startState()) {
-  return { install: isStandalone() ? 'done' : st.install || null, push: pushMode() === 'na' ? 'na' : st.push || null, group: st.group || null };
+  const s = { install: isStandalone() ? 'done' : st.install || null, push: pushMode() === 'na' ? 'na' : st.push || null, group: st.group || null };
+  const r = me?.referral;
+  if (refOn() && r && ((!r.has && !(r.hide & 1)) || (me.id && refStepSeen === me.id))) s.ref = r.has ? 'done' : r.hide & 1 ? 'skip' : null;
+  return s;
 }
 const startLeft = (steps) => Object.values(steps).filter((v) => !v).length;
 // 要不要出現：按過「稍後」或 ✕ 就不出現；新帳號（?welcome=1）一定出現；舊帳號只有 ① 或 ② 還沒做才出現
@@ -1985,9 +2038,11 @@ function startShown(welcome) {
   return !k.install || !k.push;
 }
 const ST_LABEL = { done: '已完成', skip: '已略過', na: '不需要' };
-const STEP_IC = { install: ADD_IC, push: ic('<path d="M6.4 9.6a5.6 5.6 0 0 1 11.2 0c0 4 1.4 5.4 1.4 5.4H5s1.4-1.4 1.4-5.4Z"/><path d="M10.2 18.4a2 2 0 0 0 3.6 0"/>'), group: ic('<path d="M5.5 21V4M5.5 4.5h11l-2 3.7 2 3.8h-11"/>') };
+const REF_IC = ic('<circle cx="9" cy="8" r="3.2"/><path d="M3.5 19c.6-3.3 2.8-5 5.5-5s4.9 1.7 5.5 5M17.5 8v6M14.5 11h6"/>');
+const STEP_IC = { ref: REF_IC, install: ADD_IC, push: ic('<path d="M6.4 9.6a5.6 5.6 0 0 1 11.2 0c0 4 1.4 5.4 1.4 5.4H5s1.4-1.4 1.4-5.4Z"/><path d="M10.2 18.4a2 2 0 0 0 3.6 0"/>'), group: ic('<path d="M5.5 21V4M5.5 4.5h11l-2 3.7 2 3.8h-11"/>') };
 function startCard() {
-  const steps = startSteps(), left = startLeft(steps), n = 3 - left;
+  const steps = startSteps(), left = startLeft(steps), total = Object.keys(steps).length, n = total - left;
+  if ('ref' in steps && me?.id) refStepSeen = me.id;
   if (!left) return `<section class="card startcard alldone" id="startCard" aria-labelledby="startTitle">
     <div class="sthead"><h2 id="startTitle" tabindex="-1">都設定好了</h2><button type="button" class="iconx" id="startX" aria-label="收起開始使用">${ic('<path d="M7 7l10 10M17 7 7 17"/>')}</button></div>
     <p class="muted" style="margin:0">要不要用一分鐘看看五個分頁？</p>
@@ -2014,12 +2069,13 @@ function startCard() {
   const item = (k, title, sub, body) => `<li class="ststep${steps[k] ? ' ok' : ''}" data-step="${k}"><span class="stic" aria-hidden="true">${steps[k] ? IC.check : STEP_IC[k]}</span>
       <div class="stbody"><span class="sttl"><b>${title}</b><span class="sr">，</span>${stateTx(k)}</span>${steps[k] ? '' : `<span class="tiny">${sub}</span>${body}`}</div></li>`;
   return `<section class="card startcard" id="startCard" aria-labelledby="startTitle">
-    <div class="sthead"><h2 id="startTitle" tabindex="-1">開始使用</h2><span class="tiny num" id="startProg">${n} / 3 完成</span></div>
-    <div class="stbar" aria-hidden="true"><i style="width:${Math.round(n / 3 * 100)}%"></i></div>
+    <div class="sthead"><h2 id="startTitle" tabindex="-1">開始使用</h2><span class="tiny num" id="startProg">${n} / ${total} 完成</span></div>
+    <div class="stbar" aria-hidden="true"><i style="width:${Math.round(n / total * 100)}%"></i></div>
     <ol class="ststeps" role="list">
       ${item('install', '加到主畫面', '像 App 一樣打開，入場券沒網路也能出示', install)}
       ${item('push', '開啟推播', '團練異動、候補遞補、帳號安全第一時間通知你', push)}
       ${item('group', '選距離與組別', `課表的配速照組別換算・<span class="nw">目前：${grp}</span>`, group)}
+      ${'ref' in steps ? item('ref', '填推薦人', '選填・團購或活動聯絡不上時，協會幹部找得到人幫忙', steps.ref ? '' : `<div class="stacts"><a class="btn sm" id="stRefGo" href="#/me/referral?from=start" aria-label="填寫推薦人">填寫</a><button type="button" class="linkbtn tiny" data-stskip="ref">沒有推薦人</button></div>`) : ''}
     </ol>
     <div class="stfoot"><button type="button" class="btn ghost sm" id="startLater">稍後再說</button><button type="button" class="btn ghost sm" id="startTour">看看五個分頁</button></div></section>`;
 }
@@ -2037,12 +2093,18 @@ function repaintStart(msg) {
   if (!msg) return;
   const left = startLeft(startSteps()); announce(left ? `${msg}，還剩 ${left} 步` : `${msg}，都設定好了`);
 }
-const STEP_DONE = { install: '已加到主畫面', push: '已開啟推播', group: '已確認組別' };
+const STEP_DONE = { install: '已加到主畫面', push: '已開啟推播', group: '已確認組別', ref: '已填推薦人' };
 function bindStart(check = true) {
   const card = $('#startCard');
   card?.addEventListener('click', async (e) => {
     const d = e.target.closest('[data-stdone]')?.dataset.stdone, k = e.target.closest('[data-stskip]')?.dataset.stskip;
     if (d) { saveStart({ [d]: 'done' }); repaintStart(STEP_DONE[d]); return; }
+    // 推薦人這一步記在伺服器（跟首頁推薦人卡的「沒有推薦人」同一個）
+    if (k === 'ref') {
+      try { await api('/me/referral/hide', { method: 'POST', body: { bits: 1 } }); } catch (err) { toast(err.message); return; }
+      if (me?.referral) me.referral.hide = (me.referral.hide || 0) | 1;
+      repaintStart('已略過'); return;
+    }
     if (k) { saveStart({ [k]: 'skip' }); repaintStart('已略過'); return; }
     if (e.target.closest('#startLater, #startX')) {
       saveStart({ dismissed: 1 });
@@ -2054,7 +2116,7 @@ function bindStart(check = true) {
     // 導覽隨時可以看（不用先做完三步）；三步都做完的「都設定好了」卡看完導覽就收起
     if (e.target.closest('#startTour')) { if (!startLeft(startSteps())) saveStart({ dismissed: 1 }); Guide.start(); return; }
     if (e.target.closest('#stCopy')) { copy(`${location.origin}/`); return; }
-    if (e.target.closest('#stGroupEdit')) { try { sessionStorage.setItem('cil-start-back', location.hash || '#/'); } catch {} return; }
+    if (e.target.closest('#stGroupEdit, #stRefGo')) { try { sessionStorage.setItem('cil-start-back', location.hash || '#/'); } catch {} return; }
     const pb = e.target.closest('#stPush');
     if (pb) {
       if (pb.getAttribute('aria-disabled') === 'true') { toast($('#stPushWhy')?.textContent || ''); return; }
@@ -2086,6 +2148,10 @@ function bindStart(check = true) {
 // 課表設定改好組別、從「開始使用」來的：打勾，回到原本的頁面
 function startGroupSaved() {
   saveStart({ group: 'done' });
+  startBack();
+}
+// 從「開始使用」卡去別頁做完一步（課表設定的組別、推薦人）：回到原本的頁面，焦點放到下一步
+function startBack() {
   let back = '#/'; try { back = sessionStorage.getItem('cil-start-back') || '#/'; sessionStorage.removeItem('cil-start-back'); } catch {}
   focusAfterRender(['#startCard .ststep:not(.ok) .stacts > :is(button,a)', '#startTitle']);
   location.hash = back;
@@ -2930,10 +2996,10 @@ const teamsView = lazy('./teams.js', 'teamsView');
 // ---------- 我的：像 iPhone 設定一樣分組，每一列點進去是一頁 ----------
 const ME_SECTIONS = {
   profile: '個人資料', races: '我的賽事與倒數', reg: '團體報名資料', teams: '主團與分團', notify: '通知設定',
-  calendar: '行事曆訂閱', display: '外觀與語言', security: '帳號與安全', privacy: '隱私', assoc: '協會', card: '會籍卡',
+  calendar: '行事曆訂閱', display: '外觀與語言', security: '帳號與安全', privacy: '隱私', assoc: '協會', card: '會籍卡', referral: '推薦人',
 };
 // 設定列的色磚：跟 iPhone 設定一樣每一項一個顏色（深色模式也不會是一整排亮黃方塊）
-const ROW_TILE = { '#/report': 'green', '#/challenge': 'orange', '#/me/races': 'red', '#/me/reg': 'indigo', '#/tickets': 'purple', '#/me/teams': 'teal',
+const ROW_TILE = { '#/report': 'green', '#/challenge': 'orange', '#/me/races': 'red', '#/me/reg': 'indigo', '#/tickets': 'purple', '#/me/teams': 'teal', '#/me/referral': 'orange',
   '#/me/notify': 'red', '#/me/calendar': 'orange', '#/me/display': 'indigo', '#/me/security': 'gray', '#/me/privacy': 'blue', '#/me/assoc': 'indigo', '#/me/card': 'teal',
   '#/admin': 'gray', '#/admin/settings': 'gray', '#/roster': 'blue', '#/logs/team': 'green', '#/plan/new': 'green', '#/plan/season': 'green', '#/plan/race': 'red', '#/plan/guide': 'teal', '#/plan/setup': 'gray' };
 // 標題與副標中間放一個只給螢幕閱讀器的「，」：VoiceOver 唸「通知設定，推播類別」，不會連成一串沒有停頓
@@ -2962,11 +3028,14 @@ const MI = {
   display: ic('<circle cx="12" cy="12" r="8"/><path d="M12 4v16M12 8h6.5M12 12h8M12 16h6.5"/>'),
   addhome: ic('<rect x="4" y="4" width="16" height="16" rx="4"/><path d="M12 8.5v7M8.5 12h7"/>'),
   sliders: IC.sliders,
+  referral: REF_IC,
+  tree: ic('<rect x="9" y="3" width="6" height="5" rx="1.5"/><rect x="3" y="16" width="6" height="5" rx="1.5"/><rect x="15" y="16" width="6" height="5" rx="1.5"/><path d="M12 8v4M6 16v-2a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v2"/>'),
 };
 async function meView(section) {
   const welcome = new URLSearchParams(location.hash.split('?')[1] || '').get('welcome');
   const googleMsg = new URLSearchParams(location.hash.split('?')[1] || '').get('google');
-  if (googleMsg) section = 'security';
+  // Google 綁定回來（?google=）：沒指定子頁的是帳號與安全；從推薦人頁去確認的回到 #/me/referral
+  if (googleMsg && !section) section = 'security';
   if (!section) return meHome(welcome);
   if (!ME_SECTIONS[section]) { location.hash = '#/me'; return; }
   return meSection(section, googleMsg);
@@ -3007,6 +3076,8 @@ async function meHome(welcome) {
     ])}
     ${group('跑團', [
       row('#/me/teams', MI.team, '主團與分團', main ? `主團：<span translate="no">${esc(main.name)}</span>` : '主團由管理員設定'),
+      refOn() || me.referral?.has || me.referral?.pending ? row('#/me/referral', MI.referral, '推薦人', me.referral?.has ? '已填・推薦我的跑友' : '誰介紹你來的、推薦我的跑友',
+        me.referral?.pending ? `<span class="pill wait">${me.referral.pending} 位待確認</span>` : '') : '',
       row('#/me/assoc', MI.building, esc(org().name || '台灣耕跑團協會'), `${esc(me.membershipName || '跑友')}・入會、章程與文件`),
       me.membership === 'active' ? row('#/me/card', MI.idcard, '會籍卡', me.paid_until ? `會費繳至 ${esc(me.paid_until)}` : '出示給幹部掃描') : '',
     ])}
@@ -3025,7 +3096,7 @@ async function meHome(welcome) {
       row('#/me/calendar', MI.calsub, '行事曆訂閱', '團練與賽事自動出現在手機行事曆', cfg.calendarOn ? '<span class="pill solid">已開啟</span>' : ''),
       row('#/me/privacy', MI.eye, '隱私', '分享給教練、排行榜、下載或刪除資料'),
     ])}
-    ${group('', [btnRow('shareApp', MI.share, '分享耕跑團 App', '用 LINE、QR Code 邀朋友一起跑'), btnRow('openGuide', MI.help, '使用說明', '開始使用的三步、五個分頁的導覽')])}`;
+    ${group('', [btnRow('shareApp', MI.share, '分享耕跑團 App', '用 LINE、QR Code 邀朋友一起跑'), btnRow('openGuide', MI.help, '使用說明', '開始使用、五個分頁的導覽')])}`;
   bindStepup();
   bindStart();
   // 使用說明：重新打開「開始使用」卡（加到主畫面、推播、組別的進度還在），做完可以看五個分頁的導覽
@@ -3463,7 +3534,7 @@ addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvt 
 addEventListener('appinstalled', () => { installEvt = null; try { localStorage.setItem('cil-installed', '1'); } catch {} saveStart({ install: 'done' }); document.querySelectorAll('.installcard').forEach((c) => c.remove()); if ($('#startCard')) repaintStart(); });
 
 // 拆出去的模組（admin.js、photo.js…）從這裡拿共用的工具與狀態
-export { canMeetup, meetupTeams, kindLabel, tilePreload, focusEl, legacyData, removeLegacy, addrField, bindAddrField, latest, $, cfg, downloadAuthed, scanSheet, FEEL, IC, KIND_NAME, LOG_ICON, LOG_STATUS_NAME, MI, PAID_NAME, ROLE_NAME, TAB_DEFAULT, TEAM_PERMS, coachTeam, TEAM_ROLE_NAME, ago, allow, api, applyFeatures, avatar, barChart, bars, bindComments, bindStepup, btnRow, choose, coachPrefs, copy, countdownPicker, dayLabel, dstr, emptyState, esc, eventCard, feat, fixText, group, ic, largeTitle, me, mfaBanner, money, myCycle, nrow, org, pad2, paintCountdown, passkey, planSeg, queueLog, raceTarget, refreshMe, render, route, row, setCoachPrefs, squareIcon, startKey, studio, subTitle, teamAllow, teamIcon, teamOf, teams, toast, rich, keep, names, view, ymd, askReason, isOffline, nowTp, signupDefaults, submitLabel, camLazy, openSheet, apiAll, fmtDuration, fmtDistPace, parseHMS,
+export { canMeetup, meetupTeams, refOn, kindLabel, tilePreload, focusEl, legacyData, removeLegacy, addrField, bindAddrField, latest, $, cfg, downloadAuthed, scanSheet, FEEL, IC, KIND_NAME, LOG_ICON, LOG_STATUS_NAME, MI, PAID_NAME, ROLE_NAME, TAB_DEFAULT, TEAM_PERMS, coachTeam, TEAM_ROLE_NAME, ago, allow, api, applyFeatures, avatar, barChart, bars, bindComments, bindStepup, btnRow, choose, coachPrefs, copy, countdownPicker, dayLabel, dstr, emptyState, esc, eventCard, feat, fixText, group, ic, largeTitle, me, mfaBanner, money, myCycle, nrow, org, pad2, paintCountdown, passkey, planSeg, queueLog, raceTarget, refreshMe, render, route, row, setCoachPrefs, squareIcon, startKey, studio, subTitle, teamAllow, teamIcon, teamOf, teams, toast, rich, keep, names, view, ymd, askReason, isOffline, nowTp, signupDefaults, submitLabel, camLazy, openSheet, apiAll, fmtDuration, fmtDistPace, parseHMS,
   // event.js、me.js
   applyCounts, bellState, canScan, dayPattern, mapsUrl, once, qrSVG, routeSvg, scan, setStopScan, GOOGLE_G, NICON, applyTabs, applyTheme, askLegacyOnLeave,
   bindInstall, clearDeviceData, dropPush, googleHref, iconsOnly, installCard, isStandalone, lsOrNull, pkSupported, reduceMotion, theme, togglePush, setMe,
@@ -3472,4 +3543,4 @@ export { canMeetup, meetupTeams, kindLabel, tilePreload, focusEl, legacyData, re
   // 無障礙共用：播報、表單錯誤、重畫後的焦點
   announce, fieldError, focusAfterRender,
   // coach.js：課表設定從「開始使用」來，存好組別後打勾
-  startGroupSaved };
+  startGroupSaved, startBack };
