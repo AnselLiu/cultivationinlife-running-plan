@@ -4,7 +4,7 @@ import * as P from './plan.js';
 import * as I18N from './i18n.js';
 import { CATS, CHIPS } from './notif-cats.js';
 import * as Device from './device.js';
-import { tpNow, signupState, tpShort, SIGNUP_DEFAULTS } from './signup-window.js';
+import { tpNow, signupState, tpShort, SIGNUP_DEFAULTS, evPhase, PHASE_LABEL } from './signup-window.js';
 // 用到才下載的模組：管理後台、拍照、報表、活動頁、「我的」子頁、活動表單與統計、分團
 // 剛部署的那幾秒可能拿到舊檔：載入失敗就等一下、加版本參數再試一次，仍失敗才顯示錯誤
 const calendarView = (...a) => lazy('./calendar.js', 'calendarView')(...a);
@@ -1302,17 +1302,20 @@ function heroCard(e) {
     </div>
   </a>`;
 }
+// 報名狀態標籤（活動卡片、沒登入的分享預覽）：報名中、即將開放、額滿可候補、報名已截止、已結束、已取消
+function phasePill(e, full) { const ph = evPhase(e, nowTp(), full); return `<span class="pill reg-${ph}">${PHASE_LABEL[ph](e)}</span>`; }
 function eventCard(e) {
   const pct = e.capacity ? Math.min(100, Math.round(e.signed / e.capacity * 100)) : 0;
+  // 自己已經報名（右邊有狀態）：只在活動結束或取消時另外標示
+  const full = !!e.capacity && e.signed >= e.capacity, ph = evPhase(e, nowTp(), full), showPh = !e.mine || ph === 'over' || ph === 'cancelled';
   return `<a class="card lit" href="#/e/${e.id}">
     <div class="ev">
       <span class="cal"><u>${d2(e.date).getMonth() + 1}月</u><b class="num">${e.date.slice(8)}</b><span>週${WD[d2(e.date).getDay()]}</span></span>
       <span class="body">
-        <span class="pills"><span class="pill ${e.kind}">${KIND_NAME[e.kind] || '活動'}</span>${teamTag(teamOf(e.team_id))}${e.visibility === 'invite' ? `<span class="pill lock">${IC.lock}邀請制</span>` : ''}</span>
+        <span class="pills">${showPh ? phasePill(e, full) : ''}<span class="pill ${e.kind}">${KIND_NAME[e.kind] || '活動'}</span>${teamTag(teamOf(e.team_id))}${e.visibility === 'invite' ? `<span class="pill lock">${IC.lock}邀請制</span>` : ''}</span>
         <span class="t"><span translate="no">${esc(e.title)}</span></span>
         <span class="tiny meta">${[e.gather_time, e.place && `<span translate="no">${esc(e.place)}</span>`,
-          (() => { const ps = [...(e.options || []), ...(e.kind === 'buy' ? e.items || [] : [])].map((o) => o.price).filter(Boolean); return ps.length ? `${money(Math.min(...ps))} 起` : e.fee ? money(e.fee) : ''; })(),
-          !e.mine && e.signup_start && signupState(e, nowTp()) === 'soon' && `${tpShort(e.signup_start)} 開放`].filter(Boolean).map((x) => `<span>${x}</span>`).join('')}</span>
+          (() => { const ps = [...(e.options || []), ...(e.kind === 'buy' ? e.items || [] : [])].map((o) => o.price).filter(Boolean); return ps.length ? `${money(Math.min(...ps))} 起` : e.fee ? money(e.fee) : ''; })()].filter(Boolean).map((x) => `<span>${x}</span>`).join('')}</span>
         ${e.capacity ? `<span class="bar"><i style="width:${pct}%"></i></span>` : ''}
       </span>
       <span class="evright">${e.mine === 'in' ? `<span class="mine">${IC.check}已報名</span>` : e.mine === 'wait' ? '<span class="mine wait">候補中</span>'

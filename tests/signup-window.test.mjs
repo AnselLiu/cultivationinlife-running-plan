@@ -1,7 +1,7 @@
 // 報名期間共用模組的單元測試：純函式，不需要伺服器
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { isStamp, tpNow, tpToday, shiftDays, daysBetween, evStart, signupEnd, signupState, defaultWindow, windowError, tpText, tpShort, STATE_TEXT, STATE_LABEL } from '../public/signup-window.js';
+import { isStamp, tpNow, tpToday, shiftDays, daysBetween, evStart, signupEnd, signupState, defaultWindow, windowError, tpText, tpShort, STATE_TEXT, STATE_LABEL, evEnd, evPhase, PHASE_LABEL } from '../public/signup-window.js';
 
 test('isStamp：只接受存在的台北牆上時間', () => {
   assert.equal(isStamp('2026-02-30T10:00'), false);
@@ -80,4 +80,24 @@ test('windowError：結束時間（選填）要晚於集合時間；沒填集合
   assert.equal(windowError({ ...ev, end_time: '' }), null);
   assert.equal(windowError({ date: '2026-10-10', gather_time: '', end_time: '09:00' }), null);
   assert.equal(windowError({ ...ev, kind: 'survey', end_time: '06:00' }), null);
+});
+
+test('evPhase：卡片與分享預覽的狀態（取消 > 已結束 > 關閉／即將開放／截止 > 額滿 > 報名中）', () => {
+  const ev = { kind: 'track', date: '2026-10-10', gather_time: '19:30', end_time: '21:00', signup_open: 1, signup_start: '2026-10-05T20:00', deadline: '2026-10-09T22:00' };
+  assert.equal(evEnd(ev), '2026-10-10T21:00');
+  assert.equal(evEnd({ ...ev, end_time: '' }), '2026-10-10T23:59', '沒有結束時間：當天結束');
+  assert.equal(evPhase(ev, '2026-10-05T19:59'), 'soon');
+  assert.equal(PHASE_LABEL.soon(ev), '即將開放 10/5 20:00');
+  assert.equal(evPhase(ev, '2026-10-05T20:00'), 'open');
+  assert.equal(evPhase(ev, '2026-10-06T08:00', true), 'full');
+  assert.equal(evPhase(ev, '2026-10-09T22:01', true), 'closed', '截止後不管滿不滿都是報名已截止');
+  assert.equal(evPhase(ev, '2026-10-10T20:00'), 'closed', '活動進行中');
+  assert.equal(evPhase(ev, '2026-10-10T21:01'), 'over');
+  assert.equal(evPhase({ ...ev, end_time: null }, '2026-10-10T23:00'), 'closed');
+  assert.equal(evPhase({ ...ev, end_time: null }, '2026-10-11T00:00'), 'over');
+  assert.equal(evPhase({ ...ev, status: 'cancelled' }, '2026-10-11T00:00'), 'cancelled', '取消優先');
+  assert.equal(evPhase({ ...ev, signup_open: 0 }, '2026-10-06T08:00'), 'off');
+  assert.equal(PHASE_LABEL.open({ kind: 'survey' }), '填寫中');
+  assert.equal(PHASE_LABEL.closed({ kind: 'survey' }), '問卷已截止');
+  for (const k of ['cancelled', 'over', 'off', 'soon', 'closed', 'full', 'open']) assert.equal(typeof PHASE_LABEL[k](ev), 'string');
 });

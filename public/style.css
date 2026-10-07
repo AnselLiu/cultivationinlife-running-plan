@@ -230,6 +230,11 @@ form.row .btn,.row:not(.spotopts) > input ~ .btn,.row:not(.spotopts) > select ~ 
 .pill.party{background:rgba(232,105,26,.14);color:#E8691A}
 .pill.solid{background:var(--accent);color:var(--on-accent)}
 .pill.wait{background:var(--warn-bg);color:var(--warn)}
+/* 報名狀態（活動卡片、分享預覽）：報名中綠、即將開放用預設主色、額滿可候補黃、截止與結束灰、取消紅 */
+.pill.reg-open{background:color-mix(in srgb,var(--ok) 14%,transparent);color:color-mix(in srgb,var(--ok-ink) 80%,var(--ink))}
+.pill.reg-full{background:var(--warn-bg);color:var(--warn)}
+.pill.reg-closed,.pill.reg-over,.pill.reg-off{background:color-mix(in srgb,var(--ink) 9%,transparent);color:var(--ink-2)}
+.pill.reg-cancelled{background:color-mix(in srgb,var(--race) 12%,var(--glass-2));color:color-mix(in srgb,var(--race) 70%,var(--ink-2))}
 button.pill{cursor:pointer}
 
 /* 活動卡 */

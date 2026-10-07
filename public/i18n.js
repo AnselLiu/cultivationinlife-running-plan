@@ -100,6 +100,7 @@ const PATTERNS = [
   [/^報名期間：(.+?) – (.+?)(（需主辦審核）)?$/, (_, a, b, c) => `Signup period: ${a === '即日起' ? 'now' : a} – ${b}${c ? ' (organizer approval required)' : ''}`],
   [/^回覆截止 (.+)$/, 'Responses close $1'],
   [/^(?:(\d+) 天 )?(\d+) 小時後開放報名$/, (_, d, h) => `Signup opens in ${d ? `${d} d ` : ''}${h} h`], [/^(\d+) 分鐘後開放報名$/, 'Signup opens in $1 min'],
+  [/^即將開放 (\d{1,2}\/\d{1,2} \d\d:\d\d)$/, 'Opens $1'],   // 活動卡片的報名狀態
   [/(\d{1,2}\/\d{1,2} \d\d:\d\d) 開放/g, 'opens $1'],
   [/^你在候補第 (\d+) 位，有人取消會自動遞補並通知你。$/, "You're number $1 on the waitlist and will be moved up automatically if someone cancels."],
   [/^人數已滿，已排入候補第 (\d+) 位，有人取消會自動遞補並通知你$/, "Event is full. You're number $1 on the waitlist and will be moved up automatically if someone cancels."],

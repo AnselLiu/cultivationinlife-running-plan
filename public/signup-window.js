@@ -37,6 +37,27 @@ export const STATE_LABEL = {
   soon: (ev) => `尚未開放報名・${tpText(ev.signup_start)} 開始`,
   ended: (ev) => (ev.kind === 'survey' ? '問卷已截止' : '報名已截止'),
 };
+// 活動結束：有結束時間用結束時間，沒有就到當天結束（問卷＝截止那天結束）
+export const evEnd = (ev) => `${ev.date}T${ev.kind !== 'survey' && /^\d{2}:\d{2}$/.test(ev.end_time || '') ? ev.end_time : '23:59'}`;
+// 卡片與分享連結預覽的狀態：cancelled 已取消｜over 已結束｜off 幹部關閉｜soon 即將開放｜closed 報名已截止｜full 額滿可候補｜open 報名中
+//   伺服器（連結預覽卡）與前端（活動卡片、沒登入的預覽）共用；full 由呼叫的人給（只要「滿了沒」，不給人數）
+export function evPhase(ev, now = tpNow(), full = false) {
+  if (ev.status === 'cancelled' || ev.cancelled) return 'cancelled';
+  if (now > evEnd(ev)) return 'over';
+  const st = signupState(ev, now);
+  if (st === 'ended') return 'closed';
+  if (st !== 'open') return st;
+  return full ? 'full' : 'open';
+}
+export const PHASE_LABEL = {
+  cancelled: () => '已取消',
+  over: () => '已結束',
+  off: () => '未開放報名',
+  soon: (ev) => `即將開放 ${tpShort(ev.signup_start)}`,
+  closed: (ev) => (ev.kind === 'survey' ? '問卷已截止' : '報名已截止'),
+  full: () => '額滿可候補',
+  open: (ev) => (ev.kind === 'survey' ? '填寫中' : '報名中'),
+};
 // 系統預設（settings 沒有 'signup' 這一列時使用）
 export const SIGNUP_DEFAULTS = { approval: false, notify: true, open_days: null, open_time: '20:00', close_days: null, close_time: '22:00' };
 // 依預設規則算出這場的報名開始與截止；'' 表示「立即開放」或「活動開始時截止」
