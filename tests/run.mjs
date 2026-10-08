@@ -9,7 +9,7 @@ import { rmSync } from 'node:fs';
 const UNIT = ['tests/plan.test.mjs', 'tests/coachcalc.test.mjs', 'tests/migrate.test.mjs', 'tests/device.test.mjs', 'tests/restore.test.mjs', 'tests/run-record.test.mjs', 'tests/email.test.mjs', 'tests/referral-sql.test.mjs',
   'tests/achrule.test.mjs', 'tests/achieve-sql.test.mjs'];
 // 需要伺服器的測試（node --test 照檔名字母順序跑；achieve.test 另外最後跑，見下面）
-const API = ['tests/hours.test.mjs', 'tests/ics.test.mjs', 'tests/push.test.mjs', 'tests/cams-sync.test.mjs', 'tests/sql-limits.test.mjs', 'tests/rest-parse.test.mjs', 'tests/rest-sync.test.mjs', 'tests/signup-window.test.mjs', 'tests/sw-shell.test.mjs', 'tests/api.test.mjs', 'tests/passkey.test.mjs', 'tests/referral.test.mjs', 'tests/achieve.test.mjs', 'tests/budget.test.mjs'];
+const API = ['tests/hours.test.mjs', 'tests/ics.test.mjs', 'tests/push.test.mjs', 'tests/cams-sync.test.mjs', 'tests/sql-limits.test.mjs', 'tests/rest-parse.test.mjs', 'tests/rest-sync.test.mjs', 'tests/signup-window.test.mjs', 'tests/sw-shell.test.mjs', 'tests/api.test.mjs', 'tests/passkey.test.mjs', 'tests/referral.test.mjs', 'tests/google-link.test.mjs', 'tests/achieve.test.mjs', 'tests/budget.test.mjs'];
 const ONLY = (process.env.TEST_FILES || '').split(',').map((f) => f.trim()).filter(Boolean);
 const pick = (list) => (ONLY.length ? list.filter((f) => ONLY.includes(f)) : list);
 const unknown = ONLY.filter((f) => !UNIT.includes(f) && !API.includes(f));

@@ -174,7 +174,8 @@ const api = async (path, opt = {}, retried = false) => {
     try { await passkey('stepup'); } catch (e) { throw new Error(e.message === '已取消' ? '已取消驗證' : data.error); }
     return api(path, opt, true);
   }
-  if (!res.ok) throw Object.assign(new Error(data.error || `錯誤 ${res.status}`), { status: res.status });
+  // data：伺服器回的其他欄位（例如新增通行金鑰被擋下時的 officer、google，確認逾時的 expired）
+  if (!res.ok) throw Object.assign(new Error(data.error || `錯誤 ${res.status}`), { status: res.status, data });
   return data;
 };
 // 大量輸入分段處理：伺服器一次執行的額度有限（免費方案 50 個子請求），處理不完會回 more（剩下的輸入）。
@@ -817,13 +818,15 @@ const pkSupported = () => !!window.PublicKeyCredential && !!navigator.credential
 const b64uToBuf = (s) => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((s.length + 3) % 4)), (c) => c.charCodeAt(0)).buffer;
 const bufToB64u = (b) => btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 // purpose：register 新增、login 登入、stepup 幹部再次驗證
-async function passkey(purpose, name) {
+//   hints：['hybrid'] 先出現「用其他裝置」的 QR Code（舊手機不在身邊時；不支援的瀏覽器忽略，照樣可以在選單裡選）
+async function passkey(purpose, name, { hints } = {}) {
   if (!pkSupported()) throw new Error('這個瀏覽器不支援通行金鑰，請用 iPhone 的 Safari 或 Chrome');
   const { cid, publicKey: o } = await api('/passkey/options', { method: 'POST', body: { purpose } });
   const pk = { ...o, challenge: b64uToBuf(o.challenge) };
   if (o.user) pk.user = { ...o.user, id: b64uToBuf(o.user.id) };
   if (o.excludeCredentials) pk.excludeCredentials = o.excludeCredentials.map((c) => ({ ...c, id: b64uToBuf(c.id) }));
   if (o.allowCredentials) pk.allowCredentials = o.allowCredentials.map((c) => ({ ...c, id: b64uToBuf(c.id) }));
+  if (hints) pk.hints = hints;
   let cred;
   try { cred = purpose === 'register' ? await navigator.credentials.create({ publicKey: pk }) : await navigator.credentials.get({ publicKey: pk, mediation: 'optional' }); }
   catch (e) { throw new Error(e.name === 'NotAllowedError' ? '已取消' : e.name === 'InvalidStateError' ? '這台裝置已經有通行金鑰了' : '通行金鑰沒有完成'); }
@@ -836,6 +839,33 @@ async function passkey(purpose, name) {
 // 幹部開了強制兩步驟、這次登入還沒驗證：顯示提示列
 const mfaBanner = () => (me?.mfaPending ? `<section class="card mfabar"><div><b>請驗證身分</b><span class="tiny" style="display:block">你是<span translate="no">${esc(me.realRoleName || '幹部')}</span>，協會規定用通行金鑰再驗證一次才能使用管理功能。</span></div>
   <button class="btn sm" data-stepup>${IC.lock}驗證</button></section>` : '');
+// 協會開了幹部兩步驟驗證、這次登入還沒驗證的幹部：用 Google 登入回來（#/?mfa=1 有通行金鑰｜#/?mfa=add 還沒有），
+//   或這個分頁第一次打開時，跳出說明（每個分頁一次）。WebKit 的通行金鑰要使用者手勢：一定等他按「用通行金鑰驗證」；按「稍後」留著首頁的提示列
+async function mfaSheet() {
+  const [path, qs] = location.hash.split('?'), sp = new URLSearchParams(qs || ''), q = sp.get('mfa');
+  if (q) { sp.delete('mfa'); try { history.replaceState(null, '', `${path || '#/'}${sp.toString() ? `?${sp}` : ''}`); } catch {} }
+  if (!me?.mfaPending || document.querySelector('.sheet')) return;
+  try { if (!q && sessionStorage.getItem('cil-mfa-sheet')) return; sessionStorage.setItem('cil-mfa-sheet', '1'); } catch {}
+  const has = q === '1' || (q !== 'add' && !!(await api('/passkeys').catch(() => ({ passkeys: [] }))).passkeys?.length);
+  if (!me?.mfaPending || document.querySelector('.sheet')) return;
+  const why = `你是<span translate="no">${esc(me.realRoleName || '幹部')}</span>。協會要求幹部用通行金鑰再確認一次，驗證後才有管理權限。`;
+  const s = openSheet(has ? '完成登入：用通行金鑰驗證' : '完成登入：先新增一把通行金鑰', has
+    ? `<h3 id="mfaT">完成登入：用通行金鑰驗證</h3><p class="muted" style="margin:0">${why}</p>
+      <div class="choices gstep"><button type="button" class="btn block" data-go>${IC.lock}用通行金鑰驗證</button><button type="button" class="btn ghost block" data-close>稍後</button></div>`
+    : `<h3 id="mfaT">完成登入：先新增一把通行金鑰</h3><p class="muted" style="margin:0">${why}你還沒有通行金鑰，先到「帳號與安全」新增一把。</p>
+      <div class="choices gstep"><a class="btn block" href="#/me/security" data-close>前往帳號與安全</a><button type="button" class="btn ghost block" data-close>稍後</button></div>`, null, 'mfaT',
+    // 按「稍後」關掉：焦點移到首頁提示列的「驗證」（VoiceOver 不會停在空白處）
+    { onClose: () => setTimeout(() => { if (document.activeElement === document.body || !document.activeElement) $('.mfabar [data-stepup]')?.focus(); }) });
+  const go = s.host.querySelector('[data-go]');
+  go?.addEventListener('click', async () => {
+    go.disabled = true;
+    try { await passkey('stepup'); s.close(); toast('驗證完成，可以使用管理功能了'); me = null; render(); }
+    catch (e) {
+      if (go.isConnected) go.disabled = false;
+      if (/還沒有通行金鑰/.test(e.message)) { s.close(); location.hash = '#/me/security'; } else if (e.message !== '已取消') toast(e.message);
+    }
+  });
+}
 function bindStepup() {
   for (const b of document.querySelectorAll('[data-stepup]')) b.onclick = async () => {
     try { await passkey('stepup'); toast('驗證完成'); me = null; render(); }
@@ -1220,6 +1250,7 @@ async function listView() {
   bindRefCard();
   bindStepup();
   flushLogQueue();
+  mfaSheet();
 }
 // 幹部：報名待審核（畫面畫好後才載入，有資料才顯示）
 async function reviewCard() {

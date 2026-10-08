@@ -121,7 +121,7 @@ test('Google 登入寫查詢碼：Email 驗證過才寫（布林或字串 true�
   assert.equal((await me(off.cookie)).name, '字串驗證', '名字不會被改掉');
 });
 
-test('同意新版政策才算查詢碼；推薦人頁的「用 Google 確認」回到推薦人頁；同一個 Google 帳號不用通行金鑰驗證、第一次綁才要；已經綁了別的不換綁', async () => {
+test('同意新版政策才算查詢碼；推薦人頁的「用 Google 確認」回到推薦人頁；同一個 Google 帳號不用通行金鑰驗證、第一次綁才要（先記下待確認）；已經綁了別的不換綁', async () => {
   assert.equal((await call('t_runner', '/me')).json.needConsent, true, 't_runner 的同意版本是舊的');
   const later = await google({ link: '1', from: 'ref', sub: 'g_run', email: 'run@gmail.com', verified: '1' }, 't_runner');
   assert.equal(later.location, '/#/me/referral?google=later');
@@ -158,7 +158,7 @@ test('同意新版政策才算查詢碼；推薦人頁的「用 Google 確認」
   assert.equal(j.status, 200, j.text);
   const jc = j.headers.getSetCookie().find((c) => c.startsWith('__Host-cil_sess=')).split(';')[0];
   await addPasskey(jc);
-  assert.equal((await google({ link: '1', from: 'ref', sub: 'g_join' }, jc)).location, '/#/me/referral?google=stepup', '第一次綁 Google');
+  assert.equal((await google({ link: '1', from: 'ref', sub: 'g_join' }, jc)).location, '/#/me/referral?google=confirm', '第一次綁 Google：先記下，用通行金鑰確認才綁（tests/google-link.test.mjs）');
 });
 
 test('用 Gmail 找：全形、googlemail、大小寫都找得到；只回遮罩名字與暱稱；找不到、關掉找我都是同一個回應；自己', async () => {

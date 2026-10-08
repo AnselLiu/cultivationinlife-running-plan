@@ -121,6 +121,11 @@ Google 不允許在 LINE、Facebook、Instagram 的內建瀏覽器登入；在 L
 3. 打開「成績與挑戰」前：確認已設定 `RACE_KEY`（見證制體重挑戰需要；沒有時只能辦榮譽制體重挑戰）；「系統設定 → 隱私權政策」有自訂內文的協會，要自己補上比賽成績、挑戰紀錄與挑戰體重的說明並升版。
 4. 打開「系統設定 → 功能開關 → 成績與挑戰」；恭喜榜的各距離 PB 排行另外打開。
 
+**先 Google、再通行金鑰上線步驟**（沒有功能開關）：
+
+1. `npx wrangler d1 migrations apply cil-run --remote`（`0055_google_then_passkey`，只新增 `google_pending` 表與 `sessions.google_at` 欄位），先在測試環境做一次。**要在部署程式之前做**：新程式每次請求都會讀 `sessions.google_at`，登入時也會寫。
+2. 部署程式（Service Worker 升到 `cil-v75`）。
+
 ### 跑步數據匯入
 
 不串接任何付費或需要訂閱的服務：手動輸入、iPhone 捷徑讀取 Apple 健康，或匯入 GPX／TCX 檔（Garmin Connect、Apple 健康、各家手錶都能匯出）。
