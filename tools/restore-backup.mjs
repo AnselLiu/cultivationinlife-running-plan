@@ -10,7 +10,7 @@
 //      金鑰預設讀 ~/.config/cil-run/backup-key（測試環境 --staging 讀 backup-key-staging），也可以用 BACKUP_KEY 環境變數；
 //      檔名不是日期時用 --label 2026-10-04 指定（AAD 綁住日期與第幾段，對不上就解不開）
 //   3. 備份之後本人做的撤回（刪除帳號、刪除賽事報名資料、停止分享訓練、退出排行榜、通知分類、取消推播、移除通行金鑰、登出所有裝置、
-//      退出分團、停用行事曆訂閱、刪除訓練紀錄、路線與分團公告），以及身分與分團身分的變更（降級不能跟著倒回去）
+//      退出分團、停用行事曆訂閱、刪除訓練紀錄、路線與分團公告）、理事長重設通行金鑰並登出，以及身分與分團身分的變更（降級不能跟著倒回去）
 //      要在匯入後重做，不然會跟著舊備份回來（PDPA／A.5.34；重做什麼見 tools/restore-sql.mjs）：
 //        --sql 一定要帶 --withdrawals <檔案>（或確定沒有時帶 --no-withdrawals）；工具會印出查詢指令（唯讀）：
 //        npx wrangler d1 execute cil-run --remote --json --command "SELECT … FROM audit_log WHERE action IN (…) AND at >= '<備份時間>' ORDER BY at, id" > withdrawals.json

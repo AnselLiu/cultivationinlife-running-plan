@@ -337,6 +337,7 @@ test('強制兩步驟、還沒有通行金鑰的幹部：用 Google 登入後 15
       const n = firstNote(await sec(await devCookie(who)));
       assert.equal(n.length, 1, who);
       assert.equal(n[0].url, '/#/admin?tab=roles');
+      assert.ok(n[0].body.endsWith('不是本人的話，請理事長到後台「權限」按這位跑友的「安全」→「重設並登出」。'), '告訴理事長怎麼處理（重設並登出）');
     }
     assert.equal(firstNote(await sec(await devCookie('t_coach'))).length, 0, '教練不通知');
     // 有了第一把：剛用 Google 登入也要用它驗證才能再新增

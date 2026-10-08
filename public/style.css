@@ -331,6 +331,7 @@ input[type=number]{-moz-appearance:textfield}
 .roster{display:grid}
 .r{display:grid;grid-template-columns:32px 1fr auto;gap:10px;align-items:center;padding:9px 0;border-bottom:1px solid var(--stroke);font-size:15px}
 .r:last-child{border-bottom:0}
+.roleacts{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}   /* 權限分頁一列兩顆：「變更」「安全」 */
 .av{width:32px;height:32px;border-radius:50%;object-fit:cover;background:var(--accent-soft);color:var(--accent);
   display:grid;place-items:center;font-size:13px;font-weight:700;overflow:hidden;flex:none}
 .notice{border-radius:var(--r-m);padding:11px 13px;font-size:14px;background:var(--warn-bg);color:var(--warn)}

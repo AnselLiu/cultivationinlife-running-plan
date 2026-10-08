@@ -1,8 +1,8 @@
-// 全功能測試（管理後台）：總覽與待審核、會員查詢、指派身分、分團、系統設定、備份、稽核、名冊
+// 全功能測試（管理後台）：總覽與待審核、會員查詢、指派身分、重設通行金鑰並登出、分團、系統設定、備份、稽核、名冊
 import { test, expect } from '@playwright/test';
-import { login, apiAs, acceptPrivacyIfAsked } from './helpers.mjs';
+import { login, apiAs, acceptPrivacyIfAsked, BASE } from './helpers.mjs';
 
-const enter = async (page, id) => { await login(page, id); await acceptPrivacyIfAsked(page); };
+const enter = async (page, id, opt) => { await login(page, id, opt); await acceptPrivacyIfAsked(page); };
 
 test('總覽：待審核的入團申請可以直接核准', async ({ page, request }) => {
   await apiAs(request, 't_super', '/teams/kids/join', { method: 'POST' });
@@ -43,6 +43,35 @@ test('權限：搜尋跑友指派身分，分頁停在權限', async ({ page }) 
   await page.locator('#roleList [data-role]').first().click();
   await page.locator('#rf [name=role]').selectOption('member');
   await page.locator('#rf').getByRole('button', { name: '儲存' }).click();
+});
+
+test('權限：「安全」重設通行金鑰並登出（看數字、焦點在取消、填原因、重設後提示），對方的登入失效', async ({ page, request }) => {
+  // 要重設的跑友：邀請碼加入（一個登入中的裝置、沒有通行金鑰、沒綁 Google）
+  const name = `安全測試${Date.now().toString(36).slice(-4)}`;
+  const j = await request.post('/api/join', { headers: { origin: BASE, 'content-type': 'application/json' }, data: JSON.stringify({ code: 'test-join', name, consent: true }) });
+  expect(j.status()).toBe(200);
+  const cookie = j.headersArray().find((h) => h.name.toLowerCase() === 'set-cookie' && h.value.startsWith('__Host-cil_sess=')).value.split(';')[0];
+  // 理事長：剛用通行金鑰驗證過（重設要 15 分鐘內驗證過）
+  await enter(page, 't_chair', { mfa: true });
+  await page.goto('/#/admin?tab=roles');
+  await expect(page.locator('#panel [data-sec="t_coach"]')).toHaveCount(1);
+  await expect(page.locator('#panel [data-sec="t_chair"]')).toHaveCount(0);   // 自己的在「帳號與安全」
+  await page.locator('#roleSearch [name=q]').fill(name);
+  const btn = page.locator('#roleList [data-sec]').first();
+  await expect(btn).toHaveAccessibleName(new RegExp(`^安全\\s*：${name}$`));   // VoiceOver 讀得出是誰的
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth), '一列兩顆按鈕也不超出手機畫面').toBeLessThanOrEqual(0);
+  await btn.click();
+  const sheet = page.getByRole('dialog', { name: '重設通行金鑰並登出' });
+  await expect(sheet.locator('#secN')).toHaveText('通行金鑰 0 把・登入中的裝置 1 個');
+  await expect(sheet.locator('#secG')).toBeHidden();   // 沒綁 Google：沒有「解除 Google」
+  await expect(sheet.getByRole('button', { name: '取消' })).toBeFocused();   // 危險操作：焦點先在安全的那一顆
+  await sheet.getByLabel('原因（選填）').fill('手機遺失');
+  await sheet.getByRole('button', { name: '重設並登出' }).click();
+  await expect(page.locator('.toast')).toHaveText(`已重設 ${name} 的通行金鑰並登出所有裝置`);
+  await expect(sheet).toHaveCount(0);
+  await expect(page.locator('#roleSearch [name=q]')).toBeFocused();   // 重畫後焦點回到搜尋框
+  const me = await (await request.get('/api/me', { headers: { cookie } })).json();
+  expect(me.member).toBeNull();
 });
 
 test('系統設定：功能開關、分頁名稱、立即備份；稽核查詢與完整性檢查；名冊查詢', async ({ page }) => {

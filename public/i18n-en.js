@@ -5208,7 +5208,24 @@ export default {
 "｜幹部第一把（Google 確認後新增）": " | officer’s first passkey (added after Google confirmation)",
 "幹部新增了第一把通行金鑰": "An officer added their first passkey",
 "用 Google 登入後新增了第一把通行金鑰（": "signed in with Google and added their first passkey (",
-"）。不是本人的話，請理事長在後台「權限」把他改成團員（會登出所有裝置），並請本人到「帳號與安全」移除這把通行金鑰。": "). If this wasn’t them, the President can change their role to Member in Admin → Roles (this signs them out everywhere), and ask them to remove this passkey in Account & security.",
-"幹部移除最後一把通行金鑰前，請先用它驗證（手機不見了請理事長協助）": "Officers must verify with their last passkey before removing it (if your phone is lost, ask the President for help)"
+"）。不是本人的話，請理事長到後台「權限」按這位跑友的「安全」→「重設並登出」。": "). If this wasn’t them, the President can go to Admin → Roles, tap Security next to this runner, then Reset and sign out.",
+"幹部移除最後一把通行金鑰前，請先用它驗證（手機不見了請理事長協助）": "Officers must verify with their last passkey before removing it (if your phone is lost, ask the President for help)",
+"重設通行金鑰並登出": "Reset passkeys and sign out",
+"讀取中…": "Loading…",
+"會刪除這位跑友所有的通行金鑰、登出所有裝置與推播。之後本人重新登入（Google 或邀請碼），再新增通行金鑰。": "This deletes all of this runner’s passkeys and signs them out of every device and push notifications. They then sign in again (Google or invite code) and add a new passkey.",
+"同時解除 Google 綁定（Google 帳號被盜用時才勾）": "Also unlink Google (only if their Google account was compromised)",
+"解除後本人不能再用 Google 登入這個帳號，要用邀請碼或請理事長協助。": "After unlinking, they can’t sign in to this account with Google. They’ll need an invite code or help from the President.",
+"原因只有本人看得到，推播與稽核紀錄都不會記": "Only they can see the reason. It isn’t included in push notifications or the audit log",
+"重設並登出": "Reset and sign out",
+"已重設": "Reset",
+"的通行金鑰並登出所有裝置": "’s passkeys and signed them out of all devices",
+"帳號安全重設": "Account security reset",
+"只有理事長可以重設別人的通行金鑰": "Only the President can reset someone else’s passkeys",
+"只有理事長可以查看": "Only the President can view this",
+"重設自己的請到「我的 → 帳號與安全」": "To reset your own, go to Me → Account & security",
+"帳號安全已重設": "Account security reset",
+"理事長重設了你的通行金鑰並登出所有裝置": "The President reset your passkeys and signed you out of all devices",
+"，也解除了 Google 綁定": ", and unlinked your Google account",
+"。重新登入後，請到「我的 → 帳號與安全」新增通行金鑰。": ". After you sign in again, add a passkey in Me → Account & security."
 };
 export const inner = {"團練": "group run", "課表": "training plan", "拍照": "photo", "跑步": "running", "我的": "my", "揪跑": "social run", "分團": "sub-club", "主團": "home club", "報名": "sign up", "幹部": "officers", "團員": "members", "跑友": "runners", "活動": "event", "協會": "Association", "行事曆": "calendar", "地點": "spot", "路線": "route", "天氣": "weather", "通知": "notifications", "賽事": "race", "組別": "group", "訓練紀錄": "training log", "內容": "details", "流程": "process", "選擇": "option", "跑法": "how to run", "起跑": "start", "慢跑": "jog", "小時": "hours", "碳水": "carbs", "熱身": "warm-up", "分段": "segments", "強度": "intensity", "主課": "main set", "前段": "first part", "組數": "sets", "比賽日": "race day", "可在": "can be done on"};

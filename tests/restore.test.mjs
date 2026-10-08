@@ -368,8 +368,10 @@ test('撤回清單：worker.js 裡的隱私撤回、推薦人移除與「不是�
   const acts = new Set([...src.matchAll(/audit(?:Stmt|ManyStmt)?\(env, \w+, [^,]+, '([a-z_]+\.[a-z_.]+)'/g)].map((m) => m[1]));
   const NOT_WITHDRAWAL = ['privacy.consent', 'privacy.export', 'privacy.race_profile'];
   const must = [...acts].filter((a) => (a.startsWith('privacy.') && !NOT_WITHDRAWAL.includes(a))
-    || ['referrer.clear', 'referrer.deny', 'referrer.admin_clear', 'team.leave', 'session.revoke_all', 'push.unsubscribe', 'passkey.remove', 'calendar.off', 'log.delete', 'route.delete', 'team.post_delete', 'pb.delete'].includes(a));
+    || ['referrer.clear', 'referrer.deny', 'referrer.admin_clear', 'team.leave', 'session.revoke_all', 'push.unsubscribe', 'passkey.remove', 'calendar.off', 'log.delete', 'route.delete', 'team.post_delete', 'pb.delete',
+      'security.reset'].includes(a));
   assert.ok(must.includes('privacy.email_lookup') && must.includes('referrer.deny'), '掃描有抓到');
+  assert.ok(must.includes('security.reset'), '理事長重設通行金鑰並登出也有掃到');
   assert.ok(['privacy.cheer_board', 'privacy.cheer_rank', 'privacy.ach_weight_delete', 'pb.delete'].every((a) => must.includes(a)), '成績與挑戰的撤回也有掃到');
   assert.deepEqual(must.filter((a) => !REPLAY_ACTIONS.includes(a)), []);
 });
@@ -430,4 +432,46 @@ test('還原後重做成績與挑戰的撤回：恭喜榜、PB 排行、挑戰�
   assert.equal(one(db, "SELECT 1 AS x FROM ach_entries WHERE id = 'ex'"), undefined, '沒發放的參加列一起刪');
   assert.equal(one(db, "SELECT COUNT(*) AS n FROM cheers").n, 0, '收到的與給出的恭喜都刪掉');
   assert.equal(one(db, "SELECT review_by FROM pb_records WHERE id = 'pb'").review_by, null, '審核人清空，別人的成績照樣在');
+});
+
+// 理事長「重設通行金鑰並登出」（帳號被盜用）：還原後被盜用時的通行金鑰、登入、推播訂閱、行事曆訂閱網址、Google 綁定不能跟著舊資料回來
+test('還原後重做理事長重設：重設當時以前的通行金鑰、登入、推播與行事曆訂閱；「解除 Google」的清掉 google_sub 與查詢碼，推薦關係不動', () => {
+  const db0 = freshDb();
+  db0.exec(`INSERT INTO members (id, name, google_sub, email_h, cal_token_hash) VALUES ('sc', '沒事的人', 'gsub-c', 'HC', 'cal-c'), ('sa', '被盜用的人', 'gsub-a', 'HA', 'cal-a'), ('sb', '只重設的人', 'gsub-b', 'HB', 'cal-b');
+    UPDATE members SET referrer_id = 'sc', referrer_by = 'self' WHERE id = 'sa';
+    INSERT INTO passkeys (id, member_id, public_jwk, created_at) VALUES ('pkStolen000001', 'sa', '{}', '2026-10-01 10:00:00'), ('pkOld000000002', 'sb', '{}', '2026-09-01 10:00:00'),
+      ('pkKeep00000003', 'sc', '{}', '2026-09-01 10:00:00');
+    INSERT INTO push_subs (endpoint, member_id, p256dh, auth) VALUES ('https://push.example/sa', 'sa', 'p', 'a'), ('https://push.example/sc', 'sc', 'p', 'a');`);
+  const tables = {};
+  for (const t of ['members', 'passkeys', 'push_subs']) tables[t] = db0.prepare(`SELECT * FROM "${t}"`).all().map((r) => ({ ...r }));
+  const data = { format: 'cil-backup', version: 2, at: '2026-10-01T19:00:00.000Z', tables };
+  const RESETS = [
+    A('r1', '2026-10-02 08:00:00', 'security.reset', 'sa', '通行金鑰 1 把、裝置 2 個、解除 Google', { actor_id: 't_chair' }),
+    A('r2', '2026-10-02 09:00:00', 'security.reset', 'sb', '通行金鑰 1 把、裝置 0 個', { actor_id: 't_chair' }),
+  ];
+  const rows = auditRowsFrom(wranglerJson(RESETS), data.at);
+  assert.equal(rows.length, 2);
+  const { plan, lines } = replaySql(rows);
+  assert.match(planSummary(plan), /理事長重設通行金鑰 2/);
+  assert.match(planSummary(plan), /解除 Google（理事長重設） 1/);
+  assert.ok(lines.includes("DELETE FROM passkeys WHERE member_id = 'sa' AND created_at <= '2026-10-02 08:00:00';"));
+  const db = freshDb();
+  db.exec(`BEGIN;\n${toSql(data, { audit: rows }).join('\n')}\nCOMMIT;`);
+  assert.deepEqual(db.prepare('SELECT id FROM passkeys ORDER BY id').all().map((r) => r.id), ['pkKeep00000003'], '重設的人的通行金鑰不會回來，別人的不動');
+  assert.deepEqual(db.prepare('SELECT member_id FROM push_subs').all().map((r) => r.member_id), ['sc']);
+  const m = (id) => ({ ...one(db, `SELECT google_sub, email_h, cal_token_hash, referrer_id FROM members WHERE id = '${id}'`) });
+  assert.deepEqual(m('sa'), { google_sub: null, email_h: null, cal_token_hash: null, referrer_id: 'sc' }, '解除 Google；推薦關係不動');
+  assert.deepEqual(m('sb'), { google_sub: 'gsub-b', email_h: 'HB', cal_token_hash: null, referrer_id: null }, '沒勾解除 Google 的照樣綁著');
+  assert.deepEqual(m('sc'), { google_sub: 'gsub-c', email_h: 'HC', cal_token_hash: 'cal-c', referrer_id: null }, '沒被重設的人不動');
+  // Time Travel 之後：倒回來的登入失效；重設之後本人新增的通行金鑰留著；跑兩次結果一樣
+  db.exec(`INSERT INTO sessions (token_hash, member_id, expires_at) VALUES ('ta', 'sa', '2026-12-01'), ('tb', 'sb', '2026-12-01'), ('tc', 'sc', '2026-12-01');
+    INSERT INTO passkeys (id, member_id, public_jwk, created_at) VALUES ('pkNewAfter0004', 'sa', '{}', '2026-10-02 08:30:00'), ('pkStolen000001', 'sa', '{}', '2026-10-01 10:00:00');`);
+  const sql = ['PRAGMA defer_foreign_keys = true;', ...replaySql(rows, { timeTravel: true }).lines].join('\n');
+  for (let i = 0; i < 2; i++) db.exec(`BEGIN;\n${sql}\nCOMMIT;`);
+  assert.deepEqual(db.prepare('SELECT member_id FROM sessions').all().map((r) => r.member_id), ['sc']);
+  assert.deepEqual(db.prepare("SELECT id FROM passkeys WHERE member_id = 'sa'").all().map((r) => r.id), ['pkNewAfter0004'], '重設之後新增的留著');
+  // 時間看不懂（直接給 replaySql 的列）：刪掉他所有的通行金鑰（安全優先）；帳號 id 被改過就擋下
+  assert.ok(replaySql([A('r3', null, 'security.reset', 'sa', '通行金鑰 0 把、裝置 0 個')]).lines.includes("DELETE FROM passkeys WHERE member_id = 'sa';"));
+  assert.throws(() => replaySql([A('r4', '2026-10-02 08:00:00', 'security.reset', "sa'; --", '')]));
+  assert.ok(!replaySql([A('r5', '2026-10-02 08:00:00', 'security.reset', 'sa', '通行金鑰 0 把、裝置 0 個｜解除 Google 了嗎')]).lines.some((l) => l.includes('google_sub')), '只認結尾的「解除 Google」');
 });

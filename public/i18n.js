@@ -19,6 +19,9 @@ const ACH_D = { '5K': '5K', '10K': '10K', 半馬: 'half marathon', 全馬: 'mara
 const achD = (d) => ACH_D[d] || d.replace(/^([\d.]+) 公里$/, '$1 km');
 // 動態句型：數字、日期、倒數等（先於片段替換）
 const PATTERNS = [
+  // 重設通行金鑰並登出（後台「權限」→「安全」的數字、稽核紀錄的 detail）
+  [/^通行金鑰 (\d+) 把・登入中的裝置 (\d+) 個(・已綁 Google)?$/, (_, a, b, g) => `${a} ${a === '1' ? 'passkey' : 'passkeys'} · ${b} signed-in ${b === '1' ? 'device' : 'devices'}${g ? ' · Google linked' : ''}`],
+  [/^通行金鑰 (\d+) 把、裝置 (\d+) 個(、解除 Google)?$/, (_, a, b, g) => `${a} ${a === '1' ? 'passkey' : 'passkeys'}, ${b} ${b === '1' ? 'device' : 'devices'}${g ? ', Google unlinked' : ''}`],
   // 成績與挑戰：條件句（achrule.js 的 ruleLines）與進度；整句先換，片段「全馬」「還有」單獨換會拆壞句子
   [/^期間內跑出比挑戰開始前更快的(5K|10K|半馬|全馬)成績$/, (_, d) => `Run a faster ${ACH_D[d]} than your best before the challenge`],
   [/^期間內(5K|10K|半馬|全馬)跑進 (\d+:\d{2}(?::\d{2})?)$/, (_, d, t) => `Run a ${ACH_D[d]} under ${t} during the challenge`],

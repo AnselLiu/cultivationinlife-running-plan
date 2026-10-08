@@ -47,7 +47,7 @@ async function adminView(tab) {
   panel.style.minHeight = ''; panel.removeAttribute('aria-busy');
   if (tab === 'overview') bindOverview();
   if (tab === 'members') bindMembers();
-  if (tab === 'roles') { for (const b of document.querySelectorAll('[data-role]')) b.onclick = () => roleDialog(b.dataset.role, b.dataset.name, b.dataset.cur); bindHandover(); }
+  if (tab === 'roles') { bindRoleActs(panel); bindHandover(); }
   if (tab === 'teams') bindAdminTeams();
   if (tab === 'audit') bindAudit();
   if (tab === 'events') bindEventsPanel();
@@ -422,7 +422,7 @@ function rolesPanel(data) {
       <div class="row spread"><h3>${data.roles[r]}</h3><span class="tiny">${byRole[r].length} 人</span></div>
       <div class="roster">${byRole[r].map((m) => `<div class="r">${avatar(m)}
         <span><b><span translate="no">${esc(m.name)}</span></b>${m.title ? ` <span class="tiny"><span translate="no">${esc(m.title)}</span></span>` : ''}</span>
-        ${allow('roles') ? `<button class="btn ghost sm" data-role="${m.id}" data-name="${esc(m.name)}" data-cur="${m.role}">變更</button>` : ''}</div>`).join('')}</div>
+        ${allow('roles') ? roleActs(m) : ''}</div>`).join('')}</div>
     </section>`).join('')}
     ${allow('roles') ? `<section class="card"><h3>指派身分</h3>
       <form id="roleSearch" class="row" style="gap:8px" role="search" data-live><input name="q" maxlength="20" placeholder="輸入跑友姓名或暱稱" aria-label="搜尋要指派身分的跑友" style="flex:1;min-width:160px" required><button class="btn ghost sm">搜尋</button></form>
@@ -434,14 +434,61 @@ function rolesPanel(data) {
       <div id="hoList" class="roster"></div>
     </section>` : ''}`;
 }
+// 權限分頁每位跑友的動作：「變更」身分；理事長（指派身分權限）另外有「安全」（重設通行金鑰並登出，自己的不顯示：自己的在「帳號與安全」）
+//   按鈕裡的 .sr 讓 VoiceOver 讀出是誰的（畫面上同一列已經有名字）
+const roleActs = (m) => `<span class="roleacts"><button class="btn ghost sm" data-role="${esc(m.id)}" data-name="${esc(m.name)}" data-cur="${esc(m.role)}">變更<span class="sr">：<span translate="no">${esc(m.name)}</span></span></button>${m.id === me.id ? ''
+  : `<button class="btn ghost sm" data-sec="${esc(m.id)}" data-name="${esc(m.name)}">${IC.lock}安全<span class="sr">：<span translate="no">${esc(m.name)}</span></span></button>`}</span>`;
+function bindRoleActs(box) {
+  if (!box) return;
+  for (const b of box.querySelectorAll('[data-role]')) b.onclick = () => roleDialog(b.dataset.role, b.dataset.name, b.dataset.cur);
+  for (const b of box.querySelectorAll('[data-sec]')) b.onclick = () => securityDialog(b.dataset.sec, b.dataset.name);
+}
+// 重設通行金鑰並登出所有裝置（帳號被盜用、幹部第一把不是本人、幹部唯一一把的手機弄丟）：只有理事長
+//   打開先讀數字（GET …/security：通行金鑰幾把、登入中的裝置幾個、有沒有綁 Google；不給裝置名稱、IP）；
+//   送出要 15 分鐘內用通行金鑰驗證過（api() 會叫出 Face ID）；原因只放在給本人的通知，推播與稽核紀錄都不記
+let secSeq = 0;
+function securityDialog(id, name) {
+  const opener = document.activeElement, my = ++secSeq;
+  const s = openSheet('重設通行金鑰並登出', `<h3 id="secT">重設通行金鑰並登出</h3>
+    <p style="margin:0"><b translate="no">${esc(name)}</b></p>
+    <p class="tiny" id="secN" style="margin:0" aria-live="polite">讀取中…</p>
+    <p class="muted" style="margin:0">會刪除這位跑友所有的通行金鑰、登出所有裝置與推播。之後本人重新登入（Google 或邀請碼），再新增通行金鑰。</p>
+    <form id="secF" style="display:grid;gap:12px">
+      <div id="secG" style="display:grid;gap:4px">
+        <label class="inline"><input type="checkbox" name="unlink" aria-describedby="secW"> 同時解除 Google 綁定（Google 帳號被盜用時才勾）</label>
+        <p class="tiny" id="secW" style="margin:0">解除後本人不能再用 Google 登入這個帳號，要用邀請碼或請理事長協助。</p>
+      </div>
+      <label>原因（選填）<textarea name="reason" maxlength="100" rows="2" aria-describedby="secR"></textarea></label>
+      <p class="tiny" id="secR" style="margin:0">原因只有本人看得到，推播與稽核紀錄都不會記</p>
+      <div class="sheetacts"><button type="button" class="btn ghost" data-close>取消</button><button class="btn danger">重設並登出</button></div>
+    </form>`, opener, 'secT');
+  const n = s.host.querySelector('#secN');
+  api(`/members/${encodeURIComponent(id)}/security`).then((c) => {
+    if (my !== secSeq || !n.isConnected) return;
+    n.textContent = `通行金鑰 ${Number(c.passkeys) || 0} 把・登入中的裝置 ${Number(c.sessions) || 0} 個${c.google ? '・已綁 Google' : ''}`;
+    // 沒有綁 Google：沒有東西可以解除
+    if (!c.google) { const g = s.host.querySelector('#secG'); g.hidden = true; g.querySelector('input').checked = false; }
+  }).catch((err) => { if (my === secSeq && n.isConnected) n.textContent = err.message; });
+  s.host.querySelector('#secF').onsubmit = async (e) => {
+    e.preventDefault();
+    const f = e.target;
+    try {
+      await api(`/members/${encodeURIComponent(id)}/security-reset`, { method: 'POST', body: { unlink_google: f.unlink.checked, reason: f.reason.value.trim().slice(0, 100) } });
+      s.close(); toast(`已重設 ${name} 的通行金鑰並登出所有裝置`);
+      await adminView('roles');
+      // 重畫後焦點回到同一位跑友的「安全」（在搜尋結果裡的話回到搜尋框）
+      focusEl(document.querySelector(`#panel [data-sec="${CSS.escape(id)}"]`) || $('#roleSearch [name=q]'));
+    } catch (err) { toast(err.message); }
+  };
+}
 function bindHandover() {
   const rs = $('#roleSearch'), rsOnly = latest(), hoOnly = latest();
   if (rs) rs.onsubmit = async (e) => {
     e.preventDefault();
     const { members } = await rsOnly(api(`/members?q=${encodeURIComponent(rs.q.value.trim())}`).catch((err) => { toast(err.message); return { members: [] }; }));
     $('#roleList').innerHTML = members.slice(0, 12).map((m) => `<div class="r">${avatar(m)}<span><b><span translate="no">${esc(m.name)}</span></b><span class="tiny" style="display:block">${esc(ROLE_NAME[m.role] || '團員')}</span></span>
-      <button class="btn ghost sm" data-role="${esc(m.id)}" data-name="${esc(m.name)}" data-cur="${esc(m.role)}">變更</button></div>`).join('') || '<p class="tiny" style="margin:0">找不到符合的跑友。</p>';
-    for (const b of document.querySelectorAll('#roleList [data-role]')) b.onclick = () => roleDialog(b.dataset.role, b.dataset.name, b.dataset.cur);
+      ${roleActs(m)}</div>`).join('') || '<p class="tiny" style="margin:0">找不到符合的跑友。</p>';
+    bindRoleActs($('#roleList'));
   };
   const f = $('#hoSearch'); if (!f) return;
   f.onsubmit = async (e) => {
@@ -501,7 +548,7 @@ const AUDIT_NAME = {
   'privacy.race_profile': '更新賽事報名資料', 'privacy.race_profile_delete': '刪除賽事報名資料', 'event.reg_export': '下載團體報名資料',
   'calendar.on': '產生行事曆訂閱', 'calendar.off': '停用行事曆訂閱',
   'passkey.add': '新增通行金鑰', 'passkey.remove': '移除通行金鑰', 'session.revoke_all': '登出所有裝置', 'passkey.denied': '通行金鑰驗證失敗', 'mfa.verify': '兩步驟驗證', 'login.new_device': '新裝置登入',
-  'settings.security': '修改兩步驟驗證設定', 'audit.verify': '稽核完整性檢查',
+  'settings.security': '修改兩步驟驗證設定', 'audit.verify': '稽核完整性檢查', 'security.reset': '重設通行金鑰並登出',
   'settings.signup': '修改活動報名預設', 'event.signup_review': '審核報名', 'event.signup_reject': '婉拒或移出報名', 'event.reopen': '恢復活動',
   'signup.expire': '待審核逾期失效', 'event.orders_export': '下載訂購單',
   'google.link': '綁定 Google', 'login.denied': '登入驗證失敗', 'team.post': '發布分團公告', 'team.post_delete': '刪除分團公告', 'privacy.show_rank': '排行榜設定', broadcast: '群發通知', 'retention.cleanup': '資料保存期限清理', 'event.invite_denied': '邀請連結無效', 'privacy.share_logs': '訓練紀錄分享設定', 'settings.shortcut': '修改捷徑連結',
@@ -522,7 +569,7 @@ const AUDIT_NAME = {
 };
 // 稽核紀錄：一定要選時間區間（預設最近 7 天），再依類型、操作者、對象縮小；一次 50 筆
 const AUDIT_GROUPS = { '': '所有類型', role: '身分變更', membership: '會籍', team: '分團', event: '活動', checkin: '報到', lottery: '抽獎',
-  settings: '系統設定', signup: '報名審核', privacy: '個資', login: '登入', passkey: '通行金鑰', mfa: '兩步驟驗證', account: '帳號', 'join.denied': '邀請碼錯誤', bootstrap: '初始設定', plan: '課表', referrer: '推薦人', pb: '成績', ach: '挑戰' };
+  settings: '系統設定', signup: '報名審核', privacy: '個資', login: '登入', passkey: '通行金鑰', mfa: '兩步驟驗證', security: '帳號安全重設', account: '帳號', 'join.denied': '邀請碼錯誤', bootstrap: '初始設定', plan: '課表', referrer: '推薦人', pb: '成績', ach: '挑戰' };
 function auditPanel() {
   const to = new Date().toISOString().slice(0, 10), from = new Date(Date.now() - 6 * 864e5).toISOString().slice(0, 10);
   return `<section class="card">

@@ -7,7 +7,9 @@
 //   - 通知分類 notif.prefs：照最後一次的設定（同一秒有好幾筆，取關掉的聯集）
 //   - 取消推播 push.unsubscribe、登出所有裝置 session.revoke_all：刪掉這個人的推播訂閱（之後在「通知設定」重新連上）
 //   - 移除通行金鑰 passkey.remove：detail 有金鑰 id 前綴就刪那一把；舊紀錄沒有前綴時讓他的登入失效，並列出來請本人再刪一次
-//   - 讓登入失效的動作（身分變更、理事長移交、初始理事長、登出所有裝置）：刪掉他的工作階段（Time Travel 會把撤銷的登入帶回來）
+//   - 讓登入失效的動作（身分變更、理事長移交、初始理事長、登出所有裝置、理事長重設）：刪掉他的工作階段（Time Travel 會把撤銷的登入帶回來）
+//   - 理事長「重設通行金鑰並登出」security.reset（target＝被重設的人）：刪掉他在重設當時（含）以前建立的通行金鑰、工作階段、推播訂閱、
+//     行事曆訂閱網址；detail 有「解除 Google」的再清掉 google_sub 與 Gmail 查詢碼（推薦關係不動）。時間看不懂時刪掉他所有的通行金鑰（安全優先，本人再新增）
 //   - 身分與分團身分（role.change、role.handover、bootstrap.chair、team.role）：照時間順序重設成最後一次的身分，
 //     降級的人不會在重新登入後拿回原本的權限；detail 結尾有 ｜role=代碼（新紀錄）就照代碼，舊紀錄照中文名稱，看不懂的列出人數請人工確認
 //   - 退出分團 team.leave、被移出或婉拒 team.remove／team.reject：刪掉 team_members 那一列（不然那個分團的幹部又看得到他分享的訓練）；
@@ -46,8 +48,10 @@ const ROLE_OF = Object.fromEntries(Object.entries(ROLE_LABELS).map(([k, v]) => [
 // 一定要有做這件事的人（actor_id）才能重做
 const NEED_ACTOR = ['team.leave', 'log.delete', 'referrer.deny', 'pb.delete'];
 // 讓某人的登入失效的動作（target_id；理事長移交另外連 actor_id）
-export const REVOKE_ACTIONS = ['role.change', 'role.handover', 'bootstrap.chair', 'session.revoke_all'];
-export const REPLAY_ACTIONS = [...new Set([...ERASE_ACTIONS, ...WITHDRAW_ACTIONS, ...REVOKE_ACTIONS, ...ROLE_ACTIONS])];
+export const REVOKE_ACTIONS = ['role.change', 'role.handover', 'bootstrap.chair', 'session.revoke_all', 'security.reset'];
+// 理事長重設通行金鑰並登出（帳號被盜用時）：不是本人的撤回，但還原後一樣要重做（不然被盜用時的通行金鑰與登入會跟著舊資料回來）
+export const RESET_ACTIONS = ['security.reset'];
+export const REPLAY_ACTIONS = [...new Set([...ERASE_ACTIONS, ...WITHDRAW_ACTIONS, ...REVOKE_ACTIONS, ...ROLE_ACTIONS, ...RESET_ACTIONS])];
 
 // 到正式資料庫查「這個時間之後」的撤回（唯讀）：整列抓下來，重做之後原樣補回 audit_log
 export const replayQuery = (at) => `SELECT ${AUDIT_COLS.join(', ')} FROM audit_log WHERE action IN (${REPLAY_ACTIONS.map(lit).join(', ')}) AND at >= ${lit(sqlTime(at))} ORDER BY at, id`;
@@ -104,6 +108,8 @@ function latest(rows, action) {
 }
 const offAtLast = (rows, action) => [...latest(rows, action)].filter(([, v]) => v.rows.some((r) => r.detail === '關閉')).map(([id]) => id);
 const pkPrefix = (r) => { const m = /^id=([\w-]+)$/.exec(r.detail || ''); return m && PK.test(m[1]) ? m[1] : null; };
+// security.reset 的 detail：「通行金鑰 N 把、裝置 M 個[、解除 Google]」
+const GOOGLE_OFF = /(?:^|、)解除 Google$/;
 
 // 從稽核紀錄算出要重做什麼
 export function planReplay(rows) {
@@ -132,11 +138,14 @@ export function planReplay(rows) {
     shareOff: offAtLast(rows, 'privacy.share_logs'),
     rankOff: offAtLast(rows, 'privacy.show_rank'),
     mute,
-    pushOff: ids((r) => r.action === 'push.unsubscribe' || r.action === 'session.revoke_all'),
+    pushOff: ids((r) => r.action === 'push.unsubscribe' || r.action === 'session.revoke_all' || RESET_ACTIONS.includes(r.action)),
+    // 理事長重設：[被重設的人, 重設的時間（看不懂是 null：刪掉他所有的通行金鑰）]；解除 Google 的人
+    resets: rows.filter((r) => RESET_ACTIONS.includes(r.action)).map((r) => [r.target_id, AT.test(sqlTime(r.at)) ? sqlTime(r.at) : null]),
+    googleOff: ids((r) => RESET_ACTIONS.includes(r.action) && GOOGLE_OFF.test(r.detail || '')),
     passkeys, passkeyUnknown,
     revoke: [...revoke],
     steps, unresolved,
-    calOff: ids((r) => r.action === 'calendar.off' || r.action === 'calendar.on'),
+    calOff: ids((r) => r.action === 'calendar.off' || r.action === 'calendar.on' || RESET_ACTIONS.includes(r.action)),
     logs: rows.filter((r) => r.action === 'log.delete').map((r) => [r.target_id, r.actor_id]),
     routes: ids((r) => r.action === 'route.delete'),
     posts: rows.filter((r) => r.action === 'team.post_delete' && ID.test(r.detail || '')).map((r) => [r.target_id, r.detail]),
@@ -207,7 +216,7 @@ function stepSql(s) {
 // 給人看的摘要（只有人數，不印帳號 id）
 export const planSummary = (p) => [
   ['刪除帳號', p.erased.length], ['刪除賽事報名資料', p.raceDelete.length], ['停止分享訓練', p.shareOff.length], ['退出排行榜', p.rankOff.length],
-  ['通知分類設定', p.mute.size], ['推播訂閱刪除', p.pushOff.length], ['通行金鑰刪除', p.passkeys.length], ['登入失效', p.revoke.length],
+  ['通知分類設定', p.mute.size], ['推播訂閱刪除', p.pushOff.length], ['通行金鑰刪除', p.passkeys.length], ['理事長重設通行金鑰', p.resets.length], ['解除 Google（理事長重設）', p.googleOff.length], ['登入失效', p.revoke.length],
   ['身分與分團成員', p.steps.length], ['行事曆訂閱停用', p.calOff.length], ['訓練紀錄刪除', p.logs.length], ['路線刪除', p.routes.length], ['分團公告刪除', p.posts.length],
   ['Gmail 查詢關閉', p.emailOff.length], ['Gmail 查詢碼刪除（關過又打開）', p.emailDel.length - p.emailOff.length], ['推薦人移除', p.refClear.length], ['推薦人「不是我」', p.refDeny.length],
   ['退出恭喜榜', p.boardOff.length], ['退出 PB 排行', p.cheerRankOff.length], ['刪除挑戰體重', p.achWeight.length], ['成績刪除', p.pbDel.length],
@@ -238,6 +247,12 @@ export function replaySql(rows, { timeTravel = false } = {}) {
   for (const [id, v] of p.mute) { if (!ID.test(id)) throw new Error(`看不懂的帳號 id：${id}`); L.push(`UPDATE members SET notif_mute = ${lit(v)} WHERE id = ${lit(id)};`); }
   each(p.pushOff, ['DELETE FROM push_subs WHERE member_id = ?1']);
   for (const [id, pre] of p.passkeys) L.push(`DELETE FROM passkeys WHERE member_id = ${lit(id)} AND substr(id, 1, ${pre.length}) = ${lit(pre)};`);
+  // 理事長重設：重設當時（含）以前建立的通行金鑰（之後本人新增的留著）；解除 Google
+  for (const [id, at] of p.resets) {
+    if (!ID.test(id) || (at != null && !AT.test(at))) throw new Error(`看不懂的帳號 id：${id}`);
+    L.push(`DELETE FROM passkeys WHERE member_id = ${lit(id)}${at ? ` AND created_at <= ${lit(at)}` : ''};`);
+  }
+  each(p.googleOff, ['UPDATE members SET google_sub = NULL, email_h = NULL WHERE id = ?1']);
   each(p.revoke, ['DELETE FROM sessions WHERE member_id = ?1']);
   for (const s of p.steps) L.push(...stepSql(s));
   each(p.calOff, ['UPDATE members SET cal_token_hash = NULL WHERE id = ?1']);

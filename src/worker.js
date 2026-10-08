@@ -143,10 +143,12 @@ async function startSession(env, member, req, { mfa = false, google = false } = 
   return `${COOKIE}=${token}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${pol.absDays * 86400}`;
 }
 // 作廢所有工作階段，同時讓行事曆訂閱網址失效（登出所有裝置、身分變更時都要重新訂閱）
-const revokeSessions = (env, memberId) => env.DB.batch([
+//   revokeStmts 只產生語句：理事長「重設通行金鑰並登出」跟其他寫入放在同一個 batch
+const revokeStmts = (env, memberId) => [
   env.DB.prepare('DELETE FROM sessions WHERE member_id = ?').bind(memberId),
   env.DB.prepare('UPDATE members SET cal_token_hash = NULL WHERE id = ?').bind(memberId),
-]);
+];
+const revokeSessions = (env, memberId) => env.DB.batch(revokeStmts(env, memberId));
 
 // 嘗試次數限制：在 window 秒內超過 limit 次就擋
 async function limited(env, key, limit, windowSec) {
@@ -2319,11 +2321,11 @@ const api = (async function api(req, env, path, method) {
         const dev = deviceLabel(req.headers.get('user-agent') || '');
         await audit(env, req, member, 'passkey.add', 'member', member.id, `${dev}${ch.via === 'google' ? '｜Google 確認後新增' : ch.via === 'first' ? '｜幹部第一把（Google 確認後新增）' : ''}`);
         await securityNotify(env, [member.id], { title: '新增了一把通行金鑰', body: `${dev}。不是你的話，請到「我的 → 帳號與安全」移除並登出所有裝置。`, url: '/#/me/security' });
-        // 幹部的第一把（第一次使用即信任）：也通知理事長與行政人員（有系統設定權限的人），不是本人可以先改身分登出所有裝置
+        // 幹部的第一把（第一次使用即信任）：也通知理事長與行政人員（有系統設定權限的人），不是本人的話理事長在後台「權限」重設並登出（/api/members/:id/security-reset）
         if (ch.via === 'first') {
           const admins = (await env.DB.prepare("SELECT id FROM members WHERE role IN ('chair', 'staff', 'admin') AND id != ?").bind(member.id).all()).results.map((r) => r.id);
           await securityNotify(env, admins, { title: '幹部新增了第一把通行金鑰',
-            body: `${member.name} 用 Google 登入後新增了第一把通行金鑰（${dev}）。不是本人的話，請理事長在後台「權限」把他改成團員（會登出所有裝置），並請本人到「帳號與安全」移除這把通行金鑰。`,
+            body: `${member.name} 用 Google 登入後新增了第一把通行金鑰（${dev}）。不是本人的話，請理事長到後台「權限」按這位跑友的「安全」→「重設並登出」。`,
             url: '/#/admin?tab=roles' });
         }
         return json({ ok: true });
@@ -5994,6 +5996,50 @@ const api = (async function api(req, env, path, method) {
     await audit(env, req, member, 'role.change', 'member', mr[1], `${ROLES[role]}${b.title ? `／${str(b.title, 20)}` : ''}｜role=${role}`);
     await securityNotify(env, [mr[1]], { title: '身分更新', body: `你的身分已設定為${ROLES[role]}`, url: '/#/me', push: { body: '你的身分已變更，請重新登入' } });
     return json({ ok: true });
+  }
+
+  // 重設別人的通行金鑰並登出所有裝置（帳號被盜用、幹部第一把不是本人、幹部唯一一把的手機弄丟）：只有理事長（權限「指派身分」）
+  //   GET …/security：只給數字（通行金鑰幾把、登入中的裝置幾個、最近使用日期、有沒有綁 Google、有沒有待確認的綁定、是不是幹部），
+  //     不給裝置名稱、IP、UA；唯讀、不用再驗證、不寫稽核
+  //   POST …/security-reset {unlink_google, reason}：要 15 分鐘內用通行金鑰驗證過（needStepUp(true)）；不能重設自己（自己的在「帳號與安全」）
+  //     同一個 batch（句數固定）：刪通行金鑰、工作階段與行事曆訂閱網址（同 revokeSessions）、推播訂閱（同「登出所有裝置」）、
+  //     待確認的 Google 綁定、還沒用掉的挑戰值；unlink_google（Google 帳號被盜用時）再清掉 google_sub 與 Gmail 查詢碼（推薦關係不動）；
+  //     稽核 security.reset 只記數字與「解除 Google」（不記原因、不記個資），還原備份後 tools/restore-sql.mjs 照這一列重做
+  //     原因只放在給本人的通知中心（推播與稽核都沒有）；推播訂閱已經刪了，這則通知等本人重新登入後在通知中心看到
+  const msec = path.match(/^\/api\/members\/([\w-]{1,32})\/security(-reset)?$/);
+  if (msec && method === (msec[2] ? 'POST' : 'GET')) {
+    const g = need(); if (g) return g;
+    const reset = !!msec[2];
+    if (!can(member, 'roles')) return fail(403, reset ? '只有理事長可以重設別人的通行金鑰' : '只有理事長可以查看');
+    if (reset && msec[1] === member.id) return fail(400, '重設自己的請到「我的 → 帳號與安全」');
+    if (reset) {
+      const su = await needStepUp(true); if (su) return su;
+      if (await limited(env, `secreset:${member.id}`, 10, 3600)) return fail(429, '操作太頻繁，請稍後再試');
+    }
+    // 一句讀完：最近使用＝工作階段與帳號的最後活動取比較晚的（台北日期）
+    const t = await env.DB.prepare(`SELECT m.id, m.role, m.google_sub IS NOT NULL AS g,
+        (SELECT COUNT(*) FROM passkeys WHERE member_id = m.id) AS pk,
+        (SELECT COUNT(*) FROM sessions WHERE member_id = m.id AND expires_at > datetime('now')) AS ss,
+        (SELECT date(MAX(x), '+8 hours') FROM (SELECT m.last_seen AS x UNION ALL SELECT last_seen_at FROM sessions WHERE member_id = m.id)) AS seen,
+        EXISTS (SELECT 1 FROM google_pending WHERE member_id = m.id AND expires_at > datetime('now')) AS gp,
+        EXISTS (SELECT 1 FROM team_members WHERE member_id = m.id AND status = 'active' AND role IN ('lead', 'officer')) AS tof
+      FROM members m WHERE m.id = ?`).bind(msec[1]).first();
+    if (!t) return fail(404, '找不到這位跑友');
+    if (!reset) return json({ passkeys: t.pk, sessions: t.ss, lastSeen: t.seen || null, google: !!t.g, pending: !!t.gp, officer: norm(t.role) !== 'member' || !!t.tof });
+    const b = await body(), unlink = b.unlink_google === true && !!t.g, reason = str(b.reason, 100);
+    await env.DB.batch([
+      env.DB.prepare('DELETE FROM passkeys WHERE member_id = ?').bind(t.id),
+      ...revokeStmts(env, t.id),
+      env.DB.prepare('DELETE FROM push_subs WHERE member_id = ?').bind(t.id),
+      env.DB.prepare('DELETE FROM google_pending WHERE member_id = ?').bind(t.id),
+      env.DB.prepare('DELETE FROM webauthn_challenges WHERE member_id = ?').bind(t.id),
+      env.DB.prepare('UPDATE members SET google_sub = NULL, email_h = NULL WHERE id = ?1 AND ?2 = 1').bind(t.id, unlink ? 1 : 0),
+      await auditStmt(env, req, member, 'security.reset', 'member', t.id, `通行金鑰 ${t.pk} 把、裝置 ${t.ss} 個${unlink ? '、解除 Google' : ''}`),
+    ]);
+    await securityNotify(env, [t.id], { title: '帳號安全已重設',
+      body: `理事長重設了你的通行金鑰並登出所有裝置${unlink ? '，也解除了 Google 綁定' : ''}。重新登入後，請到「我的 → 帳號與安全」新增通行金鑰。${reason ? `原因：${reason}` : ''}`,
+      url: '/#/me/security', push: { body: '理事長重設了你的通行金鑰並登出所有裝置' } });
+    return json({ ok: true, passkeys: t.pk, sessions: t.ss, unlinked: unlink });
   }
 
   if (path === '/api/push/subscribe' && method === 'POST') {

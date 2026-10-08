@@ -4,10 +4,11 @@ export const BASE = 'http://localhost:8796';
 const base = () => { try { return test.info().project.use.baseURL || BASE; } catch { return BASE; } };
 const plus = (d) => new Date(Date.now() + 8 * 3600e3 + d * 864e5).toISOString().slice(0, 10);
 export { plus };
-export async function login(page, id, { start = false } = {}) {
+// mfa：登入時當作剛用通行金鑰驗證過（理事長重設別人的通行金鑰等要 15 分鐘內驗證過的操作）
+export async function login(page, id, { start = false, mfa = false } = {}) {
   // 「開始使用」卡（加到主畫面、推播、組別）在首頁與「我的」最上面：測試裡先標成收起，不影響其他版面（卡片本身另外測：start: true）
   if (!start) await page.addInitScript(() => { try { localStorage.setItem('cil-start', JSON.stringify({ v: 1, dismissed: 1 })); } catch {} });
-  await page.goto(`/api/dev/login?id=${id}`);
+  await page.goto(`/api/dev/login?id=${id}${mfa ? '&mfa=1' : ''}`);
   await page.waitForURL(/#\//);
 }
 // 以某個帳號呼叫 API（測試資料準備用）

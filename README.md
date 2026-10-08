@@ -126,6 +126,8 @@ Google 不允許在 LINE、Facebook、Instagram 的內建瀏覽器登入；在 L
 1. `npx wrangler d1 migrations apply cil-run --remote`（`0055_google_then_passkey`，只新增 `google_pending` 表與 `sessions.google_at`、`webauthn_challenges.via` 欄位），先在測試環境做一次。**要在部署程式之前做**：新程式每次請求都會讀 `sessions.google_at`，登入與新增通行金鑰時也會寫。
 2. 部署程式（Service Worker 升到 `cil-v75`）。過渡期：還沒按「有新版本」更新的人用舊版畫面綁 Google（網址沒帶 `c=1`），伺服器照舊回「先驗證一次再綁」，不會停在一頁看不懂的確認網址；更新後就是新的確認卡。
 
+**重設通行金鑰並登出上線步驟**（沒有 migration、沒有功能開關）：部署程式（Service Worker 升到 `cil-v76`）。後台「權限」每位跑友多一顆「安全」（只有理事長看得到）；幹部第一把通行金鑰的通知改成請理事長按「安全」→「重設並登出」。還原備份的工具會重做 `security.reset`（見 docs/RESTORE.md）。
+
 ### 跑步數據匯入
 
 不串接任何付費或需要訂閱的服務：手動輸入、iPhone 捷徑讀取 Apple 健康，或匯入 GPX／TCX 檔（Garmin Connect、Apple 健康、各家手錶都能匯出）。
