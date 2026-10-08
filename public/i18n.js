@@ -14,8 +14,45 @@ const WD = { 日: 'Sun', 一: 'Mon', 二: 'Tue', 三: 'Wed', 四: 'Thu', 五: 'F
 const MON = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const MO3 = MON.map((m) => m.slice(0, 3));
 const DN = { 全馬: 'marathon', 半馬: 'half' };
+// 成績與挑戰的距離（句型用；「30 公里」這類其他距離照數字換）
+const ACH_D = { '5K': '5K', '10K': '10K', 半馬: 'half marathon', 全馬: 'marathon' };
+const achD = (d) => ACH_D[d] || d.replace(/^([\d.]+) 公里$/, '$1 km');
 // 動態句型：數字、日期、倒數等（先於片段替換）
 const PATTERNS = [
+  // 成績與挑戰：條件句（achrule.js 的 ruleLines）與進度；整句先換，片段「全馬」「還有」單獨換會拆壞句子
+  [/^期間內跑出比挑戰開始前更快的(5K|10K|半馬|全馬)成績$/, (_, d) => `Run a faster ${ACH_D[d]} than your best before the challenge`],
+  [/^期間內(5K|10K|半馬|全馬)跑進 (\d+:\d{2}(?::\d{2})?)$/, (_, d, t) => `Run a ${ACH_D[d]} under ${t} during the challenge`],
+  [/^(5K|10K|半馬|全馬|任一距離)成績比挑戰開始前的 PB 快 ([\d.]+)% 以上$/, (_, d, p) => `Beat your pre-challenge PB${d === '任一距離' ? ' at any distance' : ` in the ${ACH_D[d]}`} by ${p}% or more`],
+  [/^在團練現場量起始與結束體重（幹部見證），減少 ([\d.]+)% 以上$/, 'Weigh in at the start and end at a group run (witnessed by an officer) and lose $1% or more'],
+  [/^挑戰結束前自主聲明體重比開始時減少 ([\d.]+)% 以上$/, 'Before the challenge ends, declare on your honor that your weight is down $1% or more'],
+  [/^期間內訓練紀錄累積 ([\d.]+) 公里$/, 'Log $1 km of training during the challenge'],
+  [/^期間內出席 (\d+) 次團練$/, (_, n) => `Attend ${n} group ${n === '1' ? 'run' : 'runs'} during the challenge`],
+  [/^比目前 PB 快 (\S+)$/, '$1 faster than current PB'],
+  [/^比目前 PB 慢 (\S+)，不會刷新 PB$/, '$1 slower than current PB — won’t set a new PB'],
+  [/^還差 ([\d.]+) 公里$/, '$1 km to go'],
+  [/^還差 (\d+) 次$/, '$1 more to go'],
+  [/^進步 ([\d.]+)%，目標 ([\d.]+)%$/, 'Improved $1% — goal $2%'],
+  [/^減少 ([\d.]+)%$/, 'Down $1%'],
+  [/^比開始時減少 ([\d.]+)%$/, 'Down $1% from the start'],
+  [/^候補第 (\d+) 位$/, 'Waitlist #$1'],
+  [/^目前第 (\d+) 位，名額 (\d+) 件$/, 'Currently #$1 of $2 shirts'],
+  [/^限量 (\d+) 件，依達成先後$/, 'Limited to $1 — first come, first served'],
+  [/^限量 (\d+) 件$/, 'Limited to $1'],
+  [/^已經有 (\d+) 位達成，現在參加會排在候補$/, (_, n) => `${n} ${n === '1' ? 'runner has' : 'runners have'} already finished — if you join now you’ll be on the shirt waitlist`],
+  [/^(\d+) 位跑友恭喜你$/, (_, n) => `${n} ${n === '1' ? 'runner' : 'runners'} cheered for you`],
+  [/^已見證 (.+) 的(起始|結束)量測$/, (_, n, w) => `Witnessed ${n}’s ${w === '起始' ? 'starting' : 'final'} weigh-in`],
+  [/^配速 (\S+)$/, 'Pace $1'],
+  [/^尺寸選到 (\d{1,2})\/(\d{1,2})$/, 'Choose a size by $1/$2'],
+  [/^已通知 (\d+) 人$/, 'Notified $1'],
+  [/^已讓出 (\d+) 個名額$/, (_, n) => `Released ${n} ${n === '1' ? 'slot' : 'slots'}`],
+  [/^已跑 ([\d.]+) 公里，目標 ([\d.]+) 公里$/, '$1 km of $2 km'],
+  [/^已出席 (\d+) 次，目標 (\d+) 次$/, 'Attended $1 of $2'],
+  [/^刷新 (5K|10K|半馬|全馬|[\d.]+ 公里) PB$/, (_, d) => `New ${achD(d)} PB`],
+  [/^完賽 (5K|10K|半馬|全馬|[\d.]+ 公里)$/, (_, d) => `Finished ${/^\d/.test(achD(d)) ? achD(d) : `a ${achD(d)}`}`],
+  [/^快 (\d+:\d{2}(?::\d{2})?)$/, '$1 faster'],
+  [/^(\d{1,2})\/(\d{1,2}) 開始$/, 'Starts $1/$2'],
+  [/^已結束（(\d+)）$/, 'Ended ($1)'],
+  [/^我確認體重比挑戰開始時減少了 ([\d.]+)% 以上。這是榮譽制聲明，不會上傳數字。$/, 'I confirm my weight is down $1% or more since the challenge started. This is an honor-system declaration — no numbers are uploaded.'],
   // 索票（張數）、異動重新確認：整句，數字在中間；要在片段與數量單位「N 張」之前
   [/^已登記 (\d+) \/ (\d+) 張$/, '$1 / $2 tickets requested'],
   [/^已登記 (\d+) 張$/, (_, n) => `${n} ${n === '1' ? 'ticket' : 'tickets'} requested`],
