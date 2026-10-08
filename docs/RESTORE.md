@@ -2,7 +2,7 @@
 
 資料庫要回到某個時間點（例如誤刪、錯誤的批次修改）時，優先用 D1 Time Travel（免費方案 7 天）。每日加密備份的還原步驟寫在 `tools/restore-backup.mjs` 的開頭。
 
-Time Travel 會把整個資料庫倒回去，**連 `audit_log` 也一起倒回**。還原時間點之後本人做的撤回（刪除帳號、刪除賽事報名資料、停止分享訓練、退出排行榜、通知分類、取消推播、移除通行金鑰、登出所有裝置、退出分團、停用行事曆訂閱、刪除自己的訓練紀錄、路線與分團公告、關閉用 Gmail 找到我、移除推薦人、推薦人按「不是我」）、幹部做的移出分團，以及身分與分團身分的變更，都會跟著消失。還原後如果沒有重做，被刪掉的帳號與資料會回來，關掉的分享會重新打開，退出的分團的幹部又看得到他分享的訓練，被降級的人重新登入就拿回原本的權限（PDPA，ISO 27001 A.5.34、A.5.18）。所以撤回紀錄**一定要在還原之前抓下來**，還原後再用工具產生的 SQL 重做。
+Time Travel 會把整個資料庫倒回去，**連 `audit_log` 也一起倒回**。還原時間點之後本人做的撤回（刪除帳號、刪除賽事報名資料、停止分享訓練、退出排行榜、通知分類、取消推播、移除通行金鑰、登出所有裝置、退出分團、停用行事曆訂閱、刪除自己的訓練紀錄、路線與分團公告、關閉用 Gmail 找到我、移除推薦人、推薦人按「不是我」、退出恭喜榜與 PB 排行、刪除挑戰體重或退出現場量體重的挑戰、刪除自己的成績）、幹部做的移出分團，以及身分與分團身分的變更，都會跟著消失。還原後如果沒有重做，被刪掉的帳號與資料會回來，關掉的分享會重新打開，退出的分團的幹部又看得到他分享的訓練，被降級的人重新登入就拿回原本的權限（PDPA，ISO 27001 A.5.34、A.5.18）。所以撤回紀錄**一定要在還原之前抓下來**，還原後再用工具產生的 SQL 重做。
 
 重做什麼、怎麼判斷，寫在 `tools/restore-sql.mjs` 開頭的說明；測試在 `tests/restore.test.mjs`。
 
@@ -64,8 +64,9 @@ node tools/restore-backup.mjs --replay withdrawals.json --since "$T"
 10. 關閉用 Gmail 找到我（`privacy.email_lookup`）：只要關過就清掉 Gmail 查詢碼（`email_h`；刪除是單向的，之後又打開也不會從備份回來，要本人再用 Google 確認一次）；開關照最後一次（同一秒有開有關以關閉為準）。
 11. 移除推薦人（`referrer.clear` 本人、`referrer.admin_clear` 幹部）：清掉推薦人；推薦人按「不是我」（`referrer.deny`）：只清掉推薦人還是這位的那一筆，標成沒有確認，並補回 180 天的冷卻（`rate_limits`）。備份不含 `rate_limits`：備份之前按的「不是我」，冷卻照備份自己的 `audit_log` 補回（還沒過 180 天的，完整還原或只還原 `members` 時）。
 12. 刪除自己的訓練紀錄（`log.delete`）、路線（`route.delete`）、分團公告（`team.post_delete`）：照 id 再刪一次，備註、心率、強度不會跟著回來。
-13. 清空倒回來的推播佇列（`push_queue`），舊推播不會重送；通知中心的內容不受影響。
-14. 抓到的稽核紀錄原樣補回 `audit_log`（`INSERT OR IGNORE`，簽章照原本的）。之後再從更舊的備份還原時，也查得到這些撤回。
+13. 退出恭喜榜（`privacy.cheer_board`）與 PB 排行（`privacy.cheer_rank`），最後一次是關閉就關掉；刪除挑戰體重（`privacy.ach_weight_delete`：刪掉該挑戰的 `ach_private`、清掉見證紀錄；detail 有 `leave` 的再把參加改成已退出）；刪除自己的成績（`pb.delete`：照 id 再刪一次，截圖與恭喜一起刪）。
+14. 清空倒回來的推播佇列（`push_queue`），舊推播不會重送；通知中心的內容不受影響。
+15. 抓到的稽核紀錄原樣補回 `audit_log`（`INSERT OR IGNORE`，簽章照原本的）。之後再從更舊的備份還原時，也查得到這些撤回。
 
 `members` 的還原用 `INSERT … ON CONFLICT(id) DO UPDATE`（不是 `INSERT OR REPLACE`：REPLACE 會先刪掉舊的那一列，觸發推薦人的 `ON DELETE SET NULL` 與子表的 `ON DELETE CASCADE`）。
 
@@ -85,6 +86,8 @@ npx wrangler d1 execute cil-run --remote --command "SELECT COUNT(*) AS n FROM me
 npx wrangler d1 execute cil-run --remote --command "SELECT COUNT(*) AS n FROM member_private WHERE member_id IN (SELECT target_id FROM audit_log WHERE action = 'privacy.race_profile_delete' AND at >= '<T 減 10 分鐘>')"
 # 退出分團的人不在那個分團了（應該是 0）
 npx wrangler d1 execute cil-run --remote --command "SELECT COUNT(*) AS n FROM team_members t JOIN audit_log a ON a.action = 'team.leave' AND a.actor_id = t.member_id AND a.target_id = t.team_id WHERE a.at >= '<T 減 10 分鐘>'"
+# 挑戰結束超過 30 天或已取消的體重資料不在了（應該是 0，或等下一次每日清理）
+npx wrangler d1 execute cil-run --remote --command "SELECT COUNT(*) FROM ach_private WHERE campaign_id IN (SELECT id FROM ach_campaigns WHERE status = 'cancelled' OR end_date < date('now', '-30 days'));"
 ```
 
 - **身分與幹部（一定要做，再公告維護結束）**：到管理後台「稽核紀錄」篩選還原時間點之後的「變更身分」「變更分團身分」「移交理事長」「移出分團」，逐筆對照名冊與各分團的幹部名單。工具印出「看不懂、要人工確認」的筆數不是 0 時，照稽核紀錄手動調整。
