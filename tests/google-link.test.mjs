@@ -32,7 +32,8 @@ async function join(name) {
   assert.equal(j.status, 200, j.text);
   return { cookie: j.headers.getSetCookie().find((c) => c.startsWith('__Host-cil_sess=')).split(';')[0], id: j.json.member.id };
 }
-const auditOf = async (action) => (await call(await devCookie('t_chair'), `/audit?action=${action.split('_')[0]}`)).json.items.filter((r) => r.action === action);
+// 理事長用通行金鑰驗證過的工作階段（強制兩步驟開著的時候，沒驗證的理事長看不到稽核）
+const auditOf = async (action) => (await call(await devCookie('t_chair', true), `/audit?action=${action.split('_')[0]}`)).json.items.filter((r) => r.action === action);
 
 // 軟體驗證器：一把金鑰可以註冊、驗證（簽章計數每次加一）
 const te = new TextEncoder(), b64u = (b) => Buffer.from(b).toString('base64url'), unb64u = (s) => new Uint8Array(Buffer.from(s, 'base64url'));
@@ -50,10 +51,11 @@ const der = (raw) => { const enc = (x) => { let i = 0; while (i < 31 && x[i] ===
 async function newKey() {
   return { key: await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']), credId: crypto.getRandomValues(new Uint8Array(32)), counter: 1 };
 }
-// 新增通行金鑰：回傳 options 與 verify 的回應（options 被擋下時 verify 是 null）
-async function register(cookie, k) {
+// 新增通行金鑰：回傳 options 與 verify 的回應（options 被擋下時 verify 是 null）；between：拿到 options 之後、送出 verify 之前要做的事
+async function register(cookie, k, between) {
   const o = await call(cookie, '/passkey/options', { method: 'POST', body: { purpose: 'register' } });
   if (o.status !== 200) return { options: o, verify: null };
+  if (between) await between();
   const jwk = await crypto.subtle.exportKey('jwk', k.key.publicKey);
   const cose = new Map([[1, 2], [3, -7], [-1, 1], [-2, unb64u(jwk.x)], [-3, unb64u(jwk.y)]]);
   const ad = cat(await sha(te.encode(RP)), new Uint8Array([0x45, 0, 0, 0, k.counter]), new Uint8Array(16), new Uint8Array([0, 32]), k.credId, cbor(cose));
@@ -71,7 +73,9 @@ async function stepup(cookie, k) {
   const r = await call(cookie, '/passkey/verify', { method: 'POST', body: { cid: op.cid, credential: { id: b64u(k.credId), type: 'public-key', response: { clientDataJSON: b64u(c), authenticatorData: b64u(a), signature: b64u(der(raw)) } } } });
   assert.equal(r.status, 200, r.text);
 }
-const confirm = (cookie) => call(cookie, '/google/confirm-link', { method: 'POST' });
+// 確認：照 App 的做法先讀待確認那一筆（確認卡顯示的帳號），把它的 pid 送回去
+const pending = async (cookie) => (await call(cookie, '/google/pending')).json?.pending ?? null;
+const confirm = async (cookie, pid) => call(cookie, '/google/confirm-link', { method: 'POST', body: { pid: pid ?? (await pending(cookie))?.pid } });
 
 const B = {};   // 每支 API 這次用掉的 D1 句數（最後一起檢查）
 const chairKey = { id: null };
@@ -91,9 +95,15 @@ test('有通行金鑰綁 Google：先記下待確認 → 沒驗證不能確認 �
   const j = await join('先綁甲'), k = await newKey();
   assert.equal((await register(j.cookie, k)).verify.status, 200, '還沒有通行金鑰：第一把直接新增');
   const sub = `gl_a_${T}`;
-  const g = await google({ link: '1', sub, name: '先綁甲' }, j.cookie);
+  const g = await google({ link: '1', sub, name: '先綁甲', pic: 'https://lh3.googleusercontent.com/a/gl-a' }, j.cookie);
   assert.equal(g.location, '/#/me?google=confirm', '不再擋下（以前是 google=stepup）');
   B.pending = g.d1;
+  // 確認卡顯示要綁的 Google 帳號：名稱與大頭貼（不給 sub、Email）
+  const pg = await call(j.cookie, '/google/pending');
+  B.pendingGet = pg.d1;
+  assert.deepEqual(Object.keys(pg.json.pending).sort(), ['name', 'pic', 'pid']);
+  assert.equal(pg.json.pending.name, '先綁甲');
+  assert.equal(pg.json.pending.pic, 'https://lh3.googleusercontent.com/a/gl-a');
   assert.equal((await me(j.cookie)).google, false, '還沒確認：沒有綁上');
   const no = await confirm(j.cookie);
   assert.equal(no.status, 403);
@@ -128,7 +138,8 @@ test('待確認：只有發起的那個工作階段能確認、10 分鐘逾時�
   await register(j.cookie, k);
   assert.equal((await google({ link: '1', sub: `gl_s_${T}` }, j.cookie)).location, '/#/me?google=confirm');
   const other = await devCookie(j.id, true);
-  assert.equal((await confirm(other)).status, 404, '另一個工作階段');
+  assert.equal(await pending(other), null, '另一個工作階段看不到');
+  assert.equal((await confirm(other, (await pending(j.cookie)).pid)).status, 404, '另一個工作階段：拿到 pid 也確認不了');
   // 取消
   assert.equal((await call(j.cookie, '/google/pending', { method: 'DELETE' })).status, 200);
   await stepup(j.cookie, k);
@@ -144,16 +155,28 @@ test('待確認：只有發起的那個工作階段能確認、10 分鐘逾時�
   assert.equal(late.status, 404);
   assert.equal(late.json.expired, true);
   assert.equal((await me(j2.cookie)).google, false);
-  // 重新綁定：同一個人只留最新的一筆（UPSERT）
+  assert.equal(await pending(j2.cookie), null, '過期的不顯示');
+  // 重新綁定：同一個人只留最新的一筆（UPSERT）；卡上看的是前一個帳號（pid 對不上）就不綁，要重新看過再確認
   const j3 = await join('逾時丙'), k3 = await newKey();
   await register(j3.cookie, k3);
-  await google({ link: '1', sub: `gl_e1_${T}` }, j3.cookie);
-  await google({ link: '1', sub: `gl_e2_${T}` }, j3.cookie);
+  await google({ link: '1', sub: `gl_e1_${T}`, name: '第一個' }, j3.cookie);
+  const seen = await pending(j3.cookie);
+  assert.equal(seen.name, '第一個');
+  await google({ link: '1', sub: `gl_e2_${T}`, name: '換掉的' }, j3.cookie);
   await stepup(j3.cookie, k3);
-  assert.equal((await confirm(j3.cookie)).json.result, 'linked');
+  const swapped = await confirm(j3.cookie, seen.pid);
+  assert.equal(swapped.status, 409);
+  assert.equal(swapped.json.changed, true);
+  assert.equal((await me(j3.cookie)).google, false, '沒有綁上換過的帳號');
+  assert.equal((await confirm(j3.cookie, '')).status, 409, '沒帶 pid 也不綁');
+  const now = await pending(j3.cookie);
+  assert.equal(now.name, '換掉的');
+  assert.notEqual(now.pid, seen.pid);
+  assert.equal((await confirm(j3.cookie, now.pid)).json.result, 'linked');
   assert.equal((await me((await google({ sub: `gl_e2_${T}` })).cookie)).id, j3.id, '綁上的是最後一次選的 Google 帳號');
   assert.equal((await google({ sub: `gl_e1_${T}` })).location, '/#/me?welcome=1', '前一次選的沒有綁');
   assert.equal((await call(null, '/google/confirm-link', { method: 'POST' })).status, 401);
+  assert.equal((await call(null, '/google/pending')).status, 401);
   assert.equal((await call(null, '/google/pending', { method: 'DELETE' })).status, 401);
 });
 
@@ -279,10 +302,127 @@ test('協會強制兩步驟：幹部用 Google 登入到 #/?mfa=1（沒有通行
   assert.equal((await google({ sub: coach.sub })).location, '/#/', '關掉後不提示');
 });
 
+test('強制兩步驟、還沒有通行金鑰的幹部：用 Google 登入後 15 分鐘內可以新增第一把（稽核註明、通知本人與理事長、行政人員）；超過要用 Google 重新確認；有了之後再新增要用它驗證', async () => {
+  const chair = await devCookie('t_chair', true);
+  assert.ok(chairKey.id, '理事長要有通行金鑰才能開強制兩步驟（前一個測試新增的）');
+  const sub = `gl_f_${T}`;
+  const id = (await me((await google({ sub, name: '第一把教練' })).cookie)).id;
+  assert.equal((await call(chair, `/members/${id}/role`, { method: 'POST', body: { role: 'coach' } })).status, 200);
+  assert.equal((await call(chair, '/settings/security', { method: 'POST', body: { require_mfa: true } })).status, 200);
+  const sec = async (who) => { const r = (await call(who, '/notifications?cat=security')).json; return [...(r.pinned || []), ...r.items]; };
+  const firstNote = (list) => list.filter((n) => n.title === '幹部新增了第一把通行金鑰' && n.body.startsWith('第一把教練 用 Google 登入後新增了第一把通行金鑰'));
+  try {
+    const g = await google({ sub });
+    assert.equal(g.location, '/#/?mfa=add');
+    // 不是用 Google 登入的工作階段：擋下，告訴 App 可以用 Google 重新確認（first）
+    const plain = await register(await devCookie(id), await newKey());
+    assert.equal(plain.options.status, 403);
+    assert.deepEqual({ stepup: plain.options.json.stepup, officer: plain.options.json.officer, first: plain.options.json.first, google: plain.options.json.google },
+      { stepup: false, officer: true, first: true, google: true });
+    // 超過 15 分鐘也一樣
+    await age(id, 'session');
+    assert.equal((await register(g.cookie, await newKey())).options.status, 403, '用 Google 登入超過 15 分鐘');
+    // 用同一個 Google 帳號重新確認（P）：可以新增第一把
+    assert.equal((await google({ link: '1', from: 'pk', sub }, g.cookie)).location, '/#/me/security?google=pkok');
+    const k = await newKey(), ok = await register(g.cookie, k);
+    assert.equal(ok.options.status, 200, ok.options.text);
+    assert.equal(ok.verify.status, 200, ok.verify.text);
+    B.firstVerify = ok.verify.d1;
+    const adds = (await auditOf('passkey.add')).filter((r) => r.target_id === id).map((r) => r.detail);
+    assert.equal(adds.length, 1);
+    assert.ok(adds[0].endsWith('｜幹部第一把（Google 確認後新增）'), adds[0]);
+    // 通知：本人（新增了一把）、理事長與行政人員（幹部新增了第一把，連到後台權限）；其他幹部不通知
+    assert.equal((await sec(g.cookie)).filter((n) => n.title === '新增了一把通行金鑰').length, 1);
+    for (const who of ['t_chair', 't_staff']) {
+      const n = firstNote(await sec(await devCookie(who)));
+      assert.equal(n.length, 1, who);
+      assert.equal(n[0].url, '/#/admin?tab=roles');
+    }
+    assert.equal(firstNote(await sec(await devCookie('t_coach'))).length, 0, '教練不通知');
+    // 有了第一把：剛用 Google 登入也要用它驗證才能再新增
+    const g2 = await google({ sub });
+    assert.equal(g2.location, '/#/?mfa=1');
+    const no = await register(g2.cookie, await newKey());
+    assert.equal(no.options.status, 403);
+    assert.deepEqual({ stepup: no.options.json.stepup, first: no.options.json.first, google: no.options.json.google }, { stepup: true, first: false, google: false });
+    // 全部移除再當成「第一把」：移除最後一把要先用它驗證
+    const only = (await call(g2.cookie, '/passkeys')).json.passkeys;
+    assert.equal((await call(g2.cookie, `/passkeys/${encodeURIComponent(only[0].id)}`, { method: 'DELETE' })).status, 403);
+    await stepup(g2.cookie, k);
+    assert.equal((await me(g2.cookie)).mfaPending, false, '用第一把驗證後有管理權限');
+    // 同時開了兩個新增（都是第一把）：先完成的那一把之後，另一個不能再當第一把
+    const sub2 = `gl_f2_${T}`;
+    const id2 = (await me((await google({ sub: sub2, name: '同時兩把' })).cookie)).id;
+    assert.equal((await call(chair, `/members/${id2}/role`, { method: 'POST', body: { role: 'coach' } })).status, 200);
+    const g3 = await google({ sub: sub2 });
+    let second = null;
+    const r1 = await register(g3.cookie, await newKey(), async () => { second = await register(g3.cookie, await newKey()); });
+    assert.equal(second.verify.status, 200, '先完成的那一把');
+    assert.equal(r1.verify.status, 403, '另一個挑戰值不能再當第一把');
+  } finally {
+    assert.equal((await call(chair, '/settings/security', { method: 'POST', body: { require_mfa: false } })).status, 200);
+  }
+});
+
+test('舊版畫面（沒有帶 c=1，看不懂確認卡）：照舊回 google=stepup、不記待確認；驗證一次再綁就直接綁上', async () => {
+  const j = await join('舊版甲'), k = await newKey();
+  await register(j.cookie, k);
+  assert.equal((await google({ link: '1', sub: `gl_l_${T}`, legacy: '1' }, j.cookie)).location, '/#/me?google=stepup');
+  assert.equal((await google({ link: '1', from: 'ref', sub: `gl_l_${T}`, legacy: '1' }, j.cookie)).location, '/#/me/referral?google=stepup');
+  assert.equal(await pending(j.cookie), null);
+  await stepup(j.cookie, k);
+  assert.equal((await google({ link: '1', sub: `gl_l_${T}`, legacy: '1' }, j.cookie)).location, '/#/me?google=linked');
+  assert.equal((await me(j.cookie)).google, true);
+});
+
+test('幹部（協會幹部、分團團長與幹部）沒開兩步驟驗證也不能靠 Google 確認新增通行金鑰；稽核照發挑戰值時記下的原因', async () => {
+  const chair = await devCookie('t_chair', true);
+  // 教練與分團幹部：有通行金鑰、綁了 Google，剛用 Google 登入
+  const mk = async (key) => {
+    const g = await google({ sub: `gl_o_${key}_${T}`, name: `幹部${key}` });
+    const id = (await me(g.cookie)).id, k = await newKey();
+    assert.equal((await register(g.cookie, k)).verify.status, 200, '第一把直接新增');
+    return { id, sub: `gl_o_${key}_${T}` };
+  };
+  const coach = await mk('a'), lead = await mk('b');
+  assert.equal((await call(chair, `/members/${coach.id}/role`, { method: 'POST', body: { role: 'coach' } })).status, 200);
+  assert.equal((await call(chair, '/teams/youth/members', { method: 'POST', body: { member_id: lead.id, action: 'add', role: 'officer' } })).status, 200);
+  for (const x of [coach, lead]) {
+    const g = await google({ sub: x.sub });
+    assert.equal(g.location, '/#/', '沒開兩步驟：登入不提示');
+    const no = await register(g.cookie, await newKey());
+    assert.equal(no.options.status, 403, '剛用 Google 登入也要用現有的通行金鑰');
+    assert.deepEqual({ officer: no.options.json.officer, google: no.options.json.google }, { officer: true, google: false });
+    assert.equal((await google({ link: '1', from: 'pk', sub: x.sub }, g.cookie)).location, '/#/me/security?google=pkok');
+    assert.equal((await register(g.cookie, await newKey())).options.status, 403, '重新確認後也一樣');
+  }
+  // 幹部移除最後一把要先用它驗證（不然可以全部移除再當成沒有通行金鑰的帳號自己加一把）；一般跑友照舊可以直接移除
+  const cg = await google({ sub: coach.sub });
+  const ckeys = (await call(cg.cookie, '/passkeys')).json.passkeys;
+  assert.equal(ckeys.length, 1);
+  const del = await call(cg.cookie, `/passkeys/${encodeURIComponent(ckeys[0].id)}`, { method: 'DELETE' });
+  assert.equal(del.status, 403);
+  assert.equal(del.json.stepup, true);
+  assert.equal((await call(cg.cookie, '/passkeys')).json.passkeys.length, 1, '沒有被移除');
+  const runner = await join('移除最後一把'), rk = await newKey();
+  await register(runner.cookie, rk);
+  const rid0 = (await call(runner.cookie, '/passkeys')).json.passkeys[0].id;
+  assert.equal((await call(runner.cookie, `/passkeys/${encodeURIComponent(rid0)}`, { method: 'DELETE' })).status, 200);
+  // 一般跑友：發挑戰值時是靠 Google 確認（15 分鐘內），送出時已經超過 15 分鐘也照樣註明
+  const sub = `gl_v_${T}`, g = await google({ sub, name: '慢慢按' });
+  const id = (await me(g.cookie)).id;
+  await register(g.cookie, await newKey());
+  const r = await register(g.cookie, await newKey(), () => age(id, 'session'));
+  assert.equal(r.verify.status, 200, r.verify.text);
+  const adds = (await auditOf('passkey.add')).filter((x) => x.target_id === id).map((x) => x.detail);
+  assert.equal(adds.filter((d) => d.endsWith('｜Google 確認後新增')).length, 1, adds.join(' / '));
+});
+
 test('執行額度：每支 API 的 D1 句數在規格內，沒有超過上限', async () => {
-  // 待確認 4（登入狀態、設定與會員、有沒有通行金鑰、寫入）｜確認 7（登入狀態、設定、限流、待確認、綁定＋刪除＋稽核）｜
+  // 待確認 4（登入狀態、設定與會員、有沒有通行金鑰、寫入）｜確認卡讀取 3（登入狀態、設定、待確認）｜確認 7（登入狀態、設定、限流、待確認、綁定＋刪除＋稽核）｜
   //   新增通行金鑰的 options 7｜重新確認 4｜幹部登入 6（跟一般 Google 登入一樣，多讀的都在同一句）
-  const max = { pending: 4, confirm: 7, register: 7, pkok: 4, officerLogin: 6 };
+  //   幹部第一把的 verify 16 以內（登入狀態、設定、挑戰值、刪掉、數量、寫入、稽核、通知本人、查理事長與行政人員、通知他們）
+  const max = { pending: 4, pendingGet: 3, confirm: 7, register: 7, pkok: 4, officerLogin: 6, firstVerify: 16 };
   for (const [k, n] of Object.entries(max)) assert.ok(B[k] > 0 && B[k] <= n, `${k} 用了 ${B[k]} 句（上限 ${n}）`);
   const v = (await (await fetch(`${BASE}/api/dev/budget-violations`)).json()).list;
   assert.deepEqual(v.filter((x) => /google|passkey/.test(x.name)), []);

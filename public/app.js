@@ -839,37 +839,78 @@ async function passkey(purpose, name, { hints } = {}) {
 // 幹部開了強制兩步驟、這次登入還沒驗證：顯示提示列
 const mfaBanner = () => (me?.mfaPending ? `<section class="card mfabar"><div><b>請驗證身分</b><span class="tiny" style="display:block">你是<span translate="no">${esc(me.realRoleName || '幹部')}</span>，協會規定用通行金鑰再驗證一次才能使用管理功能。</span></div>
   <button class="btn sm" data-stepup>${IC.lock}驗證</button></section>` : '');
-// 協會開了幹部兩步驟驗證、這次登入還沒驗證的幹部：用 Google 登入回來（#/?mfa=1 有通行金鑰｜#/?mfa=add 還沒有），
-//   或這個分頁第一次打開時，跳出說明（每個分頁一次）。WebKit 的通行金鑰要使用者手勢：一定等他按「用通行金鑰驗證」；按「稍後」留著首頁的提示列
-async function mfaSheet() {
+// 協會開了幹部兩步驟驗證、這次登入還沒驗證的幹部：用 Google 登入回來（#/?mfa=1 有通行金鑰｜#/?mfa=add 還沒有，在面板裡新增第一把）跳出說明。
+//   只在剛登入回來時跳（網址的 ?mfa= 用完就拿掉）；重新整理、之後再打開 App（主畫面 App 冷啟動）不再跳，首頁的提示列一直都在
+//   WebKit 的通行金鑰要使用者手勢：一定等他按「用通行金鑰驗證」；按「稍後」焦點移到首頁提示列的「驗證」
+function mfaSheet() {
   const [path, qs] = location.hash.split('?'), sp = new URLSearchParams(qs || ''), q = sp.get('mfa');
-  if (q) { sp.delete('mfa'); try { history.replaceState(null, '', `${path || '#/'}${sp.toString() ? `?${sp}` : ''}`); } catch {} }
+  if (!q) return;
+  sp.delete('mfa'); try { history.replaceState(null, '', `${path || '#/'}${sp.toString() ? `?${sp}` : ''}`); } catch {}
   if (!me?.mfaPending || document.querySelector('.sheet')) return;
-  try { if (!q && sessionStorage.getItem('cil-mfa-sheet')) return; sessionStorage.setItem('cil-mfa-sheet', '1'); } catch {}
-  const has = q === '1' || (q !== 'add' && !!(await api('/passkeys').catch(() => ({ passkeys: [] }))).passkeys?.length);
-  if (!me?.mfaPending || document.querySelector('.sheet')) return;
-  const why = `你是<span translate="no">${esc(me.realRoleName || '幹部')}</span>。協會要求幹部用通行金鑰再確認一次，驗證後才有管理權限。`;
-  const s = openSheet(has ? '完成登入：用通行金鑰驗證' : '完成登入：先新增一把通行金鑰', has
-    ? `<h3 id="mfaT">完成登入：用通行金鑰驗證</h3><p class="muted" style="margin:0">${why}</p>
-      <div class="choices gstep"><button type="button" class="btn block" data-go>${IC.lock}用通行金鑰驗證</button><button type="button" class="btn ghost block" data-close>稍後</button></div>`
-    : `<h3 id="mfaT">完成登入：先新增一把通行金鑰</h3><p class="muted" style="margin:0">${why}你還沒有通行金鑰，先到「帳號與安全」新增一把。</p>
-      <div class="choices gstep"><a class="btn block" href="#/me/security" data-close>前往帳號與安全</a><button type="button" class="btn ghost block" data-close>稍後</button></div>`, null, 'mfaT',
-    // 按「稍後」關掉：焦點移到首頁提示列的「驗證」（VoiceOver 不會停在空白處）
-    { onClose: () => setTimeout(() => { if (document.activeElement === document.body || !document.activeElement) $('.mfabar [data-stepup]')?.focus(); }) });
-  const go = s.host.querySelector('[data-go]');
-  go?.addEventListener('click', async () => {
-    go.disabled = true;
-    try { await passkey('stepup'); s.close(); toast('驗證完成，可以使用管理功能了'); me = null; render(); }
-    catch (e) {
-      if (go.isConnected) go.disabled = false;
-      if (/還沒有通行金鑰/.test(e.message)) { s.close(); location.hash = '#/me/security'; } else if (e.message !== '已取消') toast(e.message);
-    }
-  });
+  openMfaSheet(q !== 'add');
+}
+// has：有通行金鑰（按一下驗證）｜沒有：按一下新增第一把（用 Google 登入後 15 分鐘內可以，伺服器通知理事長），新增後接著驗證
+//   opener：從提示列的「驗證」打開的（關掉時焦點回到它）
+//   面板裡的步驟：verify 驗證｜add 新增第一把｜again 新增好了、再按一次驗證（WebKit 一次手勢只能叫出一次通行金鑰）
+//     ｜google 用 Google 登入超過 15 分鐘，先用 Google 重新確認（回到帳號與安全按「新增通行金鑰」）｜chair 沒辦法用 Google：請理事長暫時關閉兩步驟驗證
+function openMfaSheet(has, opener = null) {
+  const why = `<p class="muted" style="margin:0">你是<span translate="no">${esc(me?.realRoleName || '幹部')}</span>。協會要求幹部用通行金鑰再確認一次，驗證後才有管理權限。</p>`;
+  const later = '<button type="button" class="btn ghost block" data-close>稍後</button>';
+  const STEP = {
+    verify: () => `<h3 id="mfaT" tabindex="-1">完成登入：用通行金鑰驗證</h3>${why}
+      <div class="choices gstep"><button type="button" class="btn block" data-go="verify">${IC.lock}用通行金鑰驗證</button>${later}</div>`,
+    add: () => `<h3 id="mfaT" tabindex="-1">完成登入：新增第一把通行金鑰</h3>${why}
+      <p style="margin:0">你還沒有通行金鑰。用 Google 登入後 15 分鐘內可以直接新增第一把（Face ID、指紋），新增後會通知理事長。</p>
+      <div class="choices gstep"><button type="button" class="btn block" data-go="add">${IC.plus}新增第一把通行金鑰</button>${later}</div>`,
+    again: () => `<h3 id="mfaT" tabindex="-1">已新增通行金鑰</h3><p class="muted" style="margin:0">再按一次用它驗證，就有管理權限了。</p>
+      <div class="choices gstep"><button type="button" class="btn block" data-go="verify">${IC.lock}用通行金鑰驗證</button>${later}</div>`,
+    google: () => `<h3 id="mfaT" tabindex="-1">完成登入：新增第一把通行金鑰</h3>
+      <p style="margin:0">用 Google 登入已經超過 15 分鐘。請用 Google 重新確認，回來後在「帳號與安全」按「新增通行金鑰」。</p>
+      <div class="choices gstep"><a class="btn google block" href="${googleHref(true, { from: 'pk' })}">${GOOGLE_G}<span>用 Google 重新確認後新增</span></a>${later}</div>`,
+    chair: () => `<h3 id="mfaT" tabindex="-1">完成登入：還沒有通行金鑰</h3>${why}
+      <p style="margin:0">協會開啟了幹部兩步驟驗證，還沒有通行金鑰的幹部不能自己新增（避免帳號被盜用時被加上別人的金鑰）。請理事長在「系統設定」暫時關閉幹部兩步驟驗證，新增後再打開。</p>
+      <p class="tiny" style="margin:0">在那之前可以照常使用跑友的功能。</p>
+      <div class="choices gstep"><button type="button" class="btn block" data-close>知道了</button></div>`,
+  };
+  let verified = false;
+  const s = openSheet(has ? '完成登入：用通行金鑰驗證' : '完成登入：新增第一把通行金鑰', STEP[has ? 'verify' : 'add'](), opener, 'mfaT',
+    // 按「稍後」「知道了」或 Esc 關掉：焦點移到首頁提示列的「驗證」（VoiceOver 不會停在空白處）；驗證成功的不移（提示列重畫後就不見了，焦點交給大標題）
+    { onClose: () => setTimeout(() => { if (!verified && (document.activeElement === document.body || !document.activeElement)) $('.mfabar [data-stepup]')?.focus(); }) });
+  const card = s.host.querySelector('.sheet-card');
+  // 換到下一步：焦點移到新的標題（VoiceOver 唸出現在在哪一步）
+  const step = (k) => { card.innerHTML = STEP[k](); bind(); card.querySelector('#mfaT')?.focus(); };
+  const verify = async () => { await passkey('stepup'); verified = true; s.close(); toast('驗證完成，可以使用管理功能了'); focusAfterRender('h1'); me = null; render(); };
+  const bind = () => {
+    const go = card.querySelector('[data-go]'); if (!go) return;
+    go.onclick = async () => {
+      go.disabled = true;
+      try {
+        if (go.dataset.go === 'add') {
+          await passkey('register');
+          toast('已新增通行金鑰');
+          try { await verify(); } catch { step('again'); }
+          return;
+        }
+        await verify();
+      } catch (e) {
+        if (go.isConnected) go.disabled = false;
+        if (/還沒有通行金鑰/.test(e.message)) step('add');
+        // 新增被擋下：Google 登入超過 15 分鐘（可以用 Google 重新確認），或沒辦法用 Google
+        else if (e.status === 403 && e.data?.first) step(e.data.google && cfg.googleLogin ? 'google' : 'chair');
+        else if (e.message !== '已取消') toast(e.message);
+      }
+    };
+  };
+  bind();
 }
 function bindStepup() {
   for (const b of document.querySelectorAll('[data-stepup]')) b.onclick = async () => {
     try { await passkey('stepup'); toast('驗證完成'); me = null; render(); }
-    catch (e) { if (/還沒有通行金鑰/.test(e.message)) { toast('先新增通行金鑰'); location.hash = '#/me/security'; } else if (e.message !== '已取消') toast(e.message); }
+    catch (e) {
+      // 還沒有通行金鑰：強制兩步驟的幹部（提示列）在面板裡新增第一把；其他人帶到帳號與安全新增
+      if (/還沒有通行金鑰/.test(e.message)) { if (me?.mfaPending) openMfaSheet(false, b); else { toast('先新增通行金鑰'); location.hash = '#/me/security'; } }
+      else if (e.message !== '已取消') toast(e.message);
+    }
   };
 }
 
@@ -879,7 +920,8 @@ const GOOGLE_G = '<svg viewBox="0 0 48 48" width="20" height="20" aria-hidden="t
 const inAppBrowser = () => (/Line\//i.test(navigator.userAgent) ? 'line' : /FBAN|FBAV|Instagram/i.test(navigator.userAgent) ? 'meta' : '');
 // from: 'ref'＝從推薦人頁綁定或確認（登入後回到推薦人頁）；basic：只用名稱與大頭貼登入（不給 Email）
 const googleHref = (link, { from, basic } = {}) => {
-  const q = [link && 'link=1', link && from && `from=${encodeURIComponent(from)}`, basic && 'basic=1'].filter(Boolean).join('&');
+  // c=1：這一版看得懂「先 Google、再通行金鑰」的確認卡（伺服器才會回 ?google=confirm；舊版畫面回 stepup）
+  const q = [link && 'link=1', link && from && `from=${encodeURIComponent(from)}`, link && 'c=1', basic && 'basic=1'].filter(Boolean).join('&');
   const path = `/api/google/start${q ? `?${q}` : ''}`;
   return inAppBrowser() === 'line' ? `${location.origin}/?openExternalBrowser=1${location.hash || '#/'}` : path;
 };

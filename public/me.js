@@ -276,44 +276,56 @@ function meDisplay() {
 // 綁定或確認時選到另一個 Google 帳號（已經綁了一個）：不換綁（google=other）
 const GOOGLE_OTHER = '這不是你登入耕跑團用的 Google 帳號，請改選原本那個帳號再確認一次。';
 // 先 Google、再通行金鑰：已經有通行金鑰的帳號綁 Google，Google 回來（?google=confirm）先記下（10 分鐘），在這張卡按一下用通行金鑰確認才綁上
-//   帳號與安全、推薦人頁共用；done(結果)：綁好傳 linked｜confirmed｜later…，取消或逾時傳 null
-const googleConfirmCard = () => `<section class="card gstep" id="gConfirm" aria-labelledby="gConfirmT">
+//   帳號與安全、推薦人頁共用；卡上顯示要綁的 Google 帳號（名稱與大頭貼，GET /api/google/pending），不是自己的就按「取消」
+//   p：待確認的那一筆（pid、name、pic；null＝已經過期或不在這個工作階段）
+//   done(結果)：綁好傳 linked｜confirmed｜later…，取消或逾時傳 null，中途被換成別的 Google 帳號傳 'confirm'（重新讀取再顯示一次）
+const googlePending = () => api('/google/pending').then((r) => r.pending || null).catch(() => null);
+const GOOGLE_EXPIRED = '已經超過 10 分鐘，請再用 Google 綁定一次';
+const googleConfirmCard = (p) => (!p ? `<div class="notice" id="gNote" tabindex="-1">${GOOGLE_EXPIRED}</div>` : `<section class="card gstep" id="gConfirm" aria-labelledby="gConfirmT">
     <h2 class="h3" id="gConfirmT">最後一步：用通行金鑰確認綁定這個 Google 帳號</h2>
+    <div class="gacct">${avatar({ avatar: p.pic, name: p.name || 'G' })}<b translate="no" id="gConfirmWho">${esc(p.name || 'Google 帳號')}</b></div>
     <p class="tiny" style="margin:0">你的帳號已經有通行金鑰，綁定前用它確認是你本人。10 分鐘內有效。</p>
-    <div class="row" style="gap:8px"><button type="button" class="btn" id="gConfirmGo">${IC.lock}用通行金鑰確認</button><button type="button" class="btn ghost" id="gConfirmNo">取消</button></div>
-  </section>`;
-function bindGoogleConfirm(done) {
-  const go = $('#gConfirmGo'); if (!go) return;
+    <p class="tiny" style="margin:0">不是你的 Google 帳號，請按「取消」。</p>
+    <div class="row" style="gap:8px"><button type="button" class="btn" id="gConfirmGo" aria-describedby="gConfirmWho">${IC.lock}用通行金鑰確認</button><button type="button" class="btn ghost" id="gConfirmNo">取消</button></div>
+  </section>`);
+function bindGoogleConfirm(p, done) {
+  const go = $('#gConfirmGo'); if (!go || !p) return;
   go.onclick = async () => {
     go.disabled = true;
     try {
       await passkey('stepup');
-      const r = await api('/google/confirm-link', { method: 'POST' });
+      // pid：卡上顯示的那一筆；中途被換掉伺服器回 changed（不綁），重新顯示換過的帳號讓本人再看一次
+      const r = await api('/google/confirm-link', { method: 'POST', body: { pid: p.pid } });
       await refreshMe().catch(() => {});
       done(r.result);
     } catch (e) {
       if (go.isConnected) go.disabled = false;
-      if (e.data?.expired) { toast(e.message); done(null); } else if (e.message !== '已取消') toast(e.message);
+      if (e.data?.expired) { toast(e.message); done(null); }
+      else if (e.data?.changed) { toast(e.message); done('confirm'); }
+      else if (e.message !== '已取消') toast(e.message);
     }
   };
   $('#gConfirmNo').onclick = async () => { await api('/google/pending', { method: 'DELETE' }).catch(() => {}); toast('已取消綁定 Google'); done(null); };
 }
 // 回到原本的網址（不留 ?google=confirm，重新整理不會再出現確認卡），不觸發換頁
 const replaceHash = (h) => { try { history.replaceState(null, '', h); } catch {} };
+// stepup：開始綁定時還是舊版畫面（沒有帶 c=1），伺服器照舊版回的（App 剛好在這中間更新）
 const SEC_NOTE = {
   linked: '已綁定 Google，之後可以直接用 Google 登入。',
+  stepup: '還沒綁定 Google：App 剛更新，請再按一次「綁定」。',
   taken: '這個 Google 帳號已經綁定另一個帳號了。如果那個帳號也是你的，請聯絡行政人員合併。',
   other: GOOGLE_OTHER,
 };
 // 帳號與安全：Google 綁定、通行金鑰（新增、移除、驗證一次）、登出
 //   新增通行金鑰被擋下（已經有通行金鑰、這次登入沒用它驗證過）：在卡片裡說明能怎麼做（#pkGate）
 //     一般跑友：用現有的通行金鑰驗證，或「用 Google 重新確認後新增」（回來是 ?google=pkok，按一下新增；WebKit 的通行金鑰要使用者手勢，不自動跳）
-//     協會強制兩步驟的幹部：一定要用現有的通行金鑰（可以用其他裝置掃 QR）；還沒有通行金鑰的請理事長協助
+//     幹部（協會與分團，不管有沒有開兩步驟驗證）：一定要用現有的通行金鑰（可以用其他裝置掃 QR）；強制兩步驟、還沒有通行金鑰的請理事長協助
 async function meSecurity(googleMsg, again) {
+  const pend = googleMsg === 'confirm' ? await googlePending() : null;
   view.innerHTML = `${subTitle('帳號與安全')}
-    ${googleMsg === 'confirm' ? googleConfirmCard() : SEC_NOTE[googleMsg] ? `<div class="notice" id="gNote" tabindex="-1">${SEC_NOTE[googleMsg]}</div>` : ''}
+    ${googleMsg === 'confirm' ? googleConfirmCard(pend) : SEC_NOTE[googleMsg] ? `<div class="notice" id="gNote" tabindex="-1">${SEC_NOTE[googleMsg]}</div>` : ''}
     ${googleMsg === 'pkok' && pkSupported() ? `<section class="card gstep" id="pkOk" aria-labelledby="pkOkT"><h2 class="h3" id="pkOkT">Google 已確認是你本人</h2>
-      <p class="tiny" style="margin:0">15 分鐘內可以直接新增通行金鑰，不用舊的那一把。</p>
+      <p class="tiny" style="margin:0">${me.mfaPending ? '15 分鐘內可以新增第一把通行金鑰，新增後會通知理事長。' : '15 分鐘內可以直接新增通行金鑰，不用舊的那一把。'}</p>
       <button type="button" class="btn" id="pkOkGo">${IC.plus}新增通行金鑰</button></section>` : ''}
     ${mfaBanner()}
     ${cfg.googleLogin ? `<section class="card"><div class="row spread"><div><h2 class="h3">Google 帳號</h2><span class="tiny">${me.google ? '已綁定，可以用 Google 登入' : '綁定後換手機或清掉瀏覽器資料，也能用 Google 回到同一個帳號'}</span></div>
@@ -335,27 +347,35 @@ async function meSecurity(googleMsg, again) {
   const spot = ['#gConfirm h2', '#pkOk h2', '#gNote'];
   if (again) focusEl(spot.map((x) => $(x)).find(Boolean) || $('#pkCard h2'));
   else if (googleMsg === 'confirm' || googleMsg === 'pkok' || SEC_NOTE[googleMsg]) focusAfterRender(spot);
-  bindGoogleConfirm((x) => { replaceHash(x ? `#/me/security?google=${x}` : '#/me/security'); meSecurity(x, true); });
-  let havePk = 0;
+  bindGoogleConfirm(pend, (x) => { replaceHash(x ? `#/me/security?google=${x}` : '#/me/security'); meSecurity(x, true); });
   const loadPk = async () => {
     const { passkeys } = await api('/passkeys');
     if (!$('#pkList')) return;
-    havePk = passkeys.length;
     $('#pkList').innerHTML = passkeys.map((p) => `<div class="r">${IC.lock}<span><span translate="no">${esc(p.name || '通行金鑰')}</span><span class="tiny" style="display:block">新增於 ${esc(p.created_at.slice(0, 10))}${p.last_used_at ? `・上次使用 ${ago(p.last_used_at)}` : ''}</span></span>
       <button class="btn ghost sm" data-pkdel="${esc(p.id)}">移除</button></div>`).join('');
     $('#pkTest').hidden = !passkeys.length || me.mfa;
-    for (const b of document.querySelectorAll('[data-pkdel]')) b.onclick = async () => { if (!confirm('移除這把通行金鑰？之後這台裝置就不能用它登入。')) return; await api(`/passkeys/${encodeURIComponent(b.dataset.pkdel)}`, { method: 'DELETE' }); toast('已移除'); loadPk(); };
+    // 幹部移除最後一把：伺服器要先用它驗證（api 會叫出通行金鑰再送一次）；取消或手機不見了顯示原因
+    for (const b of document.querySelectorAll('[data-pkdel]')) b.onclick = async () => {
+      if (!confirm('移除這把通行金鑰？之後這台裝置就不能用它登入。')) return;
+      try { await api(`/passkeys/${encodeURIComponent(b.dataset.pkdel)}`, { method: 'DELETE' }); toast('已移除'); loadPk(); } catch (e) { toast(e.message); }
+    };
   };
   loadPk().catch(() => {});
-  // 新增被擋下時：說明這次能怎麼確認（d＝伺服器回的 officer、google）
+  // 新增被擋下時：說明這次能怎麼確認（d＝伺服器回的 officer、first、google）
+  //   first：強制兩步驟、還沒有通行金鑰的幹部，第一把要在用 Google 登入或重新確認後 15 分鐘內新增（沒辦法用 Google 的請理事長協助）
   const gate = (d) => {
     const g = $('#pkGate'); if (!g) return;
     const google = d.google && cfg.googleLogin && me.google;
-    g.innerHTML = d.officer && !havePk
-      ? '<div class="notice" id="pkGateT" tabindex="-1">協會開啟了幹部兩步驟驗證，還沒有通行金鑰的幹部不能自己新增（避免帳號被盜用時被加上別人的金鑰）。請理事長在「系統設定」暫時關閉幹部兩步驟驗證，新增後再打開。</div>'
+    g.innerHTML = d.first
+      ? `<div class="gstep pkgate" role="group" aria-labelledby="pkGateT">
+        <p style="margin:0" id="pkGateT" tabindex="-1"><b>幹部的第一把通行金鑰</b></p>
+        <p class="tiny" style="margin:0">協會開啟了幹部兩步驟驗證：還沒有通行金鑰的幹部，要在用 Google 登入後 15 分鐘內新增第一把，新增後會通知理事長。</p>
+        ${google ? `<div class="row"><a class="btn google" href="${googleHref(true, { from: 'pk' })}">${GOOGLE_G}<span>用 Google 重新確認後新增</span></a></div>`
+          : cfg.googleLogin && !me.google ? '<p class="tiny" style="margin:0">先綁定上面的 Google 帳號，再按一次「新增通行金鑰」。</p>'
+          : '<p class="tiny" style="margin:0">這個網站沒有開放 Google 登入：請理事長在「系統設定」暫時關閉幹部兩步驟驗證，新增後再打開。</p>'}</div>`
       : `<div class="gstep pkgate" role="group" aria-labelledby="pkGateT">
         <p style="margin:0" id="pkGateT" tabindex="-1"><b>${d.officer ? '協會要求幹部用現有的通行金鑰確認' : '新增另一把前，先確認是你本人'}</b></p>
-        <p class="tiny" style="margin:0">${d.officer ? '開啟幹部兩步驟驗證後，只能用已經有的通行金鑰確認（Google 帳號被盜用時，別人才不能自己加一把）。舊手機不在身邊時，選「用其他裝置」會出現 QR Code，用舊手機掃描。'
+        <p class="tiny" style="margin:0">${d.officer ? '幹部只能用已經有的通行金鑰確認（Google 帳號被盜用時，別人才不能自己加一把）。舊手機不在身邊時，選「用其他裝置」會出現 QR Code，用舊手機掃描。'
           : google ? '用現有的通行金鑰驗證；舊的不在身邊時，可以改用 Google 重新確認。' : '用現有的通行金鑰驗證；舊手機不在身邊時，會出現 QR Code 讓你用舊手機掃描。'}</p>
         <div class="row" style="gap:8px"><button type="button" class="btn" data-pkstep>${IC.lock}用現有的通行金鑰驗證</button>
           ${d.officer ? `<button type="button" class="btn ghost" data-pkstep="hybrid">${IC.scan}用其他裝置的通行金鑰驗證</button>` : ''}
@@ -368,7 +388,8 @@ async function meSecurity(googleMsg, again) {
         g.innerHTML = `<div class="gstep pkgate"><p style="margin:0" id="pkGateT" tabindex="-1"><b>已確認是你本人</b></p><p class="tiny" style="margin:0">15 分鐘內可以新增通行金鑰。</p>
           <div class="row"><button type="button" class="btn" id="pkGateAdd">${IC.plus}新增通行金鑰</button></div></div>`;
         $('#pkGateAdd').onclick = addPk;
-        focusEl($('#pkGateAdd'));
+        // 焦點放在「已確認是你本人」：VoiceOver 先唸結果與 15 分鐘，再往下滑到「新增通行金鑰」
+        focusEl($('#pkGateT'));
       } catch (e) { if (b.isConnected) b.disabled = false; if (e.message !== '已取消') toast(e.message); }
     };
     focusEl($('#pkGateT'));
@@ -381,7 +402,7 @@ async function meSecurity(googleMsg, again) {
       try { await passkey('stepup'); setMe(null); render(); return; } catch {}
       loadPk();
     } catch (e) {
-      if (e.data?.stepup) { await loadPk().catch(() => {}); gate(e.data); } else if (e.message !== '已取消') toast(e.message);
+      if (e.data?.stepup || e.data?.first) { await loadPk().catch(() => {}); gate(e.data); } else if (e.message !== '已取消') toast(e.message);
     }
   };
   $('#pkAdd')?.addEventListener('click', addPk);
@@ -446,11 +467,14 @@ const REF_GOOGLE = {
   later: '請先同意新版隱私權政策，再按一次「用 Google 確認」。',
   taken: '這個 Google 帳號已經綁定另一個帳號了。如果那個帳號也是你的，請聯絡行政人員合併。',
   linked: '已綁定 Google，之後可以直接用 Google 登入。',
+  stepup: '還沒確認：App 剛更新，請再按一次「用 Google 確認」。',
   other: GOOGLE_OTHER,
 };
 async function meReferral(googleMsg) {
   const from = new URLSearchParams(location.hash.split('?')[1] || '').get('from');
   const d = await api('/me/referral');
+  // pend：Google 回來待確認的那一筆（?google=confirm；確認卡顯示要綁的帳號）
+  let pend = googleMsg === 'confirm' ? await googlePending() : null;
   // mode：用 Gmail 找或只填名字；edit：已經有推薦人、按了「更換」；hit：查詢結果；email：剛查的 Gmail（設定時再送一次）
   let mode = 'email', edit = false, hit = null, email = '';
   const day = (s) => esc(String(s || '').slice(0, 10));
@@ -498,7 +522,7 @@ async function meReferral(googleMsg) {
         : d.findable ? `<p style="margin:0">還沒確認 Google 帳號，跑友用你的 Gmail 找不到你。</p><div class="row">${google}</div><p class="tiny" style="margin:0">只會用 Email 算出一組無法還原的查詢碼，不存 Email 本身。</p>`
         : '<p style="margin:0">已關閉：跑友沒辦法用 Gmail 找到你。</p><a class="tiny tlink" href="#/me/privacy">到隱私設定打開 ›</a>'}</section>` : '';
     view.innerHTML = `${subTitle('推薦人', '團購或活動聯絡不上你時，協會幹部能透過推薦人找到你')}
-      ${googleMsg === 'confirm' ? googleConfirmCard() : REF_GOOGLE[googleMsg] ? `<div class="notice" id="gNote" tabindex="-1">${REF_GOOGLE[googleMsg]}</div>` : ''}
+      ${googleMsg === 'confirm' ? googleConfirmCard(pend) : REF_GOOGLE[googleMsg] ? `<div class="notice" id="gNote" tabindex="-1">${REF_GOOGLE[googleMsg]}</div>` : ''}
       ${on ? '' : '<div class="notice">推薦人功能目前沒有開放。已經填的推薦人照樣保留，你可以隨時移除。</div>'}
       ${mine}${theirs}${findme}`;
     bind();
@@ -508,7 +532,8 @@ async function meReferral(googleMsg) {
   // 重新讀一次（設定、移除、確認之後）；/api/me 也更新，「我的」列與首頁卡的待確認數字才會對
   const reload = async (focus) => {
     Object.assign(d, await api('/me/referral'));
-    edit = false; hit = null; email = ''; googleMsg = null;   // Google 回來的提示只在剛回來時顯示
+    // Google 回來的結果提示只在剛回來時顯示；確認卡留著（還沒按確認或取消，待確認那一筆還在）
+    edit = false; hit = null; email = ''; if (googleMsg !== 'confirm' || !pend) googleMsg = null;
     await refreshMe().catch(() => {});
     paint(focus);
   };
@@ -521,11 +546,12 @@ async function meReferral(googleMsg) {
   const busy = (b, fn) => async (e) => { e?.preventDefault?.(); if (b?.disabled) return; if (b) b.disabled = true; try { await fn(e); } finally { if (b?.isConnected) b.disabled = false; } };
   function bind() {
     // 用通行金鑰確認綁定 Google（?google=confirm）：確認或取消後重畫，顯示結果
-    bindGoogleConfirm(async (x) => {
+    bindGoogleConfirm(pend, async (x) => {
       replaceHash(x ? `#/me/referral?google=${x}` : '#/me/referral');
       googleMsg = x;
+      pend = x === 'confirm' ? await googlePending() : null;
       Object.assign(d, await api('/me/referral').catch(() => ({})));
-      paint(x ? '#gNote' : '#refMine');
+      paint(x === 'confirm' ? () => $('#gConfirm h2') || $('#gNote') : x ? '#gNote' : '#refMine');
     });
     for (const b of view.querySelectorAll('[data-refmode]')) b.onclick = () => { mode = b.dataset.refmode; hit = null; paint(`#${mode === 'email' ? 'refEmailF' : 'refNameF'} input`); };
     $('#refChange')?.addEventListener('click', () => { edit = true; mode = 'email'; hit = null; paint('[data-refmode="email"]'); });

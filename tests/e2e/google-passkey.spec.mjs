@@ -1,9 +1,11 @@
 // 先 Google、再通行金鑰（團員與幹部）：有通行金鑰的帳號綁 Google 回來看到確認卡（按一下用通行金鑰確認、取消）；
-//   新手機新增通行金鑰被擋下時的說明與「Google 已確認」後按一下新增；協會強制兩步驟的幹部用 Google 登入後跳出的驗證面板（驗證、稍後、還沒有通行金鑰）
+//   確認卡顯示要綁的 Google 帳號（名稱）；新增通行金鑰被擋下時的說明、用現有的驗證後焦點與「Google 已確認」後按一下新增；
+//   協會強制兩步驟的幹部用 Google 登入後跳出的驗證面板（驗證、稍後、還沒有通行金鑰的按一下新增第一把）
 //   通行金鑰用 Chrome 的虛擬驗證器（CDP WebAuthn）；Google 登入用 /api/dev/google（e2e 伺服器沒有設定 Google，畫面上沒有 Google 按鈕）
 //   幹部兩步驟驗證只在最後一個測試打開，結束時關掉並拿掉替理事長新增的通行金鑰（workers＝1，不會影響同時跑的其他測試）
 import { test, expect } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
+import { createHash } from 'node:crypto';
 import { acceptPrivacyIfAsked, BASE } from './helpers.mjs';
 
 const axeBad = async (page) => (await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21aa']).analyze()).violations
@@ -20,12 +22,16 @@ async function authenticator(page) {
   const { authenticatorId } = await cdp.send('WebAuthn.addVirtualAuthenticator', { options: { protocol: 'ctap2', transport: 'internal', hasResidentKey: true, hasUserVerification: true, isUserVerified: true } });
   return { cdp, authenticatorId };
 }
+// 加入（邀請碼）每個 IP 10 分鐘 8 次、所有測試共用：加入後把這個計數清掉，不佔後面測試（推薦人）的額度
+const JOIN_KEYS = ['local', '127.0.0.1', '::1', '::ffff:127.0.0.1'].map((ip) => `join:${createHash('sha256').update(`${ip}|test-salt`).digest('hex').slice(0, 16)}`);
 async function joinFresh(page, label) {
   await page.addInitScript(() => { try { localStorage.setItem('cil-start', JSON.stringify({ v: 1, dismissed: 1 })); } catch {} });
   const res = await page.request.post('/api/join', { headers: { origin: origin(), 'content-type': 'application/json' },
     data: JSON.stringify({ code: 'test-join', name: `${label}${stamp().slice(-4)}`, dist: 'fm', grp: 'D', consent: true }) });
   expect(res.ok(), `加入失敗 ${res.status()} ${await res.text()}`).toBe(true);
-  return (await res.json()).member.id;
+  const id = (await res.json()).member.id;
+  for (const k of JOIN_KEYS) await page.request.get(`/api/dev/rate?key=${encodeURIComponent(k)}&clear=1`);
+  return id;
 }
 const meOf = async (page) => (await (await page.request.get('/api/me')).json()).member;
 // 在帳號與安全新增一把通行金鑰（新增後 App 會順便驗證一次）
@@ -48,6 +54,7 @@ test('帳號與安全：有通行金鑰的帳號綁 Google，回來是確認卡�
   const card = page.locator('#gConfirm');
   await expect(card.locator('h2')).toHaveText('最後一步：用通行金鑰確認綁定這個 Google 帳號');
   await expect(card.locator('h2')).toBeFocused();
+  await expect(card.locator('#gConfirmWho')).toHaveText('確認卡');   // 要綁的是哪個 Google 帳號
   await expect(page.locator('#view .notice')).toHaveCount(0);   // 以前的「請先按驗證一次再重新綁定」不見了
   const go = card.getByRole('button', { name: '用通行金鑰確認' });
   expect((await go.boundingBox()).height).toBeGreaterThanOrEqual(44);
@@ -89,6 +96,14 @@ test('新手機：新增被擋下時說明能怎麼確認；用 Google 重新確
   await acceptPrivacyIfAsked(page);
   const id = (await meOf(page)).id;
   await addPasskey(page);
+  // 同一台手機、不是剛用 Google 登入的工作階段：用現有的通行金鑰驗證後，焦點在「已確認是你本人」（VoiceOver 先唸結果）
+  await devLogin(page, id);
+  await page.goto('/#/me/security');
+  await page.locator('#pkAdd').click();
+  await page.locator('#pkGate').getByRole('button', { name: '用現有的通行金鑰驗證' }).click();
+  await expect(page.locator('#pkGateT')).toHaveText('已確認是你本人');
+  await expect(page.locator('#pkGateT')).toBeFocused();
+  await expect(page.locator('#pkGateAdd')).toBeVisible();
   // 換一台手機：舊的通行金鑰不在這台，工作階段也不是剛用 Google 登入的
   await cdp.send('WebAuthn.clearCredentials', { authenticatorId });
   await devLogin(page, id);
@@ -139,7 +154,7 @@ async function chairPasskey(request) {
   return b64u(credId);
 }
 
-test('協會強制兩步驟：幹部用 Google 登入後跳出驗證面板（按一下驗證、稍後留提示列）；還沒有通行金鑰的引導到帳號與安全', async ({ page, request }) => {
+test('協會強制兩步驟：幹部用 Google 登入後跳出驗證面板（按一下驗證、稍後留提示列）；還沒有通行金鑰的按一下新增第一把', async ({ page, request }) => {
   await authenticator(page);
   await page.addInitScript(() => { try { localStorage.setItem('cil-start', JSON.stringify({ v: 1, dismissed: 1 })); } catch {} });
   const sub = `e2e_mf_${stamp()}`, bare = `e2e_mb_${stamp()}`;
@@ -156,7 +171,6 @@ test('協會強制兩步驟：幹部用 Google 登入後跳出驗證面板（按
   try {
     chairKey = await chairPasskey(request);
     expect((await mfaCall(request, 't_chair', '/settings/security', { method: 'POST', body: { require_mfa: true } })).status).toBe(200);
-    await page.evaluate(() => sessionStorage.clear());
     await page.goto(devGoogle({ sub, name: '兩步驟幹部' }));
     await page.waitForURL(/#\/(\?|$)/);
     const sheet = page.locator('.sheet[role="dialog"]');
@@ -167,7 +181,7 @@ test('協會強制兩步驟：幹部用 Google 登入後跳出驗證面板（按
     expect((await go.boundingBox()).height).toBeGreaterThanOrEqual(44);
     expect(page.url()).not.toContain('mfa=');
     expect(await axeBad(page)).toEqual([]);
-    // 稍後：面板關掉、首頁留著提示列；這個分頁不再自動跳出
+    // 稍後：面板關掉、首頁留著提示列；重新整理（或主畫面 App 冷啟動）不再自動跳出
     await sheet.getByRole('button', { name: '稍後' }).click();
     await expect(sheet).toHaveCount(0);
     await expect(page.locator('.mfabar')).toBeVisible();
@@ -182,15 +196,24 @@ test('協會強制兩步驟：幹部用 Google 登入後跳出驗證面板（按
     await expect(toast(page)).toContainText('驗證完成，可以使用管理功能了');
     await expect(page.locator('.sheet[role="dialog"]')).toHaveCount(0);
     await expect(page.locator('.mfabar')).toHaveCount(0);
+    await expect(page.locator('#view h1')).toBeFocused();   // 提示列不見了，焦點交給大標題
     expect((await meOf(page)).mfaPending).toBe(false);
-    // 還沒有通行金鑰的幹部：引導到帳號與安全
+    // 還沒有通行金鑰的幹部：剛用 Google 登入，面板按一下就新增第一把並驗證（理事長收到通知）
     await page.goto(devGoogle({ sub: bare, name: '兩步驟幹部' }));
     await page.waitForURL(/#\/(\?|$)/);
     const s2 = page.locator('.sheet[role="dialog"]');
-    await expect(s2.locator('#mfaT')).toHaveText('完成登入：先新增一把通行金鑰');
-    await s2.getByRole('link', { name: '前往帳號與安全' }).click();
-    await page.waitForURL(/#\/me\/security/);
-    await expect(page.locator('#view h1')).toHaveText('帳號與安全');
+    await expect(s2.locator('#mfaT')).toHaveText('完成登入：新增第一把通行金鑰');
+    await expect(s2).toContainText('新增後會通知理事長');
+    const add = s2.getByRole('button', { name: '新增第一把通行金鑰' });
+    await expect(add).toBeFocused();
+    expect((await add.boundingBox()).height).toBeGreaterThanOrEqual(44);
+    expect(await axeBad(page)).toEqual([]);
+    await add.click();
+    await expect(toast(page)).toContainText('驗證完成，可以使用管理功能了');
+    await expect(s2).toHaveCount(0);
+    expect((await meOf(page)).mfaPending).toBe(false);
+    const { passkeys } = await (await page.request.get('/api/passkeys')).json();
+    expect(passkeys.length).toBe(1);
   } finally {
     await mfaCall(request, 't_chair', '/settings/security', { method: 'POST', body: { require_mfa: false } });
     if (chairKey) await mfaCall(request, 't_chair', `/passkeys/${encodeURIComponent(chairKey)}`, { method: 'DELETE' });

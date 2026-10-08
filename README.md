@@ -123,8 +123,8 @@ Google 不允許在 LINE、Facebook、Instagram 的內建瀏覽器登入；在 L
 
 **先 Google、再通行金鑰上線步驟**（沒有功能開關）：
 
-1. `npx wrangler d1 migrations apply cil-run --remote`（`0055_google_then_passkey`，只新增 `google_pending` 表與 `sessions.google_at` 欄位），先在測試環境做一次。**要在部署程式之前做**：新程式每次請求都會讀 `sessions.google_at`，登入時也會寫。
-2. 部署程式（Service Worker 升到 `cil-v75`）。
+1. `npx wrangler d1 migrations apply cil-run --remote`（`0055_google_then_passkey`，只新增 `google_pending` 表與 `sessions.google_at`、`webauthn_challenges.via` 欄位），先在測試環境做一次。**要在部署程式之前做**：新程式每次請求都會讀 `sessions.google_at`，登入與新增通行金鑰時也會寫。
+2. 部署程式（Service Worker 升到 `cil-v75`）。過渡期：還沒按「有新版本」更新的人用舊版畫面綁 Google（網址沒帶 `c=1`），伺服器照舊回「先驗證一次再綁」，不會停在一頁看不懂的確認網址；更新後就是新的確認卡。
 
 ### 跑步數據匯入
 
