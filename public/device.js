@@ -7,11 +7,12 @@ export const OWNER_KEY = 'cil-device-owner';
 // 這台裝置上屬於某個帳號的 localStorage：
 //   cil-log-queue 未送出的訓練紀錄、cil-coach 課表設定與身體資料、cil-run-session 跑步中的 GPS 軌跡（位置資料）、
 //   cil-team 首頁的分團篩選、cil-map-view 地圖上次看的位置、cil-push-owner 推播訂閱是誰開的、
-//   cil-push-resume 登入狀態過期時關掉的推播是誰的（同一個人重新登入時自動重新開啟）
+//   cil-push-resume 登入狀態過期時關掉的推播是誰的（同一個人重新登入時自動重新開啟）、
+//   cil-ach 成績與挑戰：榮譽制體重挑戰的體重紀錄（只存在這台裝置）與看過的 PB
 //   （語言、主題、底圖、看過使用說明等裝置偏好不清；舊版課表教練的資料不屬於任何帳號，登出時另外問）
-export const LOCAL_KEYS = ['cil-log-queue', 'cil-coach', 'cil-run-session', 'cil-team', 'cil-map-view', 'cil-push-owner', 'cil-push-resume'];
+export const LOCAL_KEYS = ['cil-log-queue', 'cil-coach', 'cil-run-session', 'cil-team', 'cil-map-view', 'cil-push-owner', 'cil-push-resume', 'cil-ach'];
 // 換人時一定不能留給下一位的資料：有這些、又不知道主人是誰，就先確認是誰的
-export const DATA_KEYS = ['cil-log-queue', 'cil-coach', 'cil-run-session'];
+export const DATA_KEYS = ['cil-log-queue', 'cil-coach', 'cil-run-session', 'cil-ach'];
 // sessionStorage：填到一半的活動表單、報名草稿（同一個分頁換人登入時清掉；登入後要回去的頁面 cil-after-login 保留）
 export const SESSION_KEYS = ['cil-ev-draft', 'cil-after-reg'];
 export const PUSH_OWNER_KEY = 'cil-push-owner';
