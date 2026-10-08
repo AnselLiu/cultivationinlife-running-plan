@@ -2,6 +2,7 @@
 import * as Party from './party.js';
 import { defaultWindow, SIGNUP_DEFAULTS, tpText } from './signup-window.js';
 import { $, latest, nowTp, openSheet, scanSheet, ago, allow, api, apiAll, applyFeatures, avatar, barChart, bars, bindStepup, cfg, esc, group, IC, KIND_NAME, largeTitle, me, mfaBanner, nrow, org, pad2, paintCountdown, passkey, refreshMe, render, ROLE_NAME, row, studio, TAB_DEFAULT, TEAM_PERMS, teamAllow, teamIcon, teamOf, teams, toast, view, btnRow, MI, ic, emptyState, focusEl, once } from './app.js';
+import * as AR from './achrule.js';
 
 // ---------- 管理介面（RBAC、會籍、座位圖）----------
 let adminSeq = 0;
@@ -401,7 +402,7 @@ async function membershipDialog(id) {
   };
 }
 function rolesPanel(data) {
-  const PERM_NAME = { event: '建立活動', plan: '發布課表', checkin: '報到', lottery: '抽獎', roster: '看名冊', members: '會員管理', roles: '指派身分', layout: '座位圖設定' };
+  const PERM_NAME = { event: '建立活動', plan: '發布課表', checkin: '報到', lottery: '抽獎', roster: '看名冊', members: '會員管理', roles: '指派身分', layout: '座位圖設定', achieve: '成績與挑戰' };
   const order = ['chair', 'director', 'supervisor', 'staff', 'coach', 'member'];
   const byRole = {};
   for (const m of data.members) (byRole[m.role] ||= []).push(m);
@@ -510,10 +511,15 @@ const AUDIT_NAME = {
   'referrer.lookup': '用 Gmail 找推薦人', 'referrer.set': '設定推薦人', 'referrer.clear': '移除推薦人（本人）', 'referrer.ack': '推薦人確認', 'referrer.deny': '推薦人按「不是我」',
   'referrer.view': '查看推薦族譜', 'referrer.relink': '推薦人連到帳號（幹部）', 'referrer.admin_clear': '移除推薦人（幹部）', 'privacy.email_lookup': '用 Gmail 找到我（開關）',
   'google.refresh': '重新確認 Google 帳號',
+  'pb.approve': '核准成績', 'pb.reject': '婉拒成績', 'pb.revoke': '撤銷成績', 'pb.delete': '刪除成績（本人）',
+  'privacy.cheer_board': '恭喜榜開關', 'privacy.cheer_rank': 'PB 排行開關', 'privacy.ach_weight_delete': '刪除挑戰體重（本人）',
+  'ach.join': '參加挑戰', 'ach.leave': '退出挑戰', 'ach.create': '建立挑戰', 'ach.update': '修改挑戰', 'ach.open': '發布挑戰', 'ach.cancel': '取消挑戰', 'ach.delete': '刪除挑戰草稿',
+  'ach.confirm': '確認達成', 'ach.reject': '退回達成', 'ach.revoke': '撤銷達成', 'ach.witness': '見證量測', 'ach.issue': '團服發放', 'ach.shirts_export': '下載團服名單',
+  'ach.remind_size': '提醒選尺寸', 'ach.notify_pickup': '通知領取團服', 'ach.release_unsized': '讓出沒選尺寸的名額', 'ach.settle': '挑戰結算', 'event.attendance': '出席標記',
 };
 // 稽核紀錄：一定要選時間區間（預設最近 7 天），再依類型、操作者、對象縮小；一次 50 筆
 const AUDIT_GROUPS = { '': '所有類型', role: '身分變更', membership: '會籍', team: '分團', event: '活動', checkin: '報到', lottery: '抽獎',
-  settings: '系統設定', signup: '報名審核', privacy: '個資', login: '登入', passkey: '通行金鑰', mfa: '兩步驟驗證', account: '帳號', 'join.denied': '邀請碼錯誤', bootstrap: '初始設定', plan: '課表', referrer: '推薦人' };
+  settings: '系統設定', signup: '報名審核', privacy: '個資', login: '登入', passkey: '通行金鑰', mfa: '兩步驟驗證', account: '帳號', 'join.denied': '邀請碼錯誤', bootstrap: '初始設定', plan: '課表', referrer: '推薦人', pb: '成績', ach: '挑戰' };
 function auditPanel() {
   const to = new Date().toISOString().slice(0, 10), from = new Date(Date.now() - 6 * 864e5).toISOString().slice(0, 10);
   return `<section class="card">
@@ -555,9 +561,28 @@ function refDetail(action, t) {
   m = t.match(/^named｜n=(\d+)$/);
   return m ? `只填名字的跑友 ${m[1]} 人` : t;
 }
+// 成績與挑戰的細節也是代碼（d=fm｜r=link、c=<挑戰>｜w=b、on／off…），畫面上換成中文；每個詞都是字典的一個鍵（英文介面逐詞翻）
+const ACH_REASON = { link: '連結打不開', mismatch: '成績或姓名對不上', dup: '同一場已經登錄過', unclear: '截圖看不清楚', doubt: '紀錄有疑問', unverified: '沒有見到本人',
+  ineligible: '不符合挑戰資格', wrong: '成績有誤', notself: '不是本人', other: '其他' };
+const ACH_PB_STATE = { pending: '審核中', approved: '已核准', rejected: '已婉拒', revoked: '已撤銷' };
+const ACH_FLAG = { on: '標記已發放', off: '取消發放', consent: '同意保存體重', leave: '退出挑戰' };
+const ACH_CODED = new Set(['pb.approve', 'pb.reject', 'pb.revoke', 'privacy.ach_weight_delete', 'ach.join', 'ach.leave', 'ach.confirm', 'ach.reject', 'ach.revoke', 'ach.witness', 'ach.issue']);
+function achDetail(action, t) {
+  if (action === 'pb.delete') return ACH_PB_STATE[t] || t;
+  if (!ACH_CODED.has(action)) return t;
+  return t.split('｜').map((p) => {
+    const [k, v] = [p.slice(0, p.indexOf('=')), p.slice(p.indexOf('=') + 1)];
+    if (!p.includes('=')) return ACH_FLAG[p] || p;
+    if (k === 'd') return `距離：${AR.DISTS[v]?.zh || v}`;
+    if (k === 'r') return `原因：${ACH_REASON[v] || v}`;
+    if (k === 'c') return `挑戰 ${v}`;
+    if (k === 'w') return v === 'b' ? '起始量測' : v === 'l' ? '結束量測' : p;
+    return p;
+  }).join('・');
+}
 function auditDetail(d, action) {
   // 結尾的 ｜team=…｜role=…｜to=… 是給還原工具看的代碼（tools/restore-sql.mjs），畫面上不顯示
-  let t = refDetail(action, String(d).replace(/(｜(team|role|to)=[\w-]+)+$/, ''));
+  let t = achDetail(action, refDetail(action, String(d).replace(/(｜(team|role|to)=[\w-]+)+$/, '')));
   if (/^\{.*\}$/.test(t)) {
     try {
       const o = JSON.parse(t), on = [], off = [], rest = [];
@@ -675,15 +700,18 @@ function bindEventsPanel() {
 // ---------- 系統設定（理事長、行政人員）----------
 const FEATURE_NAME = { gps: '跑步記錄（計時＋GPS）', studio: '拍照分享', health: 'Apple 健康匯入', file: 'GPX／TCX 檔匯入', coach: '課表教練（全季、賽事準備、配速與用語）',
   plan_cycle: '個人課表週期（跟自己的比賽排 20 週）', plan_export: '分享與匯出課表（複製、PDF、行事曆）', party: '餐敘活動（春酒、慶功宴、尾牙）', cams: '附近即時影像（政府公開攝影機）',
-  rest: '跑者休息站（飲水、廁所、淋浴置物、補給）', meetup: '團員揪團（團員自己發起活動）', referral: '推薦人（跑友填介紹人、推薦族譜）' };
+  rest: '跑者休息站（飲水、廁所、淋浴置物、補給）', meetup: '團員揪團（團員自己發起活動）', referral: '推薦人（跑友填介紹人、推薦族譜）',
+  achieve: '成績與挑戰（PB 登錄、目標挑戰、恭喜榜）', achieve_rank: '恭喜榜的各距離 PB 排行' };
 // 功能開關的說明：關掉會影響什麼（課表教練與教練身分容易搞混，寫清楚）
 const FEATURE_HELP = { coach: '關閉後所有人都看不到這些頁面；不影響每週課表與訓練紀錄',
   plan_cycle: '關閉後所有人都照協會賽季排課；已選的週期會保留，打開後恢復',
   plan_export: '教練已同意分享，預設開啟；關閉後所有人都看不到分享按鈕',
   meetup: '團員可以在自己參加的分團發起揪團：不能收費、不推播，每人同時最多 3 場；分團與協會幹部可以編輯或刪除。關閉後不能再發起，已經開的照常',
-  referral: '跑友可以填是誰介紹他來的（用 Gmail 找跑友帳號，或只填名字）；會員管理權限的幹部在「管理後台 → 會員 → 推薦族譜」查看。打開前請先在 Google Cloud 的 OAuth 同意畫面加上 Email 範圍；打開後 Google 登入會多問一次 Email 授權。關閉後不能新增，已經填的保留，本人仍可移除' };
+  referral: '跑友可以填是誰介紹他來的（用 Gmail 找跑友帳號，或只填名字）；會員管理權限的幹部在「管理後台 → 會員 → 推薦族譜」查看。打開前請先在 Google Cloud 的 OAuth 同意畫面加上 Email 範圍；打開後 Google 登入會多問一次 Email 授權。關閉後不能新增，已經填的保留，本人仍可移除',
+  achieve: '打開前請先看過隱私權政策（新增比賽成績與體重挑戰的說明；用自訂條文的協會要自己補上）。關閉後不能再登錄成績或參加挑戰，已有的資料照樣看得到、可以刪除，審核中的可以審完，進行中的挑戰照樣結算',
+  achieve_rank: '只列打開「恭喜榜」並且另外同意「列入 PB 排行」的跑友、近三年通過審核的成績，不分性別年齡，只是參考；關閉時恭喜榜只顯示最新的恭喜' };
 // 預設關閉的功能（要明確打開才有）
-const FEATURE_OFF = new Set(['cams', 'rest', 'meetup', 'referral']);
+const FEATURE_OFF = new Set(['cams', 'rest', 'meetup', 'referral', 'achieve', 'achieve_rank']);
 // 系統設定：第一層是分組清單（跟「我的」一樣的列，副標是目前的值），點一列進到子頁才是表單；常用的在前、少用但重要的放最後
 //   網址：#/admin/settings（等於 #/admin?tab=settings）、#/admin/settings/<段>；表單、儲存 API、稽核名稱都跟拆開前一樣
 const yrs = (n, none = '不自動刪除') => (Number(n) ? `${Number(n)} 年` : none);
@@ -807,8 +835,8 @@ const camsCard = () => `<section class="card" id="camSrcCard">
     <p class="tiny" style="margin:0">地點卡會列出 1.5 公里內的政府公開攝影機（沒有就列 3 公里內最近一支），畫面由本站轉送、不保存，跑友的 IP 不會送到影像來源。功能開關打開後，水利署與水利處的鏡頭清單每天清晨 04:00 起自動同步（每小時只同步一個來源）；公路局的清單由電腦上的同步工具更新。關掉來源後立即不再顯示，也不再連線。</p>
     <div id="camSrcList" class="toggles"><p class="tiny" style="margin:0">載入中…</p></div>
   </section>`;
-// 功能開關分四組：訓練、活動、地圖（地圖的兩項旁邊有「設定來源 ›」）、會員
-const FEATURE_GROUPS = [['訓練', ['gps', 'studio', 'health', 'file', 'coach', 'plan_cycle', 'plan_export']], ['活動', ['party', 'meetup']], ['地圖', ['cams', 'rest']], ['會員', ['referral']]];
+// 功能開關分五組：訓練、活動、地圖（地圖的兩項旁邊有「設定來源 ›」）、會員、成績與挑戰
+const FEATURE_GROUPS = [['訓練', ['gps', 'studio', 'health', 'file', 'coach', 'plan_cycle', 'plan_export']], ['活動', ['party', 'meetup']], ['地圖', ['cams', 'rest']], ['會員', ['referral']], ['成績與挑戰', ['achieve', 'achieve_rank']]];
 const featuresCard = () => `<section class="card">
     <form id="featForm" class="toggles">
       ${FEATURE_GROUPS.map(([g, ks]) => `<fieldset class="qset featgrp"><legend>${g}</legend>${ks.map((k) => `<label class="switch"><span>${FEATURE_NAME[k]}${FEATURE_HELP[k] ? `<span class="tiny" style="display:block">${FEATURE_HELP[k]}</span>` : ''}</span><input type="checkbox" name="${k}" ${featOn(k) ? 'checked' : ''}><i></i></label>${k === 'cams' || k === 'rest' ? `<a class="tiny tlink featsrc" href="#/admin/settings/${k}">${k === 'cams' ? '設定影像來源 ›' : '設定休息站來源 ›'}</a>` : ''}`).join('')}</fieldset>`).join('')}
