@@ -68,6 +68,7 @@ async function overviewPanel() {
   return `<section class="card opsalert" id="opsTop" role="status" hidden></section>
     ${allow('settings') ? '<section class="card" id="weeklyTop" hidden></section>' : ''}
     <section class="card" id="pendingTop" hidden></section>
+    ${achApprover() && (featOn('achieve') || me.ach?.queue) ? group('', [row('#/admin/ach', achIc('medal'), '成績與挑戰', '審核成績、設定挑戰與團服', me.ach?.queue ? `<span class="pill wait num">${Number(me.ach.queue)}</span>` : '')]) : ''}
     ${bc ? group('', [btnRow('bcJump', MI.bell, '群發通知', '推播給全部或指定分團、身分')]) : ''}
     <section class="kpis">
       ${k('跑友人數', o.members, `本月新加入 ${o.newThisMonth}`)}${k('30 天內活躍', o.active30, o.members ? `${Math.round(o.active30 / o.members * 100)}%` : '')}
