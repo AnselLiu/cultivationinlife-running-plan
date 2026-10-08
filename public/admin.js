@@ -1528,7 +1528,10 @@ function achCampCard(c) {
 function achCampsPanel(panel, ctx) {
   const cs = ctx.data.campaigns || [];
   const groups = [['進行中', (c) => c.status === 'open'], ['草稿', (c) => c.status === 'draft'], ['已結算', (c) => c.status === 'settled'], ['已取消', (c) => c.status === 'cancelled']];
-  panel.innerHTML = `${achApprover() ? '<div class="row"><a class="btn" href="#/admin/ach/new">新增挑戰</a></div>' : ''}
+  // 功能開關關著：伺服器不讓新增與發布（進行中的照樣結算），按鈕先拿掉、說明原因
+  const add = !achApprover() ? '' : featOn('achieve') ? '<div class="row"><a class="btn" href="#/admin/ach/new">新增挑戰</a></div>'
+    : '<p class="notice">「成績與挑戰」的功能開關關著：不能新增或發布挑戰；進行中的挑戰照樣結算，團服照樣發放</p>';
+  panel.innerHTML = `${add}
     ${groups.map(([g, f]) => { const xs = cs.filter(f); return xs.length ? `<section class="adm-ach-group"><h2 class="sgt">${g}</h2>${xs.map(achCampCard).join('')}</section>` : ''; }).join('')
       || `<section class="card">${emptyState(achIc('trophy'), '還沒有挑戰')}</section>`}`;
 }
