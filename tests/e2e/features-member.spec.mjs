@@ -506,7 +506,13 @@ test('跑者休息站：地點卡的附近休息站、休息站卡（顯名與�
   await expect(page.locator('#restBar')).toBeVisible();
   expect(await page.evaluate(() => localStorage.getItem('cil-map-rest'))).toBe('1');
   // 點地圖上的針打開卡片，關閉鈕關掉
-  await page.locator(`.rpin[data-rid="${id}"]`).evaluate((el) => el.closest('.leaflet-marker-icon').click());
+  //   打開圖層後格子陸續回來，每回來一格就重畫一次（換掉所有針）：先找到針、下一步才點，中間剛好重畫就會點到已經拿掉的舊針（沒反應）
+  //   所以找與點在頁面裡同一步做完；還沒畫出來就等下一次
+  await expect.poll(() => page.evaluate((rid) => {
+    const host = document.querySelector(`.rpin[data-rid="${CSS.escape(rid)}"]`)?.closest('.leaflet-marker-icon');
+    host?.click();
+    return !!host;
+  }, id)).toBe(true);
   await expect(card).toBeVisible();
   await page.locator('#restClose').click();
   await expect(page.locator('.restcard')).toHaveCount(0);
