@@ -47,7 +47,7 @@ async function adminView(tab) {
   panel.style.minHeight = ''; panel.removeAttribute('aria-busy');
   if (tab === 'overview') bindOverview();
   if (tab === 'members') bindMembers();
-  if (tab === 'roles') { bindRoleActs(panel); bindHandover(); }
+  if (tab === 'roles') { bindRoleActs(panel); bindHandover(); openSecFromUrl(); }
   if (tab === 'teams') bindAdminTeams();
   if (tab === 'audit') bindAudit();
   if (tab === 'events') bindEventsPanel();
@@ -444,42 +444,80 @@ function bindRoleActs(box) {
   for (const b of box.querySelectorAll('[data-sec]')) b.onclick = () => securityDialog(b.dataset.sec, b.dataset.name);
 }
 // 重設通行金鑰並登出所有裝置（帳號被盜用、幹部第一把不是本人、幹部唯一一把的手機弄丟）：只有理事長
-//   打開先讀數字（GET …/security：通行金鑰幾把、登入中的裝置幾個、有沒有綁 Google；不給裝置名稱、IP）；
+//   打開先讀數字（GET …/security：通行金鑰幾把、登入中的裝置幾個、有沒有綁 Google；不給裝置名稱、IP），讀到之前不能送出；
 //   送出要 15 分鐘內用通行金鑰驗證過（api() 會叫出 Face ID）；原因只放在給本人的通知，推播與稽核紀錄都不記
+//   重設後還有 Google 可以登入（有綁、沒勾解除）：本人用 Google 重新登入再新增通行金鑰
+//   沒有登入方式了（沒綁 Google，或勾了解除）：本人回不到這個帳號（邀請碼與沒綁過的 Google 都會開新帳號），顯示警告並要輸入姓名確認（伺服器也檢查）
+//   unlink：預先勾好「同時解除 Google 綁定」（幹部第一把通知打開的，見 openSecFromUrl）
 let secSeq = 0;
-function securityDialog(id, name) {
-  const opener = document.activeElement, my = ++secSeq;
+function securityDialog(id, name, { unlink = false, opener = document.activeElement } = {}) {
+  const my = ++secSeq;
   const s = openSheet('重設通行金鑰並登出', `<h3 id="secT">重設通行金鑰並登出</h3>
-    <p style="margin:0"><b translate="no">${esc(name)}</b></p>
+    <p style="margin:0"><b translate="no" id="secWho">${esc(name)}</b></p>
     <p class="tiny" id="secN" style="margin:0" aria-live="polite">讀取中…</p>
-    <p class="muted" style="margin:0">會刪除這位跑友所有的通行金鑰、登出所有裝置與推播。之後本人重新登入（Google 或邀請碼），再新增通行金鑰。</p>
+    <p class="muted" style="margin:0">會刪除這位跑友所有的通行金鑰、登出所有裝置並關閉推播。</p>
+    <p class="muted" id="secOk" style="margin:0" hidden>之後本人用已綁定的 Google 重新登入，再新增通行金鑰。</p>
     <form id="secF" style="display:grid;gap:12px">
-      <div id="secG" style="display:grid;gap:4px">
-        <label class="inline"><input type="checkbox" name="unlink" aria-describedby="secW"> 同時解除 Google 綁定（Google 帳號被盜用時才勾）</label>
-        <p class="tiny" id="secW" style="margin:0">解除後本人不能再用 Google 登入這個帳號，要用邀請碼或請理事長協助。</p>
+      <div id="secG" style="display:grid;gap:4px" hidden>
+        <label class="inline"><input type="checkbox" name="unlink" aria-describedby="secW"${unlink ? ' checked' : ''}> 同時解除 Google 綁定（Google 帳號被盜用時才勾）</label>
+        <p class="tiny" id="secW" style="margin:0">幹部第一把通行金鑰不是本人新增的，就是 Google 帳號被盜用了，要勾。勾了之後本人回不到這個帳號。</p>
+      </div>
+      <div id="secL" class="notice err" style="display:grid;gap:8px;margin:0" hidden>
+        <p style="margin:0" id="secLw"><b>重設後本人回不到這個帳號。</b>沒有 Google 可以登入，邀請碼只會開一個新帳號；原本的紀錄、成績與身分都留在這個帳號。</p>
+        <label>輸入「<span translate="no" id="secCn">${esc(name)}</span>」確認<input name="confirm" autocomplete="off" maxlength="40" aria-describedby="secLw"></label>
       </div>
       <label>原因（選填）<textarea name="reason" maxlength="100" rows="2" aria-describedby="secR"></textarea></label>
       <p class="tiny" id="secR" style="margin:0">原因只有本人看得到，推播與稽核紀錄都不會記</p>
-      <div class="sheetacts"><button type="button" class="btn ghost" data-close>取消</button><button class="btn danger">重設並登出</button></div>
+      <div class="sheetacts"><button type="button" class="btn ghost" data-close>取消</button><button class="btn danger" disabled>重設並登出</button></div>
     </form>`, opener, 'secT');
-  const n = s.host.querySelector('#secN');
+  const q = (x) => s.host.querySelector(x), n = q('#secN'), f = q('#secF');
+  let google = false;
+  // 重設後還有沒有登入方式：沒有的話顯示警告、姓名確認變成必填
+  const paint = () => {
+    const stuck = !google || f.unlink.checked;
+    q('#secOk').hidden = stuck; q('#secL').hidden = !stuck; f.confirm.required = stuck;
+  };
+  f.unlink.onchange = paint;
   api(`/members/${encodeURIComponent(id)}/security`).then((c) => {
     if (my !== secSeq || !n.isConnected) return;
     n.textContent = `通行金鑰 ${Number(c.passkeys) || 0} 把・登入中的裝置 ${Number(c.sessions) || 0} 個${c.google ? '・已綁 Google' : ''}`;
+    // 從通知打開的沒有名字：用伺服器給的（確認要輸入的也是這個）
+    if (!name) { name = String(c.name || ''); q('#secWho').textContent = name; q('#secCn').textContent = name; }
+    google = !!c.google;
     // 沒有綁 Google：沒有東西可以解除
-    if (!c.google) { const g = s.host.querySelector('#secG'); g.hidden = true; g.querySelector('input').checked = false; }
+    q('#secG').hidden = !google; if (!google) f.unlink.checked = false;
+    paint();
+    f.querySelector('.btn.danger').disabled = false;
   }).catch((err) => { if (my === secSeq && n.isConnected) n.textContent = err.message; });
-  s.host.querySelector('#secF').onsubmit = async (e) => {
+  f.onsubmit = async (e) => {
     e.preventDefault();
-    const f = e.target;
     try {
-      await api(`/members/${encodeURIComponent(id)}/security-reset`, { method: 'POST', body: { unlink_google: f.unlink.checked, reason: f.reason.value.trim().slice(0, 100) } });
-      s.close(); toast(`已重設 ${name} 的通行金鑰並登出所有裝置`);
+      await api(`/members/${encodeURIComponent(id)}/security-reset`, { method: 'POST',
+        body: { unlink_google: google && f.unlink.checked, reason: f.reason.value.trim().slice(0, 100), confirm: f.confirm.value.trim() } });
+      s.close();
+      // 名字不翻譯（英文介面也不會被拆開或整句留中文）
+      const msg = document.createDocumentFragment(), who = document.createElement('span');
+      who.translate = false; who.textContent = name;
+      msg.append('已重設通行金鑰並登出所有裝置：', who);
+      toast(msg);
       await adminView('roles');
-      // 重畫後焦點回到同一位跑友的「安全」（在搜尋結果裡的話回到搜尋框）
+      // 重畫後焦點回到同一位跑友的「安全」（在搜尋結果裡或從通知打開的話回到搜尋框）
       focusEl(document.querySelector(`#panel [data-sec="${CSS.escape(id)}"]`) || $('#roleSearch [name=q]'));
-    } catch (err) { toast(err.message); }
+    } catch (err) {
+      toast(err.message);
+      if (err.data?.confirm && !q('#secL').hidden) focusEl(f.confirm);
+    }
   };
+}
+// 幹部第一把通行金鑰的通知：#/admin?tab=roles&sec=<跑友 id>&g=1 直接打開那位跑友的「安全」（g=1 預先勾「同時解除 Google 綁定」）
+//   打開後把參數從網址拿掉（重新整理不會再跳出來）；只有理事長、不是自己
+function openSecFromUrl() {
+  const p = new URLSearchParams(location.hash.split('?')[1] || ''), id = p.get('sec');
+  if (!id) return;
+  history.replaceState(null, '', '#/admin?tab=roles');
+  if (!allow('roles') || id === me.id || !/^[\w-]{1,32}$/.test(id)) return;
+  const btn = document.querySelector(`#panel [data-sec="${CSS.escape(id)}"]`);
+  securityDialog(id, btn?.dataset.name || '', { unlink: p.get('g') === '1', opener: btn || $('#roleSearch [name=q]') });
 }
 function bindHandover() {
   const rs = $('#roleSearch'), rsOnly = latest(), hoOnly = latest();

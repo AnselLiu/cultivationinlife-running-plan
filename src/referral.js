@@ -109,10 +109,12 @@ export const LOGIN_SQL = `UPDATE members SET
   email_h = CASE WHEN id = ?1 THEN (CASE WHEN ?4 = 1 THEN ?3 ELSE email_h END) ELSE NULL END
   WHERE id = ?1 OR (?4 = 1 AND ?3 IS NOT NULL AND email_h = ?3 AND id != ?1)`;
 // 綁定模式（帳號與安全、推薦人頁的「用 Google 確認」）：多綁 google_sub（?5）
+//   ?6 發起綁定的工作階段（token_hash）：還在才寫，不在了整句 0 列（理事長「重設並登出」剛好在綁定途中送出時，不會把 Google 綁回去）
 export const LINK_SQL = `UPDATE members SET
   google_sub = CASE WHEN id = ?1 THEN ?5 ELSE google_sub END,
   avatar     = CASE WHEN id = ?1 THEN COALESCE(?2, avatar) ELSE avatar END,
   email_h    = CASE WHEN id = ?1 THEN (CASE WHEN ?4 = 1 THEN ?3 ELSE email_h END) ELSE NULL END
-  WHERE id = ?1 OR (?4 = 1 AND ?3 IS NOT NULL AND email_h = ?3 AND id != ?1)`;
+  WHERE (id = ?1 OR (?4 = 1 AND ?3 IS NOT NULL AND email_h = ?3 AND id != ?1))
+    AND EXISTS (SELECT 1 FROM sessions WHERE token_hash = ?6 AND member_id = ?1)`;
 // 新帳號：INSERT 之前（同一個 batch）先把別人身上相同的查詢碼清掉
 export const CLEAR_HOLDER_SQL = 'UPDATE members SET email_h = NULL WHERE ?1 IS NOT NULL AND email_h = ?1';

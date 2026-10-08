@@ -331,13 +331,14 @@ test('強制兩步驟、還沒有通行金鑰的幹部：用 Google 登入後 15
     const adds = (await auditOf('passkey.add')).filter((r) => r.target_id === id).map((r) => r.detail);
     assert.equal(adds.length, 1);
     assert.ok(adds[0].endsWith('｜幹部第一把（Google 確認後新增）'), adds[0]);
-    // 通知：本人（新增了一把）、理事長與行政人員（幹部新增了第一把，連到後台權限）；其他幹部不通知
+    // 通知：本人（新增了一把）、理事長與行政人員（幹部新增了第一把，直接打開這位跑友的「安全」並預先勾「同時解除 Google 綁定」）；其他幹部不通知
+    //   第一把是靠這個帳號綁的 Google 新增的：不是本人＝Google 帳號被盜用，只重設不解除的話對方再用 Google 登入又能加一把
     assert.equal((await sec(g.cookie)).filter((n) => n.title === '新增了一把通行金鑰').length, 1);
     for (const who of ['t_chair', 't_staff']) {
       const n = firstNote(await sec(await devCookie(who)));
       assert.equal(n.length, 1, who);
-      assert.equal(n[0].url, '/#/admin?tab=roles');
-      assert.ok(n[0].body.endsWith('不是本人的話，請理事長到後台「權限」按這位跑友的「安全」→「重設並登出」。'), '告訴理事長怎麼處理（重設並登出）');
+      assert.equal(n[0].url, `/#/admin?tab=roles&sec=${id}&g=1`);
+      assert.ok(n[0].body.endsWith('不是本人的話，就是他的 Google 帳號被盜用了：請理事長點這則通知打開「安全」，勾「同時解除 Google 綁定」再「重設並登出」。'), '告訴理事長怎麼處理（解除 Google 並重設）');
     }
     assert.equal(firstNote(await sec(await devCookie('t_coach'))).length, 0, '教練不通知');
     // 有了第一把：剛用 Google 登入也要用它驗證才能再新增

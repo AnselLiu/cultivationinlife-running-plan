@@ -45,7 +45,7 @@ test('權限：搜尋跑友指派身分，分頁停在權限', async ({ page }) 
   await page.locator('#rf').getByRole('button', { name: '儲存' }).click();
 });
 
-test('權限：「安全」重設通行金鑰並登出（看數字、焦點在取消、填原因、重設後提示），對方的登入失效', async ({ page, request }) => {
+test('權限：「安全」重設通行金鑰並登出（看數字、焦點在取消、沒綁 Google 的警告與姓名確認、填原因、重設後提示），對方的登入失效', async ({ page, request }) => {
   // 要重設的跑友：邀請碼加入（一個登入中的裝置、沒有通行金鑰、沒綁 Google）
   const name = `安全測試${Date.now().toString(36).slice(-4)}`;
   const j = await request.post('/api/join', { headers: { origin: BASE, 'content-type': 'application/json' }, data: JSON.stringify({ code: 'test-join', name, consent: true }) });
@@ -65,13 +65,52 @@ test('權限：「安全」重設通行金鑰並登出（看數字、焦點在�
   await expect(sheet.locator('#secN')).toHaveText('通行金鑰 0 把・登入中的裝置 1 個');
   await expect(sheet.locator('#secG')).toBeHidden();   // 沒綁 Google：沒有「解除 Google」
   await expect(sheet.getByRole('button', { name: '取消' })).toBeFocused();   // 危險操作：焦點先在安全的那一顆
+  // 沒綁 Google：重設後回不到這個帳號（邀請碼會開新帳號）→ 紅色警告、要輸入姓名，「用 Google 重新登入」的說明不顯示
+  await expect(sheet.locator('#secL')).toBeVisible();
+  await expect(sheet.locator('#secL')).toContainText('重設後本人回不到這個帳號');
+  await expect(sheet.locator('#secOk')).toBeHidden();
+  const confirm = sheet.getByRole('textbox', { name: new RegExp(`^輸入「\\s*${name}\\s*」確認$`) });
+  await expect(confirm).toHaveAttribute('required', '');
   await sheet.getByLabel('原因（選填）').fill('手機遺失');
+  await confirm.fill('不是這個名字');
   await sheet.getByRole('button', { name: '重設並登出' }).click();
-  await expect(page.locator('.toast')).toHaveText(`已重設 ${name} 的通行金鑰並登出所有裝置`);
+  await expect(page.locator('.toast')).toHaveText('請輸入對方的姓名確認');   // 伺服器也檢查
+  await expect(confirm).toBeFocused();
+  expect((await (await request.get('/api/me', { headers: { cookie } })).json()).member, '還沒重設').not.toBeNull();
+  await confirm.fill(name);
+  await sheet.getByRole('button', { name: '重設並登出' }).click();
+  await expect(page.locator('.toast')).toHaveText(`已重設通行金鑰並登出所有裝置：${name}`);
+  await expect(page.locator('.toast [translate="no"]')).toHaveText(name);   // 英文介面名字不會被拆開翻譯
   await expect(sheet).toHaveCount(0);
   await expect(page.locator('#roleSearch [name=q]')).toBeFocused();   // 重畫後焦點回到搜尋框
   const me = await (await request.get('/api/me', { headers: { cookie } })).json();
   expect(me.member).toBeNull();
+});
+
+test('權限：幹部第一把通行金鑰的通知直接打開「安全」（已勾解除 Google、警告與姓名確認），取消不重設', async ({ page, request }) => {
+  // 綁了 Google 的跑友（模擬那位幹部；通知的網址 #/admin?tab=roles&sec=<id>&g=1）
+  const gname = `谷歌測試${Date.now().toString(36).slice(-4)}`;
+  const g = await request.get(`/api/dev/google?${new URLSearchParams({ sub: `e2e_sec_${Date.now()}`, name: gname })}`, { maxRedirects: 0 });
+  const gc = g.headersArray().find((h) => h.name.toLowerCase() === 'set-cookie' && h.value.startsWith('__Host-cil_sess=')).value.split(';')[0];
+  const gid = (await (await request.get('/api/me', { headers: { cookie: gc } })).json()).member.id;
+  await enter(page, 't_chair', { mfa: true });
+  await page.goto(`/#/admin?tab=roles&sec=${gid}&g=1`);
+  const sheet = page.getByRole('dialog', { name: '重設通行金鑰並登出' });
+  await expect(sheet.locator('#secN')).toHaveText('通行金鑰 0 把・登入中的裝置 1 個・已綁 Google');
+  await expect(sheet.locator('#secWho')).toHaveText(gname);   // 不在名單上也有名字（伺服器給的）
+  await expect(page).toHaveURL(/#\/admin\?tab=roles$/);   // 參數拿掉，重新整理不會再跳出來
+  const unlink = sheet.getByRole('checkbox', { name: /同時解除 Google 綁定/ });
+  await expect(unlink).toBeChecked();
+  await expect(sheet.locator('#secL')).toBeVisible();   // 解除後沒有登入方式：警告與姓名確認
+  await expect(sheet.getByRole('textbox', { name: new RegExp(`^輸入「\\s*${gname}\\s*」確認$`) })).toBeVisible();
+  await expect(sheet.getByRole('button', { name: '重設並登出' })).toBeEnabled();
+  // 不勾：還能用 Google 重新登入，不用輸入姓名
+  await unlink.uncheck();
+  await expect(sheet.locator('#secL')).toBeHidden();
+  await expect(sheet.locator('#secOk')).toHaveText('之後本人用已綁定的 Google 重新登入，再新增通行金鑰。');
+  await sheet.getByRole('button', { name: '取消' }).click();
+  await expect(sheet).toHaveCount(0);
+  expect((await (await request.get('/api/me', { headers: { cookie: gc } })).json()).member.id, '取消：沒有重設').toBe(gid);
 });
 
 test('系統設定：功能開關、分頁名稱、立即備份；稽核查詢與完整性檢查；名冊查詢', async ({ page }) => {

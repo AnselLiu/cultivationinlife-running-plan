@@ -114,7 +114,7 @@ test('刪除帳號：先標「推薦人已刪除」再刪；順序反過來標�
   assert.deepEqual(rev.prepare('SELECT referrer_gone FROM members ORDER BY id').all().map((r) => r.referrer_gone), [0, 0], '外鍵先清掉 referrer_id，標記就找不到人');
 });
 
-test('登入時把別人身上相同的查詢碼清掉（同一句）', () => {
+test('登入時把別人身上相同的查詢碼清掉（同一句）；綁定要工作階段還在', () => {
   const db = freshDb();
   add(db, 'e', 'f');
   db.prepare("UPDATE members SET email_h = 'H' WHERE id = 'e'").run();
@@ -123,7 +123,13 @@ test('登入時把別人身上相同的查詢碼清掉（同一句）', () => {
   assert.deepEqual(db.prepare('SELECT id, email_h FROM members ORDER BY id').all().map((r) => [r.id, r.email_h]), [['e', null], ['f', 'H']]);
   db.prepare(sql).run('e', null, null, 0);
   assert.equal(db.prepare("SELECT email_h FROM members WHERE id = 'f'").get().email_h, 'H', '沒有要改查詢碼時不動別人');
-  db.prepare(LINK_SQL).run('e', 'https://lh3.googleusercontent.com/x', 'H', 1, 'sub-e');
+  // LINK_SQL 只在發起綁定的工作階段（?6）還在時寫：理事長剛好在途中「重設並登出」，整句 0 列（自己不綁、別人的查詢碼也不清）
+  assert.equal(db.prepare(LINK_SQL).run('e', 'https://lh3.googleusercontent.com/x', 'H', 1, 'sub-e', 'th-e').changes, 0, '工作階段不在');
+  db.prepare("INSERT INTO sessions (token_hash, member_id, expires_at) VALUES ('th-f', 'f', datetime('now', '+1 day'))").run();
+  assert.equal(db.prepare(LINK_SQL).run('e', 'https://lh3.googleusercontent.com/x', 'H', 1, 'sub-e', 'th-f').changes, 0, '別人的工作階段不算');
+  assert.equal(db.prepare("SELECT email_h FROM members WHERE id = 'f'").get().email_h, 'H');
+  db.prepare("INSERT INTO sessions (token_hash, member_id, expires_at) VALUES ('th-e', 'e', datetime('now', '+1 day'))").run();
+  assert.equal(db.prepare(LINK_SQL).run('e', 'https://lh3.googleusercontent.com/x', 'H', 1, 'sub-e', 'th-e').changes, 2, '自己＋清掉別人的查詢碼');
   assert.deepEqual(db.prepare('SELECT id, email_h, google_sub FROM members ORDER BY id').all().map((r) => [r.id, r.email_h, r.google_sub]), [['e', 'H', 'sub-e'], ['f', null, null]]);
   db.prepare(CLEAR_HOLDER_SQL).run('H');
   db.prepare(CLEAR_HOLDER_SQL).run(null);

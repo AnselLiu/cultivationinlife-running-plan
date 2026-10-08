@@ -135,11 +135,14 @@ async function currentMember(req, env) {
 // 15 分鐘內（工作階段的 mfa_at、google_at：UTC 的 'YYYY-MM-DD HH:MM:SS'）
 const fresh15 = (t) => !!t && Date.now() - Date.parse(`${t.replace(' ', 'T')}Z`) < 15 * 60e3;
 // google：用 Google 登入開的工作階段，記下 google_at（15 分鐘內一般跑友可以不用舊的通行金鑰就新增一把，見 /api/passkey/options）
-async function startSession(env, member, req, { mfa = false, google = false } = {}) {
+// guard：[SQL, ...參數]，同一句 INSERT … SELECT … WHERE EXISTS 檢查登入方式還在（通行金鑰沒被刪、Google 沒被解除）；
+//   不在了回 null、不開工作階段：理事長「重設並登出」剛好在登入途中送出時，這次登入不會留下來（見 /api/members/:id/security-reset）
+async function startSession(env, member, req, { mfa = false, google = false, guard = null } = {}) {
   const token = rid(24), pol = policyOf(member.role);
-  await env.DB.prepare(`INSERT INTO sessions (token_hash, member_id, expires_at, last_seen_at, role_at_issue, ip_hash, ua, mfa_at, google_at)
-    VALUES (?, ?, datetime('now', '+${pol.absDays} days'), datetime('now'), ?, ?, ?, ${mfa ? "datetime('now')" : 'NULL'}, ${google ? "datetime('now')" : 'NULL'})`)
-    .bind(await sha(token), member.id, norm(member.role), await ipHash(req, env), str(req.headers.get('user-agent'), 120)).run();
+  const r = await env.DB.prepare(`INSERT INTO sessions (token_hash, member_id, expires_at, last_seen_at, role_at_issue, ip_hash, ua, mfa_at, google_at)
+    SELECT ?, ?, datetime('now', '+${pol.absDays} days'), datetime('now'), ?, ?, ?, ${mfa ? "datetime('now')" : 'NULL'}, ${google ? "datetime('now')" : 'NULL'}${guard ? ` WHERE EXISTS (${guard[0]})` : ''}`)
+    .bind(await sha(token), member.id, norm(member.role), await ipHash(req, env), str(req.headers.get('user-agent'), 120), ...(guard ? guard.slice(1) : [])).run();
+  if (guard && !r.meta.changes) return null;
   return `${COOKIE}=${token}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${pol.absDays * 86400}`;
 }
 // 作廢所有工作階段，同時讓行事曆訂閱網址失效（登出所有裝置、身分變更時都要重新訂閱）
@@ -149,6 +152,13 @@ const revokeStmts = (env, memberId) => [
   env.DB.prepare('UPDATE members SET cal_token_hash = NULL WHERE id = ?').bind(memberId),
 ];
 const revokeSessions = (env, memberId) => env.DB.batch(revokeStmts(env, memberId));
+// 測試用（只有 DEV_LOGIN=1 的本機、請求帶 x-dev-race: <at>）：在有條件的寫入前一刻模擬理事長「重設並登出」剛好送出
+//   （刪通行金鑰與工作階段、解除 Google），驗證登入、新增通行金鑰、綁定 Google 途中被重設不會留下來；沒帶標頭什麼都不做（不讀 D1）
+async function devRace(env, req, at, memberId) {
+  if (env.DEV_LOGIN !== '1' || !LOCAL.includes(url0(req).hostname) || req.headers.get('x-dev-race') !== at) return;
+  await env.DB.batch([env.DB.prepare('DELETE FROM passkeys WHERE member_id = ?').bind(memberId), ...revokeStmts(env, memberId),
+    env.DB.prepare('UPDATE members SET google_sub = NULL, email_h = NULL WHERE id = ?').bind(memberId)]);
+}
 
 // 嘗試次數限制：在 window 秒內超過 limit 次就擋
 async function limited(env, key, limit, windowSec) {
@@ -206,14 +216,15 @@ async function emailHash(env, raw) {
 }
 const auditFields = (r) => [r.id, r.at, r.actor_id, r.actor_name, r.actor_role, r.action, r.target_type, r.target_id, r.detail, r.ip_hash].map((v) => v ?? '').join('\u001f');
 // auditStmt 只產生 statement（HMAC 照算），讓呼叫端可以和其他寫入放進同一個 DB.batch（同一個交易）
-async function auditStmt(env, req, actor, action, targetType, targetId, detail) {
+// guard：[SQL, ...參數]，跟同一個 batch 裡有條件的寫入一起成立才記（例如工作階段還在才記「綁定 Google」）
+async function auditStmt(env, req, actor, action, targetType, targetId, detail, guard = null) {
   const row = { id: rid(10), at: new Date().toISOString().replace('T', ' ').slice(0, 19), actor_id: actor?.id || null,
     actor_name: actor?.name || (req ? null : '系統排程'), actor_role: actor ? norm(actor.real_role || actor.role) : null, action,
     target_type: targetType || null, target_id: targetId || null, detail: str(detail, 300) || null, ip_hash: await ipHash(req, env) };
   row.mac = await hmac(env, auditFields(row));
   return env.DB.prepare(`INSERT INTO audit_log (id, at, actor_id, actor_name, actor_role, action, target_type, target_id, detail, ip_hash, mac)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-    .bind(row.id, row.at, row.actor_id, row.actor_name, row.actor_role, row.action, row.target_type, row.target_id, row.detail, row.ip_hash, row.mac);
+    ${guard ? `SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (${guard[0]})` : 'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'}`)
+    .bind(row.id, row.at, row.actor_id, row.actor_name, row.actor_role, row.action, row.target_type, row.target_id, row.detail, row.ip_hash, row.mac, ...(guard ? guard.slice(1) : []));
 }
 // 同一個操作、很多個對象（例如婉拒 60 人，每位一列）：一句寫完，每列各自簽章（HMAC 照算）
 async function auditManyStmt(env, req, actor, action, targetType, list) {
@@ -533,12 +544,16 @@ async function googleSignIn(req, env, claims, mode, { confirm = false } = {}) {
       }
       how = pkOf ? '綁定 Google（這次登入已用通行金鑰驗證）' : '綁定 Google（帳號沒有通行金鑰）';
     }
+    // LINK_SQL 只在發起的工作階段還在時寫（理事長剛好在途中「重設並登出」、解除 Google：不會綁回去）
+    const link = !same || pic || (nx.set && nx.value !== cur.email_h);
     const stmts = [
-      ...(!same || pic || (nx.set && nx.value !== cur.email_h) ? [env.DB.prepare(Ref.LINK_SQL).bind(cur.id, pic, nx.set ? nx.value : null, nx.set ? 1 : 0, claims.sub)] : []),
+      ...(link ? [env.DB.prepare(Ref.LINK_SQL).bind(cur.id, pic, nx.set ? nx.value : null, nx.set ? 1 : 0, claims.sub, cur.s_th)] : []),
       // 同一個已綁定的 Google 帳號重新確認：記下時間（15 分鐘內不是強制兩步驟的幹部可以不用舊的通行金鑰新增一把）
       ...(same ? [env.DB.prepare("UPDATE sessions SET google_at = datetime('now') WHERE token_hash = ?").bind(cur.s_th)] : []),
     ];
-    if (stmts.length) await env.DB.batch(stmts);
+    await devRace(env, req, 'link', cur.id);
+    const res = stmts.length ? await env.DB.batch(stmts) : [];
+    if (link && !res[0].meta.changes) return back('登入已經失效，請重新登入');
     await audit(env, req, cur, same ? 'google.refresh' : 'google.link', 'member', cur.id,
       !same ? how : !nx.set || cur.email_findable === 0 ? '未變更' : nx.value ? '查詢碼已更新' : '沒有已驗證的 Email');
     return toMe(kind === 'P' ? 'pkok' : linkResult({ mode: kind, refOn, keyOk, findable: cur.email_findable, consentOk, nx }));
@@ -557,13 +572,17 @@ async function googleSignIn(req, env, claims, mode, { confirm = false } = {}) {
     ]);
     m = { id, name: displayName, role: 'member' };
   }
+  // 工作階段只在這個 Google 帳號還綁在這個帳號上時開（同一句檢查）：理事長剛好在途中「重設並登出」並解除 Google，這次登入不會留下來
+  await devRace(env, req, 'google', m.id);
+  const cookie = await startSession(env, m, req, { google: true, guard: ['SELECT 1 FROM members WHERE id = ? AND google_sub = ?', m.id, claims.sub] });
+  if (!cookie) return back('登入沒有完成，請再試一次');
   await audit(env, req, m, isNew ? 'account.create' : 'login', 'member', m.id, 'Google');
   env.defer(noteDevice(env, req, m, ' Google '));   // env 是這次執行專用的（不要用 { ...env } 複製，綁定會不見）
   // 協會開了幹部兩步驟驗證：幹部（協會幹部、分團團長與幹部）登入後先請他用通行金鑰驗證（App 跳出說明，要他按一下）
   const gate = !isNew && mfaSubject(ctx?.ss, m.role, !!ctx?.tof) ? (ctx?.pk ? '1' : 'add') : null;
   return new Response(null, { status: 302, headers: [
     ['location', isNew ? '/#/me?welcome=1' : gate ? `/#/?mfa=${gate}` : '/#/'],
-    ['set-cookie', await startSession(env, m, req, { google: true })],
+    ['set-cookie', cookie],
     ['set-cookie', clear],
   ] });
 }
@@ -2239,12 +2258,16 @@ const api = (async function api(req, env, path, method) {
     const refOn = optInOf(setting('features'), 'referral'), keyOk = !!env.AUDIT_KEY, consentOk = member.consent_version === privacyVersionOf(setting('privacy'));
     // 查詢碼照現在的狀況再判斷一次：這 10 分鐘內關掉「用 Gmail 找到我」就清掉，功能關掉或還沒同意新版政策就不動
     const nx = !refOn || !keyOk ? { set: false } : member.email_findable === 0 ? { set: true, value: null } : consentOk && p.h_set === 1 ? { set: true, value: p.email_h } : { set: false };
+    // 綁定與稽核都只在這個工作階段還在時寫（理事長剛好在途中「重設並登出」：不會把 Google 綁回去，也不會記一筆沒發生的綁定）
+    const live = ['SELECT 1 FROM sessions WHERE token_hash = ? AND member_id = ?', member.s_th, member.id];
+    await devRace(env, req, 'confirm', member.id);
     try {
-      await env.DB.batch([
-        env.DB.prepare(Ref.LINK_SQL).bind(member.id, p.pic, nx.set ? nx.value : null, nx.set ? 1 : 0, p.sub),
+      const res = await env.DB.batch([
+        env.DB.prepare(Ref.LINK_SQL).bind(member.id, p.pic, nx.set ? nx.value : null, nx.set ? 1 : 0, p.sub, member.s_th),
         drop(),
-        await auditStmt(env, req, member, 'google.link', 'member', member.id, '綁定 Google（通行金鑰確認）'),
+        await auditStmt(env, req, member, 'google.link', 'member', member.id, '綁定 Google（通行金鑰確認）', live),
       ]);
+      if (!res[0].meta.changes) return fail(401, '登入已經失效，請重新登入');
     } catch (e) {
       // 同時被別人綁走（google_sub 唯一）：整個 batch 沒有寫入
       if (!/UNIQUE/i.test(String(e?.message || e))) throw e;
@@ -2315,18 +2338,24 @@ const api = (async function api(req, env, path, method) {
         if (ch.via === 'first' && have) return fail(403, '新增通行金鑰前，請先用現有的通行金鑰驗證');
         const r = await WebAuthn.verifyRegistration({ credential: cred, challenge: ch.challenge, origin: origin0, rpId });
         if (!r.uv) throw new Error('請用 Face ID、Touch ID 或裝置密碼確認');
-        await env.DB.prepare('INSERT INTO passkeys (id, member_id, public_jwk, sign_count, name) VALUES (?, ?, ?, ?, ?)')
-          .bind(r.credId, member.id, JSON.stringify(r.jwk), r.signCount, str(b.name, 20) || deviceLabel(req.headers.get('user-agent') || '')).run();
+        // 同一句檢查這個工作階段還在：理事長剛好在途中「重設並登出」（挑戰值已經用掉、還沒寫入），這把不會在重設之後留下來
+        await devRace(env, req, 'pk-add', member.id);
+        const ins = await env.DB.prepare(`INSERT INTO passkeys (id, member_id, public_jwk, sign_count, name)
+          SELECT ?1, ?2, ?3, ?4, ?5 WHERE EXISTS (SELECT 1 FROM sessions WHERE token_hash = ?6 AND member_id = ?2)`)
+          .bind(r.credId, member.id, JSON.stringify(r.jwk), r.signCount, str(b.name, 20) || deviceLabel(req.headers.get('user-agent') || ''), member.s_th).run();
+        if (!ins.meta.changes) throw new Error('登入已經失效，請重新登入');
         // 沒用現有的通行金鑰驗證、是靠剛才的 Google 確認新增的（發挑戰值時記下的 via，不是現在再判斷一次）：稽核註明
         const dev = deviceLabel(req.headers.get('user-agent') || '');
         await audit(env, req, member, 'passkey.add', 'member', member.id, `${dev}${ch.via === 'google' ? '｜Google 確認後新增' : ch.via === 'first' ? '｜幹部第一把（Google 確認後新增）' : ''}`);
         await securityNotify(env, [member.id], { title: '新增了一把通行金鑰', body: `${dev}。不是你的話，請到「我的 → 帳號與安全」移除並登出所有裝置。`, url: '/#/me/security' });
         // 幹部的第一把（第一次使用即信任）：也通知理事長與行政人員（有系統設定權限的人），不是本人的話理事長在後台「權限」重設並登出（/api/members/:id/security-reset）
+        //   第一把只能在 15 分鐘內用這個帳號綁的 Google 登入或重新確認後新增：不是本人＝那個 Google 帳號被盜用，只重設不解除的話對方再用 Google 登入又能加一把
+        //   所以通知直接打開這位跑友的「安全」並預先勾好「同時解除 Google 綁定」（sec＝跑友 id、g=1；分團幹部不在「權限」的名單上也找得到）
         if (ch.via === 'first') {
           const admins = (await env.DB.prepare("SELECT id FROM members WHERE role IN ('chair', 'staff', 'admin') AND id != ?").bind(member.id).all()).results.map((r) => r.id);
           await securityNotify(env, admins, { title: '幹部新增了第一把通行金鑰',
-            body: `${member.name} 用 Google 登入後新增了第一把通行金鑰（${dev}）。不是本人的話，請理事長到後台「權限」按這位跑友的「安全」→「重設並登出」。`,
-            url: '/#/admin?tab=roles' });
+            body: `${member.name} 用 Google 登入後新增了第一把通行金鑰（${dev}）。不是本人的話，就是他的 Google 帳號被盜用了：請理事長點這則通知打開「安全」，勾「同時解除 Google 綁定」再「重設並登出」。`,
+            url: `/#/admin?tab=roles&sec=${member.id}&g=1` });
         }
         return json({ ok: true });
       }
@@ -2342,11 +2371,15 @@ const api = (async function api(req, env, path, method) {
         return json({ ok: true });
       }
       // 用通行金鑰登入：本身就是兩步驟（裝置＋生物辨識），工作階段直接標記已驗證
+      //   工作階段只在這把通行金鑰還在時開（同一句檢查）：理事長剛好在途中「重設並登出」，這次登入不會留下來
       const m = await env.DB.prepare('SELECT * FROM members WHERE id = ?').bind(pk.member_id).first();
       if (!m) throw new Error('帳號不存在');
+      await devRace(env, req, 'pk-login', m.id);
+      const cookie = await startSession(env, m, req, { mfa: true, guard: ['SELECT 1 FROM passkeys WHERE id = ? AND member_id = ?', pk.id, m.id] });
+      if (!cookie) throw new Error('找不到這把通行金鑰，可能已經被移除');
       await audit(env, req, m, 'login', 'member', m.id, '通行金鑰');
       await noteDevice(env, req, m, '通行金鑰');
-      return json({ ok: true }, 200, { 'set-cookie': await startSession(env, m, req, { mfa: true }) });
+      return json({ ok: true }, 200, { 'set-cookie': cookie });
     } catch (e) {
       await audit(env, req, member, 'passkey.denied', 'member', member?.id || null, str(e.message, 80));
       return fail(400, e.message || '通行金鑰驗證失敗');
@@ -6001,7 +6034,10 @@ const api = (async function api(req, env, path, method) {
   // 重設別人的通行金鑰並登出所有裝置（帳號被盜用、幹部第一把不是本人、幹部唯一一把的手機弄丟）：只有理事長（權限「指派身分」）
   //   GET …/security：只給數字（通行金鑰幾把、登入中的裝置幾個、最近使用日期、有沒有綁 Google、有沒有待確認的綁定、是不是幹部），
   //     不給裝置名稱、IP、UA；唯讀、不用再驗證、不寫稽核
-  //   POST …/security-reset {unlink_google, reason}：要 15 分鐘內用通行金鑰驗證過（needStepUp(true)）；不能重設自己（自己的在「帳號與安全」）
+  //     名稱給從通知直接打開的面板顯示（#/admin?tab=roles&sec=id，見幹部第一把的通知）
+  //   POST …/security-reset {unlink_google, reason, confirm}：要 15 分鐘內用通行金鑰驗證過（needStepUp(true)）；不能重設自己（自己的在「帳號與安全」）
+  //     重設後沒有任何登入方式的（沒有綁 Google，或這次一起解除）要輸入對方的姓名確認：邀請碼與沒綁過的 Google 都會開新帳號，
+  //     原帳號的紀錄、成績、身分回不去（沒有理事長協助登入的功能）
   //     同一個 batch（句數固定）：刪通行金鑰、工作階段與行事曆訂閱網址（同 revokeSessions）、推播訂閱（同「登出所有裝置」）、
   //     待確認的 Google 綁定、還沒用掉的挑戰值；unlink_google（Google 帳號被盜用時）再清掉 google_sub 與 Gmail 查詢碼（推薦關係不動）；
   //     稽核 security.reset 只記數字與「解除 Google」（不記原因、不記個資），還原備份後 tools/restore-sql.mjs 照這一列重做
@@ -6017,7 +6053,7 @@ const api = (async function api(req, env, path, method) {
       if (await limited(env, `secreset:${member.id}`, 10, 3600)) return fail(429, '操作太頻繁，請稍後再試');
     }
     // 一句讀完：最近使用＝工作階段與帳號的最後活動取比較晚的（台北日期）
-    const t = await env.DB.prepare(`SELECT m.id, m.role, m.google_sub IS NOT NULL AS g,
+    const t = await env.DB.prepare(`SELECT m.id, m.name, m.role, m.google_sub IS NOT NULL AS g,
         (SELECT COUNT(*) FROM passkeys WHERE member_id = m.id) AS pk,
         (SELECT COUNT(*) FROM sessions WHERE member_id = m.id AND expires_at > datetime('now')) AS ss,
         (SELECT date(MAX(x), '+8 hours') FROM (SELECT m.last_seen AS x UNION ALL SELECT last_seen_at FROM sessions WHERE member_id = m.id)) AS seen,
@@ -6025,8 +6061,9 @@ const api = (async function api(req, env, path, method) {
         EXISTS (SELECT 1 FROM team_members WHERE member_id = m.id AND status = 'active' AND role IN ('lead', 'officer')) AS tof
       FROM members m WHERE m.id = ?`).bind(msec[1]).first();
     if (!t) return fail(404, '找不到這位跑友');
-    if (!reset) return json({ passkeys: t.pk, sessions: t.ss, lastSeen: t.seen || null, google: !!t.g, pending: !!t.gp, officer: norm(t.role) !== 'member' || !!t.tof });
-    const b = await body(), unlink = b.unlink_google === true && !!t.g, reason = str(b.reason, 100);
+    if (!reset) return json({ name: t.name, passkeys: t.pk, sessions: t.ss, lastSeen: t.seen || null, google: !!t.g, pending: !!t.gp, officer: norm(t.role) !== 'member' || !!t.tof });
+    const b = await body(), unlink = b.unlink_google === true && !!t.g, reason = str(b.reason, 100), stuck = !t.g || unlink;
+    if (stuck && str(b.confirm, 40) !== String(t.name || '').trim()) return json({ error: '請輸入對方的姓名確認', confirm: true }, 400);
     await env.DB.batch([
       env.DB.prepare('DELETE FROM passkeys WHERE member_id = ?').bind(t.id),
       ...revokeStmts(env, t.id),
@@ -6036,8 +6073,9 @@ const api = (async function api(req, env, path, method) {
       env.DB.prepare('UPDATE members SET google_sub = NULL, email_h = NULL WHERE id = ?1 AND ?2 = 1').bind(t.id, unlink ? 1 : 0),
       await auditStmt(env, req, member, 'security.reset', 'member', t.id, `通行金鑰 ${t.pk} 把、裝置 ${t.ss} 個${unlink ? '、解除 Google' : ''}`),
     ]);
+    // 還有綁 Google：用 Google 重新登入後新增；沒有登入方式了：這則只留在原帳號（本人看不到，留給之後的處理與還原對照）
     await securityNotify(env, [t.id], { title: '帳號安全已重設',
-      body: `理事長重設了你的通行金鑰並登出所有裝置${unlink ? '，也解除了 Google 綁定' : ''}。重新登入後，請到「我的 → 帳號與安全」新增通行金鑰。${reason ? `原因：${reason}` : ''}`,
+      body: `理事長重設了你的通行金鑰並登出所有裝置${unlink ? '，也解除了 Google 綁定' : ''}。${stuck ? '這個帳號已經沒有登入方式，請聯絡理事長。' : '用 Google 重新登入後，請到「我的 → 帳號與安全」新增通行金鑰。'}${reason ? `原因：${reason}` : ''}`,
       url: '/#/me/security', push: { body: '理事長重設了你的通行金鑰並登出所有裝置' } });
     return json({ ok: true, passkeys: t.pk, sessions: t.ss, unlinked: unlink });
   }
