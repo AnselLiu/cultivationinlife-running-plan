@@ -2031,6 +2031,128 @@ details > summary.setsum .tiny{font-weight:400}
 .vitals > .vital:last-child:nth-child(odd){grid-column:1/-1}
 @media (min-width:700px){.vitals{grid-template-columns:repeat(5,minmax(0,1fr))}.vitals > .vital:last-child:nth-child(odd){grid-column:auto}}
 
+/* ---------- 成績與挑戰（後台）---------- */
+/* 分頁上的待辦數、篩選、搜尋 */
+.adm-ach-seg button{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:44px}
+.adm-ach-badge{min-width:20px;padding:1px 6px;border-radius:999px;background:var(--warn-bg);color:var(--warn);font-size:12px;font-weight:700;line-height:18px}
+.adm-ach-filter button{min-height:40px}
+.adm-ach-search{display:flex;gap:8px;align-items:center}
+.adm-ach-search input,.adm-ach-q{flex:1;min-width:0;min-height:44px}
+.adm-ach-list{display:grid;gap:12px}
+/* 成績審核卡片：誰、時間（大字）、賽事、對照目前 PB、官方連結與截圖 */
+.adm-ach-pb,.adm-ach-met{gap:10px;transition:opacity .24s,transform .24s}
+.adm-ach-pb > p,.adm-ach-met > p{margin:0}
+.adm-ach-out{opacity:0;transform:translateY(-6px)}
+.adm-ach-who{display:grid;grid-template-columns:32px 1fr;gap:10px;align-items:center}
+.adm-ach-who .pill.team{margin-left:2px}
+.adm-ach-res{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 10px}
+.adm-ach-time{font-size:34px;font-weight:700;letter-spacing:-.02em;line-height:1.1;color:var(--ink)}
+.adm-ach-race{font-size:15px;color:var(--ink-2)}
+.adm-ach-cmp{font-size:15px;color:var(--ink-2)}
+.adm-ach-cmp.good{color:var(--ok-ink)}
+.adm-ach-cmp b{color:inherit}
+.adm-ach-proofrow{display:flex;flex-wrap:wrap;gap:10px;align-items:stretch}
+.adm-ach-link{display:grid;gap:2px;align-content:center;min-height:56px;padding:8px 14px;border-radius:var(--r-m);background:var(--glass-2);border:1px solid var(--stroke);color:var(--ink);text-decoration:none;flex:1 1 180px;min-width:0}
+.adm-ach-link b{font-size:17px;overflow-wrap:anywhere}
+.adm-ach-link span{font-size:13px;color:var(--accent);font-weight:600}
+.adm-ach-thumb{position:relative;width:72px;height:72px;min-width:72px;border-radius:var(--r-m);border:1px solid var(--stroke);background:var(--glass-2);color:var(--ink-2);display:grid;place-items:center;padding:0;overflow:hidden;cursor:zoom-in}
+.adm-ach-thumb svg.ic{width:26px;height:26px}
+.adm-ach-thumb img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.adm-ach-thumb.gone{cursor:default;opacity:.6}
+.adm-ach-thumb:focus-visible{outline:2.5px solid color-mix(in srgb,var(--accent) 65%,transparent);outline-offset:2px}
+.adm-ach-acts{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.adm-ach-acts .btn{min-height:44px}
+.adm-ach-acts p{margin:0}
+.adm-ach-met .linkbtn,.adm-ach-erow .linkbtn{min-height:44px;justify-self:start;font-weight:600}
+.adm-ach-more{margin-top:4px}
+/* 全螢幕看截圖：面板撐滿畫面，圖片完整顯示 */
+.sheet.adm-ach-viewer{align-items:stretch}
+.adm-ach-viewer .sheet-card{width:100%;max-width:none;max-height:none;height:100%;border-radius:0;display:grid;grid-template-rows:auto 1fr;padding-top:calc(14px + env(safe-area-inset-top,0px))}
+.adm-ach-viewer .sheet-card::after{display:none}
+.adm-ach-full{width:100%;height:100%;max-height:calc(100dvh - 120px);object-fit:contain;border-radius:var(--r-m);background:color-mix(in srgb,var(--ink) 6%,transparent)}
+/* 紀錄來源的表格與可疑訊號 */
+.adm-ach-warn > span{color:var(--warn);font-weight:600}
+.adm-ach-tbl{width:100%;border-collapse:collapse;font-size:15px}
+.adm-ach-tbl caption{text-align:left;font-size:13px;font-weight:650;color:var(--ink-3);padding:6px 0}
+.adm-ach-tbl th,.adm-ach-tbl td{padding:9px 4px;border-bottom:1px solid var(--stroke);text-align:right}
+.adm-ach-tbl th:first-child{text-align:left;font-weight:500}
+.adm-ach-tbl thead th{font-size:13px;color:var(--ink-3);font-weight:600}
+/* 挑戰清單 */
+.adm-ach-group{display:grid;gap:10px}
+.adm-ach-camp{display:grid;grid-template-columns:34px 1fr auto;gap:12px;align-items:center;color:var(--ink);text-decoration:none}
+.adm-ach-cbody{display:grid;gap:4px;min-width:0}
+.adm-ach-cbody > b{font-size:17px;overflow-wrap:anywhere}
+.adm-ach-pills{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:2px}
+.adm-ach-stats{display:flex;flex-wrap:wrap;gap:4px 12px;align-items:baseline;font-size:14px;color:var(--ink-2);margin:0}
+.adm-ach-n b{color:var(--ink);font-size:15px}
+.adm-ach-kpis{padding:0 4px}
+/* 團服：尺寸統計、下載 */
+.adm-ach-sizes{display:flex;flex-wrap:wrap;gap:6px}
+.adm-ach-size{padding:5px 11px;border-radius:999px;background:var(--glass-2);border:1px solid var(--stroke);font-size:14px}
+.adm-ach-csv{display:flex;flex-wrap:wrap;gap:8px}
+.adm-ach-csv .btn{min-height:44px;display:inline-flex;align-items:center}
+.adm-ach-shirt > p,.adm-ach-shirtbox > p{margin:0}
+/* 挑戰管理：頁首、條件句、名單、已發放 */
+.adm-ach-htop{display:grid;grid-template-columns:34px 1fr;gap:12px;align-items:start}
+.adm-ach-htop h2{margin:0 0 4px;overflow-wrap:anywhere}
+.adm-ach-rules{margin:0;padding-left:20px;display:grid;gap:4px;font-size:15px;color:var(--ink-2)}
+.adm-ach-rules b{color:var(--ink);font-weight:650}
+.adm-ach-head > p{margin:0}
+.adm-ach-erow{grid-template-columns:32px minmax(0,1fr) auto;align-items:start}
+.adm-ach-erow > .av{margin-top:2px}
+.adm-ach-erow .adm-ach-acts{margin-top:6px}
+.adm-ach-issue{display:flex;align-items:center;gap:8px;min-height:44px;min-width:44px;font-size:13px;color:var(--ink-2);cursor:pointer}
+.adm-ach-issue input{width:22px;height:22px;margin:0;accent-color:#34C759;flex:none}
+.adm-ach-roster > .seg{margin:0}
+/* 見證：體重計讀數 */
+.adm-ach-kgf{gap:8px;align-items:end}
+.adm-ach-kgf label{flex:1;min-width:0}
+.adm-ach-kgf input{min-height:44px;font-size:20px}
+.adm-ach-kgf .btn{min-height:44px}
+/* 挑戰編輯 */
+.adm-ach-form{display:grid;gap:14px}
+.adm-ach-form .notice{margin:0}
+.adm-ach-lock{margin:0;color:var(--warn)}
+.adm-ach-kinds{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.adm-ach-kind{position:relative;cursor:pointer}
+.adm-ach-kind input{position:absolute;opacity:0;width:1px;height:1px}
+.adm-ach-kind > span{display:grid;grid-template-columns:34px 1fr;grid-template-rows:auto auto;gap:2px 10px;align-items:center;min-height:64px;padding:10px 12px;border-radius:var(--r-m);border:1.5px solid var(--stroke);background:var(--glass-hi);height:100%;box-sizing:border-box}
+.adm-ach-kind .sic{grid-row:1/3}
+.adm-ach-kind b{font-size:15px}
+.adm-ach-kind .tiny{line-height:1.35}
+.adm-ach-kind input:checked + span{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
+.adm-ach-kind input:focus-visible + span{outline:2.5px solid color-mix(in srgb,var(--accent) 65%,transparent);outline-offset:2px}
+.adm-ach-kind input:disabled + span{opacity:.6;cursor:default}
+.adm-ach-cond{display:grid;gap:12px}
+.adm-ach-cond > div,.adm-ach-tbox{display:grid;gap:8px}
+.adm-ach-hms{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.adm-ach-hms input{text-align:center;font-variant-numeric:tabular-nums;min-height:44px}
+#achPresets .chip{min-height:44px;padding:8px 14px}
+.adm-ach-form label.chip > span{display:inline-flex;align-items:center;min-height:44px;box-sizing:border-box}
+.adm-ach-badges{display:grid;grid-template-columns:repeat(auto-fill,minmax(52px,1fr));gap:8px}
+.adm-ach-bdg{position:relative;cursor:pointer}
+.adm-ach-bdg input{position:absolute;opacity:0;width:1px;height:1px}
+.adm-ach-bdg > span{display:grid;place-items:center;height:52px;border-radius:var(--r-m);border:1.5px solid var(--stroke);background:var(--glass-hi);color:var(--ink-2)}
+.adm-ach-bdg svg.ic{width:26px;height:26px}
+.adm-ach-bdg input:checked + span{border-color:var(--accent);color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
+.adm-ach-bdg input:focus-visible + span{outline:2.5px solid color-mix(in srgb,var(--accent) 65%,transparent);outline-offset:2px}
+.adm-ach-bdg input:disabled + span{opacity:.6;cursor:default}
+.adm-ach-shirtform{display:grid;gap:10px}
+.adm-ach-addsz{gap:8px}
+.adm-ach-addsz input{flex:1;min-width:0;min-height:44px}
+.adm-ach-preview .adm-ach-rules{font-size:16px}
+.adm-ach-rw{display:flex;flex-wrap:wrap;gap:8px 14px;margin:0;font-size:14px;color:var(--ink-2)}
+.adm-ach-rwi{display:inline-flex;align-items:center;gap:6px}
+.adm-ach-rwi svg.ic{width:20px;height:20px;color:var(--accent)}
+@media (min-width:700px){
+  .adm-ach-kinds{grid-template-columns:repeat(3,minmax(0,1fr))}
+}
+@media (prefers-reduced-motion:reduce){
+  .adm-ach-pb,.adm-ach-met{transition:none}
+}
+@media (prefers-reduced-transparency:reduce){
+  .adm-ach-kind > span,.adm-ach-bdg > span,.adm-ach-link,.adm-ach-thumb,.adm-ach-size{background:var(--sheet-solid)}
+}
 /* ---------- 版面掃描修正：活動表單與統計 ---------- */
 /* 活動表單：包在 data-when 區塊裡的欄位也保持 12px 間距 */
 #ef > div[data-when]{display:grid;gap:12px}

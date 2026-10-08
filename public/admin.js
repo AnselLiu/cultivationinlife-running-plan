@@ -2,6 +2,9 @@
 import * as Party from './party.js';
 import { defaultWindow, SIGNUP_DEFAULTS, tpText } from './signup-window.js';
 import { $, latest, nowTp, openSheet, scanSheet, ago, allow, api, apiAll, applyFeatures, avatar, barChart, bars, bindStepup, cfg, esc, group, IC, KIND_NAME, largeTitle, me, mfaBanner, nrow, org, pad2, paintCountdown, passkey, refreshMe, render, ROLE_NAME, row, studio, TAB_DEFAULT, TEAM_PERMS, teamAllow, teamIcon, teamOf, teams, toast, view, btnRow, MI, ic, emptyState, focusEl, once } from './app.js';
+import { askReason, choose } from './app.js';
+import * as AR from './achrule.js';
+import { FM, HM } from './plan.js';
 
 // ---------- 管理介面（RBAC、會籍、座位圖）----------
 let adminSeq = 0;
@@ -65,6 +68,7 @@ async function overviewPanel() {
   return `<section class="card opsalert" id="opsTop" role="status" hidden></section>
     ${allow('settings') ? '<section class="card" id="weeklyTop" hidden></section>' : ''}
     <section class="card" id="pendingTop" hidden></section>
+    ${achApprover() && (featOn('achieve') || me.ach?.queue) ? group('', [row('#/admin/ach', achIc('medal'), '成績與挑戰', '審核成績、設定挑戰與團服', me.ach?.queue ? `<span class="pill wait num">${Number(me.ach.queue)}</span>` : '')]) : ''}
     ${bc ? group('', [btnRow('bcJump', MI.bell, '群發通知', '推播給全部或指定分團、身分')]) : ''}
     <section class="kpis">
       ${k('跑友人數', o.members, `本月新加入 ${o.newThisMonth}`)}${k('30 天內活躍', o.active30, o.members ? `${Math.round(o.active30 / o.members * 100)}%` : '')}
@@ -401,7 +405,7 @@ async function membershipDialog(id) {
   };
 }
 function rolesPanel(data) {
-  const PERM_NAME = { event: '建立活動', plan: '發布課表', checkin: '報到', lottery: '抽獎', roster: '看名冊', members: '會員管理', roles: '指派身分', layout: '座位圖設定' };
+  const PERM_NAME = { event: '建立活動', plan: '發布課表', checkin: '報到', lottery: '抽獎', roster: '看名冊', members: '會員管理', roles: '指派身分', layout: '座位圖設定', achieve: '成績與挑戰' };
   const order = ['chair', 'director', 'supervisor', 'staff', 'coach', 'member'];
   const byRole = {};
   for (const m of data.members) (byRole[m.role] ||= []).push(m);
@@ -510,10 +514,15 @@ const AUDIT_NAME = {
   'referrer.lookup': '用 Gmail 找推薦人', 'referrer.set': '設定推薦人', 'referrer.clear': '移除推薦人（本人）', 'referrer.ack': '推薦人確認', 'referrer.deny': '推薦人按「不是我」',
   'referrer.view': '查看推薦族譜', 'referrer.relink': '推薦人連到帳號（幹部）', 'referrer.admin_clear': '移除推薦人（幹部）', 'privacy.email_lookup': '用 Gmail 找到我（開關）',
   'google.refresh': '重新確認 Google 帳號',
+  'pb.approve': '核准成績', 'pb.reject': '婉拒成績', 'pb.revoke': '撤銷成績', 'pb.delete': '刪除成績（本人）',
+  'privacy.cheer_board': '恭喜榜開關', 'privacy.cheer_rank': 'PB 排行開關', 'privacy.ach_weight_delete': '刪除挑戰體重（本人）',
+  'ach.join': '參加挑戰', 'ach.leave': '退出挑戰', 'ach.create': '建立挑戰', 'ach.update': '修改挑戰', 'ach.open': '發布挑戰', 'ach.cancel': '取消挑戰', 'ach.delete': '刪除挑戰草稿',
+  'ach.confirm': '確認達成', 'ach.reject': '退回達成', 'ach.revoke': '撤銷達成', 'ach.witness': '見證量測', 'ach.issue': '團服發放', 'ach.shirts_export': '下載團服名單',
+  'ach.remind_size': '提醒選尺寸', 'ach.notify_pickup': '通知領取團服', 'ach.release_unsized': '讓出沒選尺寸的名額', 'ach.settle': '挑戰結算', 'event.attendance': '出席標記',
 };
 // 稽核紀錄：一定要選時間區間（預設最近 7 天），再依類型、操作者、對象縮小；一次 50 筆
 const AUDIT_GROUPS = { '': '所有類型', role: '身分變更', membership: '會籍', team: '分團', event: '活動', checkin: '報到', lottery: '抽獎',
-  settings: '系統設定', signup: '報名審核', privacy: '個資', login: '登入', passkey: '通行金鑰', mfa: '兩步驟驗證', account: '帳號', 'join.denied': '邀請碼錯誤', bootstrap: '初始設定', plan: '課表', referrer: '推薦人' };
+  settings: '系統設定', signup: '報名審核', privacy: '個資', login: '登入', passkey: '通行金鑰', mfa: '兩步驟驗證', account: '帳號', 'join.denied': '邀請碼錯誤', bootstrap: '初始設定', plan: '課表', referrer: '推薦人', pb: '成績', ach: '挑戰' };
 function auditPanel() {
   const to = new Date().toISOString().slice(0, 10), from = new Date(Date.now() - 6 * 864e5).toISOString().slice(0, 10);
   return `<section class="card">
@@ -555,9 +564,28 @@ function refDetail(action, t) {
   m = t.match(/^named｜n=(\d+)$/);
   return m ? `只填名字的跑友 ${m[1]} 人` : t;
 }
+// 成績與挑戰的細節也是代碼（d=fm｜r=link、c=<挑戰>｜w=b、on／off…），畫面上換成中文；每個詞都是字典的一個鍵（英文介面逐詞翻）
+const ACH_REASON = { link: '連結打不開', mismatch: '成績或姓名對不上', dup: '同一場已經登錄過', unclear: '截圖看不清楚', doubt: '紀錄有疑問', unverified: '沒有見到本人',
+  ineligible: '不符合挑戰資格', wrong: '成績有誤', notself: '不是本人', other: '其他' };
+const ACH_PB_STATE = { pending: '審核中', approved: '已核准', rejected: '已婉拒', revoked: '已撤銷' };
+const ACH_FLAG = { on: '標記已發放', off: '取消發放', consent: '同意保存體重', leave: '退出挑戰' };
+const ACH_CODED = new Set(['pb.approve', 'pb.reject', 'pb.revoke', 'privacy.ach_weight_delete', 'ach.join', 'ach.leave', 'ach.confirm', 'ach.reject', 'ach.revoke', 'ach.witness', 'ach.issue']);
+function achDetail(action, t) {
+  if (action === 'pb.delete') return ACH_PB_STATE[t] || t;
+  if (!ACH_CODED.has(action)) return t;
+  return t.split('｜').map((p) => {
+    const [k, v] = [p.slice(0, p.indexOf('=')), p.slice(p.indexOf('=') + 1)];
+    if (!p.includes('=')) return ACH_FLAG[p] || p;
+    if (k === 'd') return `距離：${AR.DISTS[v]?.zh || v}`;
+    if (k === 'r') return `原因：${ACH_REASON[v] || v}`;
+    if (k === 'c') return `挑戰 ${v}`;
+    if (k === 'w') return v === 'b' ? '起始量測' : v === 'l' ? '結束量測' : p;
+    return p;
+  }).join('・');
+}
 function auditDetail(d, action) {
   // 結尾的 ｜team=…｜role=…｜to=… 是給還原工具看的代碼（tools/restore-sql.mjs），畫面上不顯示
-  let t = refDetail(action, String(d).replace(/(｜(team|role|to)=[\w-]+)+$/, ''));
+  let t = achDetail(action, refDetail(action, String(d).replace(/(｜(team|role|to)=[\w-]+)+$/, '')));
   if (/^\{.*\}$/.test(t)) {
     try {
       const o = JSON.parse(t), on = [], off = [], rest = [];
@@ -675,15 +703,18 @@ function bindEventsPanel() {
 // ---------- 系統設定（理事長、行政人員）----------
 const FEATURE_NAME = { gps: '跑步記錄（計時＋GPS）', studio: '拍照分享', health: 'Apple 健康匯入', file: 'GPX／TCX 檔匯入', coach: '課表教練（全季、賽事準備、配速與用語）',
   plan_cycle: '個人課表週期（跟自己的比賽排 20 週）', plan_export: '分享與匯出課表（複製、PDF、行事曆）', party: '餐敘活動（春酒、慶功宴、尾牙）', cams: '附近即時影像（政府公開攝影機）',
-  rest: '跑者休息站（飲水、廁所、淋浴置物、補給）', meetup: '團員揪團（團員自己發起活動）', referral: '推薦人（跑友填介紹人、推薦族譜）' };
+  rest: '跑者休息站（飲水、廁所、淋浴置物、補給）', meetup: '團員揪團（團員自己發起活動）', referral: '推薦人（跑友填介紹人、推薦族譜）',
+  achieve: '成績與挑戰（PB 登錄、目標挑戰、恭喜榜）', achieve_rank: '恭喜榜的各距離 PB 排行' };
 // 功能開關的說明：關掉會影響什麼（課表教練與教練身分容易搞混，寫清楚）
 const FEATURE_HELP = { coach: '關閉後所有人都看不到這些頁面；不影響每週課表與訓練紀錄',
   plan_cycle: '關閉後所有人都照協會賽季排課；已選的週期會保留，打開後恢復',
   plan_export: '教練已同意分享，預設開啟；關閉後所有人都看不到分享按鈕',
   meetup: '團員可以在自己參加的分團發起揪團：不能收費、不推播，每人同時最多 3 場；分團與協會幹部可以編輯或刪除。關閉後不能再發起，已經開的照常',
-  referral: '跑友可以填是誰介紹他來的（用 Gmail 找跑友帳號，或只填名字）；會員管理權限的幹部在「管理後台 → 會員 → 推薦族譜」查看。打開前請先在 Google Cloud 的 OAuth 同意畫面加上 Email 範圍；打開後 Google 登入會多問一次 Email 授權。關閉後不能新增，已經填的保留，本人仍可移除' };
+  referral: '跑友可以填是誰介紹他來的（用 Gmail 找跑友帳號，或只填名字）；會員管理權限的幹部在「管理後台 → 會員 → 推薦族譜」查看。打開前請先在 Google Cloud 的 OAuth 同意畫面加上 Email 範圍；打開後 Google 登入會多問一次 Email 授權。關閉後不能新增，已經填的保留，本人仍可移除',
+  achieve: '打開前請先看過隱私權政策（新增比賽成績與體重挑戰的說明；用自訂條文的協會要自己補上）。關閉後不能再登錄成績或參加挑戰，已有的資料照樣看得到、可以刪除，審核中的可以審完，進行中的挑戰照樣結算',
+  achieve_rank: '只列打開「恭喜榜」並且另外同意「列入 PB 排行」的跑友、近三年通過審核的成績，不分性別年齡，只是參考；關閉時恭喜榜只顯示最新的恭喜' };
 // 預設關閉的功能（要明確打開才有）
-const FEATURE_OFF = new Set(['cams', 'rest', 'meetup', 'referral']);
+const FEATURE_OFF = new Set(['cams', 'rest', 'meetup', 'referral', 'achieve', 'achieve_rank']);
 // 系統設定：第一層是分組清單（跟「我的」一樣的列，副標是目前的值），點一列進到子頁才是表單；常用的在前、少用但重要的放最後
 //   網址：#/admin/settings（等於 #/admin?tab=settings）、#/admin/settings/<段>；表單、儲存 API、稽核名稱都跟拆開前一樣
 const yrs = (n, none = '不自動刪除') => (Number(n) ? `${Number(n)} 年` : none);
@@ -807,8 +838,8 @@ const camsCard = () => `<section class="card" id="camSrcCard">
     <p class="tiny" style="margin:0">地點卡會列出 1.5 公里內的政府公開攝影機（沒有就列 3 公里內最近一支），畫面由本站轉送、不保存，跑友的 IP 不會送到影像來源。功能開關打開後，水利署與水利處的鏡頭清單每天清晨 04:00 起自動同步（每小時只同步一個來源）；公路局的清單由電腦上的同步工具更新。關掉來源後立即不再顯示，也不再連線。</p>
     <div id="camSrcList" class="toggles"><p class="tiny" style="margin:0">載入中…</p></div>
   </section>`;
-// 功能開關分四組：訓練、活動、地圖（地圖的兩項旁邊有「設定來源 ›」）、會員
-const FEATURE_GROUPS = [['訓練', ['gps', 'studio', 'health', 'file', 'coach', 'plan_cycle', 'plan_export']], ['活動', ['party', 'meetup']], ['地圖', ['cams', 'rest']], ['會員', ['referral']]];
+// 功能開關分五組：訓練、活動、地圖（地圖的兩項旁邊有「設定來源 ›」）、會員、成績與挑戰
+const FEATURE_GROUPS = [['訓練', ['gps', 'studio', 'health', 'file', 'coach', 'plan_cycle', 'plan_export']], ['活動', ['party', 'meetup']], ['地圖', ['cams', 'rest']], ['會員', ['referral']], ['成績與挑戰', ['achieve', 'achieve_rank']]];
 const featuresCard = () => `<section class="card">
     <form id="featForm" class="toggles">
       ${FEATURE_GROUPS.map(([g, ks]) => `<fieldset class="qset featgrp"><legend>${g}</legend>${ks.map((k) => `<label class="switch"><span>${FEATURE_NAME[k]}${FEATURE_HELP[k] ? `<span class="tiny" style="display:block">${FEATURE_HELP[k]}</span>` : ''}</span><input type="checkbox" name="${k}" ${featOn(k) ? 'checked' : ''}><i></i></label>${k === 'cams' || k === 'rest' ? `<a class="tiny tlink featsrc" href="#/admin/settings/${k}">${k === 'cams' ? '設定影像來源 ›' : '設定休息站來源 ›'}</a>` : ''}`).join('')}</fieldset>`).join('')}
@@ -1208,4 +1239,822 @@ function roleDialog(id, name, cur) {
   };
 }
 
-export { adminView, rosterView, weeklyView, settingsPage, treeView };
+// ---------- 成績與挑戰（後台）：成績審核、待確認、挑戰設定與管理、團服 ----------
+//   #/admin/ach（?tab=queue|met|campaigns|shirts）、#/admin/ach/new、#/admin/ach/c/<id>、#/admin/ach/c/<id>/edit
+//   審核者＝有 achieve 權限、不是唯讀（預設理事長、行政人員）；監事只看挑戰清單與彙總；分團挑戰的團長／幹部只進得了挑戰管理頁（伺服器回 limited）
+//   有變數的整句不寫在這裡：數字放在自己的元素裡，英文介面才翻得到；使用者內容（姓名、賽事、挑戰名稱、說明）一律 translate="no"
+const achIc = (k) => ic(AR.ACH_ICONS[k] || '');
+const ACH_TILE = { pb: 'orange', time: 'indigo', pace: 'green', weight: 'teal', km: 'blue', attend: 'purple' };
+const achApprover = () => allow('achieve') && me.role !== 'supervisor';
+const achViewer = () => achApprover() || me.role === 'supervisor';
+const achToday = () => nowTp().slice(0, 10);
+const achMD = (d) => (d ? `${Number(d.slice(5, 7))}/${Number(d.slice(8, 10))}` : '');
+const achYMD = (d) => (d ? d.slice(0, 10).replace(/-/g, '/') : '');
+const achNm = (m) => (m ? `<b translate="no">${esc(m.name)}</b>${m.nickname ? ` <span class="tiny" translate="no">${esc(m.nickname)}</span>` : ''}` : '<span class="tiny">已刪除帳號</span>');
+const achTeam = (t) => (t ? `<span class="pill team" style="--tc:${esc(t.color || '#1C4698')}"><span translate="no">${esc(t.name)}</span></span>` : '');
+const achN = (label, n, k = '') => `<span class="adm-ach-n"${k ? ` data-n="${k}"` : ''}><span>${label}</span> <b class="num">${Number(n) || 0}</b></span>`;
+const achTile = (c) => `<span class="sic" style="--sc:var(--tile-${ACH_TILE[c.kind] || 'gray'})" aria-hidden="true">${achIc(AR.KIND_ICON[c.kind])}</span>`;
+const achWho = (c) => (c.team ? achTeam(c.team) : `<span class="pill">${c.members_only ? '協會會員' : '全協會'}</span>`);
+const achPeriod = (c) => `<span class="num">${achMD(c.start_date)}–${achMD(c.end_date)}</span>`;
+const ACH_STATUS = { draft: '草稿', open: '進行中', settled: '已結算', cancelled: '已取消' };
+const ACH_PILL = { 草稿: 'pill wait', 即將開始: 'pill', 進行中: 'pill solid', 結算中: 'pill wait', 已結算: 'pill', 已取消: 'pill reg-cancelled' };
+const achPhase = (c, today = achToday()) => (c.status !== 'open' ? ACH_STATUS[c.status] || '' : today < c.start_date ? '即將開始' : today > c.end_date ? '結算中' : '進行中');
+const achPhasePill = (c) => { const p = achPhase(c); return `<span class="${ACH_PILL[p] || 'pill'}">${p}</span>`; };
+const ACH_ENTRY = { joined: '已參加', met: '待確認', achieved: '已達成', not_met: '沒有達成', rejected: '已退回', revoked: '已撤銷', left: '已退出', ended: '已結束' };
+const ACH_ENTRY_PILL = { met: 'pill wait', achieved: 'pill solid', not_met: 'pill', rejected: 'pill reg-cancelled', revoked: 'pill reg-cancelled', left: 'pill', ended: 'pill', joined: 'pill' };
+const ACH_REWARD = { granted: '待發放', waitlist: '候補', issued: '已發放', declined: '不需要', dup: '同款已拿' };
+const PB_FILTER = { pending: '待審核', approved: '已核准', rejected: '已婉拒', revoked: '已撤銷' };
+const PB_EMPTY = { pending: '目前沒有待審核的成績', approved: '沒有已核准的成績', rejected: '沒有已婉拒的成績', revoked: '沒有已撤銷的成績' };
+const PB_REJECT = ['連結打不開', '成績或姓名對不上', '同一場已經登錄過', '截圖看不清楚', '其他'];
+const ACH_REJECT = ['紀錄有疑問', '沒有見到本人', '不符合挑戰資格', '其他'];
+const ACH_REVOKE = ['成績有誤', '不是本人', '其他'];
+// 原因代碼：選了常用原因（chip）就用它的代碼，自己寫的一律 other；稽核只存代碼
+const achReason = (note) => Object.keys(ACH_REASON).find((k) => ACH_REASON[k] === note) || 'other';
+const achRules = (c) => { try { return AR.ruleLines(c); } catch { return []; } };
+const achRulesHtml = (c) => `<ul class="adm-ach-rules">${achRules(c).map((l, i) => `<li>${i ? esc(l) : `<b>${esc(l)}</b>`}</li>`).join('')}</ul>`;
+const achFail = (box, title, msg) => { box.innerHTML = `${largeTitle(title)}<div class="card"><p class="muted">${esc(msg)}</p></div>`; };
+const achFade = (el, done) => { if (matchMedia('(prefers-reduced-motion: reduce)').matches) { done(); return; } el.classList.add('adm-ach-out'); setTimeout(done, 240); };
+let achSeq = 0;
+const achUrls = new Set();   // 截圖的 blob 網址：重畫或換頁時收回
+const achDropUrls = () => { for (const u of achUrls) URL.revokeObjectURL(u); achUrls.clear(); };
+
+async function achAdminView(sub, id) {
+  achDropUrls();
+  const title = sub === 'new' ? '新增挑戰' : sub === 'edit' ? '修改挑戰' : sub === 'c' ? '挑戰管理' : '成績與挑戰';
+  if (me.mfaPending) { view.innerHTML = `${largeTitle(title)}${mfaBanner()}`; bindStepup(); return; }
+  if (sub === 'new' || sub === 'edit') return achEditView(sub === 'edit' ? id : null);
+  if (sub === 'c') return achCampView(id);
+  return achHomeView();
+}
+
+// ---- 首頁：成績審核｜待確認｜挑戰｜團服（監事只有挑戰）----
+const ACH_TAB = { queue: '成績審核', met: '待確認', campaigns: '挑戰', shirts: '團服' };
+async function achHomeView() {
+  const my = ++achSeq, appr = achApprover();
+  if (!achViewer()) { achFail(view, '成績與挑戰', '只有理事長與行政人員可以管理挑戰'); return; }
+  const tabs = appr ? ['queue', 'met', 'campaigns', 'shirts'] : ['campaigns'];
+  const want = new URLSearchParams(location.hash.split('?')[1] || '').get('tab');
+  let data, pend;
+  try { [data, pend] = await Promise.all([api('/admin/ach'), appr ? api('/admin/pb?status=pending') : null]); }
+  catch (e) { if (my === achSeq) achFail(view, '成績與挑戰', e.message); return; }
+  if (my !== achSeq || !/^#\/admin\/ach(\?|$)/.test(location.hash)) return;   // 等資料的時候已經換頁
+  const counts = { queue: (pend?.items || []).length, met: (data.met || []).length };
+  const badge = (k) => (k in counts ? ` <span class="adm-ach-badge num" data-achcnt="${k}"${counts[k] ? '' : ' hidden'}>${counts[k]}${k === 'queue' && pend?.next ? '+' : ''}</span>` : '');
+  view.innerHTML = `${largeTitle('成績與挑戰', appr ? '審核成績、設定挑戰與團服' : '挑戰與團服的統計')}
+    ${appr && data.meta?.approvers === 1 ? '<p class="notice">目前只有你一位審核者，你自己的成績要等指派行政人員後才能審核</p>' : ''}
+    ${appr ? '' : '<p class="tiny">監事只能看挑戰清單與彙總數字，看不到成績與名單。</p>'}
+    ${tabs.length > 1 ? `<div class="seg adm-ach-seg" role="group" aria-label="成績與挑戰分頁">${tabs.map((k) => `<button type="button" data-achtab="${k}"><span>${ACH_TAB[k]}</span>${badge(k)}</button>`).join('')}</div>` : ''}
+    <div id="achPanel"></div>`;
+  const ctx = {
+    data,
+    count(k, d) {
+      counts[k] = Math.max(0, counts[k] + d);
+      const b = view.querySelector(`[data-achcnt="${k}"]`);
+      if (b) { b.textContent = counts[k]; b.hidden = !counts[k]; }
+    },
+  };
+  const show = (k) => {
+    for (const b of view.querySelectorAll('[data-achtab]')) b.setAttribute('aria-pressed', String(b.dataset.achtab === k));
+    history.replaceState(null, '', `#/admin/ach${k === tabs[0] ? '' : `?tab=${k}`}`);
+    achDropUrls();
+    const panel = $('#achPanel');
+    if (k === 'queue') return achQueue(panel, ctx);
+    if (k === 'met') return achMetPanel(panel, ctx);
+    if (k === 'shirts') return achShirtsPanel(panel, ctx);
+    return achCampsPanel(panel, ctx);
+  };
+  for (const b of view.querySelectorAll('[data-achtab]')) b.onclick = () => { if (b.getAttribute('aria-pressed') !== 'true') show(b.dataset.achtab); };
+  await show(tabs.includes(want) ? want : tabs[0]);
+}
+
+// ---- 成績審核 ----
+async function achProofUrl(id) {
+  const r = await fetch(`/api/pb/${encodeURIComponent(id)}/proof`, { credentials: 'same-origin' });
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || '截圖已刪除');
+  const u = URL.createObjectURL(await r.blob());
+  achUrls.add(u);
+  return u;
+}
+// 縮圖：捲到看得到才讀（每張一次請求，不一次讀 50 張）
+function achThumbs(root) {
+  const load = async (b) => {
+    try { const u = await achProofUrl(b.dataset.proof); if (!b.isConnected) return; b.dataset.url = u; b.insertAdjacentHTML('afterbegin', `<img src="${u}" alt="">`); b.classList.add('has'); }
+    catch { b.classList.add('gone'); }
+  };
+  const io = 'IntersectionObserver' in window ? new IntersectionObserver((es) => { for (const e of es) if (e.isIntersecting) { io.unobserve(e.target); load(e.target); } }, { rootMargin: '200px' }) : null;
+  for (const b of root.querySelectorAll('[data-proof]:not([data-seen])')) { b.dataset.seen = '1'; if (io) io.observe(b); else load(b); }
+}
+// 全螢幕看截圖：Esc 或「關閉」關掉，焦點回到縮圖
+async function achProof(b) {
+  let u = b.dataset.url;
+  try { u ||= await achProofUrl(b.dataset.proof); } catch (e) { toast(e.message); return; }
+  const s = openSheet('成績截圖', `<div class="row spread"><h3 id="achPvT">成績截圖</h3><button type="button" class="btn ghost sm" data-close>關閉</button></div>
+    <img class="adm-ach-full" src="${u}" alt="成績截圖">`, b, 'achPvT');
+  s.host.classList.add('adm-ach-viewer');
+}
+const achHost = (u) => { try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return ''; } };
+const achUrlOk = (u) => /^https:\/\/[^\s<>"]+$/i.test(u || '');   // 伺服器已經檢查過；畫面上再擋一次，不是 https 的不做成連結
+function achPbCard(x, st) {
+  const self = x.member?.id === me.id, km = AR.kmOf(x.dist_key, x.km) || x.km;
+  const cmp = st === 'approved' || st === 'revoked' ? ''
+    : x.current_best == null ? '<p class="adm-ach-cmp"><span class="pill">這個距離的第一筆</span></p>'
+    : x.seconds < x.current_best ? `<p class="adm-ach-cmp good"><span>比目前 PB 快</span> <b class="num">${AR.fmtTime(x.current_best - x.seconds)}</b></p>`
+    : x.seconds === x.current_best ? '<p class="adm-ach-cmp"><span>和目前 PB 一樣，不會刷新 PB</span></p>'
+    : `<p class="adm-ach-cmp"><span>比目前 PB 慢</span> <b class="num">${AR.fmtTime(x.seconds - x.current_best)}</b>・<span>不會刷新 PB</span></p>`;
+  const acts = self ? `<p class="tiny">${st === 'pending' ? '這是你自己的成績，要由另一位審核者審核' : '這是你自己的成績'}</p>`
+    : st === 'pending' ? '<button type="button" class="btn sm" data-pbact="approve">核准</button><button type="button" class="btn ghost sm" data-pbact="reject">婉拒</button>'
+    : st === 'approved' ? '<button type="button" class="btn ghost sm" data-pbact="revoke">撤銷</button>'
+    : st === 'rejected' ? '<button type="button" class="btn ghost sm" data-pbact="approve">改判核准</button>' : '';
+  const url = achUrlOk(x.result_url) ? x.result_url : '', host = url ? achHost(url) : '';
+  return `<article class="card adm-ach-pb" data-pb="${esc(x.id)}" data-name="${esc(x.member?.name || '')}">
+    <div class="adm-ach-who">${avatar(x.member || {})}<span>${achNm(x.member)} ${achTeam(x.member?.team)}
+      <span class="tiny" style="display:block"><span>送出於</span> <span>${ago(x.created_at)}</span>${x.edited ? '・<span>送出後改過</span>' : ''}</span></span></div>
+    <p class="adm-ach-res"><span class="pill">${esc(AR.distLabel(x.dist_key, x.km))}</span> <b class="num adm-ach-time">${AR.fmtTime(x.seconds)}</b>
+      <span class="tiny"><span>配速</span> <span class="num">${km ? AR.fmtPace(x.seconds, km) : ''}</span></span></p>
+    <p class="adm-ach-race"><span translate="no">${esc(x.race_name)}</span>・<span class="num">${achYMD(x.race_date)}</span>${x.bib ? `・<span>號碼布</span> <span class="num" translate="no">${esc(x.bib)}</span>` : ''}</p>
+    ${cmp}
+    ${url || x.proof ? `<div class="adm-ach-proofrow">
+      ${url ? `<a class="adm-ach-link" href="${esc(url)}" target="_blank" rel="noopener noreferrer"><b translate="no">${esc(host)}</b><span>開官方成績 ›</span></a>` : ''}
+      ${x.proof ? `<button type="button" class="adm-ach-thumb" data-proof="${esc(x.id)}" aria-label="看截圖：${esc(x.member?.name || '')}">${achIc('image')}</button>` : ''}</div>` : ''}
+    ${!x.proof && !x.result_url && st === 'pending' ? '<p class="notice">截圖已過期，可以婉拒請跑友重新附上</p>' : x.proof && !x.result_url ? '<p class="tiny">只有截圖、沒有官方連結</p>' : ''}
+    ${x.note ? `<p class="tiny"><span>說明：</span><span translate="no">${esc(x.note)}</span></p>` : ''}
+    ${st !== 'pending' && x.review_at ? `<p class="tiny">${x.review_by_name ? `<span translate="no">${esc(x.review_by_name)}</span>・` : ''}<span>${PB_FILTER[st] || ''}</span>・<span class="num">${achYMD(x.review_at)}</span>${x.review_note ? `・<span>原因：</span><span translate="no">${esc(x.review_note)}</span>` : ''}</p>` : ''}
+    ${acts ? `<div class="row adm-ach-acts">${acts}</div>` : ''}
+  </article>`;
+}
+async function achQueue(panel, ctx) {
+  let st = 'pending', q = '', next = null;
+  panel.innerHTML = `<div class="seg adm-ach-filter" role="group" aria-label="成績狀態">${Object.entries(PB_FILTER).map(([k, v]) => `<button type="button" data-pbst="${k}" aria-pressed="${k === st}">${v}</button>`).join('')}</div>
+    <form class="adm-ach-search" id="achPbQ" role="search" data-live="empty"><input name="q" maxlength="20" placeholder="搜尋姓名" aria-label="搜尋姓名" autocomplete="off" enterkeyhint="search"><button class="btn ghost sm">搜尋</button></form>
+    <div class="adm-ach-list" id="achPbList"></div>`;
+  const list = $('#achPbList'), only = latest();
+  const empty = () => { if (!list.querySelector('.adm-ach-pb')) list.innerHTML = `<section class="card">${emptyState(achIc('trophy'), q ? '找不到符合的成績' : PB_EMPTY[st])}</section>`; };
+  const load = async (more) => {
+    const r = await only(api(`/admin/pb?${new URLSearchParams({ status: st, ...(q ? { q } : {}), ...(more && next ? { before: next } : {}) })}`));
+    next = r.next || null;
+    list.querySelector('.adm-ach-more')?.remove();
+    if (!more) achDropUrls();
+    if (!more) list.innerHTML = '';
+    list.insertAdjacentHTML('beforeend', (r.items || []).map((x) => achPbCard(x, st)).join(''));
+    empty();
+    if (next) list.insertAdjacentHTML('beforeend', '<button type="button" class="btn ghost sm block adm-ach-more">載入更多</button>');
+    achThumbs(list);
+  };
+  for (const b of panel.querySelectorAll('[data-pbst]')) b.onclick = () => {
+    st = b.dataset.pbst;
+    for (const x of panel.querySelectorAll('[data-pbst]')) x.setAttribute('aria-pressed', String(x === b));
+    load(false).catch((e) => toast(e.message));
+  };
+  $('#achPbQ').onsubmit = (e) => { e.preventDefault(); q = e.target.q.value.trim(); load(false).catch((err) => toast(err.message)); };
+  // 處理完：卡片淡出（減少動態時直接移除），焦點移到下一筆
+  const drop = (card) => {
+    const nb = [card.nextElementSibling, card.previousElementSibling].find((x) => x?.matches('.adm-ach-pb'));
+    achFade(card, () => { card.remove(); empty(); focusEl(nb || list.querySelector('.empty') || view.querySelector('h1')); });
+  };
+  list.addEventListener('click', async (e) => {
+    const b = e.target.closest('button'); if (!b || !list.contains(b)) return;
+    if (b.classList.contains('adm-ach-more')) { load(true).catch((err) => toast(err.message)); return; }
+    if (b.dataset.proof) { achProof(b); return; }
+    const card = b.closest('[data-pb]'), act = b.dataset.pbact; if (!card || !act) return;
+    const pid = card.dataset.pb, who = card.dataset.name;
+    let body;
+    if (act === 'reject' || act === 'revoke') {
+      const r = await askReason(act === 'reject' ? '婉拒這筆成績' : '撤銷這筆成績', act === 'reject' ? { who, chips: PB_REJECT }
+        : { who, chips: ACH_REVOKE, ok: '撤銷', lines: ['用這筆成績完成的挑戰會一起撤銷；團服已發放的保留發放紀錄'] });
+      if (!r) return;
+      body = { note: r.note, code: achReason(r.note) };
+      if (act === 'reject') body.approve = false;
+    } else body = { approve: true };
+    await once(b, async () => {
+      try {
+        const r = await api(`/admin/pb/${encodeURIComponent(pid)}/${act === 'revoke' ? 'revoke' : 'review'}`, { method: 'POST', body });
+        if (act === 'approve' && (r.achieved || []).length) {
+          const n = document.createElement('span');
+          n.innerHTML = `<span>已核准，同時完成挑戰：</span><span translate="no">${r.achieved.map((a) => esc(a.title)).join('、')}</span>`;
+          toast(n);
+        } else toast(act === 'approve' ? '已核准' : act === 'reject' ? '已婉拒' : '已撤銷');
+        if (st === 'pending') ctx.count('queue', -1);
+        drop(card);
+      } catch (err) { toast(err.message); }
+    })();
+  });
+  await load(false).catch((e) => { list.innerHTML = `<section class="card"><p class="muted">${esc(e.message)}</p></section>`; });
+}
+
+// ---- 待確認（只有里程挑戰；榮譽制體重直接達成、不進這裡）----
+function achMetCard(x) {
+  const self = x.member?.id === me.id;
+  return `<article class="card adm-ach-met" data-eid="${esc(x.eid)}" data-cid="${esc(x.cid)}" data-name="${esc(x.member?.name || '')}">
+    <div class="adm-ach-who">${avatar(x.member || {})}<span>${achNm(x.member)} ${achTeam(x.member?.team)}
+      <a class="tiny tlink" style="display:block" href="#/admin/ach/c/${esc(x.cid)}" translate="no">${esc(x.title)}</a></span></div>
+    ${x.evidence ? `<p class="adm-ach-res"><span>累積</span> <b class="num adm-ach-time">${esc(x.evidence)}</b> <span>公里</span></p>` : ''}
+    <p class="tiny"><span>系統判定達成：</span><span class="num">${achMD(x.met_at)}</span></p>
+    <button type="button" class="linkbtn" data-src>查看紀錄來源 ›</button>
+    <div class="row adm-ach-acts">${self ? '<p class="tiny">這是你自己的達成，要由另一位審核者確認</p>'
+      : '<button type="button" class="btn sm" data-metact="ok">確認達成</button><button type="button" class="btn ghost sm" data-metact="no">退回</button>'}</div>
+  </article>`;
+}
+function achMetPanel(panel, ctx) {
+  const rows = ctx.data.met || [];
+  const empty = () => `<section class="card">${emptyState(achIc('calcheck'), '目前沒有待確認的達成')}</section>`;
+  panel.innerHTML = `<p class="tiny">里程挑戰由系統判定達成後，要幹部看過紀錄來源再確認；確認前名額先保留。</p>
+    <div class="adm-ach-list" id="achMetList">${rows.length ? rows.map(achMetCard).join('') : empty()}</div>`;
+  const list = $('#achMetList');
+  list.addEventListener('click', async (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    const card = b.closest('[data-eid]'); if (!card) return;
+    const { eid, cid, name } = card.dataset;
+    if (b.hasAttribute('data-src')) { achSourceSheet(cid, eid, b); return; }
+    const ok = b.dataset.metact === 'ok';
+    let body = { approve: true };
+    if (!ok) {
+      const r = await askReason('退回這筆達成', { who: name, chips: ACH_REJECT, ok: '退回' });
+      if (!r) return;
+      body = { approve: false, note: r.note, code: achReason(r.note) };
+    }
+    await once(b, async () => {
+      try {
+        await api(`/admin/ach/${encodeURIComponent(cid)}/entries/${encodeURIComponent(eid)}/confirm`, { method: 'POST', body });
+        toast(ok ? '已確認達成' : '已退回');
+        ctx.data.met = (ctx.data.met || []).filter((x) => x.eid !== eid);
+        ctx.count('met', -1);
+        const nb = [card.nextElementSibling, card.previousElementSibling].find((x) => x?.matches('.adm-ach-met'));
+        achFade(card, () => { card.remove(); if (!list.querySelector('.adm-ach-met')) list.innerHTML = empty(); focusEl(nb || list.querySelector('.empty')); });
+      } catch (err) { toast(err.message); }
+    })();
+  });
+}
+// 達成的細節（A11）：里程的紀錄來源與可疑訊號、出席的場次、成績、體重只有見證時間（不含數字、不含有沒有達成）
+const ACH_SRC = { gps: 'GPS 跑步', health: 'Apple 健康', file: 'GPX 檔', manual: '手動' };
+async function achSourceSheet(cid, eid, opener) {
+  let r;
+  try { r = await api(`/admin/ach/${encodeURIComponent(cid)}/entries/${encodeURIComponent(eid)}`); } catch (e) { toast(e.message); return; }
+  const d = r.detail || {}, itr = (label, v, warn = false) => `<div class="itr${warn ? ' adm-ach-warn' : ''}"><span>${label}</span><b class="num">${v}</b></div>`;
+  let body = '';
+  if (d.total != null || d.by_source) {
+    const src = d.by_source || {};
+    body = `<div class="itemtable">${itr('期間累積', `${esc(d.total ?? 0)} 公里`)}${itr('紀錄筆數', Number(d.logs) || 0)}${itr('單筆最多', `${esc(d.max ?? 0)} 公里`, Number(d.max) > 60)}
+        ${itr('結束後才補記（不算）', Number(d.late) || 0, Number(d.late) > 0)}${itr('補記超過 7 天前的', Number(d.backfilled) || 0, Number(d.backfilled) > 0)}</div>
+      <table class="adm-ach-tbl"><caption>紀錄來源</caption><thead><tr><th scope="col">來源</th><th scope="col">筆數</th><th scope="col">公里</th></tr></thead>
+        <tbody>${Object.entries(ACH_SRC).map(([k, v]) => `<tr><th scope="row">${v}</th><td class="num">${Number(src[k]?.n) || 0}</td><td class="num">${esc(src[k]?.km ?? 0)}</td></tr>`).join('')}</tbody></table>
+      <p class="tiny">單筆超過 60 公里、補記很久以前的紀錄，可以先請本人說明再確認。</p>`;
+  } else if (d.events) {
+    body = d.events.length ? `<div class="itemtable">${d.events.map((ev) => `<div class="itr"><span translate="no">${esc(ev.title)}</span><b class="num">${achYMD(ev.date)}</b></div>`).join('')}</div>`
+      : '<p class="tiny">沒有出席紀錄</p>';
+  } else if (d.pb) {
+    const p = d.pb;
+    body = `<p class="adm-ach-res"><span class="pill">${esc(AR.distLabel(p.dist_key, p.km))}</span> <b class="num adm-ach-time">${AR.fmtTime(p.seconds)}</b></p>
+      <p class="adm-ach-race"><span translate="no">${esc(p.race_name)}</span>・<span class="num">${achYMD(p.race_date)}</span></p>
+      ${achUrlOk(p.result_url) ? `<a class="adm-ach-link" href="${esc(p.result_url)}" target="_blank" rel="noopener noreferrer"><b translate="no">${esc(achHost(p.result_url))}</b><span>開官方成績 ›</span></a>` : ''}`;
+  } else if (d.verify) {
+    body = `<div class="itemtable">${itr('起始量測', d.w_base_at ? '已見證' : '還沒見證')}${itr('結束量測', d.w_last_at ? '已見證' : '還沒見證')}</div>
+      <p class="tiny">體重不會顯示在這裡，也看不到有沒有達成。</p>`;
+  }
+  openSheet('達成的細節', `<div class="row spread"><h3 id="achSrcT">達成的細節</h3><button type="button" class="btn ghost sm" data-close>關閉</button></div>
+    <p style="margin:0">${achNm(r.member)}</p>${body || '<p class="tiny">沒有細節</p>'}`, opener, 'achSrcT');
+}
+
+// ---- 挑戰清單 ----
+function achCampCard(c) {
+  const s = c.stats || {}, shirt = c.rewards?.shirt;
+  return `<a class="card adm-ach-camp" href="#/admin/ach/c/${esc(c.id)}">${achTile(c)}
+    <span class="adm-ach-cbody"><b translate="no">${esc(c.title)}</b>
+      <span class="tiny"><span>${esc(AR.KIND_ZH[c.kind] || '')}</span>・${achPeriod(c)}</span>
+      <span class="adm-ach-pills">${achPhasePill(c)}${achWho(c)}</span>
+      ${c.status === 'draft' ? '' : `<span class="adm-ach-stats">${achN('參加', s.joined)}${achN('達成', (s.done || 0) - (s.met || 0))}${s.met ? achN('待確認', s.met) : ''}</span>`}
+      ${shirt && c.status !== 'draft' ? `<span class="adm-ach-stats"><span>團服</span>${achN('已給', s.granted)}${achN('候補', s.waitlist)}${achN('已發', s.issued)}</span>` : ''}</span>
+    <span class="chev" aria-hidden="true"></span></a>`;
+}
+function achCampsPanel(panel, ctx) {
+  const cs = ctx.data.campaigns || [];
+  const groups = [['進行中', (c) => c.status === 'open'], ['草稿', (c) => c.status === 'draft'], ['已結算', (c) => c.status === 'settled'], ['已取消', (c) => c.status === 'cancelled']];
+  // 功能開關關著：伺服器不讓新增與發布（進行中的照樣結算），按鈕先拿掉、說明原因
+  const add = !achApprover() ? '' : featOn('achieve') ? '<div class="row"><a class="btn" href="#/admin/ach/new">新增挑戰</a></div>'
+    : '<p class="notice">「成績與挑戰」的功能開關關著：不能新增或發布挑戰；進行中的挑戰照樣結算，團服照樣發放</p>';
+  panel.innerHTML = `${add}
+    ${groups.map(([g, f]) => { const xs = cs.filter(f); return xs.length ? `<section class="adm-ach-group"><h2 class="sgt">${g}</h2>${xs.map(achCampCard).join('')}</section>` : ''; }).join('')
+      || `<section class="card">${emptyState(achIc('trophy'), '還沒有挑戰')}</section>`}`;
+}
+
+// ---- 團服：有團服的挑戰、尺寸統計、兩種 CSV、提醒選尺寸 ----
+const achSizes = (sizes, order) => {
+  const keys = [...new Set([...(order || []), ...Object.keys(sizes || {})])].filter((z) => (sizes || {})[z]);
+  return keys.length ? keys.map((z) => `<span class="adm-ach-size"><span translate="no">${esc(z)}</span> <b class="num">${Number(sizes[z]) || 0}</b></span>`).join('') : '<span class="tiny">還沒有人選尺寸</span>';
+};
+const achCsv = (c) => `<div class="row adm-ach-csv"><a class="btn ghost sm" href="/api/admin/ach/${esc(c.id)}/shirts.csv?view=order" download>下載訂製統計（CSV）</a>
+    <a class="btn ghost sm" href="/api/admin/ach/${esc(c.id)}/shirts.csv?view=list" download>下載發放名單（CSV）</a></div>
+  <p class="tiny">訂製統計只有尺寸與件數，可以給廠商；發放名單是協會內部用，不要轉給廠商</p>`;
+async function achShirtsPanel(panel, ctx) {
+  const cs = (ctx.data.campaigns || []).filter((c) => c.rewards?.shirt && ['open', 'settled'].includes(c.status));
+  if (!cs.length) { panel.innerHTML = `<section class="card">${emptyState(achIc('shirt'), '還沒有送團服的挑戰')}</section>`; return; }
+  panel.innerHTML = cs.map((c) => { const s = c.stats || {};
+    return `<section class="card adm-ach-shirt" data-cid="${esc(c.id)}">
+      <div class="row spread"><a class="tlink" href="#/admin/ach/c/${esc(c.id)}"><b translate="no">${esc(c.title)}</b></a>${achPhasePill(c)}</div>
+      <div class="adm-ach-sizes" data-sizes><span class="tiny">載入中…</span></div>
+      <p class="adm-ach-stats">${achN('已給', s.granted)}${achN('候補', s.waitlist)}${achN('已發', s.issued)}${achN('未選尺寸', s.unsized)}</p>
+      ${achCsv(c)}
+      ${c.status === 'settled' ? `<button type="button" class="btn ghost sm" data-remind ${s.unsized ? '' : 'disabled'}>提醒還沒選尺寸的人</button>` : '<p class="tiny">挑戰結算後才分配名額</p>'}
+    </section>`; }).join('');
+  for (const b of panel.querySelectorAll('[data-remind]')) b.onclick = once(b, async () => {
+    try { const r = await api(`/admin/ach/${encodeURIComponent(b.closest('[data-cid]').dataset.cid)}/remind-size`, { method: 'POST', body: {} }); toast(`已提醒 ${Number(r.n) || 0} 人`); }
+    catch (e) { toast(e.message); }
+  });
+  // 尺寸統計：每場讀一次團服名單（最多 8 場；名單本身不畫在這裡）
+  await Promise.all(cs.slice(0, 8).map(async (c) => {
+    const r = await api(`/admin/ach/${encodeURIComponent(c.id)}/entries?state=shirt`).catch(() => null);
+    const box = panel.querySelector(`[data-cid="${CSS.escape(c.id)}"] [data-sizes]`);
+    if (box) box.innerHTML = r ? achSizes(r.sizes, c.rewards.shirt.sizes) : '<span class="tiny">讀不到尺寸統計</span>';
+  }));
+}
+
+// ---- 一行文字的面板（取消原因、領取方式）：askReason 的說明是「原因只有本人看得到」，這兩個是給所有人看的，另外做 ----
+function achAskText(title, { lines = [], label, max, ok, required = false, hint = '' }) {
+  return new Promise((done) => {
+    let val = null;
+    const s = openSheet(title, `<h3 id="achAskT">${esc(title)}</h3>${lines.map((x) => `<p class="muted" style="margin:0">${esc(x)}</p>`).join('')}
+      <form id="achAskF"><label>${esc(label)}<textarea name="t" rows="2" maxlength="${max}" ${required ? 'required' : ''}${hint ? ' aria-describedby="achAskH"' : ''}></textarea></label>
+      ${hint ? `<p class="tiny" id="achAskH" style="margin:0">${esc(hint)}</p>` : ''}
+      <div class="sheetacts"><button type="button" class="btn ghost" data-close>取消</button><button class="btn">${esc(ok)}</button></div></form>`,
+    document.activeElement, 'achAskT', { onClose: () => done(val) });
+    s.host.querySelector('textarea').focus();
+    s.host.querySelector('#achAskF').onsubmit = (e) => { e.preventDefault(); const t = e.target.t.value.trim(); if (required && !t) return; val = t.slice(0, max); s.close(); };
+  });
+}
+
+// ---- 挑戰管理：名單、確認與撤銷、團服發放（就地更新）、CSV、提醒與通知、見證體重 ----
+let achCampState = { id: '', f: 'all', q: '' };   // 重畫（確認、撤銷後）保留篩選與搜尋
+const ACH_FILTERS = { all: '全部', met: '待確認', achieved: '達成', not_met: '沒有達成', shirt: '團服' };
+async function achCampView(id) {
+  const my = ++achSeq, appr = achApprover(), viewer = achViewer();
+  if (achCampState.id !== id) achCampState = { id, f: 'all', q: '' };
+  let list = null, ent = null;
+  try {
+    [list, ent] = await Promise.all([viewer ? api('/admin/ach') : null,
+      appr || !viewer ? api(`/admin/ach/${encodeURIComponent(id)}/entries?state=all`) : null]);
+  } catch (e) { if (my === achSeq) achFail(view, '挑戰管理', e.message); return; }
+  if (my !== achSeq || location.hash.split('?')[0] !== `#/admin/ach/c/${id}`) return;
+  const c = ent?.campaign || (list?.campaigns || []).find((x) => x.id === id);
+  if (!c) { achFail(view, '挑戰管理', '找不到這個挑戰'); return; }
+  const stats = (list?.campaigns || []).find((x) => x.id === id)?.stats || null;
+  const limited = !!ent?.limited, weight = c.kind === 'weight', shirt = c.rewards?.shirt || null;
+  const rows = ent?.entries || [];
+  const today = achToday();
+  const canIssue = !!shirt && (appr || limited);
+  const witness = weight && c.opts?.verify === 'witness' && c.status === 'open' && (appr || limited);
+  const filters = limited ? [] : Object.keys(ACH_FILTERS).filter((k) => (k === 'shirt' ? !!shirt : !weight || k === 'all'));
+  if (!filters.includes(achCampState.f)) achCampState.f = 'all';
+  const s = stats || {};
+  const kpis = stats ? `<div class="adm-ach-stats adm-ach-kpis">${achN('參加', s.joined, 'joined')}${achN('達成', (s.done || 0) - (s.met || 0), 'done')}${weight ? '' : achN('待確認', s.met, 'met') + achN('沒有達成', s.not_met, 'not_met')}</div>
+      ${shirt ? `<div class="adm-ach-stats adm-ach-kpis"><span>團服</span>${achN('已給', s.granted, 'granted')}${achN('候補', s.waitlist, 'waitlist')}${achN('已發', s.issued, 'issued')}</div>` : ''}` : '';
+  const acts = !appr ? '' : c.status === 'draft' ? `<a class="btn sm" href="#/admin/ach/c/${esc(id)}/edit">編輯</a><button type="button" class="btn sm" id="achOpen">發布</button><button type="button" class="btn ghost sm" id="achDel">刪除草稿</button>`
+    : c.status === 'open' ? `<a class="btn ghost sm" href="#/admin/ach/c/${esc(id)}/edit">編輯</a><button type="button" class="btn ghost sm" id="achCancel">取消挑戰</button>`
+    : c.status === 'settled' ? `<a class="btn ghost sm" href="#/admin/ach/c/${esc(id)}/edit">編輯</a>` : '';
+  view.innerHTML = `${largeTitle('挑戰管理')}
+    <section class="card adm-ach-head">
+      <div class="adm-ach-htop">${achTile(c)}<div><h2 class="h3" translate="no">${esc(c.title)}</h2><div class="adm-ach-pills">${achPhasePill(c)}${achWho(c)}<span class="pill">${esc(AR.KIND_ZH[c.kind] || '')}</span></div></div></div>
+      ${achRulesHtml(c)}
+      <p class="tiny">${achPeriod(c)}・<span>報名截止</span> <span class="num">${achMD(c.join_by)}</span></p>
+      ${c.status === 'cancelled' && c.cancel_note ? `<p class="tiny"><span>取消原因：</span><span translate="no">${esc(c.cancel_note)}</span></p>` : ''}
+      ${acts ? `<div class="row adm-ach-acts">${acts}</div>` : ''}
+    </section>
+    ${kpis}
+    ${limited ? '<p class="tiny">分團幹部只看得到有團服名額的團員：可以勾「已發放」、掃會籍卡找人、通知領取。</p>' : ''}
+    ${weight ? `<p class="tiny">${limited ? '體重挑戰只列出有團服名額的人。' : '體重挑戰不顯示誰有沒有達成，只看得到見證進度與團服；體重數字只有本人看得到。'}</p>` : ''}
+    ${witness ? '<button type="button" class="btn ghost sm" id="achWit">見證體重量測</button>' : ''}
+    ${shirt ? achShirtBox(c, ent, appr, limited, today) : ''}
+    ${ent ? `<section class="card adm-ach-roster">
+      <div class="row spread"><h3>名單</h3>${canIssue && c.status === 'settled' ? '<button type="button" class="btn ghost sm" id="achScanCard">掃會籍卡</button>' : ''}</div>
+      ${filters.length > 1 ? `<div class="seg adm-ach-filter" role="group" aria-label="名單篩選">${filters.map((k) => `<button type="button" data-ef="${k}" aria-pressed="${k === achCampState.f}">${ACH_FILTERS[k]}</button>`).join('')}</div>` : ''}
+      <input type="search" class="adm-ach-q" id="achEq" maxlength="20" placeholder="搜尋姓名" aria-label="搜尋姓名" autocomplete="off" value="${esc(achCampState.q)}">
+      <div class="roster" id="achRoster">${rows.map((x) => achEntryRow(x, c, { appr, limited, canIssue })).join('')}</div>
+      <p class="tiny" id="achNone" hidden>沒有符合的跑友</p>
+    </section>` : viewer ? '<p class="tiny">監事看不到名單。</p>' : ''}`;
+  bindAchCamp(c, { appr, limited, rows, stats });
+}
+function achShirtBox(c, ent, appr, limited, today) {
+  const sh = c.rewards.shirt, settled = c.status === 'settled';
+  return `<section class="card adm-ach-shirtbox"><h3>團服</h3>
+    <p class="tiny">${sh.quota ? `<span>名額</span> <b class="num">${Number(sh.quota)}</b>` : '<span>不限量</span>'}${sh.size_by ? `・<span>尺寸選到</span> <span class="num">${achMD(sh.size_by)}</span>` : ''}${sh.pool ? `・<span>同款團服</span> <span translate="no">${esc(sh.pool)}</span>` : ''}</p>
+    ${ent ? `<div class="adm-ach-sizes">${achSizes(ent.sizes, sh.sizes)}</div><p class="adm-ach-stats">${achN('未選尺寸', ent.unsized)}</p>` : ''}
+    ${c.pickup ? `<p class="tiny"><span>領取方式：</span><span translate="no">${esc(c.pickup)}</span></p>` : ''}
+    ${appr ? achCsv(c) : ''}
+    ${!settled ? '<p class="tiny">挑戰結算後依達成先後分配名額，才能提醒選尺寸與通知領取。</p>' : appr || limited ? `<div class="row adm-ach-acts">
+      ${appr ? `<button type="button" class="btn ghost sm" id="achRemind" ${ent?.unsized ? '' : 'disabled'}>提醒還沒選尺寸的人</button>` : ''}
+      <button type="button" class="btn ghost sm" id="achPickup">通知領取</button>
+      ${appr && sh.size_by && today > sh.size_by ? '<button type="button" class="btn ghost sm" id="achRelease">把還沒選尺寸的名額讓給候補</button>' : ''}</div>` : ''}
+  </section>`;
+}
+function achEntryRow(x, c, { appr, limited, canIssue }) {
+  const m = x.member, weight = c.kind === 'weight', self = m?.id === me.id;
+  const stName = weight && x.status === 'joined' ? '參加中' : ACH_ENTRY[x.status] || x.status;
+  const pills = [`<span class="${ACH_ENTRY_PILL[x.status] || 'pill'}">${stName}</span>`,
+    weight && x.w_base_at ? '<span class="pill">起始已見證</span>' : '', weight && x.w_last_at ? '<span class="pill">結束已見證</span>' : '',
+    x.reward_state ? `<span class="pill${x.reward_state === 'granted' ? ' wait' : ''}" data-rw>${ACH_REWARD[x.reward_state] || ''}${x.reward_state === 'waitlist' && x.reward_rank ? ` <b class="num">${Number(x.reward_rank)}</b>` : ''}</span>` : '',
+    x.late_size ? '<span class="pill">補訂</span>' : '', x.pool_dup ? '<span class="pill wait">同款重複</span>' : ''].filter(Boolean).join('');
+  const when = !weight && (x.achieved_at || x.met_at) ? `<span>達成</span> <span class="num">${achMD(x.achieved_at || x.met_at)}</span>` : '';
+  const ev = appr && !limited && x.evidence && ['km', 'attend'].includes(c.kind) ? `<span>${c.kind === 'km' ? '累積' : '出席'}</span> <span class="num">${esc(x.evidence)}</span> <span>${c.kind === 'km' ? '公里' : '次'}</span>` : '';
+  const meta = [when, ev, x.shirt_size ? `<span>尺寸</span> <b translate="no">${esc(x.shirt_size)}</b>` : x.reward_state === 'granted' ? '<span>還沒選尺寸</span>' : ''].filter(Boolean).join('・');
+  const btns = !appr || limited || self ? '' : [
+    x.status === 'met' ? '<button type="button" class="btn sm" data-eact="ok">確認</button><button type="button" class="btn ghost sm" data-eact="no">退回</button>' : '',
+    x.status === 'achieved' && !weight ? '<button type="button" class="btn ghost sm" data-eact="revoke">撤銷達成</button>' : '',
+    !weight && ['met', 'achieved', 'not_met', 'revoked', 'rejected'].includes(x.status) ? '<button type="button" class="linkbtn" data-eact="detail">細節 ›</button>' : '',
+  ].join('');
+  const issuable = canIssue && ['granted', 'issued'].includes(x.reward_state) && (weight || x.status === 'achieved');
+  const issue = !issuable ? '<span></span>' : self ? '<span class="tiny">由其他幹部發放</span>'
+    : `<label class="adm-ach-issue"><input type="checkbox" data-issue aria-label="已發放：${esc(m?.name || '')}" ${x.reward_state === 'issued' ? 'checked' : ''}><span>已發放</span></label>`;
+  return `<div class="r adm-ach-erow" data-eid="${esc(x.id)}" data-mid="${esc(m?.id || '')}" data-st="${esc(x.status)}" data-rws="${esc(x.reward_state || '')}" data-q="${esc(`${m?.name || ''} ${m?.nickname || ''}`.toLowerCase())}" data-name="${esc(m?.name || '')}">
+    ${avatar(m || {})}<span>${achNm(m)} ${achTeam(m?.team)}<span class="adm-ach-pills">${pills}</span>${meta ? `<span class="tiny" style="display:block">${meta}</span>` : ''}
+      ${canIssue && x.status === 'met' && ['granted', 'issued'].includes(x.reward_state) ? '<span class="tiny" style="display:block">確認達成後才能發放</span>' : ''}
+      ${btns ? `<span class="row adm-ach-acts">${btns}</span>` : ''}</span>
+    ${issue}</div>`;
+}
+function bindAchCamp(c, { appr, limited, stats }) {
+  const id = c.id, roster = $('#achRoster');
+  const rerender = () => achCampView(id);
+  const fail = (e) => toast(e.message);
+  // 篩選與搜尋：只在畫面上藏起來（名單已經整份讀進來），焦點與勾選都不動
+  const apply = () => {
+    if (!roster) return;
+    const f = achCampState.f, q = achCampState.q.trim().toLowerCase();
+    let shown = 0;
+    for (const r of roster.querySelectorAll('.adm-ach-erow')) {
+      const st = r.dataset.st, rw = r.dataset.rws;
+      const ok = (f === 'all' || (f === 'shirt' ? !!rw : st === f)) && (!q || r.dataset.q.includes(q));
+      r.hidden = !ok; if (ok) shown++;
+    }
+    $('#achNone').hidden = !!shown;
+  };
+  for (const b of view.querySelectorAll('[data-ef]')) b.onclick = () => {
+    achCampState.f = b.dataset.ef;
+    for (const x of view.querySelectorAll('[data-ef]')) x.setAttribute('aria-pressed', String(x === b));
+    apply();
+  };
+  $('#achEq')?.addEventListener('input', (e) => { achCampState.q = e.target.value; apply(); });
+  apply();
+  // 已發放：就地更新（不重畫：搜尋、篩選與焦點都留著，現場可以一路勾下去）；勾選中不停用核取方塊（停用會讓焦點跑掉）
+  const bump = (k, d) => { const b = view.querySelector(`[data-n="${k}"] b`); if (b) b.textContent = Math.max(0, Number(b.textContent) + d); };
+  roster?.addEventListener('change', async (e) => {
+    const cb = e.target.closest('[data-issue]'); if (!cb) return;
+    const row = cb.closest('[data-eid]'), on = cb.checked;
+    if (cb.dataset.busy) { cb.checked = !on; return; }
+    cb.dataset.busy = '1';
+    try {
+      const r = await api(`/admin/ach/${encodeURIComponent(id)}/entries/${encodeURIComponent(row.dataset.eid)}/issue`, { method: 'POST', body: { issued: on } });
+      toast(on ? '已標記發放' : '已取消發放');
+      if (r.changed !== false) {
+        row.dataset.rws = on ? 'issued' : 'granted';
+        const p = row.querySelector('[data-rw]');
+        if (p) { p.textContent = on ? '已發放' : '待發放'; p.classList.toggle('wait', !on); }
+        bump('issued', on ? 1 : -1);
+      }
+    } catch (err) { cb.checked = !on; fail(err); }
+    finally { delete cb.dataset.busy; }
+  });
+  roster?.addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-eact]'); if (!b) return;
+    const row = b.closest('[data-eid]'), eid = row.dataset.eid, who = row.dataset.name, act = b.dataset.eact;
+    const base = `/admin/ach/${encodeURIComponent(id)}/entries/${encodeURIComponent(eid)}`;
+    if (act === 'detail') { achSourceSheet(id, eid, b); return; }
+    let path = `${base}/confirm`, body = { approve: true }, msg = '已確認達成';
+    if (act === 'no') {
+      const r = await askReason('退回這筆達成', { who, chips: ACH_REJECT, ok: '退回' }); if (!r) return;
+      body = { approve: false, note: r.note, code: achReason(r.note) }; msg = '已退回';
+    } else if (act === 'revoke') {
+      const r = await askReason('撤銷這筆達成', { who, chips: ACH_REVOKE, ok: '撤銷', lines: ['還沒發放的團服名額會讓給候補'] }); if (!r) return;
+      path = `${base}/revoke`; body = { note: r.note, code: achReason(r.note) }; msg = '已撤銷達成';
+    }
+    await once(b, async () => { try { await api(path, { method: 'POST', body }); toast(msg); rerender(); } catch (err) { fail(err); } })();
+  });
+  // 頁首動作
+  $('#achOpen')?.addEventListener('click', (e) => achPublish(id, e.currentTarget).then((ok) => ok && rerender()));
+  $('#achDel')?.addEventListener('click', async (e) => {
+    const b = e.currentTarget;
+    if (await choose('刪除草稿', '刪除這個挑戰草稿？', [{ label: '刪除草稿', value: 'del', danger: true }]) !== 'del') return;
+    await once(b, async () => { try { await api(`/admin/ach/${encodeURIComponent(id)}`, { method: 'DELETE' }); toast('已刪除草稿'); location.hash = '#/admin/ach?tab=campaigns'; } catch (err) { fail(err); } })();
+  });
+  $('#achCancel')?.addEventListener('click', async (e) => {
+    const b = e.currentTarget;
+    const note = await achAskText('取消這個挑戰', { lines: [c.kind === 'weight' ? '參加者會收到通知；體重資料會立即刪除' : '參加者會收到通知'], label: '取消原因', max: 120, ok: '取消挑戰', required: true, hint: '原因會出現在參加者收到的通知裡' });
+    if (note == null) return;
+    await once(b, async () => { try { await api(`/admin/ach/${encodeURIComponent(id)}/cancel`, { method: 'POST', body: { note } }); toast('已取消挑戰'); rerender(); } catch (err) { fail(err); } })();
+  });
+  // 團服
+  $('#achRemind')?.addEventListener('click', (e) => once(e.currentTarget, async () => {
+    try { const r = await api(`/admin/ach/${encodeURIComponent(id)}/remind-size`, { method: 'POST', body: {} }); toast(`已提醒 ${Number(r.n) || 0} 人`); } catch (err) { fail(err); }
+  })());
+  $('#achPickup')?.addEventListener('click', async (e) => {
+    const b = e.currentTarget;
+    const note = await achAskText('通知領取團服', { lines: ['通知有名額、還沒領的跑友；同一個挑戰一天通知一次'], label: '領取方式', max: AR.LIMITS.pickupNote, ok: '通知', required: true, hint: '例如「週四團練在田徑場入口領」；會顯示在跑友的團服卡上' });
+    if (note == null) return;
+    await once(b, async () => { try { const r = await api(`/admin/ach/${encodeURIComponent(id)}/notify-pickup`, { method: 'POST', body: { note } }); toast(`已通知 ${Number(r.n) || 0} 人`); rerender(); } catch (err) { fail(err); } })();
+  });
+  $('#achRelease')?.addEventListener('click', async (e) => {
+    const b = e.currentTarget;
+    if (await choose('讓出名額', '把尺寸截止後還沒選尺寸的名額讓給候補？被讓出的跑友會收到通知，還想要可以重新排隊。', [{ label: '讓給候補', value: 'go', primary: true }]) !== 'go') return;
+    await once(b, async () => { try { const r = await api(`/admin/ach/${encodeURIComponent(id)}/release-unsized`, { method: 'POST', body: {} }); toast(`已讓出 ${Number(r.released) || 0} 個名額`); rerender(); } catch (err) { fail(err); } })();
+  });
+  // 發放現場找人：掃會籍卡（CILM:<id>.<簽章>）只拿 id 在已載入的名單裡找，不打 API、不驗簽章
+  $('#achScanCard')?.addEventListener('click', () => {
+    const close = scanSheet({ title: '掃會籍卡', hint: '把跑友 App 裡的會籍卡 QR 對準框內', placeholder: '或貼上 QR 內容', onCode: async (raw) => {
+      const mid = /^CILM:([\w-]{1,32})\./i.exec(raw.trim())?.[1];
+      const row = mid && roster?.querySelector(`[data-mid="${CSS.escape(mid)}"]`);
+      if (!row) return '這位跑友不在名單上';
+      close();
+      achCampState.f = 'all'; achCampState.q = ''; if ($('#achEq')) $('#achEq').value = '';
+      for (const x of view.querySelectorAll('[data-ef]')) x.setAttribute('aria-pressed', String(x.dataset.ef === 'all'));
+      apply();
+      row.scrollIntoView({ block: 'center' });
+      focusEl(row.querySelector('[data-issue]') || row);
+      return '';
+    } });
+  });
+  $('#achWit')?.addEventListener('click', () => achWitness());
+}
+// 見證體重量測：掃跑友手機上的見證碼（或手動輸入），看著體重計輸入讀數；伺服器不回傳任何數字，也不說有沒有達成
+//   先掃碼再填數字、或先填數字再掃碼都可以；同一個碼見證成功後鏡頭還對著，不會再送一次
+function achWitness() {
+  let pending = '', lastOk = '', lastMsg = '';
+  const norm = (s) => String(s || '').trim().replace(/^cil-wit:/i, '').replace(/[\s-]/g, '').toLowerCase();   // 畫面上分成 4 組顯示，手動輸入時空白與減號不算
+  let kgIn = null, msgEl = null;
+  const send = async (code) => {
+    const kg = Number(String(kgIn?.value || '').trim().replace(',', '.'));
+    if (!AR.kgOk(kg)) { pending = code; kgIn?.focus(); return '已讀到見證碼，請輸入體重計上的數字'; }
+    const r = await api('/ach/witness', { method: 'POST', body: { code, kg: Math.round(kg * 10) / 10 } });
+    pending = ''; lastOk = code; kgIn.value = '';
+    lastMsg = `已見證 ${r.name || ''} 的${/^b/.test(r.which || '') ? '起始量測' : '結束量測'}`;   // 整句由 i18n.js 的句型換成英文
+    return lastMsg;
+  };
+  scanSheet({ title: '見證體重量測', hint: '掃跑友手機上的見證碼，數字以體重計為準', placeholder: '手動輸入見證碼', onCode: async (raw) => {
+    const code = norm(raw); if (!code) return '';
+    return code === lastOk ? lastMsg : send(code);
+  } });
+  const host = document.getElementById('scanT')?.closest('.sheet'); if (!host) return;
+  msgEl = host.querySelector('.scanmsg');
+  msgEl.insertAdjacentHTML('beforebegin', `<form class="row adm-ach-kgf" id="achKgF"><label>體重計讀數（公斤）<input name="kg" inputmode="decimal" autocomplete="off" maxlength="5" placeholder="例如 72.4" enterkeyhint="send"></label>
+    <button class="btn sm">送出見證</button></form>`);
+  kgIn = host.querySelector('#achKgF [name=kg]');
+  host.querySelector('#achKgF').onsubmit = async (e) => {
+    e.preventDefault();
+    if (!pending) { msgEl.textContent = '請先掃跑友手機上的見證碼，或在下面輸入代碼'; return; }
+    try { msgEl.textContent = await send(pending); } catch (err) { msgEl.textContent = err.message; }
+  };
+}
+// 發布：先問要不要通知可以參加的人
+async function achPublish(id, opener) {
+  const v = await choose('發布挑戰', '發布後條件就不能再改，確定嗎？', [{ label: '發布並通知可以參加的人', value: 'notify', primary: true }, { label: '發布，不通知', value: 'quiet' }]);
+  if (!v) return false;
+  try {
+    await api(`/admin/ach/${encodeURIComponent(id)}/open`, { method: 'POST', body: { announce: v === 'notify' } });
+    toast(v === 'notify' ? '已發布並通知可以參加的人' : '已發布');
+    return true;
+  } catch (e) { toast(e.message); opener?.focus(); return false; }
+}
+
+// ---- 挑戰編輯（新增、草稿、發布後的有限修改）----
+const ACH_KIND_DESC = { pb: '期間內跑出比之前更快的成績', time: '例如全馬破 4、半馬破 2', pace: '成績比之前的 PB 快一定比例', weight: '現場見證或自主聲明，體重不上榜', km: '用訓練紀錄累積公里數', attend: '以現場報到為準' };
+const ACH_ATT_NAME = { track: '田徑場團練', core: '核心日', long: '長跑團練', race: '賽事', other: '活動' };
+const ACH_BADGE_NAME = { trophy: '獎盃', medal: '獎牌', stopwatch: '碼錶', flame: '火焰', mountain: '山', heart: '愛心', star: '星星', shirt: '團服' };
+const achR1 = (v) => Math.round(Number(v) * 10) / 10;
+async function achEditView(id) {
+  const my = ++achSeq, title = id ? '修改挑戰' : '新增挑戰';
+  if (!achApprover()) { achFail(view, title, '只有理事長與行政人員可以管理挑戰'); return; }
+  let data;
+  try { data = await api('/admin/ach'); } catch (e) { if (my === achSeq) achFail(view, title, e.message); return; }
+  if (my !== achSeq || !location.hash.startsWith('#/admin/ach/')) return;
+  const old = id ? (data.campaigns || []).find((c) => c.id === id) : null;
+  if (id && !old) { achFail(view, title, '找不到這個挑戰'); return; }
+  if (old?.status === 'cancelled') { achFail(view, title, '挑戰已經取消，不能再修改'); return; }
+  const meta = data.meta || {}, today = achToday(), locked = !!old && old.status !== 'draft';
+  const o = old || { kind: 'time', dist_key: 'fm', target: 14400, opts: {}, confirm: false, team_id: null, members_only: false,
+    rewards: { badge: 'medal', board: 1 }, start_date: today, end_date: AR.addDays(today, 60), join_by: AR.addDays(today, 60), title: '', intro: '' };
+  const sh = o.rewards?.shirt || null, dis = locked ? 'disabled' : '';
+  const t0 = o.kind === 'time' && o.target ? o.target : 0;
+  const aud = o.team_id ? 'team' : o.members_only ? 'members' : 'all';
+  const sizes = [...new Set([...AR.SIZES, ...(sh?.sizes || [])])];
+  const chk = (b) => (b ? 'checked' : '');
+  const lockNote = locked ? '<p class="tiny adm-ach-lock">挑戰開始後不能改條件</p>' : '';
+  view.innerHTML = `${largeTitle(title)}
+    <form id="achForm" class="adm-ach-form" novalidate>
+      <p class="notice" id="achErr" role="alert" tabindex="-1" hidden></p>
+      <section class="card"><fieldset class="qset" ${dis}><legend>挑戰類型</legend>${lockNote}
+        <div class="adm-ach-kinds">${AR.KINDS.map((k) => `<label class="adm-ach-kind"><input type="radio" name="kind" value="${k}" ${chk(o.kind === k)}>
+          <span>${achTile({ kind: k })}<b>${esc(AR.KIND_ZH[k])}</b><span class="tiny">${ACH_KIND_DESC[k]}</span></span></label>`).join('')}</div></fieldset></section>
+      <section class="card"><fieldset class="qset adm-ach-cond" ${dis}><legend>條件</legend>${lockNote}
+        <div data-for="pb time pace"><span class="tiny">距離</span><div class="chips" role="radiogroup" aria-label="距離">
+          <label class="chip" data-for="pb pace"><input type="radio" name="dist" value="" ${chk(!o.dist_key)}><span>任一距離</span></label>
+          ${AR.STD.map((d) => `<label class="chip"><input type="radio" name="dist" value="${d}" ${chk(o.dist_key === d)}><span>${esc(AR.DISTS[d].zh)}</span></label>`).join('')}</div></div>
+        <div data-for="time" class="adm-ach-tbox">
+          <span class="tiny">常用目標（跑進這個時間才算）</span><div class="chips" id="achPresets"></div>
+          <div class="adm-ach-hms" role="group" aria-label="目標時間"><label>小時<input name="th" inputmode="numeric" maxlength="2" value="${t0 ? Math.floor(t0 / 3600) : ''}"></label>
+            <label>分鐘<input name="tm" inputmode="numeric" maxlength="2" value="${t0 ? Math.floor((t0 % 3600) / 60) : ''}"></label>
+            <label>秒<input name="ts" inputmode="numeric" maxlength="2" value="${t0 ? t0 % 60 : ''}"></label></div>
+          <label id="achGrpBox">用分組目標<select name="grp"></select></label>
+          <label class="switch"><span>限第一次跑進<span class="tiny" style="display:block">挑戰開始前已經跑進過的不算</span></span><input type="checkbox" name="first_time" ${chk(o.opts?.first_time)}><i></i></label></div>
+        <label class="switch" data-for="pb"><span>之前沒有成績的人，完賽就算<span class="tiny" style="display:block">鼓勵第一次完賽；挑戰發布後才補登的舊成績不算</span></span><input type="checkbox" name="first_ok" ${chk(o.opts?.first_ok)}><i></i></label>
+        <label data-for="pace">進步幅度（%）<input name="pace_pct" type="number" inputmode="decimal" min="0.5" max="20" step="0.1" value="${o.kind === 'pace' ? esc(o.target) : 3}"></label>
+        <p class="tiny" data-for="pace">建議在功能開放幾週、大家登錄過以前的成績之後再辦：基準只算挑戰發布前就登錄的成績</p>
+        <label data-for="weight">減少幅度（%）<input name="weight_pct" type="number" inputmode="decimal" min="1" max="10" step="0.1" value="${o.kind === 'weight' ? esc(o.target) : 3}"></label>
+        <fieldset class="qset" data-for="weight"><legend>確認方式</legend>
+          <label class="chip"><input type="radio" name="verify" value="honor" ${chk(o.opts?.verify !== 'witness')}><span>自主聲明（榮譽制，不收體重）</span></label>
+          <label class="chip"><input type="radio" name="verify" value="witness" ${chk(o.opts?.verify === 'witness')} ${meta.raceKey ? '' : 'disabled'}><span>現場見證（加密保存體重）</span></label>
+          ${meta.raceKey ? '' : '<p class="tiny">伺服器還沒有設定加密金鑰，暫時不能用現場見證</p>'}
+          <p class="tiny" id="achWitNote">見證就是確認，不需要另外確認</p>
+          <p class="tiny">健康的減重大約每週不超過體重的 1%，所以幅度最多 10%、期間至少 4 週。</p></fieldset>
+        <label data-for="km">目標里程（公里）<input name="km" type="number" inputmode="decimal" min="10" max="5000" step="0.1" value="${o.kind === 'km' ? esc(o.target) : 300}"></label>
+        <label class="switch" data-for="km"><span>達成後要幹部確認<span class="tiny" style="display:block">有團服時建議打開：幹部看過紀錄來源再確認</span></span><input type="checkbox" name="confirm" ${chk(o.kind === 'km' && o.confirm)}><i></i></label>
+        <label data-for="attend">出席次數<input name="att" type="number" inputmode="numeric" min="1" max="200" step="1" value="${o.kind === 'attend' ? esc(o.target) : 12}"></label>
+        <fieldset class="qset" data-for="attend"><legend>要算哪些團練</legend><div class="chips">${AR.ATTEND_KINDS.map((k) => `<label class="chip"><input type="checkbox" name="akinds" value="${k}" ${chk((o.kind === 'attend' ? o.opts?.kinds || [] : AR.ATTEND_DEFAULT).includes(k))}><span>${ACH_ATT_NAME[k]}</span></label>`).join('')}</div></fieldset>
+      </fieldset></section>
+      <section class="card"><h2 class="h3">期間與對象</h2>
+        <div class="grid3"><label>開始<input type="date" name="start" value="${esc(o.start_date)}" ${dis}></label><label>結束<input type="date" name="end" value="${esc(o.end_date)}"></label>
+          <label>報名截止<input type="date" name="join_by" value="${esc(o.join_by)}" aria-describedby="achJoinHint"></label></div>
+        <p class="tiny" id="achJoinHint"></p>
+        ${locked ? '<p class="tiny">結束日只能延長，而且要在原本的結束日以前延長。</p>' : ''}
+        <fieldset class="qset" ${dis}><legend>對象</legend><div class="chips">
+          <label class="chip"><input type="radio" name="aud" value="all" ${chk(aud === 'all')}><span>全協會</span></label>
+          <label class="chip"><input type="radio" name="aud" value="members" ${chk(aud === 'members')}><span>只限協會會員</span></label>
+          <label class="chip"><input type="radio" name="aud" value="team" ${chk(aud === 'team')} ${(meta.teams || []).length ? '' : 'disabled'}><span>某個分團</span></label></div>
+          <select name="team_id" aria-label="分團">${(meta.teams || []).map((t) => `<option value="${esc(t.id)}" ${o.team_id === t.id ? 'selected' : ''}>${esc(t.name)}</option>`).join('')}</select></fieldset>
+      </section>
+      <section class="card"><h2 class="h3">獎勵</h2>${lockNote}
+        <fieldset class="qset" ${dis}><legend>徽章</legend><div class="adm-ach-badges">
+          ${['', ...AR.BADGES].map((b) => `<label class="adm-ach-bdg"><input type="radio" name="badge" value="${b}" ${chk((o.rewards?.badge || '') === b)} aria-label="${b ? ACH_BADGE_NAME[b] : '不要徽章'}"><span aria-hidden="true">${b ? achIc(b) : '<span class="tiny">不要</span>'}</span></label>`).join('')}</div></fieldset>
+        <label class="switch"><span>上恭喜榜<span class="tiny" style="display:block" id="achBoardHint"></span></span><input type="checkbox" name="board" ${chk(o.rewards?.board)} ${dis}><i></i></label>
+        <label class="switch"><span>團服<span class="tiny" style="display:block" id="achShirtHint"></span></span><input type="checkbox" name="shirt" ${chk(sh)} ${dis}><i></i></label>
+        <div id="achShirtBox" class="adm-ach-shirtform">
+          <fieldset class="qset"><legend>尺寸</legend><div class="chips" id="achSizes">${sizes.map((z) => `<label class="chip"><input type="checkbox" name="sizes" value="${esc(z)}" ${chk(sh ? sh.sizes.includes(z) : AR.SIZES.includes(z))} ${locked && sh?.sizes.includes(z) ? 'disabled' : ''}><span translate="no">${esc(z)}</span></label>`).join('')}</div>
+            <div class="row adm-ach-addsz"><input id="achSizeAdd" maxlength="${AR.LIMITS.sizeLen}" placeholder="自訂尺寸" aria-label="自訂尺寸"><button type="button" class="btn ghost sm" id="achSizeAddBtn">加入</button></div>
+            ${locked ? '<p class="tiny">尺寸只能增加</p>' : ''}</fieldset>
+          <div class="grid2"><label>名額<input name="quota" type="number" inputmode="numeric" min="1" max="2000" step="1" placeholder="不限量" value="${sh?.quota ?? ''}" aria-describedby="achQuotaHint"></label>
+            <label>尺寸選到<input name="size_by" type="date" value="${esc(sh?.size_by || '')}" aria-describedby="achSizeByHint"></label></div>
+          <p class="tiny" id="achQuotaHint">${locked ? '名額只能增加，留空就是不限量；依達成先後分配，挑戰結算時才確定' : '名額留空就是不限量；依達成先後分配，挑戰結算時才確定'}</p>
+          <p class="tiny" id="achSizeByHint">${locked ? '尺寸截止只能延後；留空就照原本的日期' : '沒填的話是結束後 14 天'}</p>
+          <label>尺寸表連結（選填）<input name="chart" type="url" inputmode="url" placeholder="https://" value="${esc(sh?.chart || '')}"></label>
+          <label>同款團服的名稱（選填）<input name="pool" maxlength="${AR.LIMITS.pool}" list="achPools" placeholder="例如 2026 團服" value="${esc(sh?.pool || '')}" aria-describedby="achPoolHint" ${dis}></label>
+          <datalist id="achPools">${(meta.pools || []).map((p) => `<option value="${esc(p)}"></option>`).join('')}</datalist>
+          <p class="tiny" id="achPoolHint">好幾個挑戰送同一款團服時填同一個名稱，一位跑友只會拿到一件</p>
+        </div>
+      </section>
+      <section class="card"><h2 class="h3">名稱與說明</h2>
+        <label>名稱<input name="title" maxlength="${AR.LIMITS.title}" value="${esc(o.title || '')}" required></label>
+        <p class="tiny" data-for="weight">建議用中性的名稱（例如「秋季體態挑戰」）</p>
+        <label>說明（選填）<textarea name="intro" maxlength="${AR.LIMITS.intro}" rows="4">${esc(o.intro || '')}</textarea></label>
+      </section>
+      <section class="card adm-ach-preview"><h2 class="h3">預覽</h2><p class="tiny">跑友在挑戰頁看到的條件與獎勵：</p><div id="achPrev"></div></section>
+      ${locked ? `<label class="switch" id="achAnnBox" hidden><span>通知參加者<span class="tiny" style="display:block">延長結束日或增加名額時，通知已經參加的人</span></span><input type="checkbox" name="announce"><i></i></label>
+        <div class="sheetacts"><a class="btn ghost" href="#/admin/ach/c/${esc(id)}">取消</a><button class="btn" id="achSave">儲存</button></div>`
+      : '<div class="sheetacts"><button type="button" class="btn ghost" id="achDraft">存草稿</button><button class="btn" id="achPub">發布</button></div>'}
+    </form>`;
+  bindAchEdit({ id, old, o, meta, locked, today });
+}
+function bindAchEdit({ id: id0, old, o, meta, locked, today }) {
+  const f = $('#achForm'), err = $('#achErr');
+  let id = id0;   // 新增時第一次存好草稿後就有 id：之後再按是修改同一份草稿，不會多一份
+  const val = (n) => f.querySelector(`[name="${n}"]:checked`)?.value ?? '';
+  const kind = () => val('kind') || o.kind;
+  let joinAuto = !old, confirmTouched = !!old;
+  const hms = () => {
+    const [h, m, s] = ['th', 'tm', 'ts'].map((n) => f[n].value.trim());
+    if (!h && !m && !s) return null;
+    const n = [h, m, s].map((x) => Number(x || 0));
+    return n.every((x) => Number.isInteger(x) && x >= 0) && n[1] < 60 && n[2] < 60 ? n[0] * 3600 + n[1] * 60 + n[2] : NaN;
+  };
+  const setHms = (sec) => { f.th.value = Math.floor(sec / 3600); f.tm.value = Math.floor((sec % 3600) / 60); f.ts.value = sec % 60; };
+  // 依目前的表單組出挑戰（型別整理好，給 checkCampaign、預覽與送出共用）
+  const read = () => {
+    const k = kind(), dist = val('dist') || null, verify = val('verify') || 'honor';
+    let target = null; const opts = {};
+    if (k === 'time') { target = hms(); if (f.first_time.checked) opts.first_time = 1; }
+    if (k === 'pb' && f.first_ok.checked) opts.first_ok = 1;
+    if (k === 'pace') target = achR1(f.pace_pct.value);
+    if (k === 'weight') { target = achR1(f.weight_pct.value); opts.verify = verify; }
+    if (k === 'km') target = achR1(f.km.value);
+    if (k === 'attend') { target = Number(f.att.value); opts.kinds = [...f.querySelectorAll('[name=akinds]:checked')].map((x) => x.value); }
+    const honor = k === 'weight' && verify === 'honor';
+    const aud = val('aud');
+    const rewards = {};
+    const badge = val('badge'); if (badge) rewards.badge = badge;
+    if (f.board.checked && k !== 'weight') rewards.board = 1;
+    if (f.shirt.checked && !honor) {
+      const q = f.quota.value.trim();
+      rewards.shirt = { sizes: [...f.querySelectorAll('[name=sizes]:checked')].map((x) => x.value), quota: q === '' ? null : Number(q),
+        size_by: f.size_by.value || null, chart: f.chart.value.trim() || null, pool: f.pool.value.trim() || null };
+    }
+    return { title: f.title.value.trim(), intro: f.intro.value.trim() || null, team_id: aud === 'team' ? f.team_id.value || null : null, members_only: aud === 'members',
+      kind: k, dist_key: ['pb', 'time', 'pace'].includes(k) ? dist : null, target, opts, confirm: k === 'km' && f.confirm.checked,
+      rewards, start_date: f.start.value, end_date: f.end.value, join_by: f.join_by.value };
+  };
+  // 發布後：鎖住的欄位一律用原本的值（伺服器比對的是同一份），只換可以改的
+  const next = () => {
+    if (!locked) return read();
+    const r = read(), so = old.rewards?.shirt;
+    const rewards = { ...(old.rewards || {}) };
+    if (so) rewards.shirt = { ...so, sizes: r.rewards.shirt?.sizes || so.sizes, quota: r.rewards.shirt ? r.rewards.shirt.quota : so.quota,
+      size_by: r.rewards.shirt?.size_by || so.size_by, chart: r.rewards.shirt ? r.rewards.shirt.chart : so.chart };
+    return { title: r.title, intro: r.intro, team_id: old.team_id, members_only: old.members_only, kind: old.kind, dist_key: old.dist_key, target: old.target,
+      opts: old.opts, confirm: old.confirm, rewards, start_date: old.start_date, end_date: r.end_date, join_by: r.join_by };
+  };
+  const joinDefault = (c) => (c.kind === 'weight' && AR.isDay(c.start_date) && AR.isDay(c.end_date)
+    ? [AR.addDays(c.start_date, 14), AR.addDays(c.end_date, -AR.GRACE.weighJoinGap)].sort()[0] : c.end_date);
+  const presets = () => {
+    const d = val('dist'), box = $('#achPresets'), cur = hms();
+    box.innerHTML = (AR.TIME_PRESETS[d] || []).map((s) => `<button type="button" class="chip" data-preset="${s}" aria-pressed="${s === cur}"><span class="num">${AR.fmtTime(s)}</span></button>`).join('');
+    const groups = d === 'fm' ? FM : d === 'hm' ? HM : null;
+    $('#achGrpBox').hidden = !groups;
+    f.grp.innerHTML = groups ? `<option value="">選一組</option>${Object.entries(groups).map(([g, v]) => `<option value="${v[2] * 60}">${g} 組 ${AR.fmtTime(v[2] * 60)}</option>`).join('')}` : '';
+  };
+  const paint = () => {
+    const k = kind(), c = locked ? next() : read(), verify = val('verify') || 'honor', honor = k === 'weight' && verify === 'honor';
+    for (const el of f.querySelectorAll('[data-for]')) el.hidden = !el.dataset.for.split(' ').includes(k);
+    $('#achWitNote').hidden = verify !== 'witness';
+    // 上恭喜榜：體重一律不上榜；團服：榮譽制體重不能送
+    if (!locked) {
+      f.board.disabled = k === 'weight';
+      f.shirt.disabled = honor;
+      if (honor) f.shirt.checked = false;
+    }
+    $('#achBoardHint').textContent = k === 'weight' ? '體重挑戰一律不上榜，避免讓人知道誰參加了減重' : '完成的跑友會出現在恭喜榜（要本人在隱私設定打開）';
+    $('#achShirtHint').textContent = honor ? '自主聲明的體重挑戰不能送團服（沒辦法驗證）' : '選尺寸、限量、依達成先後分配，有候補遞補';
+    $('#achShirtBox').hidden = !f.shirt.checked;
+    f.team_id.hidden = val('aud') !== 'team';
+    $('#achJoinHint').textContent = k === 'weight' ? '體重挑戰的報名截止預設是開始後 14 天與結束前 18 天較早的那天，最晚結束前 18 天' : '報名截止預設是結束日';
+    // 預覽：跑友看到的條件句與獎勵
+    const rw = c.rewards || {}, s = rw.shirt;
+    $('#achPrev').innerHTML = `${achRulesHtml(c)}<p class="adm-ach-rw">${rw.badge ? `<span class="adm-ach-rwi">${achIc(rw.badge)}<span>完成徽章</span></span>` : ''}
+      ${s ? `<span class="adm-ach-rwi">${achIc('shirt')}${s.quota ? `<span>團服名額</span> <b class="num">${Number(s.quota) || 0}</b>` : '<span>團服不限量</span>'}</span>` : ''}
+      ${rw.board ? `<span class="adm-ach-rwi">${achIc('sparkle')}<span>完成後上恭喜榜</span></span>` : ''}
+      ${k === 'weight' ? '<span class="adm-ach-rwi"><span>這個挑戰不上恭喜榜</span></span>' : ''}</p>`;
+    if (locked) {
+      const so = old.rewards?.shirt;
+      const more = c.end_date > old.end_date || (so && (so.quota !== null && (c.rewards.shirt?.quota === null || c.rewards.shirt?.quota > so.quota)));
+      $('#achAnnBox').hidden = !more;
+      if (!more) f.announce.checked = false;
+    }
+  };
+  f.addEventListener('change', (e) => {
+    const n = e.target.name;
+    if (n === 'join_by') joinAuto = false;
+    if (n === 'confirm') confirmTouched = true;
+    if ((n === 'shirt' || n === 'kind') && !confirmTouched) f.confirm.checked = f.shirt.checked;   // 里程挑戰：有團服時預設要幹部確認
+    // 時間門檻一定要選距離：從「任一距離」換過來時先選全馬
+    if (n === 'kind' && kind() === 'time' && !val('dist')) { const fm = f.querySelector('[name=dist][value="fm"]'); if (fm) fm.checked = true; }
+    if (n === 'dist' || n === 'kind') presets();
+    if (n === 'grp' && f.grp.value) setHms(Number(f.grp.value));
+    if (joinAuto && ['kind', 'start', 'end'].includes(n)) f.join_by.value = joinDefault(read());
+    paint();
+  });
+  f.addEventListener('input', (e) => { if (['th', 'tm', 'ts'].includes(e.target.name)) for (const b of f.querySelectorAll('[data-preset]')) b.setAttribute('aria-pressed', String(Number(b.dataset.preset) === hms())); paint(); });
+  f.addEventListener('click', (e) => {
+    const p = e.target.closest('[data-preset]'); if (!p) return;
+    setHms(Number(p.dataset.preset)); for (const b of f.querySelectorAll('[data-preset]')) b.setAttribute('aria-pressed', String(b === p)); f.grp.value = ''; paint();
+  });
+  $('#achSizeAddBtn').onclick = () => {
+    const inp = $('#achSizeAdd'), z = inp.value.trim().slice(0, AR.LIMITS.sizeLen);
+    if (!z) { inp.focus(); return; }
+    const have = [...f.querySelectorAll('[name=sizes]')].find((x) => x.value.toLowerCase() === z.toLowerCase());
+    if (have) have.checked = true;
+    else $('#achSizes').insertAdjacentHTML('beforeend', `<label class="chip"><input type="checkbox" name="sizes" value="${esc(z)}" checked><span translate="no">${esc(z)}</span></label>`);
+    inp.value = ''; inp.focus(); paint();
+  };
+  $('#achSizeAdd').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); $('#achSizeAddBtn').click(); } });
+  presets();
+  paint();
+  // 檢查：前後端同一份規則；錯誤顯示在表單最上面並把焦點移過去
+  const showErr = (m) => { err.textContent = m; err.hidden = !m; if (m) focusEl(err); };
+  const check = () => {
+    const c = next();
+    if (c.rewards.shirt && c.rewards.shirt.chart && !/^https:\/\/\S+$/.test(c.rewards.shirt.chart)) return '尺寸表連結要是 https:// 開頭的網址';
+    return AR.checkCampaign(c) || (locked ? AR.checkEdit(old, c, today) : null);
+  };
+  const save = async () => {
+    const m = check(); if (m) { showErr(m); return null; }
+    showErr('');
+    const body = next();
+    if (locked) return api(`/admin/ach/${encodeURIComponent(id)}`, { method: 'PUT', body: { ...body, announce: !!f.announce?.checked } }).then(() => id);
+    if (id) return api(`/admin/ach/${encodeURIComponent(id)}`, { method: 'PUT', body }).then(() => id);
+    id = (await api('/admin/ach', { method: 'POST', body })).id;
+    return id;
+  };
+  f.onsubmit = async (e) => {
+    e.preventDefault();
+    if (locked) { try { if (await save()) { toast('已儲存'); location.hash = `#/admin/ach/c/${id}`; } } catch (er) { showErr(er.message); } return; }
+    // 發布：先檢查、再問通知，最後才存（取消就什麼都不動）
+    const m = check(); if (m) { showErr(m); return; }
+    const v = await choose('發布挑戰', '發布後條件就不能再改，確定嗎？', [{ label: '發布並通知可以參加的人', value: 'notify', primary: true }, { label: '發布，不通知', value: 'quiet' }]);
+    if (!v) return;
+    try {
+      const cid = await save(); if (!cid) return;
+      await api(`/admin/ach/${encodeURIComponent(cid)}/open`, { method: 'POST', body: { announce: v === 'notify' } });
+      toast(v === 'notify' ? '已發布並通知可以參加的人' : '已發布');
+      location.hash = `#/admin/ach/c/${cid}`;
+    } catch (er) {
+      showErr(er.message);
+      if (id && !id0) history.replaceState(null, '', `#/admin/ach/c/${id}/edit`);   // 草稿已經存了：網址換成修改這份草稿
+    }
+  };
+  $('#achDraft')?.addEventListener('click', (e) => once(e.currentTarget, async () => {
+    try { const cid = await save(); if (cid) { toast('已存草稿'); location.hash = `#/admin/ach/c/${cid}`; } } catch (er) { showErr(er.message); }
+  })());
+}
+
+export { adminView, rosterView, weeklyView, settingsPage, treeView, achAdminView };
