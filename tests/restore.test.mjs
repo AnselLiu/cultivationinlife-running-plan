@@ -368,7 +368,64 @@ test('撤回清單：worker.js 裡的隱私撤回、推薦人移除與「不是�
   const acts = new Set([...src.matchAll(/audit(?:Stmt|ManyStmt)?\(env, \w+, [^,]+, '([a-z_]+\.[a-z_.]+)'/g)].map((m) => m[1]));
   const NOT_WITHDRAWAL = ['privacy.consent', 'privacy.export', 'privacy.race_profile'];
   const must = [...acts].filter((a) => (a.startsWith('privacy.') && !NOT_WITHDRAWAL.includes(a))
-    || ['referrer.clear', 'referrer.deny', 'referrer.admin_clear', 'team.leave', 'session.revoke_all', 'push.unsubscribe', 'passkey.remove', 'calendar.off', 'log.delete', 'route.delete', 'team.post_delete'].includes(a));
+    || ['referrer.clear', 'referrer.deny', 'referrer.admin_clear', 'team.leave', 'session.revoke_all', 'push.unsubscribe', 'passkey.remove', 'calendar.off', 'log.delete', 'route.delete', 'team.post_delete', 'pb.delete'].includes(a));
   assert.ok(must.includes('privacy.email_lookup') && must.includes('referrer.deny'), '掃描有抓到');
+  assert.ok(['privacy.cheer_board', 'privacy.cheer_rank', 'privacy.ach_weight_delete', 'pb.delete'].every((a) => must.includes(a)), '成績與挑戰的撤回也有掃到');
   assert.deepEqual(must.filter((a) => !REPLAY_ACTIONS.includes(a)), []);
+});
+
+// 成績與挑戰（規格 §17.5）：恭喜榜與 PB 排行最後一次是關閉就關掉；刪除挑戰體重（只刪體重、退出的另外改參加狀態）；刪除自己的成績（沒有 actor 的略過）
+test('還原後重做成績與挑戰的撤回：恭喜榜、PB 排行、挑戰體重（含退出）、自己刪掉的成績；ERASE_MEMBER 的新語句跑得過', () => {
+  const db0 = freshDb();
+  db0.exec(`INSERT INTO members (id, name, cheer_board, cheer_rank) VALUES ('ca', '跑友甲', 1, 1), ('cb', '跑友乙', 1, 1), ('cs', '審核者', 0, 0);
+    INSERT INTO ach_campaigns (id, title, kind, target, opts, start_date, end_date, join_by, status) VALUES
+      ('cx', '體重挑戰', 'weight', 3, '{"verify":"witness"}', '2026-09-01', '2026-11-30', '2026-09-15', 'open'),
+      ('cy', '體重挑戰二', 'weight', 3, '{"verify":"witness"}', '2026-09-01', '2026-11-30', '2026-09-15', 'open');
+    INSERT INTO ach_entries (id, campaign_id, member_id, status, consent_at, w_base_at) VALUES ('ex', 'cx', 'ca', 'joined', '2026-09-02 00:00:00', '2026-09-02 01:00:00'),
+      ('ey', 'cy', 'ca', 'joined', '2026-09-02 00:00:00', '2026-09-02 01:00:00'), ('ez', 'cx', 'cb', 'achieved', '2026-09-02 00:00:00', '2026-09-02 01:00:00');
+    INSERT INTO ach_private (campaign_id, member_id, enc) VALUES ('cx', 'ca', 'v1.a.b'), ('cy', 'ca', 'v1.c.d'), ('cx', 'cb', 'v1.e.f');
+    INSERT INTO pb_records (id, member_id, dist_key, km, seconds, race_name, race_date, status, review_by) VALUES
+      ('pa', 'ca', 'fm', 42.195, 12521, '臺北馬', '2025-12-21', 'approved', 'cs'), ('pb', 'cb', 'fm', 42.195, 13000, '臺北馬', '2025-12-21', 'approved', 'cs');
+    INSERT INTO pb_proofs (pb_id, img) VALUES ('pa', 'data:image/webp;base64,AAAA');`);
+  const tables = {};
+  for (const t of ['members', 'ach_campaigns', 'ach_entries', 'ach_private', 'pb_records']) tables[t] = db0.prepare(`SELECT * FROM "${t}"`).all().map((r) => ({ ...r }));
+  const data = { format: 'cil-backup', version: 2, at: '2026-10-01T19:00:00.000Z', tables };
+  const rows = auditRowsFrom(wranglerJson([
+    A('w1', '2026-10-02 08:00:00', 'privacy.cheer_board', 'ca', '開啟'),
+    A('w2', '2026-10-02 09:00:00', 'privacy.cheer_board', 'ca', '關閉'),                 // 最後一次是關閉
+    A('w3', '2026-10-02 08:00:00', 'privacy.cheer_rank', 'cb', '關閉'),
+    A('w4', '2026-10-02 09:00:00', 'privacy.cheer_rank', 'cb', '開啟'),                  // 最後一次是開啟：不動
+    A('w5', '2026-10-02 08:10:00', 'privacy.ach_weight_delete', 'ca', 'c=cx'),           // 只刪體重
+    A('w6', '2026-10-02 08:11:00', 'privacy.ach_weight_delete', 'ca', 'c=cy｜leave'),    // 退出
+    A('w7', '2026-10-02 08:12:00', 'privacy.ach_weight_delete', 'cb', 'c=cx'),           // 已達成：達成與見證紀錄不動
+    A('w8', '2026-10-02 08:13:00', 'pb.delete', 'pa', 'approved', { target_type: 'pb', actor_id: 'ca' }),
+  ]), '2026-10-01T19:00:00.000Z');
+  // 沒有 actor 的 pb.delete：看起來被改過，整份擋下；replaySql 直接給的也略過
+  assert.throws(() => auditRowsFrom(wranglerJson([A('w9', '2026-10-02 08:14:00', 'pb.delete', 'pb', 'approved', { target_type: 'pb', actor_id: null })])));
+  const { plan, lines } = replaySql([...rows, A('w9', '2026-10-02 08:14:00', 'pb.delete', 'pb', 'approved', { target_type: 'pb', actor_id: null })]);
+  assert.match(planSummary(plan), /退出恭喜榜 1/);
+  assert.match(planSummary(plan), /刪除挑戰體重 3/);
+  assert.match(planSummary(plan), /成績刪除 1/);
+  assert.ok(!/退出 PB 排行/.test(planSummary(plan)), '最後一次是開啟的不算');
+  assert.ok(lines.some((l) => l.startsWith('UPDATE members SET cheer_board = 0')) && lines.some((l) => l.startsWith('DELETE FROM ach_private')) && lines.some((l) => l.startsWith('DELETE FROM pb_records')));
+  assert.ok(!lines.some((l) => l.includes("'pb'") && l.startsWith('DELETE FROM pb_records')), '沒有 actor 的 pb.delete 略過');
+  const db = freshDb();
+  db.exec(`BEGIN;\n${toSql(data, { audit: rows }).join('\n')}\nCOMMIT;`);
+  assert.deepEqual({ ...one(db, "SELECT cheer_board, cheer_rank FROM members WHERE id = 'ca'") }, { cheer_board: 0, cheer_rank: 1 });
+  assert.deepEqual({ ...one(db, "SELECT cheer_board, cheer_rank FROM members WHERE id = 'cb'") }, { cheer_board: 1, cheer_rank: 1 });
+  assert.equal(one(db, "SELECT COUNT(*) AS n FROM ach_private WHERE member_id = 'ca'").n, 0);
+  assert.deepEqual({ ...one(db, "SELECT status, w_base_at, consent_at FROM ach_entries WHERE id = 'ex'") }, { status: 'joined', w_base_at: null, consent_at: '2026-09-02 00:00:00' }, '只刪體重：參加狀態不變');
+  assert.deepEqual({ ...one(db, "SELECT status, w_base_at, consent_at FROM ach_entries WHERE id = 'ey'") }, { status: 'left', w_base_at: null, consent_at: null }, '退出');
+  assert.deepEqual({ ...one(db, "SELECT status, w_base_at FROM ach_entries WHERE id = 'ez'") }, { status: 'achieved', w_base_at: '2026-09-02 01:00:00' }, '已達成的不動');
+  assert.equal(one(db, "SELECT 1 AS x FROM pb_records WHERE id = 'pa'"), undefined);
+  assert.ok(one(db, "SELECT 1 AS x FROM pb_records WHERE id = 'pb'"));
+  // 刪除帳號（ERASE_MEMBER）：已發放的參加列匿名化保留、收到的恭喜刪掉；審核人與發放人清空
+  db.exec(`UPDATE ach_entries SET status = 'achieved', reward_state = 'issued', shirt_size = 'M', issued_by = 'cs', review_by = 'cs' WHERE id = 'ey';
+    INSERT INTO cheers (entry_id, member_id) VALUES ('ey', 'cb'); INSERT INTO cheers (pb_id, member_id) VALUES ('pb', 'ca');`);
+  db.exec(`BEGIN;\n${toSql({ format: 'cil-backup', version: 2, at: data.at, tables: {} }, { erased: ['ca', 'cs'] }).join('\n')}\nCOMMIT;`);
+  assert.deepEqual({ ...one(db, "SELECT member_id, shirt_size, reward_state, issued_by, review_by FROM ach_entries WHERE id = 'ey'") },
+    { member_id: null, shirt_size: 'M', reward_state: 'issued', issued_by: null, review_by: null });
+  assert.equal(one(db, "SELECT 1 AS x FROM ach_entries WHERE id = 'ex'"), undefined, '沒發放的參加列一起刪');
+  assert.equal(one(db, "SELECT COUNT(*) AS n FROM cheers").n, 0, '收到的與給出的恭喜都刪掉');
+  assert.equal(one(db, "SELECT review_by FROM pb_records WHERE id = 'pb'").review_by, null, '審核人清空，別人的成績照樣在');
 });

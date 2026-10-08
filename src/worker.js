@@ -20,6 +20,8 @@ import { fold, b64bytes } from './ics.js';
 import { ERASE_MEMBER } from './erase.js';
 import { normalizeEmail, deriveEmailKey, emailDigest } from './email.js';
 import * as Ref from './referral.js';
+import * as Ach from '../public/achrule.js';
+import * as AchSql from './achieve.js';
 import { WorkerEntrypoint } from 'cloudflare:workers';
 import { Budget, invocationEnv, logBudget, settled, strictViolations, xfetch, planOf, cacheOf, addUsage, usageDue, takeUsage, restoreUsage, usage, USAGE_SQL, USAGE_COLS } from './budget.js';
 import { holdable, eventLatest, digestText, opsConditions, quotaUsage, reportPush, reportFor, isDigestHour, DIGEST_BATCH, DIGEST_SPAN, DIGEST_TTL, OPS, OPS_CONDS, OPS_NAME, REPORT_MIN_SHARE } from './ops.js';
@@ -65,7 +67,7 @@ const isTime = (s) => !s || /^\d{2}:\d{2}$/.test(s);
 const today = () => new Date(Date.now() + 8 * 3600e3).toISOString().slice(0, 10);
 const url0 = (req) => new URL(req.url);
 // 隱私權政策版本：預設值；實際版本由後台「系統設定」決定，改版後使用者下次開啟會被要求重新同意
-const PRIVACY_VERSION = '2026-10-07.1';
+const PRIVACY_VERSION = '2026-10-08.1';
 // 個資匯出的 profile 不放的欄位（另外還有所有 s_ 開頭的工作階段欄位）
 const EXPORT_OMIT = new Set(['line_id', 'google_sub', 'cal_token_hash', 'team_officer', 'email_h', 'referrer_id', 'referral_hide']);
 async function getSettings(env, preloaded) {
@@ -103,7 +105,9 @@ async function currentMember(req, env) {
     `SELECT m.*, s.last_seen_at AS s_seen, s.role_at_issue AS s_role, s.created_at AS s_created, s.mfa_at AS s_mfa, s.token_hash AS s_th,
        (SELECT json_group_array(json_object('team_id', tm.team_id, 'role', tm.role, 'status', tm.status, 'title', tm.title)) FROM team_members tm WHERE tm.member_id = m.id) AS s_teams,
        (SELECT 1 FROM push_queue WHERE lease_until IS NULL OR lease_until < datetime('now') LIMIT 1) AS s_pq,
-       (SELECT COUNT(*) FROM members r WHERE r.referrer_id = m.id AND r.referrer_ack IS NULL) AS s_refq
+       (SELECT COUNT(*) FROM members r WHERE r.referrer_id = m.id AND r.referrer_ack IS NULL) AS s_refq,
+       CASE WHEN m.role IN ('chair', 'staff', 'admin') THEN (SELECT COUNT(*) FROM pb_records WHERE status = 'pending') + (SELECT COUNT(*) FROM ach_entries WHERE status = 'met') END AS s_achq,
+       (SELECT COUNT(*) FROM ach_entries e WHERE e.member_id = m.id AND e.reward_state = 'granted' AND e.shirt_size IS NULL) AS s_achsz
      FROM sessions s JOIN members m ON m.id = s.member_id
      WHERE s.token_hash = ? AND s.expires_at > datetime('now')`).bind(th).first();
   if (!row) return null;
@@ -248,12 +252,12 @@ const safeAvatar = (u) => (/^https:\/\/lh\d\.googleusercontent\.com\//.test(u ||
 // 角色：參考人民團體的組織分層。chair 理事長｜director 理事｜supervisor 監事｜staff 行政人員｜coach 教練｜member 團員
 export const ROLES = { chair: '理事長', director: '理事', supervisor: '監事', staff: '行政人員', coach: '教練', member: '團員' };
 const norm = (r) => (r === 'admin' ? 'staff' : ROLES[r] ? r : 'member');   // 相容舊的 admin
-// 權限：活動（建立與編輯）、課表（發布）、報到、抽獎、名冊、角色指派
+// 權限：活動（建立與編輯）、課表（發布）、報到、抽獎、名冊、角色指派；achieve＝成績與挑戰（審核成績、設定挑戰與團服）
 const PERMS = {
-  chair:      ['event', 'plan', 'checkin', 'lottery', 'roster', 'roles', 'members', 'layout', 'audit', 'settings'],
+  chair:      ['event', 'plan', 'checkin', 'lottery', 'roster', 'roles', 'members', 'layout', 'audit', 'settings', 'achieve'],
   director:   ['event', 'checkin', 'lottery', 'roster', 'members'],
   supervisor: ['roster', 'members', 'audit'],        // 監事：監督角色，只看名冊、會籍與稽核紀錄
-  staff:      ['event', 'checkin', 'lottery', 'roster', 'members', 'layout', 'settings'],
+  staff:      ['event', 'checkin', 'lottery', 'roster', 'members', 'layout', 'settings', 'achieve'],
   coach:      ['event', 'plan', 'checkin'],
   member:     [],
 };
@@ -278,12 +282,15 @@ const pub = (m) => ({
   // 推薦人：has 有填（帳號、名字或推薦人已刪除帳號）｜pending 等我確認的人數｜hide 首頁卡片收起的位元｜findable 讓跑友用 Gmail 找到我｜emailLinked 已存查詢碼（不給查詢碼本身）
   referral: { has: !!(m.referrer_id || m.referrer_name || m.referrer_gone), pending: m.s_refq || 0, hide: m.referral_hide || 0,
     findable: m.email_findable !== 0, emailLinked: !!m.email_h },
+  // 成績與挑戰：恭喜榜與 PB 排行（本人打開才上榜）；queue＝待審核成績＋待確認達成（只有審核者有值）、needSize＝有團服名額還沒選尺寸的件數
+  cheer_board: !!m.cheer_board, cheer_rank: !!m.cheer_rank,
+  ach: { queue: can(m, 'achieve') && !READONLY[norm(m.role)] ? (m.s_achq || 0) : 0, needSize: m.s_achsz || 0 },
 });
 
 // ---- 通知中心：推播成功與否都留一份 ----
 // 分類只在伺服器端決定（public/notif-cats.js）；帳號安全只能經由 securityNotify 寫入，群發無法偽裝
 const SEC = Symbol('security');   // 模組私有：沒有任何請求路徑拿得到
-const REF_RE = /^(e|t|spot|log|join|apply|pay|wx|review|sr|ops|wk|rf):[\w:-]{1,70}$/;   // sr＝報名待審核（signup review）、ops＝系統告警（ops:<條件>:<日期>）、wk＝幹部週報（wk:<週一日期>）、rf＝推薦人（rf:<會員 id>，通知內容提到這個人；刪除帳號時一起刪）
+const REF_RE = /^(e|t|spot|log|join|apply|pay|wx|review|sr|ops|wk|rf|pb|ach):[\w:-]{1,70}$/;   // sr＝報名待審核（signup review）、ops＝系統告警（ops:<條件>:<日期>）、wk＝幹部週報（wk:<週一日期>）、rf＝推薦人（rf:<會員 id>，通知內容提到這個人；刪除帳號時一起刪）；pb＝成績（pb:<id>、pb:queue）、ach＝挑戰（ach:<參加或挑戰 id>、ach:queue）
 // 寫通知：通知中心與推播佇列各一句（每 1000 位收件人），句數跟人數無關（免費方案一次執行只有 50 個子請求）
 //   items：[通知 id, 收件人, 標題, 內文, 網址, ref, 推播內容 JSON, latest]，後 6 欄沒有就用 o 的共同值
 //   推播佇列只排「沒有關掉這一類」的人的裝置（locked 類別或 force 一律排）；opt.also 的語句放在同一個 batch（同一個交易）
@@ -554,6 +561,14 @@ async function openPrivate(env, enc, memberId) {
   const [iv, ct] = parts[0] === 'v1' ? parts.slice(1) : parts;   // 舊格式（沒有版本號、沒有 AAD）仍可讀
   const alg = parts[0] === 'v1' ? { name: 'AES-GCM', iv: WebAuthn.unb64u(iv), additionalData: new TextEncoder().encode(memberId) } : { name: 'AES-GCM', iv: WebAuthn.unb64u(iv) };
   return JSON.parse(new TextDecoder().decode(await crypto.subtle.decrypt(alg, await raceKey(env), WebAuthn.unb64u(ct))));
+}
+// 見證制體重挑戰：AAD 帶挑戰 id（密文搬到別人或別的挑戰就解不開）；只接受 v1 格式（不接受沒有 AAD 的舊格式）
+//   內容 { b?: { kg10, at }, l?: { kg10, at }, p?: { w: 'b'|'l', kg10, at } }：b／l＝見證者輸入的體重計讀數，p＝本人輸入、等見證的暫存（見證成功就移除）
+const achAad = (memberId, cid) => `${memberId}|ach:${cid}`;
+const sealAch = (env, obj, memberId, cid) => sealPrivate(env, obj, achAad(memberId, cid));
+async function openAch(env, enc, memberId, cid) {
+  if (!String(enc).startsWith('v1.')) throw new Error('格式不對');
+  return openPrivate(env, enc, achAad(memberId, cid));
 }
 // ---- 地址核對：送中華郵政 3+3 郵遞區號 Web Service（官方介面 GetZipAddress），拿到 6 碼郵遞區號才算通過 ----
 //   只送地址文字，不含姓名或其他資料；回傳郵局正規化後的寫法（例如「台」改「臺」）與郵遞區號
@@ -1195,6 +1210,55 @@ function ntpcMock(env, year, page) {
     out.push({ date: ds, year: String(year), name: ny ? '開國紀念日' : '', isholiday: wk === 0 || wk === 6 || ny ? '是' : '否', holidaycategory: wk === 0 || wk === 6 ? '星期六、星期日' : ny ? '放假之紀念日及節日' : '', description: '' });
   }
   return new Response(JSON.stringify(out), { headers: { 'content-type': 'application/json' } });
+}
+
+// ---- 成績與挑戰：輸出格式與通知（路由與排程 achSettle 共用；SQL 在 src/achieve.js）----
+const parseJ = (s, d = {}) => { try { const v = JSON.parse(s || ''); return v && typeof v === 'object' ? v : d; } catch { return d; } };
+const achMD = (d) => `${Number(String(d).slice(5, 7))}/${Number(String(d).slice(8, 10))}`;
+const achNowSql = () => new Date().toISOString().replace('T', ' ').slice(0, 19);
+// 成績（清單一律不 SELECT 截圖本身，只用 EXISTS 判斷有沒有）
+const PB_COLS = `r.id, r.dist_key, r.km, r.seconds, r.race_name, r.race_date, r.bib, r.result_url, r.note, r.race_id, r.status, r.pb_kind, r.prev_seconds, r.edited,
+  r.review_at, r.review_note, r.created_at, r.updated_at, EXISTS (SELECT 1 FROM pb_proofs x WHERE x.pb_id = r.id) AS proof`;
+const pbOut = (r) => ({ id: r.id, dist_key: r.dist_key, km: r.km, seconds: r.seconds, race_name: r.race_name, race_date: r.race_date, bib: r.bib || null,
+  result_url: r.result_url || null, note: r.note || null, race_id: r.race_id || null, ...(r.cheers != null ? { cheers: r.cheers } : {}),
+  status: r.status, pb_kind: r.pb_kind || null, prev_seconds: r.prev_seconds ?? null, edited: !!r.edited, proof: !!r.proof,
+  review_at: r.review_at || null, review_note: r.review_note || null, created_at: r.created_at, updated_at: r.updated_at });
+// 跑友（mid、mname、mnick、mavatar、tid、tname、tcolor 這幾個別名）
+const achMemberRef = (r) => (r.mid ? { id: r.mid, name: r.mname || '', nickname: r.mnick || '', avatar: r.mavatar || null,
+  team: r.tid ? { id: r.tid, name: r.tname || '', color: r.tcolor || '' } : null } : null);
+const ACH_MEMBER_COLS = 'm.id AS mid, m.name AS mname, m.nickname AS mnick, m.avatar AS mavatar, t.id AS tid, t.name AS tname, t.color AS tcolor';
+// 挑戰（c.* 加上 team_name、team_color）
+const achCampaignOut = (r) => ({ id: r.id, title: r.title, intro: r.intro || null, team_id: r.team_id || null,
+  team: r.team_id ? { id: r.team_id, name: r.team_name || '', color: r.team_color || '' } : null,
+  members_only: !!r.members_only, kind: r.kind, dist_key: r.dist_key || null, target: r.target ?? null,
+  opts: parseJ(r.opts), confirm: !!r.confirm, rewards: parseJ(r.rewards), start_date: r.start_date, end_date: r.end_date, join_by: r.join_by,
+  status: r.status, cancel_note: r.cancel_note || null, settled_at: r.settled_at || null, opened_at: r.opened_at || null, pickup: r.pickup || null });
+// 參加列：e.* 原樣（ach_entries 的欄位名稱），見證碼本身不回傳，只回「有沒有還沒過期、還沒見證的」（w_pending：SQL 算好的 'b'／'l'，或從 w_token 算）
+const achEntryOut = (e) => (e ? { id: e.id, status: e.status, joined_at: e.joined_at, consent_at: e.consent_at || null, met_at: e.met_at || null,
+  achieved_at: e.achieved_at || null, evidence: e.evidence ?? null, review_note: e.review_note || null, w_base_at: e.w_base_at || null, w_last_at: e.w_last_at || null,
+  w_pending: { b: 'base', l: 'last' }[e.w_pending !== undefined ? e.w_pending : e.w_token && e.w_token_exp > achNowSql() ? e.w_token[0] : ''] || null, shirt_size: e.shirt_size || null,
+  reward_state: e.reward_state || null, reward_rank: e.reward_rank ?? null, issued_at: e.issued_at || null, position: e.position ?? e.reward_rank ?? null } : null);
+// 我的挑戰清單那一句（AchSql.MY_LIST）的一列 → { ...Campaign, me, progress, stats }
+const achListOut = (r) => ({ ...achCampaignOut(r),
+  me: r.eid ? achEntryOut({ id: r.eid, status: r.estatus, joined_at: r.joined_at, consent_at: r.consent_at, met_at: r.met_at, achieved_at: r.achieved_at, evidence: r.evidence,
+    review_note: r.review_note, w_base_at: r.w_base_at, w_last_at: r.w_last_at, w_pending: r.w_pending || null, shirt_size: r.shirt_size, reward_state: r.reward_state,
+    reward_rank: r.reward_rank, issued_at: r.issued_at, position: r.status === 'settled' ? r.reward_rank : r.position }) : null,
+  progress: { ...(r.kind === 'km' ? { km: r.p_km ?? 0 } : {}), ...(r.kind === 'attend' ? { att: r.p_att ?? 0 } : {}),
+    ...(['pb', 'time', 'pace'].includes(r.kind) ? { best: r.p_best ?? null, base: r.p_base ?? null, base_late: !!r.p_base_late, pending_pb: r.p_pending || 0 } : {}) },
+  stats: { joined: r.s_joined, done: r.s_done, granted: r.s_held, waitlist: r.s_wait, issued: r.s_issued } });
+// 通知：恭喜完成挑戰（有團服、挑戰還沒結算時加一句名額怎麼分）、團服名額輪到你了
+const achDoneNote = (x, c) => ({ member_id: x.member_id, title: '恭喜完成挑戰',
+  body: `「${c?.title || ''}」${parseJ(c?.rewards).shirt && c?.status === 'open' ? '・團服名額會在挑戰結算時依達成先後分配' : ''}`,
+  url: `/#/ach/c/${x.campaign_id}`, ref: `ach:${x.id}`, push: { body: '點開看你的挑戰' } });
+const achPromoNote = (x, title) => ({ member_id: x.member_id, title: '團服名額輪到你了', body: `「${title || ''}」請選好尺寸`,
+  url: `/#/ach/c/${x.campaign_id}`, ref: `ach:${x.id}`, push: { body: '點開選尺寸' } });
+// 遞補之後（A3、A6、A12、A14、A19、M9、M12、排程）：被遞補的人各一則（2 句）；titles 不夠時補查挑戰名稱（1 句）
+async function achNotifyPromoted(env, rows, titles = {}) {
+  if (!rows?.length) return 0;
+  const miss = [...new Set(rows.map((r) => r.campaign_id).filter((c) => !(c in titles)))];
+  if (miss.length) for (const r of (await env.DB.prepare('SELECT id, title FROM ach_campaigns WHERE id IN (SELECT value FROM json_each(?))').bind(JSON.stringify(miss)).all()).results) titles[r.id] = r.title;
+  await notifyMany(env, 'training', rows.map((r) => achPromoNote(r, titles[r.campaign_id])), { kind: 'system' });
+  return rows.length;
 }
 
 // ---- 路由 ----
@@ -3107,8 +3171,10 @@ const api = (async function api(req, env, path, method) {
       return json({ ok: true });
     }
     if (op === 'attendance') {
-      const mid = str(b.member_id, 32);
-      await env.DB.prepare(`UPDATE signups SET attended_at = ${b.present === false ? 'NULL' : "COALESCE(attended_at, datetime('now'))"} WHERE event_id = ? AND member_id = ? AND status = 'in'`).bind(ev.id, mid).run();
+      // 手動標出席：條件式更新，真的有改才寫稽核 event.attendance（團練出席挑戰以現場報到為準）
+      const mid = str(b.member_id, 32), on = b.present !== false;
+      const u = await env.DB.prepare(`UPDATE signups SET attended_at = ${on ? "datetime('now')" : 'NULL'} WHERE event_id = ? AND member_id = ? AND status = 'in' AND attended_at IS ${on ? 'NULL' : 'NOT NULL'}`).bind(ev.id, mid).run();
+      if (u.meta.changes) await audit(env, req, member, 'event.attendance', 'event', ev.id, `${on ? '標記出席' : '取消出席'}（${mid}）`);
       return json({ ok: true });
     }
     if (op === 'attend-token') {
@@ -3422,6 +3488,911 @@ const api = (async function api(req, env, path, method) {
     }
   }
 
+  // ---- 成績與挑戰（PB 登錄、目標挑戰、團服、恭喜榜）：開關 achieve、achieve_rank（預設關閉）----
+  //   關閉時不能登錄、修改成績、參加挑戰、按恭喜、建立或發布挑戰；本人的資料與撤回（看成績、刪成績、退出、刪體重、選尺寸、量測與見證、
+  //   榮譽制聲明、關掉恭喜榜）與審核者收尾（審完、確認、發放、通知領取、讓出名額、下載名單）照常；排程結算不看開關
+  //   審核、確認、見證、發放一律不能處理自己的（職責分離，A.5.3）；稽核 detail 只放代碼，不放時間、體重、原因、姓名
+  if (path === '/api/pb' || path.startsWith('/api/pb/') || path === '/api/ach' || path.startsWith('/api/ach/') || path === '/api/me/cheer-board'
+    || path === '/api/admin/pb' || path.startsWith('/api/admin/pb/') || path === '/api/admin/ach' || path.startsWith('/api/admin/ach/')) {
+    const g = need(); if (g) return g;
+    const ID = /^[\w-]{1,32}$/, achOn = featOptIn('achieve'), t0 = today(), S = AchSql.SCOPE;
+    const gate = () => (achOn ? null : fail(403, '協會目前沒有開放成績與挑戰'));
+    // 審核者：有 achieve 權限、不是唯讀（理事長、行政人員）；看得到清單與彙總的：審核者或監事；分團挑戰的分團團長與幹部（只作用在自己的分團）
+    const achApprover = () => can(member, 'achieve') && !READONLY[norm(member.role)];
+    const achViewer = () => achApprover() || !!READONLY[norm(member.role)];
+    const achTeamOfficer = (c) => !!c.team_id && teamOwn(c.team_id, 'checkin');
+    const noApprover = () => fail(403, '只有理事長與行政人員可以審核成績');
+    const noManager = () => fail(403, '只有理事長與行政人員可以管理挑戰');
+    const isUnique = (e) => /UNIQUE/i.test(String(e?.message || e));
+    // 成績的請求可能帶截圖：先看 content-length，讀到之後再確認一次長度
+    const bigBody = async () => {
+      if (Number(req.headers.get('content-length')) > Ach.LIMITS.bodyBytes) return [fail(413, '資料太大'), null];
+      let raw = '';
+      try { raw = await req.text(); } catch {}
+      if (raw.length > Ach.LIMITS.bodyBytes) return [fail(413, '資料太大'), null];
+      try { const v = JSON.parse(raw || '{}'); return [null, v && typeof v === 'object' ? v : {}]; } catch { return [null, {}]; }
+    };
+    // 登錄、修改成績的欄位（M2、M3）：回傳 [錯誤訊息, 整理好的值]；proof：undefined＝不動、null＝移除、字串＝換
+    const pbInput = (b, old) => {
+      const d = b.dist_key;
+      if (!Ach.isDist(d)) return ['請選距離'];
+      const km = d === 'other' ? Ach.kmOf('other', Number(b.km)) : Ach.DISTS[d].km;
+      if (!Ach.kmOk(d, km)) return ['其他距離請填 1–250 公里'];
+      const sec = typeof b.seconds === 'string' ? Ach.parseTime(b.seconds) : Number(b.seconds);
+      if (!Ach.timeOk(sec, km)) return ['時間看起來不對，請用 時:分:秒（例如 3:28:41）'];
+      const race_name = str(b.race_name, Ach.LIMITS.raceName);
+      if (!race_name) return ['請填賽事名稱'];
+      if (!Ach.isDay(b.race_date)) return ['請選比賽日期'];
+      if (b.race_date > t0) return ['比賽日期不能晚於今天'];
+      const rawUrl = typeof b.result_url === 'string' ? b.result_url.trim() : '';
+      const result_url = rawUrl ? httpsUrl(rawUrl) : '';
+      if (rawUrl && !result_url) return ['成績連結要是 https:// 開頭的網址'];
+      let proof;
+      if (b.proof === null) proof = null;
+      else if (b.proof !== undefined) {
+        if (!(typeof b.proof === 'string' && b.proof.length <= Ach.LIMITS.proofChars && /^data:image\/(webp|jpeg);base64,[A-Za-z0-9+/=]+$/.test(b.proof))) return ['截圖格式不對或太大'];
+        proof = b.proof;
+      }
+      if (!result_url && !(typeof proof === 'string' || (proof === undefined && !!old?.proof))) return ['請附上官方成績連結或截圖'];
+      return [null, { dist_key: d, km, seconds: sec, race_name, race_date: b.race_date, bib: str(b.bib, Ach.LIMITS.bib) || null, result_url: result_url || null,
+        note: str(b.note, Ach.LIMITS.note) || null, race_id: typeof b.race_id === 'string' && ID.test(b.race_id) ? b.race_id : null, proof }];
+    };
+    // 有人送出成績：審核者一則待辦（一小時最多一則；鎖定畫面不顯示名字與成績）
+    const pbQueueNotify = async () => {
+      if (await limited(env, 'pbq:notify', 1, 3600)) return;
+      const ids = (await env.DB.prepare(AchSql.APPROVER_IDS).all()).results.map((r) => r.id).filter((x) => x !== member.id);
+      await notify(env, ids, 'todo', { kind: 'system', title: '成績待審核', body: '有跑友送出比賽成績，等你審核', url: '/#/admin/ach', ref: 'pb:queue', push: { body: '點開審核' } });
+    };
+    const campSql = (where) => `SELECT c.*, t.name AS team_name, t.color AS team_color, t.private AS team_private FROM ach_campaigns c LEFT JOIN teams t ON t.id = c.team_id WHERE ${where}`;
+    // 挑戰與我的參加列（一次往返）
+    const campAndMine = async (cid) => {
+      const [c, e] = await env.DB.batch([env.DB.prepare(campSql('c.id = ?')).bind(cid),
+        env.DB.prepare('SELECT * FROM ach_entries WHERE campaign_id = ? AND member_id = ?').bind(cid, member.id)]);
+      return [c.results[0] || null, e.results[0] || null];
+    };
+    const witnessOf = (c) => c.kind === 'weight' && parseJ(c.opts).verify === 'witness';
+    // 挑戰的參加者（通知用；已退出、刪除帳號的不算）
+    const participants = async (cid) => (await env.DB.prepare("SELECT id, member_id FROM ach_entries WHERE campaign_id = ? AND status != 'left' AND member_id IS NOT NULL").bind(cid).all()).results;
+
+    // ---- 跑友：成績 ----
+    // M1 我的成績（最新 200 筆）、各距離官方 PB（通過審核裡最快的；同秒取比賽日早的）、徽章
+    if (path === '/api/pb' && method === 'GET') {
+      const [a, bdg] = await env.DB.batch([
+        env.DB.prepare(`SELECT ${PB_COLS}, CASE WHEN r.status = 'approved' THEN (SELECT COUNT(*) FROM cheers h WHERE h.pb_id = r.id) END AS cheers
+          FROM pb_records r WHERE r.member_id = ? ORDER BY r.race_date DESC, r.created_at DESC LIMIT 200`).bind(member.id),
+        env.DB.prepare(`SELECT c.id AS cid, c.title, json_extract(c.rewards, '$.badge') AS badge, e.achieved_at FROM ach_entries e JOIN ach_campaigns c ON c.id = e.campaign_id
+          WHERE e.member_id = ? AND e.status = 'achieved' AND json_extract(c.rewards, '$.badge') IS NOT NULL ORDER BY e.achieved_at DESC LIMIT 100`).bind(member.id),
+      ]);
+      const items = a.results.map(pbOut), best = {}, others = {};
+      const better = (x, y) => !y || x.seconds < y.seconds || (x.seconds === y.seconds && (x.race_date < y.race_date
+        || (x.race_date === y.race_date && ((x.review_at || '') < (y.review_at || '') || (x.review_at === y.review_at && x.id < y.id)))));
+      for (const p of items) {
+        if (p.status !== 'approved') continue;
+        if (p.dist_key === 'other') { if (better(p, others[p.km])) others[p.km] = p; } else if (better(p, best[p.dist_key])) best[p.dist_key] = p;
+      }
+      best.other = Object.values(others).sort((x, y) => x.km - y.km);
+      return json({ on: achOn, items, best, pending: items.filter((p) => p.status === 'pending').length, maxPending: Ach.LIMITS.pending, badges: bdg.results });
+    }
+    // M2 登錄成績：審核中最多 5 筆（條件式 INSERT）；截圖也是條件式（前一句沒插入時直接插截圖，外鍵檢查會讓整個 batch 失敗）
+    if (path === '/api/pb' && method === 'POST') {
+      const [big, b] = await bigBody(); if (big) return big;
+      const gg = gate(); if (gg) return gg;
+      const [err, v] = pbInput(b, null); if (err) return fail(400, err);
+      if (await limited(env, `pb:${member.id}`, 10, 3600)) return fail(429, '送出太頻繁，請稍後再試');
+      const id = rid(8);
+      let res;
+      try {
+        res = await env.DB.batch([
+          env.DB.prepare(`INSERT INTO pb_records (id, member_id, dist_key, km, seconds, race_name, race_date, bib, result_url, note, race_id)
+            SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11 WHERE (SELECT COUNT(*) FROM pb_records WHERE member_id = ?2 AND status = 'pending') < ?12`)
+            .bind(id, member.id, v.dist_key, v.km, v.seconds, v.race_name, v.race_date, v.bib, v.result_url, v.note, v.race_id, Ach.LIMITS.pending),
+          ...(v.proof ? [env.DB.prepare('INSERT INTO pb_proofs (pb_id, img) SELECT ?1, ?2 WHERE EXISTS (SELECT 1 FROM pb_records WHERE id = ?1)').bind(id, v.proof)] : []),
+        ]);
+      } catch (e) { if (isUnique(e)) return fail(409, '這場比賽的這個距離已經登錄過了'); throw e; }
+      if (!res[0].meta.changes) return fail(400, '審核中的成績最多 5 筆，等審核完再送');
+      await pbQueueNotify();
+      return json({ id, status: 'pending' });
+    }
+    const mpb = path.match(/^\/api\/pb\/([\w-]{1,32})$/);
+    // M3 修改：審核中或被婉拒的（婉拒的改完回到審核中、清掉審核欄位，也受「審核中最多 5 筆」限制）；通過審核的不能改（刪掉重登）
+    if (mpb && method === 'PUT') {
+      const [big, b] = await bigBody(); if (big) return big;
+      const gg = gate(); if (gg) return gg;
+      const old = await env.DB.prepare('SELECT r.status, r.member_id, EXISTS (SELECT 1 FROM pb_proofs x WHERE x.pb_id = r.id) AS proof FROM pb_records r WHERE r.id = ?').bind(mpb[1]).first();
+      if (!old || old.member_id !== member.id) return fail(404, '找不到這筆成績');
+      if (old.status === 'approved' || old.status === 'revoked') return fail(400, '通過審核的成績不能修改，可以刪除後重新登錄');
+      const [err, v] = pbInput(b, old); if (err) return fail(400, err);
+      if (await limited(env, `pb:${member.id}`, 10, 3600)) return fail(429, '送出太頻繁，請稍後再試');
+      let res;
+      try {
+        res = await env.DB.batch([
+          env.DB.prepare(`UPDATE pb_records SET dist_key = ?3, km = ?4, seconds = ?5, race_name = ?6, race_date = ?7, bib = ?8, result_url = ?9, note = ?10, race_id = ?11,
+              status = 'pending', edited = 1, review_by = NULL, review_at = NULL, review_note = NULL, pb_kind = NULL, prev_seconds = NULL, updated_at = datetime('now')
+            WHERE id = ?1 AND member_id = ?2 AND status IN ('pending', 'rejected')
+              AND (status = 'pending' OR (SELECT COUNT(*) FROM pb_records WHERE member_id = ?2 AND status = 'pending') < ?12)`)
+            .bind(mpb[1], member.id, v.dist_key, v.km, v.seconds, v.race_name, v.race_date, v.bib, v.result_url, v.note, v.race_id, Ach.LIMITS.pending),
+          ...(typeof v.proof === 'string' ? [env.DB.prepare(`INSERT INTO pb_proofs (pb_id, img) SELECT ?1, ?2 WHERE EXISTS (SELECT 1 FROM pb_records WHERE id = ?1 AND member_id = ?3 AND status = 'pending')
+              ON CONFLICT(pb_id) DO UPDATE SET img = excluded.img, created_at = datetime('now')`).bind(mpb[1], v.proof, member.id)]
+            : v.proof === null ? [env.DB.prepare("DELETE FROM pb_proofs WHERE pb_id = ?1 AND EXISTS (SELECT 1 FROM pb_records WHERE id = ?1 AND member_id = ?2 AND status = 'pending')").bind(mpb[1], member.id)] : []),
+        ]);
+      } catch (e) { if (isUnique(e)) return fail(409, '這場比賽的這個距離已經登錄過了'); throw e; }
+      if (!res[0].meta.changes) return old.status === 'rejected' ? fail(400, '審核中的成績最多 5 筆，等審核完再送') : fail(409, '這筆成績已經審核過了');
+      if (old.status === 'rejected') await pbQueueNotify();
+      return json({ ok: true, status: 'pending' });
+    }
+    // M4 刪除（任何狀態；連同截圖與恭喜）：已經達成的挑戰不收回（審核者懷疑時用 A14 撤銷那個達成）
+    if (mpb && method === 'DELETE') {
+      const r = await env.DB.prepare('SELECT status FROM pb_records WHERE id = ? AND member_id = ?').bind(mpb[1], member.id).first();
+      if (!r) return fail(404, '找不到這筆成績');
+      await env.DB.batch([env.DB.prepare('DELETE FROM pb_records WHERE id = ? AND member_id = ?').bind(mpb[1], member.id),
+        await auditStmt(env, req, member, 'pb.delete', 'pb', mpb[1], r.status)]);
+      return json({ ok: true });
+    }
+    // M5 截圖：本人或審核者；private, no-store（不能用分團圖示那種 public, immutable）
+    const mpf = path.match(/^\/api\/pb\/([\w-]{1,32})\/proof$/);
+    if (mpf && method === 'GET') {
+      const r = await env.DB.prepare('SELECT r.member_id, p.img FROM pb_records r LEFT JOIN pb_proofs p ON p.pb_id = r.id WHERE r.id = ?').bind(mpf[1]).first();
+      if (!r) return fail(404, '找不到這筆成績');
+      if (r.member_id !== member.id && !achApprover()) return noApprover();
+      const m = r.img?.match(/^data:(image\/(?:webp|jpeg));base64,([A-Za-z0-9+/=]+)$/);
+      if (!m) return fail(404, '截圖已刪除');
+      return new Response(b64bytes(m[2]), { headers: { ...SEC_HEADERS, 'content-type': m[1], 'cache-control': 'private, no-store', 'content-disposition': 'inline' } });
+    }
+
+    // ---- 跑友：挑戰、恭喜榜 ----
+    // M6 我的挑戰清單（進行中與 60 天內結束的；資格符合或已參加；一句）
+    if (path === '/api/ach' && method === 'GET') {
+      const rows = (await env.DB.prepare(AchSql.MY_LIST(false)).bind(member.id, t0).all()).results;
+      return json({ on: achOn, campaigns: rows.map(achListOut) });
+    }
+    // M15 恭喜榜與 PB 排行開關（關掉不受功能開關限制）：{ rank: true } 而恭喜榜還關著時兩個一起打開、寫兩筆稽核
+    if (path === '/api/me/cheer-board' && method === 'POST') {
+      const b = await body();
+      if (typeof b.rank === 'boolean') {
+        const both = b.rank && !member.cheer_board;
+        await env.DB.batch([env.DB.prepare(`UPDATE members SET cheer_rank = ?2${both ? ', cheer_board = 1' : ''} WHERE id = ?1`).bind(member.id, b.rank ? 1 : 0),
+          ...(both ? [await auditStmt(env, req, member, 'privacy.cheer_board', 'member', member.id, '開啟')] : []),
+          await auditStmt(env, req, member, 'privacy.cheer_rank', 'member', member.id, b.rank ? '開啟' : '關閉')]);
+        return json({ ok: true });
+      }
+      const on = b.on === true;
+      await env.DB.batch([env.DB.prepare('UPDATE members SET cheer_board = ? WHERE id = ?').bind(on ? 1 : 0, member.id),
+        await auditStmt(env, req, member, 'privacy.cheer_board', 'member', member.id, on ? '開啟' : '關閉')]);
+      return json({ ok: true });
+    }
+    // M13 恭喜榜：最新（90 天內，每頁 30，游標 at|item）或各距離 PB 排行（achieve_rank 開時）；分團篩選要是公開分團或我是團員
+    if (path === '/api/ach/board' && method === 'GET') {
+      if (!achOn) return json({ on: false });
+      const u = url0(req).searchParams, team = str(u.get('team'), 16) || null, meOut = { cheer_board: !!member.cheer_board, cheer_rank: !!member.cheer_rank };
+      if (team) {
+        const tr = await env.DB.prepare('SELECT private FROM teams WHERE id = ?').bind(team).first();
+        if (!tr) return fail(404, '找不到這個分團');
+        if (tr.private && !inTeam(team)) return fail(403, '這個挑戰只限分團團員');
+      }
+      const ref = (r) => ({ id: r.mid ?? r.member_id, name: r.mname, nickname: '', avatar: r.avatar || null, team: r.main_team ? { id: r.main_team, name: r.tname || '', color: r.tcolor || '' } : null });
+      if (u.get('tab') === 'rank') {
+        if (!featOptIn('achieve_rank')) return json({ on: true, me: meOut });
+        const dist = Ach.STD.includes(u.get('dist')) ? u.get('dist') : 'fm';
+        const rows = (await env.DB.prepare(`SELECT x.*, tt.name AS tname, tt.color AS tcolor FROM (${AchSql.BOARD_RANK}) x LEFT JOIN teams tt ON tt.id = x.main_team ORDER BY x.rk`)
+          .bind(dist, member.id, null, team).all()).results;
+        const out = rows.map((r) => ({ rk: r.rk, member: ref(r), self: r.member_id === member.id, seconds: r.seconds, race_name: r.race_name, race_date: r.race_date }));
+        return json({ on: true, me: meOut, rank: out.filter((r) => r.rk <= 50), mine: out.find((r) => r.self) || null, dist });
+      }
+      const cur = (u.get('before') || '').match(/^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\|((?:pb|ach):[\w-]{1,32})$/);
+      const rows = (await env.DB.prepare(`SELECT x.*, tt.name AS tname, tt.color AS tcolor FROM (${AchSql.BOARD_RECENT}) x LEFT JOIN teams tt ON tt.id = x.main_team ORDER BY x.at DESC, x.item DESC`)
+        .bind(member.id, cur?.[1] ?? null, cur?.[2] ?? null, team).all()).results;
+      const items = rows.map((r) => ({ item: r.item, type: r.type, member: ref(r), self: r.mid === member.id, at: r.at, cheers: r.cheers, cheered: !!r.cheered,
+        ...(r.type === 'pb' ? { pb: { dist_key: r.dist_key, km: r.km, seconds: r.seconds, prev_seconds: r.prev_seconds ?? null, pb_kind: r.pb_kind, race_name: r.race_name, race_date: r.race_date } }
+          : { ach: { cid: r.cid, title: r.title, kind: r.kind, badge: r.badge || null } }) }));
+      return json({ on: true, me: meOut, items, next: items.length === 30 ? `${items[29].at}|${items[29].item}` : null });
+    }
+    // M14 恭喜：只能恭喜恭喜榜上看得到的、不能恭喜自己；再按一次收回；不通知、只顯示人數
+    if (path === '/api/ach/cheer' && method === 'POST') {
+      const gg = gate(); if (gg) return gg;
+      const b = await body(), m = String(b.item || '').match(/^(pb|ach):([\w-]{1,32})$/);
+      if (!m) return fail(400, '這則恭喜已經看不到了');
+      if (await limited(env, `cheer:${member.id}`, 60, 600)) return fail(429, '恭喜太頻繁，請稍後再試');
+      const col = m[1] === 'pb' ? 'pb_id' : 'entry_id';
+      if (b.on !== false) {
+        const r = await env.DB.prepare(m[1] === 'pb' ? AchSql.CHEER_PB : AchSql.CHEER_ACH).bind(member.id, m[2]).first();
+        if (r?.owner === member.id) return fail(403, '不能恭喜自己');
+        if (!r?.seen) return fail(400, '這則恭喜已經看不到了');
+      }
+      const [, n] = await env.DB.batch([
+        b.on !== false ? env.DB.prepare(`INSERT OR IGNORE INTO cheers (${col}, member_id) VALUES (?, ?)`).bind(m[2], member.id)
+          : env.DB.prepare(`DELETE FROM cheers WHERE ${col} = ? AND member_id = ?`).bind(m[2], member.id),
+        env.DB.prepare(`SELECT COUNT(*) AS n, COALESCE(SUM(member_id = ?2), 0) AS mine FROM cheers WHERE ${col} = ?1`).bind(m[2], member.id),
+      ]);
+      return json({ ok: true, cheers: n.results[0].n, cheered: !!n.results[0].mine });
+    }
+    // A17 見證量測（審核者，或被見證者所屬分團的團長與幹部；分團挑戰只限那個分團）：不受功能開關限制（已參加的要能完成）
+    //   回應不含任何數字、也不含有沒有達成；比對差 ≤ 0.3 公斤才算，存的是見證者輸入的體重計讀數；同一個見證碼錯 3 次作廢
+    if (path === '/api/ach/witness' && method === 'POST') {
+      const b = await body(), code = String(b.code || '').trim().replace(/^cil-wit:/, '');
+      if (await limited(env, `achws:${member.id}`, 60, 600)) return fail(429, '送出太頻繁，請稍後再試');
+      const bad = () => fail(400, '見證碼無效或已過期，請跑友重新產生');
+      if (!/^[bl][0-9a-z]{15}$/.test(code)) return bad();
+      const which = code[0], tok = `${which}:${await sha(code)}`;
+      const e = await env.DB.prepare(`SELECT e.*, c.title, c.kind, c.opts, c.target, c.team_id AS c_team, c.status AS c_status, c.rewards, m.name AS mname, m.nickname AS mnick, m.main_team,
+          (SELECT json_group_array(team_id) FROM team_members WHERE member_id = e.member_id AND status = 'active') AS teams
+        FROM ach_entries e JOIN ach_campaigns c ON c.id = e.campaign_id JOIN members m ON m.id = e.member_id
+        WHERE e.w_token = ?1 AND e.w_token_exp > datetime('now')`).bind(tok).first();
+      if (!e || e.status !== 'joined' || e.c_status !== 'open' || e.kind !== 'weight') return bad();
+      if (e.member_id === member.id) return fail(403, '不能見證自己的量測');
+      const theirs = new Set([...parseJ(e.teams, []), ...(e.main_team ? [e.main_team] : [])]);
+      const ok = achApprover() || (e.c_team ? theirs.has(e.c_team) && teamOwn(e.c_team, 'checkin') : [...theirs].some((tid) => teamOwn(tid, 'checkin')));
+      if (!ok) return fail(403, '只有協會幹部或這位跑友分團的幹部可以見證');
+      const kg = Number(b.kg);
+      if (!Ach.kgOk(kg)) return fail(400, '體重請填 30–250 公斤');
+      if (!env.RACE_KEY) return fail(503, '體重挑戰暫時無法使用');
+      const row = await env.DB.prepare('SELECT enc FROM ach_private WHERE campaign_id = ? AND member_id = ?').bind(e.campaign_id, e.member_id).first();
+      let data = null;
+      try { data = row ? await openAch(env, row.enc, e.member_id, e.campaign_id) : null; } catch { data = null; }
+      if (!data?.p || data.p.w !== which) return bad();
+      const kg10 = Ach.x10(kg);
+      if (Math.abs(kg10 - data.p.kg10) > Ach.GRACE.witnessTol) {
+        const u = await env.DB.prepare(`UPDATE ach_entries SET w_tries = w_tries + 1, w_token = CASE WHEN w_tries + 1 >= ?3 THEN NULL ELSE w_token END,
+            w_token_exp = CASE WHEN w_tries + 1 >= ?3 THEN NULL ELSE w_token_exp END, updated_at = datetime('now') WHERE id = ?1 AND w_token = ?2 RETURNING w_tries`)
+          .bind(e.id, tok, Ach.GRACE.witnessTries).first();
+        if (!u) return bad();
+        return fail(400, u.w_tries >= Ach.GRACE.witnessTries ? '對不上 3 次，見證碼已作廢，請跑友重新產生' : '數字和跑友輸入的不一樣，請再看一次體重計');
+      }
+      const at = new Date().toISOString(), next = { ...data, [which]: { kg10, at } };
+      delete next.p;
+      const done = which === 'l' && !!next.b && Ach.weightMet(next.b.kg10, kg10, e.target);
+      const col = which === 'b' ? 'w_base_at' : 'w_last_at';
+      const [u] = await env.DB.batch([
+        env.DB.prepare(`UPDATE ach_entries SET ${col} = datetime('now'), w_token = NULL, w_token_exp = NULL, w_tries = 0, updated_at = datetime('now')
+            ${done ? ", status = 'achieved', met_at = datetime('now'), achieved_at = datetime('now'), rank_key = datetime('now'), evidence = 'witness'" : ''}
+          WHERE id = ?1 AND w_token = ?2 AND status = 'joined'`).bind(e.id, tok),
+        env.DB.prepare(`UPDATE ach_private SET enc = ?3, updated_at = datetime('now') WHERE campaign_id = ?1 AND member_id = ?2
+            AND EXISTS (SELECT 1 FROM ach_entries WHERE id = ?4 AND w_token IS NULL AND ${col} IS NOT NULL)`)
+          .bind(e.campaign_id, e.member_id, await sealAch(env, next, e.member_id, e.campaign_id), e.id),
+        await auditStmt(env, req, member, 'ach.witness', 'entry', e.id, `c=${e.campaign_id}｜w=${which}`),
+      ]);
+      if (!u.meta.changes) return bad();
+      if (done) await notify(env, [e.member_id], 'training', achDoneNote({ ...e, id: e.id }, { title: e.title, rewards: e.rewards, status: 'open' }));
+      return json({ ok: true, which: which === 'b' ? 'base' : 'last', name: e.mnick || e.mname });
+    }
+
+    const mac = path.match(/^\/api\/ach\/([\w-]{1,32})(?:\/(join|leave|weigh|claim|shirt|weight|wit))?$/);
+    // M7 挑戰詳細：看得到＝資格符合、已參加，或審核者與監事；體重只有本人、見證制、有加密資料時才解密（解不開＝null，不是錯誤）
+    if (mac && !mac[2] && method === 'GET') {
+      const r = (await env.DB.prepare(AchSql.MY_LIST(true)).bind(member.id, t0, mac[1]).all()).results[0];
+      if (!r || !(r.eid || achViewer() || (['open', 'settled'].includes(r.status) && (!r.team_id || inTeam(r.team_id))))) return fail(404, '找不到這個挑戰');
+      const out = achListOut(r), wit = witnessOf(r);
+      let weight = null;
+      if (wit && r.eid) {
+        const p = await env.DB.prepare('SELECT enc FROM ach_private WHERE campaign_id = ? AND member_id = ?').bind(r.id, member.id).first();
+        if (p) {
+          try {
+            const d = await openAch(env, p.enc, member.id, r.id), kg = (x) => (x ? { kg: x.kg10 / 10, at: x.at } : undefined);
+            weight = { base: kg(d.b), last: kg(d.l), pending: d.p ? { which: d.p.w === 'b' ? 'base' : 'last', kg: d.p.kg10 / 10 } : undefined,
+              pct: d.b && d.l ? Ach.pctDown(d.b.kg10, d.l.kg10) : undefined };
+          } catch { weight = null; }
+        }
+      }
+      const officer = Object.values(myTeams).some((t) => t.status === 'active' && teamOwn(t.team_id, 'checkin'));
+      return json({ campaign: out, me: out.me, progress: out.progress, stats: out.stats, weight,
+        canWitness: wit && (achApprover() || (r.team_id ? teamOwn(r.team_id, 'checkin') : officer)),
+        canIssue: !!out.rewards.shirt && (achApprover() || achTeamOfficer(r)), raceKey: !!env.RACE_KEY });
+    }
+    if (mac && mac[2]) {
+      const op = mac[2], cid = mac[1];
+      // M17 見證輪詢（只讀自己的一列，不解密）
+      if (op === 'wit' && method === 'GET') {
+        const e = await env.DB.prepare(`SELECT status, w_base_at, w_last_at, CASE WHEN w_token IS NOT NULL AND w_token_exp > datetime('now') THEN substr(w_token, 1, 1) END AS p
+          FROM ach_entries WHERE campaign_id = ? AND member_id = ?`).bind(cid, member.id).first();
+        if (!e) return fail(404, '找不到這個挑戰');
+        return json({ pending: e.p === 'b' ? 'base' : e.p === 'l' ? 'last' : null, base_at: e.w_base_at || null, last_at: e.w_last_at || null, status: e.status });
+      }
+      const [c, e] = await campAndMine(cid);
+      if (!c || (c.status === 'draft' && !achViewer() && !e)) return fail(404, '找不到這個挑戰');
+      const opts = parseJ(c.opts), rw = parseJ(c.rewards), wit = witnessOf(c);
+      const b = method === 'GET' || method === 'DELETE' ? {} : await body();
+      // M16 刪除我的體重資料（任何狀態，不受開關限制）：已達成的不影響達成；沒達成的清掉見證紀錄（要重新量起始）
+      if (op === 'weight' && method === 'DELETE') {
+        if (!e || !wit) return fail(404, '沒有體重資料');
+        const has = await env.DB.prepare('SELECT 1 FROM ach_private WHERE campaign_id = ? AND member_id = ?').bind(cid, member.id).first();
+        if (!has && !e.w_token && (e.status === 'achieved' || (!e.w_base_at && !e.w_last_at))) return fail(404, '沒有體重資料');
+        await env.DB.batch([
+          env.DB.prepare('DELETE FROM ach_private WHERE campaign_id = ? AND member_id = ?').bind(cid, member.id),
+          env.DB.prepare(`UPDATE ach_entries SET w_token = NULL, w_token_exp = NULL, w_tries = 0,
+              w_base_at = CASE WHEN status = 'achieved' THEN w_base_at END, w_last_at = CASE WHEN status = 'achieved' THEN w_last_at END, updated_at = datetime('now') WHERE id = ?`).bind(e.id),
+          await auditStmt(env, req, member, 'privacy.ach_weight_delete', 'member', member.id, `c=${cid}`),
+        ]);
+        return json({ ok: true, status: e.status });
+      }
+      if (method !== 'POST') return fail(405, '不支援的操作');
+      const lim = async (k = 'achj', n = 20) => ((await limited(env, `${k}:${member.id}`, n, 3600)) ? fail(429, '送出太頻繁，請稍後再試') : null);
+      // M8 參加：開放中、報名截止前、資格（分團、協會會員）；見證制要逐場同意；已經參加的回原本那一列（不重寫、不重複稽核）
+      if (op === 'join') {
+        const gg = gate(); if (gg) return gg;
+        if (c.status === 'draft') return fail(400, '這個挑戰還沒開始報名');
+        if (e && e.status !== 'left') return json({ ok: true, entry: achEntryOut(e) });
+        if (c.status !== 'open' || t0 > c.join_by) return fail(403, '這個挑戰已經截止報名');
+        if (c.team_id && !inTeam(c.team_id)) return fail(403, '這個挑戰只限分團團員');
+        if (c.members_only && member.membership !== 'active') return fail(403, '這個挑戰只限協會會員');
+        if (wit && b.consent !== true) return fail(400, '參加體重挑戰要先勾選同意');
+        if (wit && !env.RACE_KEY) return fail(503, '體重挑戰暫時無法使用');
+        let size = null;
+        if (b.shirt_size != null && b.shirt_size !== '') {
+          if (!rw.shirt) return fail(400, '這個挑戰沒有團服');
+          if (!rw.shirt.sizes.includes(b.shirt_size)) return fail(400, '這個尺寸不在選項裡');
+          size = b.shirt_size;
+        }
+        const l = await lim(); if (l) return l;
+        const res = await env.DB.batch([
+          env.DB.prepare(`INSERT INTO ach_entries (id, campaign_id, member_id, status, consent_at, shirt_size, size_at)
+              VALUES (?1, ?2, ?3, 'joined', ${wit ? "datetime('now')" : 'NULL'}, ?4, CASE WHEN ?4 IS NOT NULL THEN datetime('now') END)
+            ON CONFLICT(campaign_id, member_id) DO UPDATE SET status = 'joined', joined_at = datetime('now'), consent_at = excluded.consent_at,
+              met_at = NULL, achieved_at = NULL, rank_key = NULL, evidence = NULL, review_by = NULL, review_at = NULL, review_note = NULL,
+              w_base_at = NULL, w_last_at = NULL, w_token = NULL, w_token_exp = NULL, w_tries = 0,
+              shirt_size = COALESCE(excluded.shirt_size, ach_entries.shirt_size), size_at = COALESCE(ach_entries.size_at, excluded.size_at),
+              reward_rank = CASE WHEN ach_entries.reward_state = 'issued' THEN ach_entries.reward_rank END,
+              reward_state = CASE WHEN ach_entries.reward_state = 'issued' THEN 'issued' END, updated_at = datetime('now')
+            WHERE ach_entries.status = 'left'`).bind(rid(8), cid, member.id, size),
+          env.DB.prepare(AchSql.PB_EVAL(S.member)).bind(member.id),
+          await auditStmt(env, req, member, 'ach.join', 'member', member.id, `c=${cid}${wit ? '｜consent' : ''}`),
+          env.DB.prepare('SELECT * FROM ach_entries WHERE campaign_id = ? AND member_id = ?').bind(cid, member.id),
+        ]);
+        const got = res[1].results;
+        if (got.length) {
+          const cm = { [c.id]: c, ...Object.fromEntries((got.some((x) => x.campaign_id !== c.id)
+            ? (await env.DB.prepare('SELECT id, title, status, rewards FROM ach_campaigns WHERE id IN (SELECT value FROM json_each(?))').bind(JSON.stringify(got.map((x) => x.campaign_id))).all()).results : []).map((x) => [x.id, x])) };
+          await notifyMany(env, 'training', got.map((x) => achDoneNote(x, cm[x.campaign_id])), { kind: 'system' });
+        }
+        return json({ ok: true, entry: achEntryOut(res[3].results[0]) });
+      }
+      if (!e) return fail(404, '找不到這個挑戰');
+      // M9 退出（參加中或達成待確認）：見證制同時刪除體重；有名額的釋放並遞補
+      if (op === 'leave') {
+        if (e.status === 'achieved') return fail(400, '已經達成，不能退出');
+        if (!['joined', 'met'].includes(e.status)) return fail(409, '這一筆已經處理過了');
+        const l = await lim(); if (l) return l;
+        const res = await env.DB.batch([
+          env.DB.prepare(`UPDATE ach_entries SET status = 'left', consent_at = NULL, w_base_at = NULL, w_last_at = NULL, w_token = NULL, w_token_exp = NULL, w_tries = 0,
+              reward_rank = CASE WHEN reward_state = 'issued' THEN reward_rank END, reward_state = CASE WHEN reward_state = 'issued' THEN 'issued' END, updated_at = datetime('now')
+            WHERE id = ? AND status IN ('joined', 'met')`).bind(e.id),
+          env.DB.prepare('DELETE FROM ach_private WHERE campaign_id = ? AND member_id = ?').bind(cid, member.id),
+          wit ? await auditStmt(env, req, member, 'privacy.ach_weight_delete', 'member', member.id, `c=${cid}｜leave`)
+            : await auditStmt(env, req, member, 'ach.leave', 'member', member.id, `c=${cid}`),
+          env.DB.prepare(AchSql.PROMOTE(S.campaigns)).bind(JSON.stringify([cid])),
+          env.DB.prepare(AchSql.SETTLE_ACH_QUEUE),
+        ]);
+        await achNotifyPromoted(env, res[3].results, { [cid]: c.title });
+        return json({ ok: true });
+      }
+      // M10 量體重（見證制；起始：開始前 7 天到報名截止；結束：結束前 14 天到結束後 3 天，而且起始已見證、隔 21 天以上）
+      //   本人輸入的數字加密暫存（p），產生一次性見證碼（10 分鐘，只存雜湊）；回應不含 kg
+      if (op === 'weigh') {
+        if (!wit || e.status !== 'joined' || c.status !== 'open') return fail(404, '找不到這個挑戰');
+        if (!e.consent_at) return fail(400, '參加體重挑戰要先勾選同意');
+        if (!env.RACE_KEY) return fail(503, '體重挑戰暫時無法使用');
+        const which = b.which === 'last' ? 'l' : 'b', kg = Number(b.kg);
+        if (!Ach.kgOk(kg)) return fail(400, '體重請填 30–250 公斤');
+        if (which === 'b' && !(t0 >= Ach.addDays(c.start_date, -7) && t0 <= c.join_by)) return fail(400, '現在不是量起始體重的時間');
+        if (which === 'l') {
+          if (!(t0 >= Ach.addDays(c.end_date, -14) && t0 <= Ach.addDays(c.end_date, Ach.GRACE.weighLate))) return fail(400, '現在不是量結束體重的時間');
+          if (!e.w_base_at) return fail(400, '起始體重要先經過幹部見證');
+          if (Ach.daysBetween(tpDate(new Date(`${e.w_base_at.replace(' ', 'T')}Z`)), t0) < Ach.GRACE.weighGap) return fail(400, '結束量測要在起始量測 21 天以後');
+        }
+        const l = await lim('achw'); if (l) return l;
+        const prev = await env.DB.prepare('SELECT enc FROM ach_private WHERE campaign_id = ? AND member_id = ?').bind(cid, member.id).first();
+        let data = {};
+        if (prev) { try { data = await openAch(env, prev.enc, member.id, cid); } catch { data = {}; } }
+        data.p = { w: which, kg10: Ach.x10(kg), at: new Date().toISOString() };
+        const token = `${which}${rid(8).slice(0, 15)}`, exp = new Date(Date.now() + Ach.GRACE.witnessMin * 60e3).toISOString().replace('T', ' ').slice(0, 19);
+        await env.DB.batch([
+          env.DB.prepare(`INSERT INTO ach_private (campaign_id, member_id, enc) VALUES (?1, ?2, ?3)
+            ON CONFLICT(campaign_id, member_id) DO UPDATE SET enc = excluded.enc, updated_at = datetime('now')`).bind(cid, member.id, await sealAch(env, data, member.id, cid)),
+          env.DB.prepare("UPDATE ach_entries SET w_token = ?2, w_token_exp = ?3, w_tries = 0, updated_at = datetime('now') WHERE id = ?1 AND status = 'joined'")
+            .bind(e.id, `${which}:${await sha(token)}`, exp),
+        ]);
+        return json({ ok: true, token, expires_at: exp });
+      }
+      // M11 榮譽制體重：結束前 14 天到結束後 3 天送出達成聲明（伺服器不收任何體重；不能有團服、不用確認）
+      if (op === 'claim') {
+        if (c.kind !== 'weight' || wit || e.status !== 'joined' || c.status !== 'open') return fail(404, '找不到這個挑戰');
+        if (!(t0 >= Ach.addDays(c.end_date, -14) && t0 <= Ach.addDays(c.end_date, Ach.GRACE.weighLate))) return fail(400, '現在不是送出聲明的時間');
+        const l = await lim(); if (l) return l;
+        const u = await env.DB.prepare(`UPDATE ach_entries SET status = 'achieved', met_at = datetime('now'), achieved_at = datetime('now'), rank_key = datetime('now'),
+          evidence = 'honor', updated_at = datetime('now') WHERE id = ? AND status = 'joined'`).bind(e.id).run();
+        if (!u.meta.changes) return fail(409, '這一筆已經處理過了');
+        await notify(env, [member.id], 'training', achDoneNote({ id: e.id, member_id: member.id, campaign_id: cid }, c));
+        return json({ ok: true, status: 'achieved' });
+      }
+      // M12 團服：選尺寸（改尺寸要在尺寸截止前；第一次選不受截止限制＝補訂）、不需要（放棄名額→遞補）、又想要（重新排隊在最後）
+      if (op === 'shirt') {
+        if (!rw.shirt) return fail(400, '這個挑戰沒有團服');
+        if (e.status === 'left') return fail(404, '找不到這個挑戰');
+        const l = await lim(); if (l) return l;
+        let stmts;
+        if (typeof b.decline === 'boolean') {
+          if (e.reward_state === 'issued') return fail(400, '已經發放，不能改尺寸');
+          stmts = b.decline
+            ? [env.DB.prepare("UPDATE ach_entries SET reward_state = 'declined', updated_at = datetime('now') WHERE id = ? AND COALESCE(reward_state, '') != 'issued'").bind(e.id),
+              env.DB.prepare(AchSql.PROMOTE(S.campaigns)).bind(JSON.stringify([cid]))]
+            : [env.DB.prepare("UPDATE ach_entries SET reward_state = NULL, reward_rank = NULL, updated_at = datetime('now') WHERE id = ? AND reward_state IN ('declined', 'dup')").bind(e.id),
+              env.DB.prepare(AchSql.RANK(S.member)).bind(member.id)];
+        } else {
+          const size = typeof b.size === 'string' ? b.size : '';
+          if (!rw.shirt.sizes.includes(size)) return fail(400, '這個尺寸不在選項裡');
+          if (e.reward_state === 'issued') return fail(400, '已經發放，不能改尺寸');
+          if (e.shirt_size && e.shirt_size !== size && t0 > (rw.shirt.size_by || Ach.addDays(c.end_date, 14))) return fail(400, '尺寸選擇已截止，請聯絡幹部');
+          stmts = [env.DB.prepare(`UPDATE ach_entries SET shirt_size = ?2, size_at = CASE WHEN shirt_size IS NULL THEN datetime('now') ELSE size_at END, updated_at = datetime('now')
+            WHERE id = ?1 AND COALESCE(reward_state, '') != 'issued'`).bind(e.id, size)];
+        }
+        const res = await env.DB.batch([...stmts, env.DB.prepare('SELECT reward_state, shirt_size FROM ach_entries WHERE id = ?').bind(e.id)]);
+        if (b.decline === true) await achNotifyPromoted(env, res[1].results, { [cid]: c.title });
+        const now = res[res.length - 1].results[0];
+        return json({ ok: true, reward_state: now.reward_state || null, shirt_size: now.shirt_size || null });
+      }
+      return fail(404, '找不到這個挑戰');
+    }
+
+    // ---- 審核者：成績 ----
+    // A1 成績清單（待審核依送出時間舊到新；其他依審核時間新到舊）：每頁 50；q 用 instr 比對姓名或暱稱（不用 LIKE）
+    if (path === '/api/admin/pb' && method === 'GET') {
+      if (!achApprover()) return noApprover();
+      const u = url0(req).searchParams, st = ['pending', 'approved', 'rejected', 'revoked'].includes(u.get('status')) ? u.get('status') : 'pending';
+      const q = str(u.get('q'), 20) || null, before = str(u.get('before'), 60), cur = before.match(/^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\|([\w-]{1,32})$/);
+      if (before && !cur) return fail(400, '分頁參數不正確');
+      const asc = st === 'pending', key = asc ? 'r.created_at' : 'r.review_at';
+      const rows = (await env.DB.prepare(`SELECT ${PB_COLS}, ${ACH_MEMBER_COLS}, ${key} AS sk,
+          (SELECT MIN(b.seconds) FROM pb_records b WHERE b.member_id = r.member_id AND b.dist_key = r.dist_key AND b.km = r.km AND b.status = 'approved' AND b.id != r.id) AS current_best,
+          (SELECT x.name FROM members x WHERE x.id = r.review_by) AS review_by_name
+        FROM pb_records r JOIN members m ON m.id = r.member_id LEFT JOIN teams t ON t.id = m.main_team
+        WHERE r.status = ?1 AND (?2 IS NULL OR instr(m.name, ?2) > 0 OR instr(COALESCE(m.nickname, ''), ?2) > 0)
+          AND (?3 IS NULL OR (${key}, r.id) ${asc ? '>' : '<'} (?3, ?4))
+        ORDER BY ${key} ${asc ? 'ASC' : 'DESC'}, r.id ${asc ? 'ASC' : 'DESC'} LIMIT 51`).bind(st, q, cur?.[1] ?? null, cur?.[2] ?? null).all()).results;
+      const items = rows.slice(0, 50).map((r) => ({ ...pbOut(r), member: achMemberRef(r), current_best: r.current_best ?? null, review_by_name: r.review_by_name || null }));
+      return json({ items, next: rows.length > 50 ? `${rows[49].sk}|${rows[49].id}` : null });
+    }
+    const mrv = path.match(/^\/api\/admin\/pb\/([\w-]{1,32})\/(review|revoke)$/);
+    if (mrv && method === 'POST') {
+      if (!achApprover()) return noApprover();
+      const b = await body(), id = mrv[1], note = str(b.note, 100).replace(/[。.]+$/, '');
+      // A2 審核：核准（含婉拒後改判）＝核准快照＋重新判定這位跑友的挑戰＋已結算挑戰的團服排隊；婉拒附原因代碼
+      if (mrv[2] === 'review') {
+        const r = await env.DB.prepare('SELECT id, member_id, dist_key, status FROM pb_records WHERE id = ?').bind(id).first();
+        if (!r) return fail(404, '找不到這筆成績');
+        if (r.member_id === member.id) return fail(403, '不能審核自己的成績');
+        if (b.approve === true) {
+          if (!['pending', 'rejected'].includes(r.status)) return fail(409, '這筆成績已經審核過了');
+          let res;
+          try {
+            res = await env.DB.batch([
+              env.DB.prepare(AchSql.APPROVE).bind(id, member.id),
+              env.DB.prepare(AchSql.PB_EVAL(S.member)).bind(r.member_id),
+              env.DB.prepare(AchSql.RANK(S.memberCampaigns)).bind(r.member_id),
+              env.DB.prepare(AchSql.SETTLE_PB_QUEUE),
+              await auditStmt(env, req, member, 'pb.approve', 'pb', id, `d=${r.dist_key}`),
+            ]);
+          } catch (e) { if (isUnique(e)) return fail(409, '這場比賽的這個距離已經登錄過了'); throw e; }
+          const ap = res[0].results[0];
+          if (!ap) return fail(409, '這筆成績已經審核過了');
+          const got = res[1].results;
+          const cm = got.length ? Object.fromEntries((await env.DB.prepare('SELECT id, title, status, rewards FROM ach_campaigns WHERE id IN (SELECT value FROM json_each(?))')
+            .bind(JSON.stringify(got.map((x) => x.campaign_id))).all()).results.map((x) => [x.id, x])) : {};
+          await notifyMany(env, 'training', [{ member_id: ap.member_id, title: '你的成績通過審核',
+            body: `${Ach.distLabel(ap.dist_key, ap.km)} ${Ach.fmtTime(ap.seconds)}・${ap.race_name}${ap.pb_kind === 'break' ? '・刷新 PB' : ''}`, url: '/#/pb', ref: `pb:${id}`, push: { body: '點開看你的成績' } },
+          ...got.map((x) => achDoneNote(x, cm[x.campaign_id]))], { kind: 'system' });
+          return json({ ok: true, status: 'approved', pb_kind: ap.pb_kind, achieved: got.map((x) => ({ cid: x.campaign_id, title: cm[x.campaign_id]?.title || '' })) });
+        }
+        if (r.status !== 'pending') return fail(409, '這筆成績已經審核過了');
+        const code = ['link', 'mismatch', 'dup', 'unclear', 'other'].includes(b.code) ? b.code : 'other';
+        const res = await env.DB.batch([
+          env.DB.prepare(`UPDATE pb_records SET status = 'rejected', review_by = ?2, review_at = datetime('now'), review_note = ?3, pb_kind = NULL, prev_seconds = NULL, updated_at = datetime('now')
+            WHERE id = ?1 AND status = 'pending' AND member_id != ?2`).bind(id, member.id, note || null),
+          env.DB.prepare(AchSql.SETTLE_PB_QUEUE),
+          await auditStmt(env, req, member, 'pb.reject', 'pb', id, `d=${r.dist_key}｜r=${code}`),
+        ]);
+        if (!res[0].meta.changes) return fail(409, '這筆成績已經審核過了');
+        await notify(env, [r.member_id], 'training', { kind: 'system', title: '你的成績沒有通過審核', body: note ? `${note}。可以修改後重新送出` : '可以修改後重新送出',
+          url: '/#/pb', ref: `pb:${id}`, push: { body: '點開看原因' } });
+        return json({ ok: true, status: 'rejected', pb_kind: null, achieved: [] });
+      }
+      // A3 撤銷已核准的成績：以它為證據的達成先退回，同一個 batch 改用別筆符合的成績重新判定；沒有的話已結算的標撤銷、進行中的回到參加中；
+      //   未發放的名額釋放並遞補，已發放的保留
+      const code = ['wrong', 'notself', 'other'].includes(b.code) ? b.code : 'other';
+      const [r0, aff] = await env.DB.batch([
+        env.DB.prepare('SELECT id, member_id, dist_key, status FROM pb_records WHERE id = ?').bind(id),
+        env.DB.prepare(`SELECT e.id, e.campaign_id, c.title FROM ach_entries e JOIN ach_campaigns c ON c.id = e.campaign_id
+          WHERE e.evidence = ?1 AND c.kind IN ('pb', 'time', 'pace') AND e.status IN ('achieved', 'met')`).bind(id),
+      ]);
+      const r = r0.results[0];
+      if (!r) return fail(404, '找不到這筆成績');
+      if (r.member_id === member.id) return fail(403, '不能審核自己的成績');
+      if (r.status !== 'approved') return fail(409, '這筆成績已經審核過了');
+      const eids = JSON.stringify(aff.results.map((x) => x.id)), cids = JSON.stringify([...new Set(aff.results.map((x) => x.campaign_id))]);
+      const res = await env.DB.batch([
+        env.DB.prepare(`UPDATE pb_records SET status = 'revoked', review_by = ?2, review_at = datetime('now'), review_note = ?3, updated_at = datetime('now')
+          WHERE id = ?1 AND status = 'approved' AND member_id != ?2`).bind(id, member.id, note || null),
+        env.DB.prepare(`UPDATE ach_entries SET status = CASE WHEN (SELECT c.status FROM ach_campaigns c WHERE c.id = ach_entries.campaign_id) = 'open' THEN 'joined' ELSE 'not_met' END,
+            evidence = NULL, met_at = NULL, achieved_at = NULL, rank_key = NULL,
+            reward_rank = CASE WHEN reward_state = 'issued' THEN reward_rank END, reward_state = CASE WHEN reward_state = 'issued' THEN 'issued' END, updated_at = datetime('now')
+          WHERE id IN (SELECT value FROM json_each(?1)) AND evidence = ?2 AND EXISTS (SELECT 1 FROM pb_records WHERE id = ?2 AND status = 'revoked')`).bind(eids, id),
+        env.DB.prepare(AchSql.PB_EVAL(S.member)).bind(r.member_id),
+        env.DB.prepare(`UPDATE ach_entries SET status = 'revoked', review_by = ?2, review_at = datetime('now'), review_note = ?3, updated_at = datetime('now')
+          WHERE id IN (SELECT value FROM json_each(?1)) AND status = 'not_met' AND (SELECT c.status FROM ach_campaigns c WHERE c.id = ach_entries.campaign_id) = 'settled'`)
+          .bind(eids, member.id, note || null),
+        env.DB.prepare(AchSql.RANK(S.member)).bind(r.member_id),
+        env.DB.prepare(AchSql.PROMOTE(S.campaigns)).bind(cids),
+        await auditStmt(env, req, member, 'pb.revoke', 'pb', id, `d=${r.dist_key}｜r=${code}`),
+      ]);
+      if (!res[0].meta.changes) return fail(409, '這筆成績已經審核過了');
+      const again = new Set(res[2].results.map((x) => x.id)), kept = aff.results.filter((x) => again.has(x.id)).length;
+      const titles = Object.fromEntries(aff.results.map((x) => [x.campaign_id, x.title]));
+      await notifyMany(env, 'training', [{ member_id: r.member_id, title: '你的成績已被撤銷', body: note || '你的成績已被撤銷', url: '/#/pb', ref: `pb:${id}`, push: { body: '點開看原因' } },
+        ...res[5].results.map((x) => achPromoNote(x, titles[x.campaign_id]))], { kind: 'system' });
+      return json({ ok: true, revoked: aff.results.length - kept, kept });
+    }
+
+    // ---- 審核者：挑戰 ----
+    // 後台表單送來的挑戰設定：先整理型別，再由 achrule.checkCampaign 檢查（前後端同一份）；體重強制不上恭喜榜、只有里程可以要幹部確認
+    const achInput = (b, old) => {
+      const kind = typeof b.kind === 'string' ? b.kind.slice(0, 10) : '', ob = b.opts && typeof b.opts === 'object' ? b.opts : {};
+      const rw = b.rewards && typeof b.rewards === 'object' ? b.rewards : {}, opts = {};
+      if (kind === 'pb' && ob.first_ok) opts.first_ok = 1;
+      if (kind === 'time' && ob.first_time) opts.first_time = 1;
+      if (kind === 'weight') opts.verify = ob.verify == null ? 'honor' : String(ob.verify).slice(0, 10);
+      if (kind === 'attend') opts.kinds = Array.isArray(ob.kinds) ? [...new Set(ob.kinds.filter((k) => typeof k === 'string').map((k) => k.slice(0, 10)))] : [...Ach.ATTEND_DEFAULT];
+      const num = (v) => (v === null || v === undefined || v === '' ? null : Number(v));
+      let target = kind === 'time' && typeof b.target === 'string' && !/^\d+$/.test(b.target.trim()) ? Ach.parseTime(b.target) : num(b.target);
+      if (kind === 'pb') target = null;
+      else if (['pace', 'weight', 'km'].includes(kind) && Number.isFinite(target)) target = Math.round(target * 10) / 10;
+      const start_date = str(b.start_date, 10), end_date = str(b.end_date, 10);
+      let shirt = null;
+      if (rw.shirt && typeof rw.shirt === 'object') {
+        const s = rw.shirt;
+        const sizes = Array.isArray(s.sizes) ? [...new Set(s.sizes.map((z) => String(z ?? '').trim()))] : [];
+        const keep = old && old.status !== 'draft' ? old.rewards.shirt?.size_by : null;
+        const size_by = typeof s.size_by === 'string' && s.size_by ? s.size_by.slice(0, 10) : keep || (Ach.isDay(end_date) ? Ach.addDays(end_date, 14) : null);
+        shirt = { sizes, quota: s.quota === null || s.quota === undefined || s.quota === '' ? null : Number(s.quota), size_by,
+          chart: httpsUrl(typeof s.chart === 'string' ? s.chart.trim() : '') || null, pool: typeof s.pool === 'string' && s.pool.trim() ? s.pool.trim() : null };
+      }
+      const rewards = {};
+      if (rw.badge != null && rw.badge !== '') rewards.badge = String(rw.badge).slice(0, 20);
+      if (rw.board && kind !== 'weight') rewards.board = 1;
+      if (shirt) rewards.shirt = shirt;
+      const join_by = str(b.join_by, 10) || (kind === 'weight' && Ach.isDay(start_date) && Ach.isDay(end_date)
+        ? [Ach.addDays(start_date, 14), Ach.addDays(end_date, -Ach.GRACE.weighJoinGap)].sort()[0] : end_date);
+      return { title: str(b.title, Ach.LIMITS.title), intro: str(b.intro, Ach.LIMITS.intro) || null, team_id: typeof b.team_id === 'string' && b.team_id ? b.team_id.slice(0, 16) : null,
+        members_only: b.members_only === true, kind, dist_key: ['pb', 'time', 'pace'].includes(kind) && typeof b.dist_key === 'string' && b.dist_key ? b.dist_key.slice(0, 6) : null,
+        target, opts, confirm: kind === 'km' ? (b.confirm == null ? !!shirt : b.confirm === true) : false, rewards, start_date, end_date, join_by };
+    };
+    const campArgs = (c) => [c.title, c.intro, c.team_id, c.members_only ? 1 : 0, c.kind, c.dist_key, c.target, JSON.stringify(c.opts), c.confirm ? 1 : 0, JSON.stringify(c.rewards),
+      c.start_date, c.end_date, c.join_by];
+    const teamOk = async (tid) => !tid || !!(await env.DB.prepare('SELECT 1 FROM teams WHERE id = ?').bind(tid).first());
+    // A4 挑戰清單（審核者與監事）：統計一次 GROUP BY 掃描；待確認的達成（只有里程挑戰；監事是空的）；審核者人數、用過的同款團服名稱、分團
+    if (path === '/api/admin/ach' && method === 'GET') {
+      if (!achViewer()) return noManager();
+      const [cs, mt, meta] = await env.DB.batch([
+        env.DB.prepare(`SELECT c.*, t.name AS team_name, t.color AS team_color, st.* FROM ach_campaigns c LEFT JOIN teams t ON t.id = c.team_id
+          LEFT JOIN (SELECT campaign_id AS cid, COUNT(CASE WHEN status != 'left' THEN 1 END) AS s_joined, COUNT(CASE WHEN status IN ('met', 'achieved') THEN 1 END) AS s_done,
+              COUNT(CASE WHEN reward_state IN ('granted', 'issued') THEN 1 END) AS s_held, COUNT(CASE WHEN reward_state = 'waitlist' THEN 1 END) AS s_wait,
+              COUNT(CASE WHEN reward_state = 'issued' THEN 1 END) AS s_issued, COUNT(CASE WHEN status = 'met' THEN 1 END) AS s_met,
+              COUNT(CASE WHEN status = 'not_met' THEN 1 END) AS s_not_met, COUNT(CASE WHEN reward_state = 'granted' AND shirt_size IS NULL THEN 1 END) AS s_unsized
+            FROM ach_entries GROUP BY campaign_id) st ON st.cid = c.id
+          ORDER BY CASE c.status WHEN 'draft' THEN 0 WHEN 'open' THEN 1 WHEN 'settled' THEN 2 ELSE 3 END, c.end_date DESC LIMIT 200`),
+        env.DB.prepare(`SELECT e.id AS eid, c.id AS cid, c.title, c.kind, e.met_at, e.evidence, ${ACH_MEMBER_COLS}
+          FROM ach_entries e JOIN ach_campaigns c ON c.id = e.campaign_id JOIN members m ON m.id = e.member_id LEFT JOIN teams t ON t.id = m.main_team
+          WHERE e.status = 'met' AND ?1 = 1 ORDER BY e.met_at LIMIT 200`).bind(achApprover() ? 1 : 0),
+        env.DB.prepare(`SELECT (SELECT COUNT(*) FROM members WHERE role IN ('chair', 'staff', 'admin')) AS approvers,
+          (SELECT json_group_array(p) FROM (SELECT DISTINCT json_extract(rewards, '$.shirt.pool') AS p FROM ach_campaigns WHERE json_extract(rewards, '$.shirt.pool') IS NOT NULL ORDER BY p)) AS pools,
+          (SELECT json_group_array(json_object('id', id, 'name', name, 'color', color)) FROM (SELECT id, name, color FROM teams ORDER BY sort)) AS teams`),
+      ]);
+      const mm = meta.results[0];
+      return json({
+        campaigns: cs.results.map((r) => ({ ...achCampaignOut(r), stats: { joined: r.s_joined || 0, done: r.s_done || 0, granted: r.s_held || 0, waitlist: r.s_wait || 0,
+          issued: r.s_issued || 0, met: r.s_met || 0, not_met: r.s_not_met || 0, unsized: r.s_unsized || 0 } })),
+        met: mt.results.map((r) => ({ eid: r.eid, cid: r.cid, title: r.title, kind: r.kind, member: achMemberRef(r), met_at: r.met_at, evidence: r.evidence ?? null })),
+        meta: { raceKey: !!env.RACE_KEY, readonly: !achApprover(), approvers: mm.approvers, pools: parseJ(mm.pools, []), teams: parseJ(mm.teams, []) },
+      });
+    }
+    // A5 建立（草稿）
+    if (path === '/api/admin/ach' && method === 'POST') {
+      if (!achApprover()) return noManager();
+      const gg = gate(); if (gg) return gg;
+      const c = achInput(await body(), null), err = Ach.checkCampaign(c);
+      if (err) return fail(400, err);
+      if (witnessOf({ kind: c.kind, opts: JSON.stringify(c.opts) }) && !env.RACE_KEY) return fail(503, '體重挑戰暫時無法使用');
+      if (!(await teamOk(c.team_id))) return fail(404, '找不到這個分團');
+      const id = rid(8);
+      await env.DB.batch([
+        env.DB.prepare(`INSERT INTO ach_campaigns (id, title, intro, team_id, members_only, kind, dist_key, target, opts, confirm, rewards, start_date, end_date, join_by, created_by)
+          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)`).bind(id, ...campArgs(c), member.id),
+        await auditStmt(env, req, member, 'ach.create', 'campaign', id, c.title),
+      ]);
+      return json({ id });
+    }
+    const mca = path.match(/^\/api\/admin\/ach\/([\w-]{1,32})$/);
+    // A6 修改：草稿隨便改；發布後條件鎖住（achrule.checkEdit），名額只能增加、尺寸只能加、尺寸截止只能延後、結束日只能在原結束日以前延長
+    //   以讀到的 updated_at 為條件（兩個人同時改，後到的 409）；已結算的名額增加→遞補；announce 時通知參加者
+    if (mca && method === 'PUT') {
+      if (!achApprover()) return noManager();
+      const row = await env.DB.prepare(campSql('c.id = ?')).bind(mca[1]).first();
+      if (!row) return fail(404, '找不到這個挑戰');
+      if (row.status === 'cancelled') return fail(409, '這一筆已經處理過了');
+      const b = await body(), old = achCampaignOut(row), c = achInput(b, old);
+      const err = Ach.checkCampaign(c) || Ach.checkEdit(old, c, t0);
+      if (err) return fail(['挑戰開始後不能改條件', '名額只能增加', '挑戰已經結束，不能再延長', '尺寸只能增加', '尺寸截止只能延後'].includes(err) ? 409 : 400, err);
+      if (witnessOf({ kind: c.kind, opts: JSON.stringify(c.opts) }) && !env.RACE_KEY) return fail(503, '體重挑戰暫時無法使用');
+      if (c.team_id !== old.team_id && !(await teamOk(c.team_id))) return fail(404, '找不到這個分團');
+      const qo = old.rewards.shirt?.quota, qn = c.rewards.shirt?.quota;
+      const more = !!old.rewards.shirt && qo !== null && qo !== undefined && (qn === null || qn > qo), longer = c.end_date > old.end_date;
+      const res = await env.DB.batch([
+        env.DB.prepare(`UPDATE ach_campaigns SET title = ?2, intro = ?3, team_id = ?4, members_only = ?5, kind = ?6, dist_key = ?7, target = ?8, opts = ?9, confirm = ?10, rewards = ?11,
+          start_date = ?12, end_date = ?13, join_by = ?14, updated_at = datetime('now') WHERE id = ?1 AND status = ?15 AND updated_at = ?16`).bind(row.id, ...campArgs(c), row.status, row.updated_at),
+        ...(row.status === 'settled' && more ? [env.DB.prepare(AchSql.PROMOTE(S.campaigns)).bind(JSON.stringify([row.id]))] : []),
+        await auditStmt(env, req, member, 'ach.update', 'campaign', row.id, c.title),
+      ]);
+      if (!res[0].meta.changes) return fail(409, '這一筆已經處理過了');
+      if (row.status === 'settled' && more) await achNotifyPromoted(env, res[1].results, { [row.id]: c.title });
+      if (b.announce === true && row.status !== 'draft' && (longer || more)) {
+        const list = await participants(row.id);
+        await notify(env, list.map((x) => x.member_id), 'training', { kind: 'system', title: '挑戰有更新',
+          body: longer ? `「${c.title}」延長到 ${achMD(c.end_date)}` : `「${c.title}」團服名額增加了`, url: `/#/ach/c/${row.id}`, ref: `ach:${row.id}`, push: { body: '點開看看' } });
+      }
+      return json({ ok: true });
+    }
+    // A7 刪除草稿
+    if (mca && method === 'DELETE') {
+      if (!achApprover()) return noManager();
+      const row = await env.DB.prepare('SELECT title, status FROM ach_campaigns WHERE id = ?').bind(mca[1]).first();
+      if (!row) return fail(404, '找不到這個挑戰');
+      if (row.status !== 'draft') return fail(409, '只能刪除草稿');
+      const [d] = await env.DB.batch([env.DB.prepare("DELETE FROM ach_campaigns WHERE id = ? AND status = 'draft'").bind(mca[1]),
+        await auditStmt(env, req, member, 'ach.delete', 'campaign', mca[1], row.title)]);
+      if (!d.meta.changes) return fail(409, '只能刪除草稿');
+      return json({ ok: true });
+    }
+    const mco = path.match(/^\/api\/admin\/ach\/([\w-]{1,32})\/(open|cancel|remind-size|notify-pickup|release-unsized)$/);
+    if (mco && method === 'POST') {
+      const op = mco[2], row = await env.DB.prepare(campSql('c.id = ?')).bind(mco[1]).first();
+      if (!row) return fail(404, '找不到這個挑戰');
+      const b = await body(), rw = parseJ(row.rewards), url = `/#/ach/c/${row.id}`;
+      // A18 通知領取團服（審核者或分團挑戰的分團幹部；每場每天一次）：領取方式存在挑戰上並進通知中心內文，不進推播、不進稽核
+      if (op === 'notify-pickup') {
+        if (!achApprover() && !achTeamOfficer(row)) return noManager();
+        if (!rw.shirt) return fail(400, '這個挑戰沒有團服');
+        const note = str(b.note, 200);
+        if (!note || note.length > Ach.LIMITS.pickupNote) return fail(400, '請填領取方式（60 字以內）');
+        const list = (await env.DB.prepare("SELECT id, member_id, campaign_id FROM ach_entries WHERE campaign_id = ? AND status = 'achieved' AND reward_state = 'granted' AND member_id IS NOT NULL")
+          .bind(row.id).all()).results;
+        if (await limited(env, `achpk:${row.id}`, 1, 86400)) return fail(429, '今天已經通知過了');
+        await env.DB.batch([env.DB.prepare("UPDATE ach_campaigns SET pickup = ?2, updated_at = datetime('now') WHERE id = ?1").bind(row.id, note),
+          await auditStmt(env, req, member, 'ach.notify_pickup', 'campaign', row.id, `${list.length} 人`)]);
+        await notifyMany(env, 'training', list.map((x) => ({ member_id: x.member_id, title: '團服可以領了', body: `「${row.title}」：${note}`, url, ref: `ach:${x.id}`,
+          push: { body: '點開看領取方式' } })), { kind: 'system' });
+        return json({ ok: true, n: list.length });
+      }
+      if (!achApprover()) return noManager();
+      // A8 發布：寫 opened_at（破 PB、速度上升的基準只認這之前登錄的成績；之後任何 API 都不能改）；announce 時通知有資格的人
+      if (op === 'open') {
+        const gg = gate(); if (gg) return gg;
+        if (row.status !== 'draft') return fail(409, '這一筆已經處理過了');
+        if (t0 > row.join_by) return fail(400, '這個挑戰已經截止報名');
+        if (witnessOf(row) && !env.RACE_KEY) return fail(503, '體重挑戰暫時無法使用');
+        const [u] = await env.DB.batch([
+          env.DB.prepare("UPDATE ach_campaigns SET status = 'open', opened_at = datetime('now'), updated_at = datetime('now') WHERE id = ? AND status = 'draft'").bind(row.id),
+          await auditStmt(env, req, member, 'ach.open', 'campaign', row.id, row.title),
+        ]);
+        if (!u.meta.changes) return fail(409, '這一筆已經處理過了');
+        let notified = 0;
+        if (b.announce === true) {
+          const ids = (await env.DB.prepare(`SELECT m.id FROM members m WHERE m.id != ?1 AND (?2 IS NULL OR m.id IN (SELECT member_id FROM team_members WHERE team_id = ?2 AND status = 'active'))
+            AND (?3 = 0 OR m.membership = 'active')`).bind(member.id, row.team_id, row.members_only ? 1 : 0).all()).results.map((x) => x.id);
+          notified = (await notify(env, ids, 'training', { kind: 'system', title: '新的目標挑戰', body: `「${row.title}」${achMD(row.start_date)}–${achMD(row.end_date)}`,
+            url, ref: `ach:${row.id}`, push: { body: '點開看看怎麼參加' } })).rows;
+        }
+        return json({ ok: true, notified });
+      }
+      // A9 取消（進行中的）：體重資料同一個 batch 刪掉；已發放的紀錄保留；通知參加者
+      if (op === 'cancel') {
+        if (row.status !== 'open') return fail(409, '這一筆已經處理過了');
+        const note = str(b.note, 100).replace(/[。.]+$/, ''), list = await participants(row.id);
+        const [u] = await env.DB.batch([
+          env.DB.prepare("UPDATE ach_campaigns SET status = 'cancelled', cancel_note = ?2, updated_at = datetime('now') WHERE id = ?1 AND status = 'open'").bind(row.id, note || null),
+          env.DB.prepare('DELETE FROM ach_private WHERE campaign_id = ?').bind(row.id),
+          env.DB.prepare(AchSql.SETTLE_ACH_QUEUE),
+          await auditStmt(env, req, member, 'ach.cancel', 'campaign', row.id, row.title),
+        ]);
+        if (!u.meta.changes) return fail(409, '這一筆已經處理過了');
+        await notify(env, list.map((x) => x.member_id), 'training', { kind: 'system', title: '挑戰取消了',
+          body: `「${row.title}」${note ? `：${note}` : ''}${witnessOf(row) ? '。你的體重資料已刪除' : ''}`, url, ref: `ach:${row.id}`, push: { body: '點開看看' } });
+        return json({ ok: true });
+      }
+      if (!rw.shirt) return fail(400, '這個挑戰沒有團服');
+      // A16 提醒還沒選尺寸的人（有名額的；每場每天一次）
+      if (op === 'remind-size') {
+        const list = (await env.DB.prepare("SELECT id, member_id FROM ach_entries WHERE campaign_id = ? AND reward_state = 'granted' AND shirt_size IS NULL AND member_id IS NOT NULL")
+          .bind(row.id).all()).results;
+        if (await limited(env, `achsz:${row.id}`, 1, 86400)) return fail(429, '今天已經提醒過了');
+        await notifyMany(env, 'training', list.map((x) => ({ member_id: x.member_id, title: '請選團服尺寸', body: `「${row.title}」`, url, ref: `ach:${x.id}`, push: { body: '點開選尺寸' } })),
+          { kind: 'system', also: [await auditStmt(env, req, member, 'ach.remind_size', 'campaign', row.id, `${list.length} 人`)] });
+        return json({ ok: true, n: list.length });
+      }
+      // A19 尺寸截止後，把還沒選尺寸的名額讓給候補（由人決定、不自動）；被讓出的人可以「我又想要了」重新排隊
+      if (op === 'release-unsized') {
+        if (row.status !== 'settled' || !(t0 > (rw.shirt.size_by || Ach.addDays(row.end_date, 14)))) return fail(400, '只有尺寸截止後才能讓出名額');
+        const n = (await env.DB.prepare("SELECT COUNT(*) AS n FROM ach_entries WHERE campaign_id = ? AND reward_state = 'granted' AND shirt_size IS NULL").bind(row.id).first()).n;
+        const res = await env.DB.batch([
+          env.DB.prepare(`UPDATE ach_entries SET reward_state = 'declined', updated_at = datetime('now') WHERE campaign_id = ? AND reward_state = 'granted' AND shirt_size IS NULL
+            RETURNING id, member_id, campaign_id`).bind(row.id),
+          env.DB.prepare(AchSql.DUPMARK(S.campaigns)).bind(JSON.stringify([row.id])),
+          env.DB.prepare(AchSql.PROMOTE(S.campaigns)).bind(JSON.stringify([row.id])),
+          await auditStmt(env, req, member, 'ach.release_unsized', 'campaign', row.id, `${n} 人`),
+        ]);
+        const rel = res[0].results.filter((x) => x.member_id), pro = res[2].results;
+        await notifyMany(env, 'training', [...rel.map((x) => ({ member_id: x.member_id, title: '團服名額已讓出',
+          body: `「${row.title}」尺寸截止後還沒選尺寸，名額先給了候補的跑友。還想要可以重新排隊`, url, ref: `ach:${x.id}`, push: { body: '點開看看' } })),
+          ...pro.map((x) => achPromoNote(x, row.title))], { kind: 'system' });
+        return json({ ok: true, released: rel.length, promoted: pro.length });
+      }
+    }
+    // A15 團服 CSV：order＝訂製統計（只有尺寸與件數，給廠商）；list＝發放名單（協會內部用）；BOM、CRLF、cell() 防公式注入
+    const mcsv = path.match(/^\/api\/admin\/ach\/([\w-]{1,32})\/shirts\.csv$/);
+    if (mcsv && method === 'GET') {
+      if (!achApprover()) return noManager();
+      const row = await env.DB.prepare('SELECT id, title, rewards FROM ach_campaigns WHERE id = ?').bind(mcsv[1]).first();
+      if (!row) return fail(404, '找不到這個挑戰');
+      const shirt = parseJ(row.rewards).shirt;
+      if (!shirt) return fail(400, '這個挑戰沒有團服');
+      const rows = (await env.DB.prepare(`SELECT e.reward_rank, e.reward_state, e.shirt_size, e.issued_at,
+          CASE WHEN date(e.size_at, '+8 hours') > ?2 THEN 1 ELSE 0 END AS late, m.name, m.nickname, t.name AS team
+        FROM ach_entries e LEFT JOIN members m ON m.id = e.member_id LEFT JOIN teams t ON t.id = m.main_team
+        WHERE e.campaign_id = ?1 AND e.reward_state IS NOT NULL ORDER BY e.reward_rank, e.id`).bind(row.id, shirt.size_by || '9999-12-31').all()).results;
+      const cell = (v) => { let x = String(v ?? ''); if (/^[=+\-@\t\r]/.test(x)) x = `'${x}`; return `"${x.replace(/"/g, '""')}"`; };
+      const view = url0(req).searchParams.get('view') === 'order' ? 'order' : 'list';
+      let lines;
+      if (view === 'order') {
+        const held = rows.filter((r) => ['granted', 'issued'].includes(r.reward_state));
+        const sizes = [...shirt.sizes, ...new Set(held.map((r) => r.shirt_size).filter((z) => z && !shirt.sizes.includes(z)))];
+        lines = [['尺寸', '件數（待發放＋已發放）', '其中補訂'].map(cell).join(','),
+          ...sizes.map((z) => [z, held.filter((r) => r.shirt_size === z).length, held.filter((r) => r.shirt_size === z && r.late).length].map(cell).join(',')),
+          ['未選尺寸', held.filter((r) => !r.shirt_size).length, ''].map(cell).join(','),
+          ['合計', held.length, held.filter((r) => r.late).length].map(cell).join(',')];
+      } else {
+        const ST = { issued: '已發放', granted: '待發放', waitlist: '候補', declined: '不需要', dup: '同款已拿' };
+        lines = [['順位', '姓名', '暱稱', '分團', '尺寸', '狀態', '備註', '發放日期'].map(cell).join(','),
+          ...rows.map((r) => [r.reward_rank ?? '', r.name || '已刪除帳號', r.nickname || '', r.team || '', r.shirt_size || '', ST[r.reward_state] || '',
+            r.late && r.shirt_size ? '補訂' : '', r.issued_at ? tpStamp(r.issued_at).slice(0, 10) : ''].map(cell).join(','))];
+      }
+      await audit(env, req, member, 'ach.shirts_export', 'campaign', row.id, view === 'order' ? '訂製統計' : `名單 ${rows.length} 筆`);
+      return new Response(`﻿${lines.join('\r\n')}`, { headers: { ...SEC_HEADERS, 'content-type': 'text/csv; charset=utf-8', 'cache-control': 'no-store',
+        'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent(`${row.title}${view === 'order' ? '-團服訂製.csv' : '-團服名單.csv'}`)}` } });
+    }
+    // A10–A14 參加名單、單筆詳細、確認或退回達成、發放團服、撤銷達成
+    const mce = path.match(/^\/api\/admin\/ach\/([\w-]{1,32})\/entries(?:\/([\w-]{1,32})(?:\/(confirm|issue|revoke))?)?$/);
+    if (mce) {
+      const row = await env.DB.prepare(campSql('c.id = ?')).bind(mce[1]).first();
+      if (!row) return fail(404, '找不到這個挑戰');
+      const isWeight = row.kind === 'weight', rw = parseJ(row.rewards);
+      // A10 名單：體重挑戰最小揭露（進行中一律 joined、結算或取消後一律 ended，時間與證據為 null，篩選無效）；分團幹部只有有團服名額的列、不含成績與體重欄位
+      if (!mce[2] && method === 'GET') {
+        const full = achApprover(), limitedView = !full && achTeamOfficer(row);
+        if (!full && !limitedView) return noManager();
+        const u = url0(req).searchParams, state = isWeight ? 'all' : (u.get('state') || 'all'), q = str(u.get('q'), 20);
+        const rows = (await env.DB.prepare(`SELECT e.*, ${ACH_MEMBER_COLS},
+            CASE WHEN e.reward_state = 'granted' AND ${AchSql.POOL_HELD} THEN 1 ELSE 0 END AS pool_dup,
+            CASE WHEN date(e.size_at, '+8 hours') > json_extract(c.rewards, '$.shirt.size_by') THEN 1 ELSE 0 END AS late_size
+          FROM ach_entries e JOIN ach_campaigns c ON c.id = e.campaign_id LEFT JOIN members m ON m.id = e.member_id LEFT JOIN teams t ON t.id = m.main_team
+          WHERE e.campaign_id = ?1 AND (?2 = 0 OR e.reward_state IN ('granted', 'issued'))
+          ORDER BY e.reward_rank IS NULL, e.reward_rank, e.joined_at, e.id LIMIT 2000`).bind(row.id, limitedView ? 1 : 0).all()).results;
+        const sizes = {};
+        for (const r of rows) if (['granted', 'issued'].includes(r.reward_state) && r.shirt_size) sizes[r.shirt_size] = (sizes[r.shirt_size] || 0) + 1;
+        const unsized = rows.filter((r) => r.reward_state === 'granted' && !r.shirt_size).length;
+        const pick = (r) => (state === 'met' ? r.status === 'met' : state === 'achieved' ? r.status === 'achieved' : state === 'not_met' ? r.status === 'not_met'
+          : state === 'shirt' ? !!r.reward_state : true) && (!q || (r.mname || '').includes(q) || (r.mnick || '').includes(q));
+        const entries = rows.filter(pick).map((r) => {
+          const out = { ...achEntryOut(r), member: achMemberRef(r), pool_dup: !!r.pool_dup, late_size: !!r.late_size };
+          if (isWeight) Object.assign(out, { status: r.status === 'left' ? 'left' : row.status === 'open' ? 'joined' : 'ended', met_at: null, achieved_at: null, evidence: null, position: null });
+          if (limitedView) Object.assign(out, { evidence: null, review_note: null, w_base_at: null, w_last_at: null, w_pending: null, consent_at: null });
+          return out;
+        });
+        return json({ campaign: achCampaignOut(row), limited: limitedView, entries, sizes, unsized });
+      }
+      if (!mce[2]) return fail(405, '不支援的操作');
+      const e = await env.DB.prepare(`SELECT e.*, ${ACH_MEMBER_COLS} FROM ach_entries e LEFT JOIN members m ON m.id = e.member_id LEFT JOIN teams t ON t.id = m.main_team
+        WHERE e.id = ? AND e.campaign_id = ?`).bind(mce[2], row.id).first();
+      if (!e) return fail(404, '找不到這個挑戰');
+      // A11 單筆詳細（審核者）：里程的可疑訊號（單筆最大、結束後補記、補記很久以前的、來源分布）；出席的場次；成績；體重只有見證進度
+      if (!mce[3] && method === 'GET') {
+        if (!achApprover()) return noManager();
+        let detail = null;
+        if (row.kind === 'km' && e.member_id) {
+          const logs = (await env.DB.prepare(`SELECT id, date, km, source, created_at, updated_at FROM training_logs WHERE member_id = ? AND date BETWEEN ? AND ? AND status != 'skip'
+            ORDER BY date, id LIMIT 500`).bind(e.member_id, row.start_date, row.end_date).all()).results;
+          const F = new Date(Date.parse(`${Ach.addDays(row.end_date, 4)}T00:00:00Z`) - 8 * 3600e3).toISOString().replace('T', ' ').slice(0, 19);
+          const src = { gps: { n: 0, km: 0 }, health: { n: 0, km: 0 }, file: { n: 0, km: 0 }, manual: { n: 0, km: 0 } };
+          for (const l of logs) { const s = src[l.source] || src.manual; s.n++; s.km = Math.round((s.km + Math.min(l.km || 0, 100)) * 10) / 10; }
+          detail = { total: Math.round(logs.reduce((t, l) => t + Math.min(l.km || 0, 100), 0) * 10) / 10, logs: logs.length, max: logs.reduce((m2, l) => Math.max(m2, l.km || 0), 0),
+            late: logs.filter((l) => (l.updated_at || l.created_at) >= F).length,
+            backfilled: logs.filter((l) => Ach.daysBetween(l.date, tpDate(new Date(`${String(l.created_at).replace(' ', 'T')}Z`))) > 7).length,
+            by_source: { gps: src.gps.n, health: src.health.n, file: src.file.n, manual: src.manual } };
+        } else if (row.kind === 'attend' && e.member_id) {
+          const ev = (await env.DB.prepare(`SELECT ev.date, ev.title FROM signups s JOIN events ev ON ev.id = s.event_id
+            WHERE s.member_id = ?1 AND s.status = 'in' AND s.attended_at IS NOT NULL AND ev.status = 'open' AND ev.date BETWEEN ?2 AND ?3
+              AND ev.kind IN (SELECT value FROM json_each(?4)) AND (?5 IS NULL OR ev.team_id = ?5) GROUP BY ev.id ORDER BY ev.date LIMIT 200`)
+            .bind(e.member_id, row.start_date, row.end_date, JSON.stringify(parseJ(row.opts).kinds || Ach.ATTEND_DEFAULT), row.team_id).all()).results;
+          detail = { events: ev };
+        } else if (['pb', 'time', 'pace'].includes(row.kind)) {
+          const p = e.evidence ? await env.DB.prepare(`SELECT ${PB_COLS} FROM pb_records r WHERE r.id = ?`).bind(e.evidence).first() : null;
+          detail = { pb: p ? pbOut(p) : null };
+        } else if (isWeight) detail = { verify: parseJ(row.opts).verify || 'honor', w_base_at: e.w_base_at || null, w_last_at: e.w_last_at || null };
+        const entry = achEntryOut(e);
+        if (isWeight) Object.assign(entry, { status: e.status === 'left' ? 'left' : row.status === 'open' ? 'joined' : 'ended', met_at: null, achieved_at: null, evidence: null, position: null });
+        return json({ entry, member: achMemberRef(e), detail });
+      }
+      if (method !== 'POST') return fail(405, '不支援的操作');
+      const b = await body(), note = str(b.note, 100).replace(/[。.]+$/, ''), url = `/#/ach/c/${row.id}`, ref = `ach:${e.id}`;
+      // A13 發放團服（審核者或分團挑戰的分團幹部；不能發給自己）：只有已達成＋有名額的能勾；真的有變才寫稽核
+      if (mce[3] === 'issue') {
+        if (!achApprover() && !achTeamOfficer(row)) return noManager();
+        if (e.member_id === member.id) return fail(403, '不能審核自己的成績');
+        const on = b.issued !== false;
+        if (on && e.reward_state !== 'issued') {
+          if (e.status === 'met') return fail(400, '還沒確認達成，不能發放');
+          if (e.status !== 'achieved' || e.reward_state !== 'granted') return fail(400, '沒有名額，不能發放');
+        }
+        const u = await env.DB.prepare(on
+          ? "UPDATE ach_entries SET reward_state = 'issued', issued_at = datetime('now'), issued_by = ?3, updated_at = datetime('now') WHERE id = ?1 AND campaign_id = ?2 AND status = 'achieved' AND reward_state = 'granted' AND member_id IS NOT ?3"
+          : "UPDATE ach_entries SET reward_state = 'granted', issued_at = NULL, issued_by = NULL, updated_at = datetime('now') WHERE id = ?1 AND campaign_id = ?2 AND reward_state = 'issued' AND member_id IS NOT ?3")
+          .bind(e.id, row.id, member.id).run();
+        if (u.meta.changes) await audit(env, req, member, 'ach.issue', 'entry', e.id, `c=${row.id}｜${on ? 'on' : 'off'}`);
+        return json({ ok: true, changed: !!u.meta.changes });
+      }
+      if (!achApprover()) return noManager();
+      if (e.member_id === member.id) return fail(403, '不能審核自己的成績');
+      // A12 確認或退回達成（只有里程挑戰會有待確認）：退回釋放名額並遞補
+      if (mce[3] === 'confirm') {
+        if (e.status !== 'met') return fail(409, '這一筆已經處理過了');
+        if (b.approve === true) {
+          const [u] = await env.DB.batch([
+            env.DB.prepare(`UPDATE ach_entries SET status = 'achieved', achieved_at = datetime('now'), review_by = ?2, review_at = datetime('now'), updated_at = datetime('now')
+              WHERE id = ?1 AND status = 'met' AND member_id != ?2`).bind(e.id, member.id),
+            env.DB.prepare(AchSql.SETTLE_ACH_QUEUE),
+            await auditStmt(env, req, member, 'ach.confirm', 'entry', e.id, `c=${row.id}`),
+          ]);
+          if (!u.meta.changes) return fail(409, '這一筆已經處理過了');
+          await notify(env, [e.member_id], 'training', achDoneNote({ id: e.id, member_id: e.member_id, campaign_id: row.id }, row));
+          return json({ ok: true, status: 'achieved' });
+        }
+        const code = ['doubt', 'unverified', 'ineligible', 'other'].includes(b.code) ? b.code : 'other';
+        const res = await env.DB.batch([
+          env.DB.prepare(`UPDATE ach_entries SET status = 'rejected', review_by = ?2, review_at = datetime('now'), review_note = ?3,
+              reward_rank = CASE WHEN reward_state = 'issued' THEN reward_rank END, reward_state = CASE WHEN reward_state = 'issued' THEN 'issued' END, updated_at = datetime('now')
+            WHERE id = ?1 AND status = 'met' AND member_id != ?2`).bind(e.id, member.id, note || null),
+          env.DB.prepare(AchSql.PROMOTE(S.campaigns)).bind(JSON.stringify([row.id])),
+          env.DB.prepare(AchSql.SETTLE_ACH_QUEUE),
+          await auditStmt(env, req, member, 'ach.reject', 'entry', e.id, `c=${row.id}｜r=${code}`),
+        ]);
+        if (!res[0].meta.changes) return fail(409, '這一筆已經處理過了');
+        await notifyMany(env, 'training', [{ member_id: e.member_id, title: '挑戰達成沒有通過確認', body: `「${row.title}」${note ? `：${note}` : ''}`, url, ref, push: { body: '點開看原因' } },
+          ...res[1].results.map((x) => achPromoNote(x, row.title))], { kind: 'system' });
+        return json({ ok: true, status: 'rejected' });
+      }
+      // A14 撤銷達成（已達成的）：未發放的名額釋放並遞補，已發放的保留
+      if (mce[3] === 'revoke') {
+        if (e.status !== 'achieved') return fail(409, '這一筆已經處理過了');
+        const code = ['wrong', 'notself', 'other'].includes(b.code) ? b.code : 'other';
+        const res = await env.DB.batch([
+          env.DB.prepare(`UPDATE ach_entries SET status = 'revoked', review_by = ?2, review_at = datetime('now'), review_note = ?3,
+              reward_rank = CASE WHEN reward_state = 'issued' THEN reward_rank END, reward_state = CASE WHEN reward_state = 'issued' THEN 'issued' END, updated_at = datetime('now')
+            WHERE id = ?1 AND status = 'achieved' AND member_id != ?2`).bind(e.id, member.id, note || null),
+          env.DB.prepare(AchSql.PROMOTE(S.campaigns)).bind(JSON.stringify([row.id])),
+          await auditStmt(env, req, member, 'ach.revoke', 'entry', e.id, `c=${row.id}｜r=${code}`),
+        ]);
+        if (!res[0].meta.changes) return fail(409, '這一筆已經處理過了');
+        await notifyMany(env, 'training', [{ member_id: e.member_id, title: '挑戰達成已被撤銷', body: `「${row.title}」${note ? `：${note}` : ''}`, url, ref, push: { body: '點開看原因' } },
+          ...res[1].results.map((x) => achPromoNote(x, row.title))], { kind: 'system' });
+        return json({ ok: true });
+      }
+    }
+  }
+
   if (path === '/api/me/consent' && method === 'POST') {
     const g = need(); if (g) return g;
     const ver = (await getSettings(env)).privacy.version;
@@ -3468,6 +4439,16 @@ const api = (async function api(req, env, path, method) {
           gmail_lookup_code_stored: !!member.email_h,
         };
       })(),
+      // 成績與挑戰：成績（不含審核人）、還在的截圖、參加的挑戰（不含確認人、發放人、見證碼）、解密後的體重（b／l＝見證過的讀數、p＝等見證的暫存，都是本人的資料）、
+      //   收到與給出的恭喜人數（誰按的是別人的資料）
+      pb_records: await q('SELECT id, dist_key, km, seconds, race_name, race_date, bib, result_url, note, status, pb_kind, prev_seconds, edited, review_at, review_note, created_at, updated_at FROM pb_records WHERE member_id = ? ORDER BY race_date'),
+      pb_proofs: await q('SELECT r.id AS pb_id, p.img, p.created_at FROM pb_proofs p JOIN pb_records r ON r.id = p.pb_id WHERE r.member_id = ?'),
+      challenges: await q(`SELECT c.title, c.kind, c.start_date, c.end_date, e.status, e.joined_at, e.consent_at, e.met_at, e.achieved_at, e.evidence, e.review_note,
+        e.w_base_at, e.w_last_at, e.shirt_size, e.size_at, e.reward_state, e.reward_rank, e.issued_at FROM ach_entries e JOIN ach_campaigns c ON c.id = e.campaign_id WHERE e.member_id = ?`),
+      challenge_weights: await Promise.all((await q('SELECT campaign_id, enc FROM ach_private WHERE member_id = ?')).map(async (r) => ({ campaign_id: r.campaign_id,
+        ...(await openAch(env, r.enc, member.id, r.campaign_id).catch(() => ({ error: '解不開（金鑰已更換）' }))) }))),
+      cheers: await env.DB.prepare(`SELECT (SELECT COUNT(*) FROM cheers WHERE member_id = ?1) AS given,
+        (SELECT COUNT(*) FROM cheers h WHERE h.pb_id IN (SELECT id FROM pb_records WHERE member_id = ?1) OR h.entry_id IN (SELECT id FROM ach_entries WHERE member_id = ?1)) AS received`).bind(member.id).first(),
     };
     await audit(env, req, member, 'privacy.export', 'member', member.id, '');
     return json(data, 200, { 'content-disposition': 'attachment; filename="my-data.json"' });
@@ -3612,7 +4593,8 @@ const api = (async function api(req, env, path, method) {
       //   跑者休息站：還不認得它的舊版管理畫面存其他開關時不會順手關掉
       //   團員揪團：團員可以在自己參加的分團發起活動（精簡欄位、不推播），由協會決定要不要開放
       //   推薦人：打開前要先在 Google Cloud 的 OAuth 同意畫面加上 Email 範圍、確認隱私權政策條文（README 部署清單）
-      for (const f of ['cams', 'rest', 'meetup', 'referral']) value[f] = has(f) ? b[f] === true : cur[f] === true;
+      //   成績與挑戰、恭喜榜的 PB 排行：打開前確認隱私權政策條文與 RACE_KEY（見證制體重挑戰需要；README 部署清單）
+      for (const f of ['cams', 'rest', 'meetup', 'referral', 'achieve', 'achieve_rank']) value[f] = has(f) ? b[f] === true : cur[f] === true;
     } else if (key === 'tabs') {
       // 下方分頁列的名稱（每個最多 4 個字，空白就用預設）
       value = {};
@@ -3895,8 +4877,11 @@ const api = (async function api(req, env, path, method) {
         WHERE s.pay_reported_at IS NOT NULL AND s.paid NOT IN ('paid','waived','refunded') AND s.status = 'in' AND e.date >= date('now','-120 days')
         GROUP BY e.id ORDER BY MIN(s.pay_reported_at) LIMIT 50`).all()).results.filter((e) => teamCan(e.team_id, 'event')).slice(0, 5);
     const reviews = (await reviewRows()).slice(0, 5).map(({ id, title, n }) => ({ id, title, n }));
-    const total = Object.values(joins).reduce((t, x) => t + x.n, 0) + applied + spots + pays.reduce((t, x) => t + x.n, 0) + reviews.reduce((t, x) => t + x.n, 0);
-    return { joins: Object.values(joins), applied, spots, pays: pays.map(({ id, title, n }) => ({ id, title, n })), reviews, total };
+    // 成績與挑戰：成績待審核、里程挑戰達成待確認（審核者才算；1 句）
+    const ach = can(member, 'achieve') && !READONLY[norm(member.role)]
+      ? await env.DB.prepare("SELECT (SELECT COUNT(*) FROM pb_records WHERE status = 'pending') AS pb, (SELECT COUNT(*) FROM ach_entries WHERE status = 'met') AS met").first() : { pb: 0, met: 0 };
+    const total = Object.values(joins).reduce((t, x) => t + x.n, 0) + applied + spots + pays.reduce((t, x) => t + x.n, 0) + reviews.reduce((t, x) => t + x.n, 0) + ach.pb + ach.met;
+    return { joins: Object.values(joins), applied, spots, pays: pays.map(({ id, title, n }) => ({ id, title, n })), reviews, pb: ach.pb, achMet: ach.met, total };
   };
   // digest：NULL＝即時、7–22＝每日摘要的台北整點｜teamReport：不是團長時是 null｜ops：要不要顯示「系統狀態」「幹部週報」兩列
   const notifPrefs = () => ({ mute: (member.notif_mute || '').split(',').filter((c) => MUTABLE.includes(c)), locked: Object.keys(CATS).filter((k) => CATS[k].locked),
@@ -5088,8 +6073,9 @@ const BACKUP_AAD = new TextEncoder().encode('cil-backup-v1');
 // 不備份的表：暫存（工作階段、限流、通行金鑰挑戰、migration 紀錄）、遙測（前端效能與錯誤，保存 90 天）、
 //   推播佇列與執行額度紀錄，以及通知中心（保存 180 天的訊息副本，人多時是最大的一張表；真正的狀態在各自的資料表，還原後通知中心從空的開始）
 //   每日用量估計與系統告警（ops_daily、ops_alerts）也是遙測類；幹部週報（ops_reports）只有聚合數字、很小，照樣備份
+//   成績截圖（pb_proofs）：每列可能 200 KB、審核完成 7 天就刪的短期證據，不備份
 const BACKUP_SKIP = new Set(['sessions', 'rate_limits', 'webauthn_challenges', 'd1_migrations',
-  'client_metrics', 'client_errors', 'push_queue', 'budget_log', 'notifications', 'ops_daily', 'ops_alerts']);
+  'client_metrics', 'client_errors', 'push_queue', 'budget_log', 'notifications', 'ops_daily', 'ops_alerts', 'pb_proofs']);
 // 同步來的鏡頭清單（水利署、水利處）可以在管理後台重新同步，只備份幹部手動新增的連結；公路局用 tools/cams-sync.mjs 重新匯入
 //   跑者休息站的官方開放資料可以重新同步（tools/rest-sync.mjs 與管理後台的立即同步）：只備份幹部整理、新增、修正、隱藏或寫了補充說明的列
 //   （條件有 OR，用的地方一律加括號）
@@ -5239,7 +6225,7 @@ async function quarterlyReview(env, now) {
 }
 
 // 每天 03:00 起：清掉過期資料；活動個資依後台設定的保存年限清除（沒設定就不動）
-//   子請求：佔用 1、設定 1、清理一個 batch 8–13 句、收尾 2
+//   子請求：佔用 1、設定 1、清理一個 batch 15–24 句（固定 15 句＋活動個資 4＋訓練紀錄 1＋成績與挑戰 0–4，有東西要清才送）、收尾 2
 async function retention(env, now) {
   const t = taipei(now), label = tpDate(now);
   if (!(await claim(env, 'retention', label))) return { done: true, result: null };
@@ -5278,10 +6264,74 @@ async function retention(env, now) {
   }
   const logYears = Math.max(0, Math.min(Number(org.log_years) || 0, 20));
   if (logYears) add('training_logs', `DELETE FROM training_logs WHERE date < date('now', '-${logYears} years')`);
+  // 成績與挑戰：見證制體重挑戰結束 30 天後刪體重（取消的立刻刪，這裡是保險）；截圖審核完成 7 天後刪、一直沒審的 180 天後刪；
+  //   給審核的說明審核完成 7 天後清空（目的已達成）；婉拒、撤銷的成績 180 天後刪（src/achieve.js RETENTION）
+  //   每小時那一句已經查過哪幾句有東西要清（ach_ret 的位元）：沒有的不送，稽核照樣記 0；自己開執行（沒有 probe）時全部送
+  const achRet = env.probe ? Number(env.probe.ach_ret) || 0 : 15, skipped = [];
+  AchSql.RETENTION.forEach(([k, sql], i) => (achRet & (1 << i) ? add(k, sql) : skipped.push(k)));
   if (!fits(env, stmts.length + 2, 'retention')) return yieldTo(env, 'retention', 'retention');
   const res = await env.DB.batch(stmts);
-  const out = Object.fromEntries(keys.map((k, i) => [k, res[i].meta.changes]));
+  const out = Object.fromEntries([...keys.map((k, i) => [k, res[i].meta.changes]), ...skipped.map((k) => [k, 0])]);
   await env.DB.batch([doneStmt(env, 'retention', label), await auditStmt(env, null, null, 'retention.cleanup', 'system', null, Object.entries(out).map(([k, v]) => `${k} ${v}`).join('、'))]);
+  return { done: true, result: out };
+}
+
+// 每天 09–21 點：成績與挑戰的結算與團服遞補（不看功能開關：關掉也要把進行中的挑戰結算完）
+//   1. 結束超過 7 天的挑戰一次一場：判定（pb／time／pace、里程與出席）→ 還沒達成的標未達成 → 挑戰標已結算 → 依達成先後分配團服名額
+//      （全部冪等，重跑只改還沒改的列）→ 通知每位參加者；有待確認的達成，審核者一則待辦（一小時一次）
+//   2. 遞補：候補裡同款團服已在別的挑戰拿到名額的改成 dup（DUPMARK），再把空出來的名額依順位補上並通知
+//   子請求：找一場 1、佔用 1、結算 batch 1、讀結果 1、待辦（限流 1＋收件人 1＋通知 2）、通知與完成標記 2、遞補 batch 1、挑戰名稱 1、通知 2（最多約 15，cost 24）
+async function achSettle(env, now) {
+  const out = {};
+  const c = await env.DB.prepare(AchSql.SETTLE_PICK).bind(tpDate(now)).first();
+  if (c && (await claim(env, 'ach_settle', c.id))) {
+    if (!fits(env, 14, 'achSettle')) return yieldTo(env, 'ach_settle', 'achSettle');
+    await env.DB.batch([
+      env.DB.prepare(AchSql.PB_EVAL(AchSql.SCOPE.campaign)).bind(c.id),
+      env.DB.prepare(AchSql.KMA_EVAL).bind(c.id),
+      env.DB.prepare("UPDATE ach_entries SET status = 'not_met', updated_at = datetime('now') WHERE campaign_id = ?1 AND status = 'joined'").bind(c.id),
+      env.DB.prepare("UPDATE ach_campaigns SET status = 'settled', settled_at = datetime('now'), updated_at = datetime('now') WHERE id = ?1 AND status = 'open'").bind(c.id),
+      env.DB.prepare(AchSql.RANK(AchSql.SCOPE.campaign)).bind(c.id),
+    ]);
+    const rows = (await env.DB.prepare(`SELECT e.id, e.member_id, e.status, e.reward_state, e.reward_rank, e.shirt_size,
+        (SELECT COUNT(*) FROM pb_records p WHERE p.member_id = e.member_id AND p.status = 'pending') AS pend
+      FROM ach_entries e WHERE e.campaign_id = ?1 AND e.member_id IS NOT NULL AND e.status != 'left'`).bind(c.id).all()).results;
+    const shirt = parseJ(c.rewards).shirt, url = `/#/ach/c/${c.id}`;
+    const waits = rows.filter((r) => r.reward_state === 'waitlist').sort((a, b) => a.reward_rank - b.reward_rank).map((r) => r.id);
+    const notes = [];
+    let a = 0, n = 0, g = 0, w = 0;
+    for (const r of rows) {
+      const base = { member_id: r.member_id, url, ref: `ach:${r.id}` };
+      if (r.status === 'achieved' || r.status === 'met') {
+        a++;
+        if (r.reward_state === 'granted') {
+          g++;
+          notes.push({ ...base, title: '團服名額確定了', body: r.shirt_size ? `「${c.title}」：尺寸 ${r.shirt_size}，等通知領取`
+            : `「${c.title}」：請在 ${achMD(shirt?.size_by || dayAdd(c.end_date, 14))} 前選好尺寸`, push: { body: '點開選尺寸' } });
+        } else if (r.reward_state === 'waitlist') {
+          w++;
+          notes.push({ ...base, title: '你在團服候補名單', body: `「${c.title}」候補第 ${waits.indexOf(r.id) + 1} 位，有名額會通知你`, push: { body: '點開看看' } });
+        } else if (r.status === 'achieved' && (c.kind === 'km' || c.kind === 'attend')) {
+          notes.push({ ...base, title: '恭喜完成挑戰', body: `「${c.title}」`, push: { body: '點開看你的挑戰' } });
+        }
+      } else if (r.status === 'not_met') {
+        n++;
+        notes.push({ ...base, title: '挑戰結束了', body: `「${c.title}」這次沒有達成，謝謝你一起努力${r.pend ? '。你還有成績在審核中，通過的話會自動補算' : ''}`, push: { body: '點開看看' } });
+      }
+    }
+    // 里程挑戰要幹部確認的（met）：審核者一則待辦（一小時一次，被擋就不寫；待處理摘要照樣算得到）
+    if (rows.some((r) => r.status === 'met') && !(await limited(env, 'achq:notify', 1, 3600))) {
+      const ids = (await env.DB.prepare(AchSql.APPROVER_IDS).all()).results.map((r) => r.id);
+      await notify(env, ids, 'todo', { kind: 'system', title: '挑戰達成待確認', body: '有跑友達成挑戰，等你確認', url: '/#/admin/ach?tab=met', ref: 'ach:queue', push: { body: '點開確認' } });
+    }
+    await notifyMany(env, 'training', notes, { kind: 'system', also: [doneStmt(env, 'ach_settle', c.id),
+      await auditStmt(env, null, null, 'ach.settle', 'campaign', c.id, `達成 ${a}、未達成 ${n}、團服 ${g}／候補 ${w}`)] });
+    Object.assign(out, { settled: c.id, achieved: a, not_met: n, granted: g, waitlist: w });
+  }
+  // 遞補（DUPMARK 在前）：同款已拿過的候補跳過，空出來的名額依順位補上
+  if (!fits(env, 6, 'achSettle')) return { done: true, result: out };
+  const [, pr] = await env.DB.batch([env.DB.prepare(AchSql.DUPMARK()), env.DB.prepare(AchSql.PROMOTE(AchSql.SCOPE.all))]);
+  if (pr.results.length) out.promoted = await achNotifyPromoted(env, pr.results);
   return { done: true, result: out };
 }
 
@@ -5768,6 +6818,8 @@ const CRON_PROBE = `SELECT
   EXISTS (SELECT 1 FROM notifications n JOIN members m ON m.id = n.member_id
           WHERE n.push_held = 1 AND n.read_at IS NULL AND m.notif_digest <= ?8 AND m.notif_digest > ?8 - ${DIGEST_SPAN}
             AND m.notif_digest_sent IS NOT ?1) AS dg,
+  ${AchSql.PROBE_COL} AS ach,
+  ${AchSql.RETENTION_PROBE} AS ach_ret,
   ${opsSql(1, 9, 10, 11)} AS ops`;
 async function cronProbe(env, now) {
   const t = taipei(now), nowMin = t.getUTCHours() * 60 + t.getUTCMinutes(), today0 = tpDate(now);
@@ -5806,13 +6858,15 @@ const JOBS = {
   // 推播摘要：各人選的整點（到之後 3 個整點內補做）有等摘要、還沒讀的通知（1 句查詢＋一個 batch 最多 4 句）
   digest:        { prio: 25, cost: 8, min: 6, idle: 0, due: (t, s) => !!s.dg, run: digestJob },
   renewals:      { prio: 30, cost: 10, min: 4, idle: 0, due: (t, s) => !!s.rn, run: remindRenewals },
-  retention:     { prio: 40, cost: 26, idle: null, due: (t, s) => t.h >= 3 && open(s, 'retention', t.date), run: retention },
+  retention:     { prio: 40, cost: 30, idle: null, due: (t, s) => t.h >= 3 && open(s, 'retention', t.date), run: retention },
   auditDigest:   { prio: 41, cost: 6, idle: null, due: (t, s, env) => t.h >= 9 && !!env.AUDIT_KEY && !s.ad, run: auditDigest },
   monthSummary:  { prio: 42, cost: 12, idle: 0, due: (t, s) => t.d === 1 && t.h >= 9 && open(s, 'month_summary', t.prev), run: monthSummary },
   review:        { prio: 43, cost: 10, idle: 0, due: (t, s) => t.d === 1 && t.m % 3 === 0 && t.h >= 9 && open(s, 'quarterly_review', t.q), run: quarterlyReview },
   fatigue:       { prio: 44, cost: 12, min: 6, idle: 0, due: (t, s) => t.h >= 21 && open(s, 'fatigue', t.date), run: fatigueCheck },
   // 幹部週報：每週一 09:00 起產生上週的週報；錯過就在同一週後面的整點補做（週日屬於本週，已經做過）
   weeklyReport:  { prio: 45, cost: 12, min: 10, idle: null, due: (t, s) => (t.dow !== 1 || t.h >= 9) && open(s, 'weekly_report', t.wk), run: weeklyReport },
+  // 成績與挑戰：每天 09–21 點，結束超過 7 天的挑戰結算（一次一場）與團服遞補；不看功能開關（關掉也要把進行中的挑戰結算完）
+  achSettle:     { prio: 46, cost: 24, min: 8, idle: 0, due: (t, s) => t.h >= 9 && t.h <= 21 && !!s.ach, run: achSettle },
   cams:          { prio: 50, cost: 9, idle: null, due: (t, s) => Cams.featureOn(s.features) && t.h >= 4 && camsDue(t, s).length > 0, run: syncCams },
   // 跑者休息站：01、02、06 點各一個到期的來源（同步一個來源不能中途停，開始前要有整份額度）
   rest:          { prio: 55, cost: 12, idle: null, due: restDue, run: syncRest },
@@ -6043,9 +7097,10 @@ async function devRoute(req, env, ctx, url, path) {
       for (const [t, rows] of p.tables) { counts[t] = (counts[t] || 0) + rows.length; rid += rows.filter((r) => '_rid' in r).length; }
     }
     const names = Object.keys(counts).filter((n) => /^\w+$/.test(n));
-    const cnt = await env.DB.batch(names.map((n) => env.DB.prepare(`SELECT COUNT(*) AS n FROM "${n}" ${BACKUP_FILTER[n] ? `WHERE (${BACKUP_FILTER[n]})` : ''}`)));
+    // 現在的筆數：一句算完所有表（batch 裡每一句都算一個 D1 查詢，表一多就超過 50）
+    const cnt = names.length ? JSON.parse((await env.DB.prepare(`SELECT json_array(${names.map((n) => `(SELECT COUNT(*) FROM "${n}"${BACKUP_FILTER[n] ? ` WHERE (${BACKUP_FILTER[n]})` : ''})`).join(', ')}) AS j`).first()).j) : [];
     return json({ key: o.key, format: man.format, version: man.version, at: man.at, parts: man.parts, rid, manifest: man.tables,
-      counts, now: Object.fromEntries(names.map((n, i) => [n, cnt[i].results[0].n])) });
+      counts, now: Object.fromEntries(names.map((n, i) => [n, cnt[i]])) });
   }
   // 大量資料（執行額度測試用）：?members=300&subs=400 建假會員（id 以 b_ 開頭）與假訂閱；
   //   ?event=<id>&pending=60 讓前 60 位假會員在這場待審核（報名時間依序相差 1 秒）；?clear=1 全部清掉
@@ -6054,6 +7109,7 @@ async function devRoute(req, env, ctx, url, path) {
       await env.DB.batch([
         env.DB.prepare("DELETE FROM push_subs WHERE endpoint LIKE 'https://fcm.googleapis.com/fcm/send/b\\_%' ESCAPE '\\'"),
         env.DB.prepare("UPDATE draws SET member_id = NULL WHERE member_id LIKE 'b\\_%' ESCAPE '\\'"),   // 得獎紀錄沒有 ON DELETE（刪帳號時匿名化）
+        env.DB.prepare("DELETE FROM ach_campaigns WHERE id LIKE 'bc\\_%' ESCAPE '\\'"),   // 成績與挑戰的大量測試挑戰（參加列、成績靠 ON DELETE CASCADE）
         env.DB.prepare("DELETE FROM members WHERE id LIKE 'b\\_%' ESCAPE '\\'"),
         env.DB.prepare("DELETE FROM routes WHERE id LIKE 'b\\_%' ESCAPE '\\'"),
         env.DB.prepare("DELETE FROM teams WHERE id LIKE 'bt%'"),
@@ -6108,8 +7164,49 @@ async function devRoute(req, env, ctx, url, path) {
       FROM json_each(?2) j`).bind(q.get('logdate'), ids('ln', Number(q.get('lfrom')) || 0), Number(q.get('km')) || 10));
     const nt = Math.min(Number(q.get('teams')) || 0, 50);
     if (nt) stmts.push(env.DB.prepare("INSERT OR IGNORE INTO teams (id, name, sort) SELECT printf('bt%02d', value), printf('大量分團 %02d', value), 100 + value FROM json_each(?)").bind(seq(nt)));
+    // 成績與挑戰：?pbs=fm&pn=300：前 300 位假會員各一筆已核准的成績（30 天前、刷新 PB）並打開恭喜榜；
+    //   ?achkm=YYYY-MM-DD&cn=300：一個里程挑戰 bc_km（那天結束、前 30 天開始、目標 10 公里、團服名額 100）＋前 300 位參加、結束那天各一筆 12 公里的訓練紀錄
+    const npb = Math.min(Number(q.get('pn')) || 0, 1000), pbd = Ach.STD.includes(q.get('pbs')) ? q.get('pbs') : null;
+    if (npb && pbd) stmts.push(env.DB.prepare(`INSERT OR IGNORE INTO pb_records (id, member_id, dist_key, km, seconds, race_name, race_date, status, pb_kind, prev_seconds, review_at)
+        SELECT printf('bpb%04d', value), printf('b_%04d', value), ?2, ?3, 10800 + value * 7, '大量測試賽', date('now', '+8 hours', '-30 days'), 'approved', 'break', 10860 + value * 7, datetime('now')
+        FROM json_each(?1)`).bind(seq(npb), pbd, Ach.DISTS[pbd].km),
+      env.DB.prepare("UPDATE members SET cheer_board = 1, cheer_rank = 1 WHERE id IN (SELECT printf('b_%04d', value) FROM json_each(?))").bind(seq(npb)));
+    const ncn = Math.min(Number(q.get('cn')) || 0, 1000), akd = q.get('achkm') || '';
+    if (ncn && isDate(akd)) stmts.push(env.DB.prepare(`INSERT OR IGNORE INTO ach_campaigns (id, title, kind, target, confirm, rewards, start_date, end_date, join_by, status, opened_at)
+        VALUES ('bc_km', '大量里程挑戰', 'km', 10, 0, ?2, date(?1, '-30 days'), ?1, ?1, 'open', datetime('now'))`)
+        .bind(akd, JSON.stringify({ shirt: { sizes: ['M'], quota: 100, size_by: dayAdd(akd, 14), chart: null, pool: null } })),
+      env.DB.prepare(`INSERT OR IGNORE INTO ach_entries (id, campaign_id, member_id) SELECT printf('bce%04d', value), 'bc_km', printf('b_%04d', value) FROM json_each(?)`).bind(seq(ncn)),
+      // 記錄時間設在結束那天（結算的里程凍結在結束後第 4 天 00:00，之後才記的不算）
+      env.DB.prepare(`INSERT OR IGNORE INTO training_logs (id, member_id, date, status, km, created_at) SELECT printf('bclg%04d', value), printf('b_%04d', value), ?1, 'done', 12, ?1 || ' 01:00:00'
+        FROM json_each(?2)`).bind(akd, seq(ncn)));
     if (stmts.length) await env.DB.batch(stmts);
     return json({ ok: true, members: nm, subs: ns, pending: np });
+  }
+  // 成績與挑戰的測試入口（只改測試要的那幾個欄位，不經過 API）：
+  //   ?expire=<參加 id> 見證碼當作過期｜?entry=<參加 id> 讀一列（含 w_token 是否存在、w_tries）｜?private=<挑戰 id>&member= 讀加密的體重列
+  //   ?copyenc=<挑戰 id>&to=<挑戰 id>&member= 把密文複製到另一個挑戰（測 AAD）｜?pb=<成績 id>&created= 改登錄時間｜?log=<紀錄 id>&created=&updated= 改訓練紀錄時間
+  //   ?camp=<挑戰 id>&start=&end=&join=&opened=&settled= 改挑戰日期｜?wbase=<參加 id>&at= 改起始見證時間｜?sizeby=<挑戰 id>&date= 改尺寸截止｜?sizeat=<參加 id>&at= 改第一次選尺寸的時間
+  //   ?team=<分團 id>&add=<會員 id> 加入分團｜?tpriv=<分團 id>&on=1 設成私密分團（on=0 改回）｜?purge=1 清掉所有成績與挑戰的資料
+  if (path === '/api/dev/ach') {
+    const id = (k) => (/^[\w-]{1,32}$/.test(q.get(k) || '') ? q.get(k) : null), ts = (k) => (/^\d{4}-\d{2}-\d{2}( \d{2}:\d{2}:\d{2})?$/.test(q.get(k) || '') ? q.get(k) : null);
+    const out = {};
+    if (id('expire')) await env.DB.prepare("UPDATE ach_entries SET w_token_exp = datetime('now', '-1 minutes') WHERE id = ?").bind(id('expire')).run();
+    if (id('entry')) out.entry = await env.DB.prepare('SELECT *, w_token IS NOT NULL AS has_token FROM ach_entries WHERE id = ?').bind(id('entry')).first();
+    if (id('private')) out.private = await env.DB.prepare('SELECT * FROM ach_private WHERE campaign_id = ? AND member_id = ?').bind(id('private'), id('member')).first();
+    if (id('copyenc')) await env.DB.prepare(`INSERT INTO ach_private (campaign_id, member_id, enc) SELECT ?2, member_id, enc FROM ach_private WHERE campaign_id = ?1 AND member_id = ?3
+      ON CONFLICT(campaign_id, member_id) DO UPDATE SET enc = excluded.enc`).bind(id('copyenc'), id('to'), id('member')).run();
+    if (id('pb') && ts('created')) await env.DB.prepare('UPDATE pb_records SET created_at = ? WHERE id = ?').bind(ts('created'), id('pb')).run();
+    if (id('log')) await env.DB.prepare('UPDATE training_logs SET created_at = COALESCE(?2, created_at), updated_at = COALESCE(?3, updated_at) WHERE id = ?1').bind(id('log'), ts('created'), ts('updated')).run();
+    if (id('camp')) await env.DB.prepare(`UPDATE ach_campaigns SET start_date = COALESCE(?2, start_date), end_date = COALESCE(?3, end_date), join_by = COALESCE(?4, join_by),
+      opened_at = COALESCE(?5, opened_at), settled_at = COALESCE(?6, settled_at) WHERE id = ?1`).bind(id('camp'), ts('start'), ts('end'), ts('join'), ts('opened'), ts('settled')).run();
+    if (id('wbase') && ts('at')) await env.DB.prepare('UPDATE ach_entries SET w_base_at = ? WHERE id = ?').bind(ts('at'), id('wbase')).run();
+    if (id('sizeby') && ts('date')) await env.DB.prepare("UPDATE ach_campaigns SET rewards = json_set(rewards, '$.shirt.size_by', ?2) WHERE id = ?1 AND json_extract(rewards, '$.shirt') IS NOT NULL").bind(id('sizeby'), ts('date')).run();
+    if (id('team') && id('add')) await env.DB.prepare("INSERT OR REPLACE INTO team_members (team_id, member_id, role, status) VALUES (?, ?, 'member', 'active')").bind(id('team'), id('add')).run();
+    if (id('sizeat') && ts('at')) await env.DB.prepare('UPDATE ach_entries SET size_at = ? WHERE id = ?').bind(ts('at'), id('sizeat')).run();
+    if (id('tpriv')) await env.DB.prepare('UPDATE teams SET private = ? WHERE id = ?').bind(q.get('on') === '1' ? 1 : 0, id('tpriv')).run();
+    // ?purge=1：測試收尾清掉所有成績與挑戰的資料（後面的備份額度測試照原本的表數）
+    if (q.get('purge') === '1') await env.DB.batch(['cheers', 'pb_proofs', 'ach_private', 'ach_entries', 'ach_campaigns', 'pb_records'].map((t) => env.DB.prepare(`DELETE FROM ${t}`)));
+    return json({ ok: true, ...out });
   }
   // 營運三項的測試入口：
   //   ?day=YYYY-MM-DD（UTC，預設今天）&usage=d1_read:4100000,req:5 設定那天的用量估計；&pushErr=30&pushSent=50 設定推播結果

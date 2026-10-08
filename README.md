@@ -114,6 +114,13 @@ Google 不允許在 LINE、Facebook、Instagram 的內建瀏覽器登入；在 L
 1. `npx wrangler d1 migrations apply cil-run --remote`（`0053_claim_tbd_reconfirm`，只加欄位），先在測試環境做一次。**要在部署程式之前做**：新程式會讀寫 `time_tbd`、`reconfirm_at`、`confirmed_at`。
 2. 部署程式（Service Worker 升到 `cil-v71`）。
 
+**成績與挑戰上線步驟**（功能開關 `achieve`、`achieve_rank`，預設關閉）：
+
+1. `npx wrangler d1 migrations apply cil-run --remote`（`0054_achieve`，只新增資料表與欄位），先在測試環境做一次。**要在部署程式之前做**：新程式每次請求都會讀 `pb_records`、`ach_entries`。
+2. 部署程式。開關還是關的，畫面沒有變化；隱私權政策版本變成 `2026-10-08.1`，所有人下次開啟時要重新同意（條文寫成「協會開放時」的條件式）。
+3. 打開「成績與挑戰」前：確認已設定 `RACE_KEY`（見證制體重挑戰需要；沒有時只能辦榮譽制體重挑戰）；「系統設定 → 隱私權政策」有自訂內文的協會，要自己補上比賽成績、挑戰紀錄與挑戰體重的說明並升版。
+4. 打開「系統設定 → 功能開關 → 成績與挑戰」；恭喜榜的各距離 PB 排行另外打開。
+
 ### 跑步數據匯入
 
 不串接任何付費或需要訂閱的服務：手動輸入、iPhone 捷徑讀取 Apple 健康，或匯入 GPX／TCX 檔（Garmin Connect、Apple 健康、各家手錶都能匯出）。
