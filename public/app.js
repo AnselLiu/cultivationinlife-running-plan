@@ -76,6 +76,23 @@ if (location.pathname === '/privacy' && !location.hash) history.replaceState(nul
     history.replaceState(null, '', location.hash.startsWith('#/') ? `/${location.hash}` : `/#/e/${m[1]}${t ? `?t=${encodeURIComponent(t)}` : ''}`);
   }
 }
+// 恢復連結 /r/<代碼>（理事長私訊的一次性連結，見 src/worker.js 的 recoveryStmts）：代碼只留在這個分頁的記憶體與 sessionStorage，
+//   網址馬上換成 /#/recover（不留在網址列、瀏覽紀錄、錯誤回報與效能紀錄裡）；格式不對的一樣換掉（頁面顯示連結無效）
+let recToken = null;
+{
+  const m = location.pathname.match(/^\/r\/([\w-]{43})\/?$/);
+  if (location.pathname.startsWith('/r/')) {
+    recToken = m?.[1] || '';
+    try { if (m) sessionStorage.setItem('cil-recover', m[1]); else sessionStorage.removeItem('cil-recover'); } catch {}
+    history.replaceState(null, '', '/#/recover');
+  }
+}
+// 恢復帳號頁用的代碼（重新整理、Google 登入回來時從 sessionStorage 拿）；clear＝接回帳號後清掉
+const recoverToken = ({ clear = false } = {}) => {
+  if (clear) { recToken = null; try { sessionStorage.removeItem('cil-recover'); } catch {} return null; }
+  if (recToken == null) { try { recToken = sessionStorage.getItem('cil-recover') || ''; } catch { recToken = ''; } }
+  return recToken;
+};
 // 地圖：先連到圖磚主機、下載地圖模組（map.js 一載入就開始抓 Leaflet），跟登入資料同時進行，不用等 /api/me 回來才開始
 let mapWarm = false;
 // 先抓的圖磚：map.js 讓其他圖磚等這幾張到了（或最多 1.2 秒）才開始抓，畫面中間先出來
@@ -91,7 +108,7 @@ const warmMap = () => {
   const pre = (f) => { const l = document.createElement('link'); l.rel = 'modulepreload'; l.href = f; document.head.append(l); };
   const h = location.hash;
   if (/^#\/(e\/|tickets)/.test(h)) ['/event.js', '/pricing.js', '/party.js'].forEach(pre);   // event.js 靜態 import 的兩個一起抓，不用等 event.js 解析完才發現
-  else if (/^#\/me\/\w/.test(h)) pre('/me.js');
+  else if (/^#\/(me\/\w|recover)/.test(h)) pre('/me.js');
 }
 if (location.hash.startsWith('#/map')) {
   warmMap();
@@ -819,9 +836,11 @@ const b64uToBuf = (s) => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g,
 const bufToB64u = (b) => btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 // purpose：register 新增、login 登入、stepup 幹部再次驗證
 //   hints：['hybrid'] 先出現「用其他裝置」的 QR Code（舊手機不在身邊時；不支援的瀏覽器忽略，照樣可以在選單裡選）
-async function passkey(purpose, name, { hints } = {}) {
+//   recover：恢復連結的代碼（沒登入，用 /api/recover/passkey/* 替連結那位跑友新增一把並登入；purpose 一律 register）
+async function passkey(purpose, name, { hints, recover } = {}) {
   if (!pkSupported()) throw new Error('這個瀏覽器不支援通行金鑰，請用 iPhone 的 Safari 或 Chrome');
-  const { cid, publicKey: o } = await api('/passkey/options', { method: 'POST', body: { purpose } });
+  const base = recover ? '/recover/passkey' : '/passkey', extra = recover ? { token: recover } : {};
+  const { cid, publicKey: o } = await api(`${base}/options`, { method: 'POST', body: { purpose, ...extra } });
   const pk = { ...o, challenge: b64uToBuf(o.challenge) };
   if (o.user) pk.user = { ...o.user, id: b64uToBuf(o.user.id) };
   if (o.excludeCredentials) pk.excludeCredentials = o.excludeCredentials.map((c) => ({ ...c, id: b64uToBuf(c.id) }));
@@ -834,7 +853,7 @@ async function passkey(purpose, name, { hints } = {}) {
   const credential = { id: cred.id, type: cred.type, response: purpose === 'register'
     ? { clientDataJSON: bufToB64u(r.clientDataJSON), attestationObject: bufToB64u(r.attestationObject) }
     : { clientDataJSON: bufToB64u(r.clientDataJSON), authenticatorData: bufToB64u(r.authenticatorData), signature: bufToB64u(r.signature), userHandle: r.userHandle ? bufToB64u(r.userHandle) : null } };
-  return api('/passkey/verify', { method: 'POST', body: { cid, credential, name } });
+  return api(`${base}/verify`, { method: 'POST', body: { cid, credential, name, ...extra } });
 }
 // 幹部開了強制兩步驟、這次登入還沒驗證：顯示提示列
 const mfaBanner = () => (me?.mfaPending ? `<section class="card mfabar"><div><b>請驗證身分</b><span class="tiny" style="display:block">你是<span translate="no">${esc(me.realRoleName || '幹部')}</span>，協會規定用通行金鑰再驗證一次才能使用管理功能。</span></div>
@@ -3141,7 +3160,10 @@ const MI = {
 };
 async function meView(section) {
   const welcome = new URLSearchParams(location.hash.split('?')[1] || '').get('welcome');
-  const googleMsg = new URLSearchParams(location.hash.split('?')[1] || '').get('google');
+  // 用恢復連結接回帳號（?recovered=1 用 Google、pk 用通行金鑰）：代碼用完了，從這個分頁清掉；帳號與安全顯示下一步
+  const recovered = new URLSearchParams(location.hash.split('?')[1] || '').get('recovered');
+  if (recovered) recoverToken({ clear: true });
+  const googleMsg = recovered ? (recovered === 'pk' ? 'recoveredPk' : 'recovered') : new URLSearchParams(location.hash.split('?')[1] || '').get('google');
   // Google 綁定回來（?google=）：沒指定子頁的是帳號與安全；從推薦人頁去確認的回到 #/me/referral
   if (googleMsg && !section) section = 'security';
   if (!section) return meHome(welcome);
@@ -3219,6 +3241,7 @@ async function meHome(welcome) {
 }
 // 「我的」的子頁（me.js，用到才載入）：個人資料、賽事、報名資料、分團、通知、行事曆、外觀、安全、隱私、協會、會籍卡、分享 App
 const meSection = lazy('./me.js', 'meSection');
+const recoverView = lazy('./me.js', 'recoverView');
 const shareApp = lazy('./me.js', 'shareApp');
 
 // quiet：「開始使用」卡自己更新畫面與播報（不跳提示、不重畫整頁）；成功開啟回傳 true
@@ -3391,6 +3414,8 @@ async function renderOnce() {
   document.body.classList.toggle('guest', !me);
   // 隱私權政策與登入畫面也要換分頁標題、消耗換頁的焦點設定（不然 title 停在上一頁、焦點掉到 body）
   if (hash === '/privacy') { if (!me) { try { const r = await api('/me'); me = r.member; cfg = r; } catch {} } $('#ctitle').textContent = ''; privacyView(); return pageSettled(); }
+  // 恢復帳號（恢復連結 /r/<代碼> 轉過來的）：沒登入、登入成別人都打得開，不用先同意隱私權政策（頁面沒有個人資料，只有遮過的名字）
+  if (hash === '/recover') { $('#ctitle').textContent = ''; await recoverView(); return pageSettled(); }
   if (!me) { $('#ctitle').textContent = ''; loginView(); return pageSettled(); }
   if (cfg.needConsent) {
     // 記住原本要去的頁面（例如捷徑帶數據進來），同意後再回去
@@ -3667,7 +3692,7 @@ addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvt 
 addEventListener('appinstalled', () => { installEvt = null; try { localStorage.setItem('cil-installed', '1'); } catch {} saveStart({ install: 'done' }); document.querySelectorAll('.installcard').forEach((c) => c.remove()); if ($('#startCard')) repaintStart(); });
 
 // 拆出去的模組（admin.js、photo.js…）從這裡拿共用的工具與狀態
-export { tbdTag, timeHtml, signedWord, gatherVerb, unitOf, tpAt, canMeetup, meetupTeams, refOn, achOn, achRankOn, kindLabel, tilePreload, focusEl, legacyData, removeLegacy, addrField, bindAddrField, latest, $, cfg, downloadAuthed, scanSheet, FEEL, IC, KIND_NAME, LOG_ICON, LOG_STATUS_NAME, MI, PAID_NAME, ROLE_NAME, TAB_DEFAULT, TEAM_PERMS, coachTeam, TEAM_ROLE_NAME, ago, allow, api, applyFeatures, avatar, barChart, bars, bindComments, bindStepup, btnRow, choose, coachPrefs, copy, countdownPicker, dayLabel, dstr, emptyState, esc, eventCard, feat, fixText, group, ic, largeTitle, me, mfaBanner, money, myCycle, nrow, org, pad2, paintCountdown, passkey, planSeg, queueLog, raceTarget, refreshMe, render, route, row, setCoachPrefs, squareIcon, startKey, studio, subTitle, teamAllow, teamIcon, teamOf, teams, toast, rich, keep, names, view, ymd, askReason, isOffline, nowTp, signupDefaults, submitLabel, camLazy, openSheet, apiAll, fmtDuration, fmtDistPace, parseHMS,
+export { recoverToken, inAppBrowser, tbdTag, timeHtml, signedWord, gatherVerb, unitOf, tpAt, canMeetup, meetupTeams, refOn, achOn, achRankOn, kindLabel, tilePreload, focusEl, legacyData, removeLegacy, addrField, bindAddrField, latest, $, cfg, downloadAuthed, scanSheet, FEEL, IC, KIND_NAME, LOG_ICON, LOG_STATUS_NAME, MI, PAID_NAME, ROLE_NAME, TAB_DEFAULT, TEAM_PERMS, coachTeam, TEAM_ROLE_NAME, ago, allow, api, applyFeatures, avatar, barChart, bars, bindComments, bindStepup, btnRow, choose, coachPrefs, copy, countdownPicker, dayLabel, dstr, emptyState, esc, eventCard, feat, fixText, group, ic, largeTitle, me, mfaBanner, money, myCycle, nrow, org, pad2, paintCountdown, passkey, planSeg, queueLog, raceTarget, refreshMe, render, route, row, setCoachPrefs, squareIcon, startKey, studio, subTitle, teamAllow, teamIcon, teamOf, teams, toast, rich, keep, names, view, ymd, askReason, isOffline, nowTp, signupDefaults, submitLabel, camLazy, openSheet, apiAll, fmtDuration, fmtDistPace, parseHMS,
   // event.js、me.js
   applyCounts, bellState, canScan, dayPattern, mapsUrl, once, qrSVG, routeSvg, scan, setStopScan, GOOGLE_G, NICON, applyTabs, applyTheme, askLegacyOnLeave,
   bindInstall, clearDeviceData, dropPush, googleHref, iconsOnly, installCard, isStandalone, lsOrNull, pkSupported, reduceMotion, theme, togglePush, setMe,

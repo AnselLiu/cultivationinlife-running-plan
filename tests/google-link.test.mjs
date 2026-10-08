@@ -8,8 +8,8 @@ import { createHash } from 'node:crypto';
 const BASE = process.env.BASE || 'http://localhost:8799', RP = new URL(BASE).hostname;
 const T = Date.now().toString(36);
 const devCookie = async (id, mfa) => (await fetch(`${BASE}/api/dev/login?id=${id}${mfa ? '&mfa=1' : ''}`, { redirect: 'manual' })).headers.get('set-cookie').split(';')[0];
-async function call(cookie, path, { method = 'GET', body } = {}) {
-  const headers = { origin: BASE, ...(cookie ? { cookie } : {}) };
+async function call(cookie, path, { method = 'GET', body, race } = {}) {
+  const headers = { origin: BASE, ...(cookie ? { cookie } : {}), ...(race ? { 'x-dev-race': race } : {}) };
   if (method !== 'GET' && method !== 'DELETE') headers['content-type'] = 'application/json';
   const r = await fetch(`${BASE}/api${path}`, { method, headers, body: method === 'GET' || method === 'DELETE' ? undefined : JSON.stringify(body ?? {}) });
   const text = await r.text();
@@ -52,7 +52,8 @@ async function newKey() {
   return { key: await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']), credId: crypto.getRandomValues(new Uint8Array(32)), counter: 1 };
 }
 // 新增通行金鑰：回傳 options 與 verify 的回應（options 被擋下時 verify 是 null）；between：拿到 options 之後、送出 verify 之前要做的事
-async function register(cookie, k, between) {
+//   race：送出 verify 時帶 x-dev-race（伺服器在寫入前一刻模擬別的請求，見 src/worker.js 的 devRace）
+async function register(cookie, k, between, race) {
   const o = await call(cookie, '/passkey/options', { method: 'POST', body: { purpose: 'register' } });
   if (o.status !== 200) return { options: o, verify: null };
   if (between) await between();
@@ -61,7 +62,7 @@ async function register(cookie, k, between) {
   const ad = cat(await sha(te.encode(RP)), new Uint8Array([0x45, 0, 0, 0, k.counter]), new Uint8Array(16), new Uint8Array([0, 32]), k.credId, cbor(cose));
   const cd = te.encode(JSON.stringify({ type: 'webauthn.create', challenge: o.json.publicKey.challenge, origin: BASE }));
   const att = cbor(new Map([['fmt', 'none'], ['attStmt', new Map()], ['authData', ad]]));
-  const v = await call(cookie, '/passkey/verify', { method: 'POST', body: { cid: o.json.cid, credential: { id: b64u(k.credId), type: 'public-key', response: { clientDataJSON: b64u(cd), attestationObject: b64u(att) } } } });
+  const v = await call(cookie, '/passkey/verify', { method: 'POST', race, body: { cid: o.json.cid, credential: { id: b64u(k.credId), type: 'public-key', response: { clientDataJSON: b64u(cd), attestationObject: b64u(att) } } } });
   return { options: o, verify: v };
 }
 async function stepup(cookie, k) {
@@ -361,6 +362,17 @@ test('強制兩步驟、還沒有通行金鑰的幹部：用 Google 登入後 15
     const r1 = await register(g3.cookie, await newKey(), async () => { second = await register(g3.cookie, await newKey()); });
     assert.equal(second.verify.status, 200, '先完成的那一把');
     assert.equal(r1.verify.status, 403, '另一個挑戰值不能再當第一把');
+    // 兩個新增同時通過上面「還沒有通行金鑰」的檢查（x-dev-race 在寫入前一刻模擬另一個先寫進去）：寫入那一句再檢查一次，不會有兩把「第一把」
+    const sub3 = `gl_f3_${T}`;
+    const id3 = (await me((await google({ sub: sub3, name: '同時第一把' })).cookie)).id;
+    assert.equal((await call(chair, `/members/${id3}/role`, { method: 'POST', body: { role: 'coach' } })).status, 200);
+    const raced = await register((await google({ sub: sub3 })).cookie, await newKey(), null, 'pk-first');
+    assert.equal(raced.options.status, 200, raced.options.text);
+    assert.equal(raced.verify.status, 403, raced.verify.text);
+    assert.equal(raced.verify.json.error, '新增通行金鑰前，請先用現有的通行金鑰驗證');
+    assert.equal((await call(chair, `/members/${id3}/security`)).json.passkeys, 1, '只有先寫進去的那一把');
+    assert.ok(!(await auditOf('passkey.add')).some((r) => r.target_id === id3), '沒有記新增');
+    assert.equal((await sec(await devCookie('t_chair'))).filter((n) => n.url === `/#/admin?tab=roles&sec=${id3}&g=1`).length, 0, '沒有發第一把的通知');
   } finally {
     assert.equal((await call(chair, '/settings/security', { method: 'POST', body: { require_mfa: false } })).status, 200);
   }

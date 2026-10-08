@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
-import { BIND_SQL, UP_SQL, DOWN_SQL, RELINK_SQL, CLEAR_SQL, DENY_SQL, ACK_SQL, FOCUS_SQL, SUMMARY_SQL, SEARCH_SQL, NAMES_SQL, NAMED_SQL, NAME_SQL, COOLDOWN_SQL, LOGIN_SQL, LINK_SQL, CLEAR_HOLDER_SQL, ADMIN_CLEAR_READ_SQL } from '../src/referral.js';
+import { BIND_SQL, UP_SQL, DOWN_SQL, RELINK_SQL, CLEAR_SQL, DENY_SQL, ACK_SQL, FOCUS_SQL, SUMMARY_SQL, SEARCH_SQL, NAMES_SQL, NAMED_SQL, NAME_SQL, COOLDOWN_SQL, LOGIN_SQL, LINK_SQL, CLEAR_HOLDER_SQL, ADMIN_CLEAR_READ_SQL, RECOVER_SQL } from '../src/referral.js';
 import { ERASE_MEMBER } from '../src/erase.js';
 
 const dir = new URL('../migrations/', import.meta.url);
@@ -134,6 +134,27 @@ test('登入時把別人身上相同的查詢碼清掉（同一句）；綁定�
   db.prepare(CLEAR_HOLDER_SQL).run('H');
   db.prepare(CLEAR_HOLDER_SQL).run(null);
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM members WHERE email_h IS NOT NULL").get().n, 0);
+});
+
+test('恢復連結接回帳號（RECOVER_SQL）：連結還能用（這個人的、沒用過、沒過期）才綁 Google 與查詢碼，同一句清掉別人相同的查詢碼；刪除帳號連結一起刪', () => {
+  const db = freshDb();
+  add(db, 'g', 'h');
+  db.prepare("UPDATE members SET email_h = 'H', google_sub = 'old-g' WHERE id = 'h'").run();
+  db.prepare("UPDATE members SET google_sub = 'old' WHERE id = 'g'").run();
+  const run = (th) => db.prepare(RECOVER_SQL).run('g', null, 'H', 1, 'new-g', th).changes;
+  assert.equal(run('th-g'), 0, '沒有連結');
+  db.prepare("INSERT INTO recovery_links (token_hash, member_id, expires_at) VALUES ('th-h', 'h', datetime('now', '+1 day')), ('th-x', 'g', datetime('now', '-1 second'))").run();
+  db.prepare("INSERT INTO recovery_links (token_hash, member_id, expires_at, used_at) VALUES ('th-u', 'g', datetime('now', '+1 day'), datetime('now'))").run();
+  assert.equal(run('th-h'), 0, '別人的連結');
+  assert.equal(run('th-x'), 0, '過期');
+  assert.equal(run('th-u'), 0, '用過');
+  assert.equal(db.prepare("SELECT email_h FROM members WHERE id = 'h'").get().email_h, 'H', '沒寫的時候別人的查詢碼也不動');
+  db.prepare("INSERT INTO recovery_links (token_hash, member_id, created_by, expires_at) VALUES ('th-g', 'g', 'h', datetime('now', '+1 day'))").run();
+  assert.equal(run('th-g'), 2, '自己＋清掉別人的查詢碼');
+  assert.deepEqual(db.prepare('SELECT id, email_h, google_sub FROM members ORDER BY id').all().map((r) => [r.id, r.email_h, r.google_sub]), [['g', 'H', 'new-g'], ['h', null, 'old-g']], '換成新的 Google 帳號');
+  db.prepare("DELETE FROM members WHERE id = 'g'").run();
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM recovery_links WHERE member_id = 'g'").get().n, 0, 'ON DELETE CASCADE');
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM recovery_links").get().n, 1, '別人的留著');
 });
 
 test('幹部移除推薦人：清掉之前先把原推薦人那則推薦通知標成已讀（別人的、別的 ref 不動）', () => {

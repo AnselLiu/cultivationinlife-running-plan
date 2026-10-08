@@ -2,7 +2,7 @@
 //   GET /api/members/:id/security 只給數字；POST …/security-reset：只有理事長、15 分鐘內用通行金鑰驗證過、不能重設自己、一小時 10 次；
 //   通行金鑰、工作階段（連同行事曆訂閱網址）、推播訂閱、待確認的 Google 綁定、挑戰值一起刪；unlink_google 再解除 Google 與 Gmail 查詢碼；
 //   稽核只記數字；原因只在給本人的通知；D1 句數固定（跟金鑰、裝置數量無關）
-//   重設後沒有登入方式的（沒綁 Google，或一起解除）要輸入對方的姓名確認（邀請碼與沒綁過的 Google 都會開新帳號，回不到原帳號）
+//   重設後沒有登入方式的（沒綁 Google，或一起解除）要輸入對方的姓名確認，並一起產生一次性恢復連結（只回一次；接回帳號的流程在 tests/recovery.test.mjs）
 //   登入、新增通行金鑰、綁定 Google 途中剛好被重設（x-dev-race 模擬）：不會留下工作階段、通行金鑰或綁定
 //   用 /api/dev/google 模擬 Google 登入，軟體驗證器模擬手機的通行金鑰（同 tests/google-link.test.mjs）
 import { test, after, before } from 'node:test';
@@ -107,8 +107,8 @@ test('帳號安全的數字：只有理事長看得到；只有數字，沒有�
   const g = await call(chair, `/members/${a.id}/security`);
   assert.equal(g.status, 200, g.text);
   B.get = g.d1;
-  assert.deepEqual(Object.keys(g.json).sort(), ['google', 'lastSeen', 'name', 'officer', 'passkeys', 'pending', 'sessions']);
-  assert.deepEqual({ ...g.json, lastSeen: null }, { name: `重設甲${T}`, passkeys: 1, sessions: 2, lastSeen: null, google: false, pending: true, officer: false });
+  assert.deepEqual(Object.keys(g.json).sort(), ['google', 'lastSeen', 'name', 'officer', 'passkeys', 'pending', 'recovery', 'sessions']);
+  assert.deepEqual({ ...g.json, lastSeen: null }, { name: `重設甲${T}`, passkeys: 1, sessions: 2, lastSeen: null, google: false, pending: true, officer: false, recovery: null });
   assert.match(g.json.lastSeen, /^\d{4}-\d{2}-\d{2}$/, '最近使用：台北日期');
   assert.equal((await call(chair, '/members/t_coach/security')).json.officer, true, '教練');
   assert.equal((await call(chair, '/members/t_lead/security')).json.officer, true, '分團團長（協會身分是團員）');
@@ -156,7 +156,9 @@ test('重設：通行金鑰、所有裝置的登入、推播訂閱、待確認�
     const n0 = await subs();
     const r = await reset(chair, a.id, { reason: '手機遺失，請重新登入', confirm: ` ${a.name} ` });
     assert.equal(r.status, 200, r.text);
-    assert.deepEqual(r.json, { ok: true, passkeys: 1, sessions: 2, unlinked: false });
+    const { recovery, ...rest } = r.json;
+    assert.deepEqual(rest, { ok: true, passkeys: 1, sessions: 2, unlinked: false });
+    assert.match(recovery.url, new RegExp(`^${BASE}/r/[\\w-]{43}$`), '沒有登入方式：一起產生恢復連結（只回這一次）');
     B.resetA = r.d1;
     assert.equal(await subs(), n0 - 1, '推播訂閱刪掉');
   }).then((v) => { pendingVerify = v; });
@@ -172,8 +174,8 @@ test('重設：通行金鑰、所有裝置的登入、推播訂閱、待確認�
   const back = await devCookie(a.id);
   const n = (await security(back)).find((x) => x.title === '帳號安全已重設');
   assert.ok(n, '通知本人');
-  // 沒綁 Google：本人回不到這個帳號（這裡用測試登入看），通知照實寫
-  assert.equal(n.body, '理事長重設了你的通行金鑰並登出所有裝置。這個帳號已經沒有登入方式，請聯絡理事長。原因：手機遺失，請重新登入');
+  // 沒綁 Google：要用理事長私訊的恢復連結接回（這裡用測試登入看），通知不放連結
+  assert.equal(n.body, '理事長重設了你的通行金鑰並登出所有裝置。理事長會私訊給你一個恢復連結（24 小時內有效，只能用一次），用它接回這個帳號後，請新增通行金鑰。原因：手機遺失，請重新登入');
   assert.equal(n.url, '/#/me/security');
   const au = (await auditOf('security.reset')).filter((x) => x.target_id === a.id);
   assert.deepEqual(au.map((x) => x.detail), ['通行金鑰 1 把、裝置 2 個'], '稽核只記數字，沒有原因');
@@ -194,6 +196,7 @@ test('重設：沒勾就保留 Google 綁定；勾了「解除 Google」清掉 g
   const keep = await reset(chair, b.id);   // 還有 Google 可以登入：不用輸入姓名
   assert.equal(keep.status, 200, keep.text);
   assert.equal(keep.json.unlinked, false);
+  assert.equal(keep.json.recovery, undefined, '還能用 Google 登入：不產生恢復連結');
   B.resetB = keep.d1;
   assert.equal((await google({ sub })).location, '/#/', '沒勾：照樣用 Google 登入回到同一個帳號');
   assert.equal((await me((await google({ sub })).cookie)).id, b.id);
@@ -210,7 +213,8 @@ test('重設：沒勾就保留 Google 綁定；勾了「解除 Google」清掉 g
   assert.deepEqual({ google: aft.google, emailLinked: aft.referral.emailLinked }, { google: false, emailLinked: false });
   assert.notEqual((await me((await google({ sub, name: '重設乙' })).cookie)).id, b.id, '同一個 Google 帳號登入不會回到這個帳號');
   const n = (await security(await devCookie(b.id))).filter((x) => x.title === '帳號安全已重設');
-  assert.ok(n.some((x) => x.body === '理事長重設了你的通行金鑰並登出所有裝置，也解除了 Google 綁定。這個帳號已經沒有登入方式，請聯絡理事長。原因：Google 帳號被盜用'));
+  assert.ok(n.some((x) => x.body === '理事長重設了你的通行金鑰並登出所有裝置，也解除了 Google 綁定。理事長會私訊給你一個恢復連結（24 小時內有效，只能用一次），用它接回這個帳號後，請新增通行金鑰。原因：Google 帳號被盜用'));
+  assert.match(off.json.recovery.url, /\/r\/[\w-]{43}$/, '解除 Google：一起產生恢復連結');
   const au = (await auditOf('security.reset')).filter((x) => x.target_id === b.id).map((x) => x.detail);
   assert.ok(au.some((d) => /^通行金鑰 0 把、裝置 \d+ 個、解除 Google$/.test(d)), au.join(' / '));
   assert.ok(au.every((d) => !d.includes('盜用')), '原因不進稽核');
@@ -273,10 +277,10 @@ test('途中被重設（理事長剛好送出）：登入、新增通行金鑰�
 
 test('執行額度：D1 句數固定（跟通行金鑰、裝置數量無關），沒有超過上限', async (t) => {
   t.diagnostic(`D1 句數 ${JSON.stringify(B)}`);
-  // 讀數字 3 以內（登入狀態、設定、一句數字）｜重設 14 以內（登入狀態、設定、限流、一句數字、一個 batch 8 句、通知 2 句）
+  // 讀數字 3 以內（登入狀態、設定、一句數字）｜重設 17 以內（登入狀態、設定、限流、一句數字、一個 batch 11 句〔含恢復連結 3 句〕、通知 2 句）
   assert.ok(B.get > 0 && B.get <= 3, `GET 用了 ${B.get} 句`);
-  assert.ok(B.resetA > 0 && B.resetA <= 14, `重設用了 ${B.resetA} 句`);
-  assert.equal(B.resetB, B.resetA, '金鑰與裝置數量不同，句數一樣');
+  assert.ok(B.resetA > 0 && B.resetA <= 17, `重設用了 ${B.resetA} 句`);
+  assert.equal(B.resetB, B.resetA, '金鑰與裝置數量不同、有沒有產生恢復連結，句數一樣');
   const v = (await (await fetch(`${BASE}/api/dev/budget-violations`)).json()).list;
   assert.deepEqual(v.filter((x) => /security/.test(x.name)), []);
 });

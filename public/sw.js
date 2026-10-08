@@ -52,6 +52,17 @@ self.addEventListener('fetch', (e) => {
     e.respondWith(caches.match('/').then((hit) => (hit ? clean(hit) : fetch(e.request))));
     return;
   }
+  // 恢復連結 /r/<代碼> 的頁面導覽：跟 /e/ 一樣用存好的 '/' 回應（不存這一頁、代碼不進快取），標頭改成不送 Referer（跟伺服器回的一樣），
+  //   前端開機時把代碼收進 sessionStorage、網址換成 /#/recover
+  if (e.request.mode === 'navigate' && url.pathname.startsWith('/r/')) {
+    e.respondWith(caches.match('/').then(async (hit) => {
+      if (!hit) return fetch(e.request);
+      const res = await clean(hit), h = new Headers(res.headers);
+      h.set('referrer-policy', 'no-referrer'); h.set('cache-control', 'no-store');
+      return new Response(res.body, { status: res.status, headers: h });
+    }));
+    return;
+  }
   // 程式與頁面（js、css、html、json、頁面導覽）有快取就只用快取，不在背景一個一個換新：
   //   不然同一次使用中會新舊版混在一起（新模組配舊主程式就會壞）；換版一律靠新版 Service Worker 整批安裝
   const code = e.request.mode === 'navigate' || url.pathname === '/' || url.pathname === '/coach' || /\.(js|mjs|css|html|json|webmanifest)$/.test(url.pathname);

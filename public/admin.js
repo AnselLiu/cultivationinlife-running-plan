@@ -1,7 +1,7 @@
 // 耕跑團 PWA — admin.js：從 app.js 拆出來、用到才載入的畫面（第一次開 App 不用下載）
 import * as Party from './party.js';
 import { defaultWindow, SIGNUP_DEFAULTS, tpText } from './signup-window.js';
-import { $, latest, nowTp, openSheet, scanSheet, ago, allow, api, apiAll, applyFeatures, avatar, barChart, bars, bindStepup, cfg, esc, group, IC, KIND_NAME, largeTitle, me, mfaBanner, nrow, org, pad2, paintCountdown, passkey, refreshMe, render, ROLE_NAME, row, studio, TAB_DEFAULT, TEAM_PERMS, teamAllow, teamIcon, teamOf, teams, toast, view, btnRow, MI, ic, emptyState, focusEl, once } from './app.js';
+import { $, latest, nowTp, openSheet, scanSheet, ago, allow, api, apiAll, applyFeatures, avatar, barChart, bars, bindStepup, cfg, esc, group, IC, KIND_NAME, largeTitle, me, mfaBanner, nrow, org, pad2, paintCountdown, passkey, refreshMe, render, ROLE_NAME, row, studio, TAB_DEFAULT, TEAM_PERMS, teamAllow, teamIcon, teamOf, teams, toast, view, btnRow, MI, ic, emptyState, focusEl, once, copy } from './app.js';
 import { askReason, choose } from './app.js';
 import * as AR from './achrule.js';
 import { FM, HM } from './plan.js';
@@ -444,14 +444,22 @@ function bindRoleActs(box) {
   for (const b of box.querySelectorAll('[data-sec]')) b.onclick = () => securityDialog(b.dataset.sec, b.dataset.name);
 }
 // 重設通行金鑰並登出所有裝置（帳號被盜用、幹部第一把不是本人、幹部唯一一把的手機弄丟）：只有理事長
-//   打開先讀數字（GET …/security：通行金鑰幾把、登入中的裝置幾個、有沒有綁 Google；不給裝置名稱、IP），讀到之前不能送出；
+//   打開先讀數字（GET …/security：通行金鑰幾把、登入中的裝置幾個、有沒有綁 Google、有沒有還沒用的恢復連結；不給裝置名稱、IP），讀到之前不能送出；
 //   送出要 15 分鐘內用通行金鑰驗證過（api() 會叫出 Face ID）；原因只放在給本人的通知，推播與稽核紀錄都不記
 //   重設後還有 Google 可以登入（有綁、沒勾解除）：本人用 Google 重新登入再新增通行金鑰
-//   沒有登入方式了（沒綁 Google，或勾了解除）：本人回不到這個帳號（邀請碼與沒綁過的 Google 都會開新帳號），顯示警告並要輸入姓名確認（伺服器也檢查）
+//   沒有登入方式了（沒綁 Google，或勾了解除）：顯示警告並要輸入姓名確認（伺服器也檢查）；伺服器一起產生一次性恢復連結，
+//     面板換成「恢復連結」（只顯示這一次：複製、用 LINE 傳給本人），本人用它接回這個帳號（邀請碼與沒綁過的 Google 都會開新帳號）
+//   「產生恢復連結」（不重設）：本人已經登入不了、但不用刪掉他的東西時（POST …/recovery，一樣要驗證；舊的還沒用的連結會失效）
 //   unlink：預先勾好「同時解除 Google 綁定」（幹部第一把通知打開的，見 openSecFromUrl）
 let secSeq = 0;
 function securityDialog(id, name, { unlink = false, opener = document.activeElement } = {}) {
   const my = ++secSeq;
+  let shown = false;   // 恢復連結顯示過了：關掉面板後重畫權限分頁（重設過的話數字變了）
+  const after = async () => {
+    await adminView('roles');
+    // 重畫後焦點回到同一位跑友的「安全」（在搜尋結果裡或從通知打開的話回到搜尋框）
+    focusEl(document.querySelector(`#panel [data-sec="${CSS.escape(id)}"]`) || $('#roleSearch [name=q]'));
+  };
   const s = openSheet('重設通行金鑰並登出', `<h3 id="secT">重設通行金鑰並登出</h3>
     <p style="margin:0"><b translate="no" id="secWho">${esc(name)}</b></p>
     <p class="tiny" id="secN" style="margin:0" aria-live="polite">讀取中…</p>
@@ -460,16 +468,21 @@ function securityDialog(id, name, { unlink = false, opener = document.activeElem
     <form id="secF" style="display:grid;gap:12px">
       <div id="secG" style="display:grid;gap:4px" hidden>
         <label class="inline"><input type="checkbox" name="unlink" aria-describedby="secW"${unlink ? ' checked' : ''}> 同時解除 Google 綁定（Google 帳號被盜用時才勾）</label>
-        <p class="tiny" id="secW" style="margin:0">幹部第一把通行金鑰不是本人新增的，就是 Google 帳號被盜用了，要勾。勾了之後本人回不到這個帳號。</p>
+        <p class="tiny" id="secW" style="margin:0">幹部第一把通行金鑰不是本人新增的，就是 Google 帳號被盜用了，要勾。勾了之後本人要用恢復連結回到這個帳號。</p>
       </div>
       <div id="secL" class="notice err" style="display:grid;gap:8px;margin:0" hidden>
-        <p style="margin:0" id="secLw"><b>重設後本人回不到這個帳號。</b>沒有 Google 可以登入，邀請碼只會開一個新帳號；原本的紀錄、成績與身分都留在這個帳號。</p>
+        <p style="margin:0" id="secLw"><b>重設後本人沒有登入方式。</b>會產生一個恢復連結（24 小時內有效，只能用一次），私訊給本人，用它接回這個帳號；沒用到的話，邀請碼只會開一個新帳號。</p>
         <label>輸入「<span translate="no" id="secCn">${esc(name)}</span>」確認<input name="confirm" autocomplete="off" maxlength="40" aria-describedby="secLw"></label>
       </div>
       <label>原因（選填）<textarea name="reason" maxlength="100" rows="2" aria-describedby="secR"></textarea></label>
       <p class="tiny" id="secR" style="margin:0">原因只有本人看得到，推播與稽核紀錄都不會記</p>
       <div class="sheetacts"><button type="button" class="btn ghost" data-close>取消</button><button class="btn danger" disabled>重設並登出</button></div>
-    </form>`, opener, 'secT');
+    </form>
+    <div class="secrec" style="display:grid;gap:6px;border-top:1px solid var(--stroke);padding-top:12px">
+      <p class="tiny" style="margin:0" id="secRecD">本人登入不了、但不用重設的話（例如沒綁 Google、換了手機）：只產生恢復連結給他。</p>
+      <p class="tiny" style="margin:0" id="secRecOld" hidden>已經有一個還沒用的恢復連結，產生新的之後舊的就不能用。</p>
+      <button type="button" class="btn ghost iconbtn" id="secRec" aria-describedby="secRecD" disabled>${REC_IC}產生恢復連結</button>
+    </div>`, opener, 'secT', { onClose: () => { if (shown) after(); } });
   const q = (x) => s.host.querySelector(x), n = q('#secN'), f = q('#secF');
   let google = false;
   // 重設後還有沒有登入方式：沒有的話顯示警告、姓名確認變成必填
@@ -478,6 +491,17 @@ function securityDialog(id, name, { unlink = false, opener = document.activeElem
     q('#secOk').hidden = stuck; q('#secL').hidden = !stuck; f.confirm.required = stuck;
   };
   f.unlink.onchange = paint;
+  // 恢復連結（只有這一次）：面板換成連結、複製、用 LINE 傳給本人；關掉之後不會再顯示
+  const showLink = (rec) => {
+    shown = true;
+    const card = q('.sheet-card');
+    card.innerHTML = recoveryPanel(rec, name);
+    s.host.setAttribute('aria-labelledby', 'recT');
+    const url = card.querySelector('#recUrl');
+    url.onfocus = () => url.select();
+    card.querySelector('#recCopy').onclick = () => copy(rec.url);
+    focusEl(card.querySelector('#recT'));
+  };
   api(`/members/${encodeURIComponent(id)}/security`).then((c) => {
     if (my !== secSeq || !n.isConnected) return;
     n.textContent = `通行金鑰 ${Number(c.passkeys) || 0} 把・登入中的裝置 ${Number(c.sessions) || 0} 個${c.google ? '・已綁 Google' : ''}`;
@@ -486,29 +510,52 @@ function securityDialog(id, name, { unlink = false, opener = document.activeElem
     google = !!c.google;
     // 沒有綁 Google：沒有東西可以解除
     q('#secG').hidden = !google; if (!google) f.unlink.checked = false;
+    q('#secRecOld').hidden = !c.recovery;
     paint();
     f.querySelector('.btn.danger').disabled = false;
+    q('#secRec').disabled = false;
   }).catch((err) => { if (my === secSeq && n.isConnected) n.textContent = err.message; });
   f.onsubmit = async (e) => {
     e.preventDefault();
     try {
-      await api(`/members/${encodeURIComponent(id)}/security-reset`, { method: 'POST',
+      const r = await api(`/members/${encodeURIComponent(id)}/security-reset`, { method: 'POST',
         body: { unlink_google: google && f.unlink.checked, reason: f.reason.value.trim().slice(0, 100), confirm: f.confirm.value.trim() } });
-      s.close();
       // 名字不翻譯（英文介面也不會被拆開或整句留中文）
       const msg = document.createDocumentFragment(), who = document.createElement('span');
       who.translate = false; who.textContent = name;
       msg.append('已重設通行金鑰並登出所有裝置：', who);
       toast(msg);
-      await adminView('roles');
-      // 重畫後焦點回到同一位跑友的「安全」（在搜尋結果裡或從通知打開的話回到搜尋框）
-      focusEl(document.querySelector(`#panel [data-sec="${CSS.escape(id)}"]`) || $('#roleSearch [name=q]'));
+      if (r.recovery && s.host.isConnected) { showLink(r.recovery); return; }
+      s.close();
+      await after();
     } catch (err) {
       toast(err.message);
       if (err.data?.confirm && !q('#secL').hidden) focusEl(f.confirm);
     }
   };
+  q('#secRec').onclick = async () => {
+    const b = q('#secRec'); b.disabled = true;
+    try {
+      const r = await api(`/members/${encodeURIComponent(id)}/recovery`, { method: 'POST' });
+      if (s.host.isConnected) showLink(r.recovery);
+    } catch (err) { if (b.isConnected) b.disabled = false; toast(err.message); }
+  };
 }
+// 恢復連結的圖示（線條）：一段鏈結
+const REC_IC = ic('<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1.2 1.2"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1.2-1.2"/>');
+const COPY_IC = ic('<rect x="8.5" y="8.5" width="11" height="11" rx="2.4"/><path d="M15.5 8.5V6.9a2.4 2.4 0 0 0-2.4-2.4H6.9a2.4 2.4 0 0 0-2.4 2.4v6.2a2.4 2.4 0 0 0 2.4 2.4h1.6"/>');
+// 給本人的 LINE 訊息：一句說明加連結（line.me/R/share 打開 LINE 選要傳給誰）；不要傳到群組
+const recoveryShareText = (url) => ['耕跑團帳號恢復連結（24 小時內有效，只能用一次，請不要轉傳）：', url].join('\n');
+const recoveryPanel = (rec, name) => `<h3 id="recT" tabindex="-1">恢復連結</h3>
+  <p style="margin:0"><b translate="no">${esc(name)}</b></p>
+  <label>恢復連結（24 小時內有效，只能用一次）<input id="recUrl" readonly value="${esc(rec.url)}" translate="no" spellcheck="false" autocomplete="off" aria-describedby="recWarn"></label>
+  <p class="notice err" id="recWarn" style="margin:0">請私訊給本人，不要貼到群組；拿到連結的人可以登入這個帳號</p>
+  <div class="row" style="gap:8px">
+    <button type="button" class="btn iconbtn" id="recCopy">${COPY_IC}複製</button>
+    <a class="btn ghost iconbtn" id="recLine" href="${esc(`https://line.me/R/share?text=${encodeURIComponent(recoveryShareText(rec.url))}`)}" target="_blank" rel="noopener noreferrer">${MI.share}用 LINE 傳給本人</a>
+  </div>
+  <p class="tiny" style="margin:0">關掉之後不會再顯示；要再傳一次就重新產生（舊的會失效）。</p>
+  <div class="sheetacts"><button type="button" class="btn ghost" data-close>完成</button></div>`;
 // 幹部第一把通行金鑰的通知：#/admin?tab=roles&sec=<跑友 id>&g=1 直接打開那位跑友的「安全」（g=1 預先勾「同時解除 Google 綁定」）
 //   打開後把參數從網址拿掉（重新整理不會再跳出來）；只有理事長、不是自己
 function openSecFromUrl() {
@@ -586,7 +633,7 @@ const AUDIT_NAME = {
   'privacy.race_profile': '更新賽事報名資料', 'privacy.race_profile_delete': '刪除賽事報名資料', 'event.reg_export': '下載團體報名資料',
   'calendar.on': '產生行事曆訂閱', 'calendar.off': '停用行事曆訂閱',
   'passkey.add': '新增通行金鑰', 'passkey.remove': '移除通行金鑰', 'session.revoke_all': '登出所有裝置', 'passkey.denied': '通行金鑰驗證失敗', 'mfa.verify': '兩步驟驗證', 'login.new_device': '新裝置登入',
-  'settings.security': '修改兩步驟驗證設定', 'audit.verify': '稽核完整性檢查', 'security.reset': '重設通行金鑰並登出',
+  'settings.security': '修改兩步驟驗證設定', 'audit.verify': '稽核完整性檢查', 'security.reset': '重設通行金鑰並登出', 'security.recovery_issue': '產生恢復連結', 'security.recover': '用恢復連結接回帳號',
   'settings.signup': '修改活動報名預設', 'event.signup_review': '審核報名', 'event.signup_reject': '婉拒或移出報名', 'event.reopen': '恢復活動',
   'signup.expire': '待審核逾期失效', 'event.orders_export': '下載訂購單',
   'google.link': '綁定 Google', 'login.denied': '登入驗證失敗', 'team.post': '發布分團公告', 'team.post_delete': '刪除分團公告', 'privacy.show_rank': '排行榜設定', broadcast: '群發通知', 'retention.cleanup': '資料保存期限清理', 'event.invite_denied': '邀請連結無效', 'privacy.share_logs': '訓練紀錄分享設定', 'settings.shortcut': '修改捷徑連結',

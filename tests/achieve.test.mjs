@@ -171,8 +171,10 @@ test('修改：審核中可以改（edited）；通過的不能改；婉拒的�
   await dev(`pb=${id}&created=${D(-40)} 00:00:00`);
   ok(await call(u.cookie, `/pb/${id}`, { method: 'PUT', body: pbBody({ race_date: D(-15), seconds: 13800, race_name: '改名馬拉松' }) }));
   assert.equal(ok(await call(u.cookie, '/pb')).items.find((x) => x.id === id).created_at, `${D(-40)} 00:00:00`, '只改名稱不重算');
+  // created_at 是 UTC：跟送出前的 UTC 時間比（跟台北的「昨天」比的話，台北 00:00–08:00 跑會誤判）
+  const t0 = new Date(Date.now() - 5e3).toISOString().replace('T', ' ').slice(0, 19);
   ok(await call(u.cookie, `/pb/${id}`, { method: 'PUT', body: pbBody({ race_date: D(-300), seconds: 19800, race_name: '改名馬拉松' }) }));
-  assert.ok(ok(await call(u.cookie, '/pb')).items.find((x) => x.id === id).created_at > `${D(-1)} 23:59:59`, '換成另一場比賽：登錄時間重算');
+  assert.ok(ok(await call(u.cookie, '/pb')).items.find((x) => x.id === id).created_at >= t0, '換成另一場比賽：登錄時間重算');
   ok(await approve(id));
   err(await call(u.cookie, `/pb/${id}`, { method: 'PUT', body: pbBody() }), 400, '通過審核的成績不能修改，可以刪除後重新登錄');
 });

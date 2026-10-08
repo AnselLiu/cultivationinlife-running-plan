@@ -66,7 +66,7 @@ node tools/restore-backup.mjs --replay withdrawals.json --since "$T"
 11. 移除推薦人（`referrer.clear` 本人、`referrer.admin_clear` 幹部）：清掉推薦人；推薦人按「不是我」（`referrer.deny`）：只清掉推薦人還是這位的那一筆，標成沒有確認，並補回 180 天的冷卻（`rate_limits`）。備份不含 `rate_limits`：備份之前按的「不是我」，冷卻照備份自己的 `audit_log` 補回（還沒過 180 天的，完整還原或只還原 `members` 時）。
 12. 刪除自己的訓練紀錄（`log.delete`）、路線（`route.delete`）、分團公告（`team.post_delete`）：照 id 再刪一次，備註、心率、強度不會跟著回來。
 13. 退出恭喜榜（`privacy.cheer_board`）與 PB 排行（`privacy.cheer_rank`），最後一次是關閉就關掉；刪除挑戰體重（`privacy.ach_weight_delete`：刪掉該挑戰的 `ach_private`、清掉見證紀錄；detail 有 `leave` 的再把參加改成已退出）；刪除自己的成績（`pb.delete`：照 id 再刪一次，截圖與恭喜一起刪；刪之前先照正式站記下會影響比較基準的挑戰 `ach_base_del`，之後那些挑戰的達成要幹部確認）。
-14. 清空倒回來的推播佇列（`push_queue`），舊推播不會重送；通知中心的內容不受影響。
+14. 清空倒回來的推播佇列（`push_queue`），舊推播不會重送；通知中心的內容不受影響。刪掉所有一次性恢復連結（`recovery_links`）：倒回來的列可能是還原時間點之後已經用過的連結（變回「還沒用」），一律作廢，還需要的請理事長在「安全」重新產生。
 15. 抓到的稽核紀錄原樣補回 `audit_log`（`INSERT OR IGNORE`，簽章照原本的）。之後再從更舊的備份還原時，也查得到這些撤回。
 
 `members` 的還原用 `INSERT … ON CONFLICT(id) DO UPDATE`（不是 `INSERT OR REPLACE`：REPLACE 會先刪掉舊的那一列，觸發推薦人的 `ON DELETE SET NULL` 與子表的 `ON DELETE CASCADE`）。
@@ -93,6 +93,7 @@ npx wrangler d1 execute cil-run --remote --command "SELECT COUNT(*) FROM ach_pri
 
 - **身分與幹部（一定要做，再公告維護結束）**：到管理後台「稽核紀錄」篩選還原時間點之後的「變更身分」「變更分團身分」「移交理事長」「移出分團」，逐筆對照名冊與各分團的幹部名單。工具印出「看不懂、要人工確認」的筆數不是 0 時，照稽核紀錄手動調整。
 - **已知不會重做的**：還原時間點之後的新增與修改（新的報名、新的訓練紀錄、重新加入分團、重新產生的行事曆訂閱網址）都會消失，請在公告裡提醒團員檢查；只有撤回與權限變更會重做。
+- **恢復連結不在備份裡、也不重做**：一次性恢復連結（`recovery_links`，24 小時、只能用一次）不備份，Time Travel 之後全部刪掉（上面第 14 項）；還原後還沒接回帳號的跑友，請理事長在「權限」→「安全」重新「產生恢復連結」。用恢復連結接回帳號（稽核 `security.recover`）也不重做：稽核不記 Google 帳號，還原時間點之後才接回、綁上的 Google 會不見（`security.reset` 照樣重做，被盜用的舊 Google 不會綁回去），本人登入不了時同樣重新產生恢復連結。
 - **推播時間與分團週報開關不重做**：「每日摘要」的時間（稽核 `notif.digest`）與團長的「每週一收到分團週報」（`notif.team_report`）是便利設定，不是隱私撤回，不在重做清單裡，還原後回到備份當時的設定（通知分類 `notif.prefs` 照樣重做）。等摘要的推播（`push_held`）跟著通知中心從空的開始；每日用量估計與系統告警（`ops_daily`、`ops_alerts`）不在備份裡，還原後從空的開始，同一天的告警可能再發一次；幹部週報（`ops_reports`）在備份裡。
 
 ## 6. 收尾

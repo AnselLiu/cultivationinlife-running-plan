@@ -25,3 +25,14 @@ test('分享連結 /e/:id 的頁面導覽用存好的首頁回應（不會每個
   const app = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
   assert.match(app, /location\.pathname\.match\(\/\^\\\/e\\\/\(\[\\w-\]\{1,32\}\)\\\/\?\$\/\)/, '前端開機時把 /e/:id 轉成 /#/e/:id');
 });
+
+test('恢復連結 /r/<代碼> 的頁面導覽也用存好的首頁回應（不存這一頁、不送 Referer）；前端開機時把代碼收進 sessionStorage、網址換成 /#/recover', () => {
+  const sw = readFileSync(new URL('../public/sw.js', import.meta.url), 'utf8');
+  assert.match(sw, /e\.request\.mode === 'navigate' && url\.pathname\.startsWith\('\/r\/'\)\) \{\s*e\.respondWith\(caches\.match\('\/'\)/);
+  assert.match(sw, /h\.set\('referrer-policy', 'no-referrer'\)/);
+  const app = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
+  assert.match(app, /sessionStorage\.setItem\('cil-recover', m\[1\]\)/);
+  assert.match(app, /history\.replaceState\(null, '', '\/#\/recover'\)/);
+  // 開機時就換掉網址：要在其他程式（錯誤回報、效能紀錄、第一個 API 請求）之前
+  assert.ok(app.indexOf("history.replaceState(null, '', '/#/recover')") < app.indexOf("fetch('/api/client-error'"));
+});

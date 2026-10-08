@@ -236,7 +236,7 @@ export function backupCooldowns(data) {
   return out;
 }
 
-// 重做撤回的 SQL（放在匯入的最後，蓋過剛匯入的舊資料）；timeTravel：Time Travel 之後用，另外清掉倒回來的推播佇列（不重送舊推播）
+// 重做撤回的 SQL（放在匯入的最後，蓋過剛匯入的舊資料）；timeTravel：Time Travel 之後用，另外清掉倒回來的推播佇列（不重送舊推播）與恢復連結
 export function replaySql(rows, { timeTravel = false } = {}) {
   const p = planReplay(rows), L = [];
   const each = (list, sqls) => { for (const id of list) { if (!ID.test(id)) throw new Error(`看不懂的帳號 id：${id}`); for (const q of sqls) L.push(`${q.replaceAll('?1', lit(id))};`); } };
@@ -284,6 +284,9 @@ export function replaySql(rows, { timeTravel = false } = {}) {
     L.push(`DELETE FROM pb_records WHERE id = ${lit(id)} AND member_id = ${lit(by)};`);
   }
   if (timeTravel) L.push('DELETE FROM push_queue;');
+  // Time Travel 會把恢復連結（recovery_links，24 小時、只能用一次）倒回去：已經用過的可能變回「還沒用」，一律刪掉，請理事長重新產生
+  //   （每日備份本來就不含這張表）
+  if (timeTravel) L.push('DELETE FROM recovery_links;');
   // 原樣補回稽核紀錄（只補整列都有的；已經在的不動）
   for (const r of rows) if (r.id && r.at && r.mac) L.push(`INSERT OR IGNORE INTO audit_log (${AUDIT_COLS.join(', ')}) VALUES (${AUDIT_COLS.map((c) => lit(r[c])).join(', ')});`);
   return { lines: L, plan: p };

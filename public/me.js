@@ -5,7 +5,7 @@ import {
   $, achOn, achRankOn, addrField, ago, api, applyTabs, applyTheme, askLegacyOnLeave, avatar, bindAddrField, bindInstall, bindStepup, btnRow, camLazy, cfg, choose,
   clearDeviceData, copy, countdownPicker, dropPush, esc, feat, fieldError, focusAfterRender, focusEl, GOOGLE_G, googleHref, group, IC, iconsOnly, installCard, isStandalone, lsOrNull, me,
   mfaBanner, MI, myCycle, NICON, openSheet, org, paintCountdown, passkey, pkSupported, qrSVG, reduceMotion, refOn, refreshMe, render, ROLE_NAME, row, setMe, startBack, subTitle,
-  TEAM_ROLE_NAME, teamIcon, teamOf, teams, theme, toast, togglePush, view, ymd
+  TEAM_ROLE_NAME, teamIcon, teamOf, teams, theme, toast, togglePush, view, ymd, recoverToken, inAppBrowser
 } from './app.js';
 import * as I18N from './i18n.js';
 import * as Device from './device.js';
@@ -310,7 +310,9 @@ function bindGoogleConfirm(p, done) {
 // 回到原本的網址（不留 ?google=confirm，重新整理不會再出現確認卡），不觸發換頁
 const replaceHash = (h) => { try { history.replaceState(null, '', h); } catch {} };
 // stepup：開始綁定時還是舊版畫面（沒有帶 c=1），伺服器照舊版回的（App 剛好在這中間更新）
+//   recoveredPk：用恢復連結接回帳號時已經在這台裝置新增了通行金鑰（用 Google 接回的是 recovered，顯示「請新增通行金鑰」的卡片）
 const SEC_NOTE = {
+  recoveredPk: '帳號已恢復，已在這台裝置新增通行金鑰，之後用它登入。',
   linked: '已綁定 Google，之後可以直接用 Google 登入。',
   stepup: '還沒綁定 Google：App 剛更新，請再按一次「綁定」。',
   taken: '這個 Google 帳號已經綁定另一個帳號了。如果那個帳號也是你的，請聯絡行政人員合併。',
@@ -327,6 +329,9 @@ async function meSecurity(googleMsg, again) {
     ${googleMsg === 'pkok' && pkSupported() ? `<section class="card gstep" id="pkOk" aria-labelledby="pkOkT"><h2 class="h3" id="pkOkT">Google 已確認是你本人</h2>
       <p class="tiny" style="margin:0">${me.mfaPending ? '15 分鐘內可以新增第一把通行金鑰，新增後會通知理事長。' : '15 分鐘內可以直接新增通行金鑰，不用舊的那一把。'}</p>
       <button type="button" class="btn" id="pkOkGo">${IC.plus}新增通行金鑰</button></section>` : ''}
+    ${googleMsg === 'recovered' ? `<section class="card gstep" id="pkOk" aria-labelledby="pkOkT"><h2 class="h3" id="pkOkT">帳號已恢復，請新增通行金鑰</h2>
+      <p class="tiny" style="margin:0">已經用 Google 接回原本的帳號。再新增一把通行金鑰（Face ID、指紋），之後換手機或 Google 出問題也登入得了。${me.mfaPending ? '15 分鐘內可以新增第一把，新增後會通知理事長。' : '15 分鐘內可以直接新增。'}</p>
+      ${pkSupported() ? `<button type="button" class="btn" id="pkOkGo">${IC.plus}新增通行金鑰</button>` : '<p class="tiny" style="margin:0">這個瀏覽器不支援通行金鑰，請改用 iPhone 的 Safari 或 Chrome 登入後新增。</p>'}</section>` : ''}
     ${mfaBanner()}
     ${cfg.googleLogin ? `<section class="card"><div class="row spread"><div><h2 class="h3">Google 帳號</h2><span class="tiny">${me.google ? '已綁定，可以用 Google 登入' : '綁定後換手機或清掉瀏覽器資料，也能用 Google 回到同一個帳號'}</span></div>
       ${me.google ? '<span class="pill solid">已綁定</span>' : `<a class="btn google sm" href="${googleHref(true)}">${GOOGLE_G}<span>綁定</span></a>`}</div></section>` : ''}
@@ -346,7 +351,7 @@ async function meSecurity(googleMsg, again) {
   // 焦點移到確認卡或結果（從 Google 回來是整頁載入；在這一頁按完確認是重畫）
   const spot = ['#gConfirm h2', '#pkOk h2', '#gNote'];
   if (again) focusEl(spot.map((x) => $(x)).find(Boolean) || $('#pkCard h2'));
-  else if (googleMsg === 'confirm' || googleMsg === 'pkok' || SEC_NOTE[googleMsg]) focusAfterRender(spot);
+  else if (googleMsg === 'confirm' || googleMsg === 'pkok' || googleMsg === 'recovered' || SEC_NOTE[googleMsg]) focusAfterRender(spot);
   bindGoogleConfirm(pend, (x) => { replaceHash(x ? `#/me/security?google=${x}` : '#/me/security'); meSecurity(x, true); });
   const loadPk = async () => {
     const { passkeys } = await api('/passkeys');
@@ -642,6 +647,86 @@ function meAssoc() {
       <div class="doclist">${(cfg.settings?.docs || []).map((d) => `<a class="docrow" href="${esc(d.url)}" target="_blank" rel="noopener"><span class="docic">${IC.doc}</span><span><b><span translate="no">${esc(d.title)}</span></b>${d.note ? `<span class="tiny" style="display:block"><span translate="no">${esc(d.note)}</span></span>` : ''}</span><span class="tiny">${IC.external}</span></a>`).join('')}</div>
     </section>` : ''}`;
   $('#applyBtn')?.addEventListener('click', async () => { try { setMe((await api('/me/apply', { method: 'POST' })).member); toast('已送出申請'); meAssoc(); } catch (e) { toast(e.message); } });
+}
+
+// ---------- 恢復帳號（#/recover）----------
+// 理事長私訊的一次性恢復連結 /r/<代碼>：開機時代碼收進這個分頁的記憶體與 sessionStorage、網址換成 #/recover（app.js），這裡不把代碼放回網址
+//   先問伺服器這個連結還能不能用（POST /api/recover/check：不存在、過期、用過一律同一個回應），能用才顯示遮過的名字與按鈕
+//   主要：用 Google 登入並接回帳號（check 帶 google:true，伺服器把代碼放進 HttpOnly cookie，再到 /api/google/start?mode=X；代碼不進任何網址）
+//     LINE 的內建瀏覽器不能用 Google 登入：改成「用瀏覽器開啟」（同一個連結加 openExternalBrowser=1，Safari／Chrome 打開後一樣換掉網址）
+//   次要：改用通行金鑰（在這台裝置替這個帳號新增一把並登入，不用 Google）
+//   Google 回來沒接上（?err=：這個 Google 帳號已經是另一個帳號、取消、逾時）：訊息顯示在按鈕上方，可以換一個帳號再試
+const REC_INVALID = '這個恢復連結無效或已過期，請聯絡理事長重新產生';
+export async function recoverView() {
+  const token = recoverToken(), err = new URLSearchParams(location.hash.split('?')[1] || '').get('err');
+  const head = (who) => `<section class="welcome compact"><img class="wmark" src="/icons/icon-192.png" alt="" width="72" height="72">
+    <h1 class="wtitle" id="recT">恢復帳號${who ? `：<span translate="no">${esc(who)}</span>` : ''}</h1></section>`;
+  view.innerHTML = `${head('')}<section class="card"><p class="tiny" style="margin:0" role="status">讀取中…</p></section>`;
+  let info = null;
+  try { if (token) info = await api('/recover/check', { method: 'POST', body: { token } }); }
+  catch (e) {
+    if (!e.data?.invalid) {
+      view.innerHTML = `${head('')}<section class="card"><div class="notice err" role="alert">${esc(e.message)}</div><button type="button" class="btn ghost block" id="recRetry">重試</button></section>`;
+      $('#recRetry').onclick = () => recoverView();
+      return;
+    }
+  }
+  if (!info) {
+    view.innerHTML = `${head('')}<section class="card"><div class="notice err" role="alert">${REC_INVALID}</div><a class="btn ghost block" href="#/">回到首頁</a></section>`;
+    return;
+  }
+  const d = new Date(info.expires_at), until = `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  const app = inAppBrowser();
+  const google = app === 'line' ? `<a class="btn google block" href="${esc(`${location.origin}/r/${token}?openExternalBrowser=1`)}">${GOOGLE_G}<span>用瀏覽器開啟並以 Google 登入</span></a>
+      <p class="tiny center" style="margin:0">Google 不允許在 LINE 裡登入，按上面的按鈕會改用 Safari 或 Chrome 打開這個連結。</p>`
+    : app === 'meta' ? '<p class="notice" style="margin:0">Google 不允許在 Facebook／Instagram 裡登入：請點右上角「⋯」選「在瀏覽器開啟」。</p>'
+    : cfg.googleLogin ? `<button type="button" class="btn google block" id="recG" aria-describedby="recGd">${GOOGLE_G}<span>用 Google 登入並接回帳號</span></button>
+      <p class="tiny" style="margin:0" id="recGd">選你之後要用的 Google 帳號（可以跟以前的不同），接回後就用它登入。</p>` : '';
+  const pk = pkSupported() ? `<button type="button" class="btn ghost block iconbtn" id="recPk" aria-describedby="recPkd">${IC.lock}改用通行金鑰</button>
+      <p class="tiny" style="margin:0" id="recPkd">在這台裝置新增通行金鑰（Face ID、指紋）並登入，不用 Google。</p>` : '';
+  view.innerHTML = `${head(info.name)}
+    <section class="card authcard" id="recCard">
+      ${err ? `<div class="notice err" role="alert" id="recErr">${esc(err)}</div>` : ''}
+      <p style="margin:0">理事長替這個帳號產生了一次性的恢復連結。登入後會接回原本的帳號，紀錄、成績與身分都還在。</p>
+      <p class="tiny" style="margin:0">24 小時內有效，只能用一次。<span class="nw">到期：<b class="num" translate="no">${esc(until)}</b></span></p>
+      <p class="tiny" style="margin:0">不是你的帳號，請不要繼續，並告訴理事長。</p>
+      ${google}${pk}
+      ${!google && !pk ? '<p class="notice" style="margin:0">這個瀏覽器不能用 Google 或通行金鑰登入，請改用 iPhone 的 Safari 或 Chrome 打開這個連結。</p>' : ''}
+    </section>`;
+  const g = $('#recG'), p = $('#recPk');
+  if (g) {
+    g.onclick = async () => {
+      g.disabled = true;
+      try {
+        // 伺服器把代碼放進 HttpOnly cookie（10 分鐘），/api/google/start?mode=X 再搬進 OAuth 的 state cookie
+        await api('/recover/check', { method: 'POST', body: { token, google: true } });
+        location.href = '/api/google/start?mode=X';
+      } catch (e) {
+        if (g.isConnected) g.disabled = false;
+        if (e.data?.invalid) { recoverView(); return; }
+        toast(e.message);
+      }
+    };
+    // 從 Google 的頁面按返回（頁面從快取還原）：按鈕恢復可以按
+    addEventListener('pageshow', (e) => { if (e.persisted && g.isConnected) g.disabled = false; }, { once: true });
+  }
+  if (p) {
+    p.onclick = async () => {
+      p.disabled = true;
+      try {
+        await passkey('register', undefined, { recover: token });
+        recoverToken({ clear: true });
+        toast('帳號已恢復');
+        setMe(null);
+        location.hash = '#/me/security?recovered=pk';
+      } catch (e) {
+        if (p.isConnected) p.disabled = false;
+        if (e.data?.invalid) { toast(e.message); recoverView(); return; }
+        if (e.message !== '已取消') toast(e.message);
+      }
+    };
+  }
+  if (err) focusEl($('#recErr'));
 }
 
 // 子頁對照（app.js 的 meView 依網址呼叫）

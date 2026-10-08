@@ -125,12 +125,15 @@ test('D1 Time Travel 之後：重做撤回、撤銷的登入失效、清掉倒�
   const data = backupWithPrivacy();
   db.exec(`BEGIN;\n${toSql(data, { only: null, erased: [] }).join('\n')}\nCOMMIT;`);
   db.exec(`INSERT INTO sessions (token_hash, member_id, expires_at) VALUES ('t2', 'x2', '2026-12-01'), ('t3', 'x3', '2026-12-01'), ('t4', 'x4', '2026-12-01');
-    INSERT INTO push_queue (endpoint, payload, expires_at) VALUES ('https://push.example/x4', '{}', '2026-12-01');`);
+    INSERT INTO push_queue (endpoint, payload, expires_at) VALUES ('https://push.example/x4', '{}', '2026-12-01');
+    INSERT INTO recovery_links (token_hash, member_id, expires_at) VALUES ('rk2', 'x2', '2099-01-01');`);
   const rows = auditRowsFrom(wranglerJson([...WITHDRAWALS, A('c1', '2026-10-02 12:00:00', 'privacy.delete', 'x4', '本人刪除帳號')]), '2026-10-01T19:00:00.000Z');
   const sql = ['PRAGMA defer_foreign_keys = true;', ...replaySql(rows, { timeTravel: true }).lines].join('\n');
   for (let i = 0; i < 2; i++) db.exec(`BEGIN;\n${sql}\nCOMMIT;`);
   assert.deepEqual(db.prepare('SELECT member_id FROM sessions ORDER BY member_id').all().map((r) => r.member_id), ['x2'], 'x3 登出所有裝置、x4 刪除帳號');
   assert.equal(one(db, 'SELECT COUNT(*) AS n FROM push_queue').n, 0);
+  assert.equal(one(db, 'SELECT COUNT(*) AS n FROM recovery_links').n, 0, '倒回來的恢復連結全部刪掉（可能是已經用過的）');
+  assert.ok(!replaySql(rows).lines.includes('DELETE FROM recovery_links;'), '每日備份本來就沒有這張表：不用刪');
   assert.equal(one(db, "SELECT 1 AS x FROM members WHERE id = 'x4'"), undefined);
   assert.equal(one(db, "SELECT share_logs FROM members WHERE id = 'x2'").share_logs, 0);
   assert.equal(one(db, "SELECT COUNT(*) AS n FROM audit_log").n, rows.length, '補回的稽核紀錄不會重複');
