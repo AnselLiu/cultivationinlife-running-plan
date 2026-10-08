@@ -158,7 +158,7 @@ test('重設：通行金鑰、所有裝置的登入、推播訂閱、待確認�
     assert.equal(r.status, 200, r.text);
     const { recovery, ...rest } = r.json;
     assert.deepEqual(rest, { ok: true, passkeys: 1, sessions: 2, unlinked: false });
-    assert.match(recovery.url, new RegExp(`^${BASE}/r/[\\w-]{43}$`), '沒有登入方式：一起產生恢復連結（只回這一次）');
+    assert.match(recovery.url, new RegExp(`^${BASE}/\\?openExternalBrowser=1#/recover/[\\w-]{43}$`), '沒有登入方式：一起產生恢復連結（只回這一次）');
     B.resetA = r.d1;
     assert.equal(await subs(), n0 - 1, '推播訂閱刪掉');
   }).then((v) => { pendingVerify = v; });
@@ -214,7 +214,7 @@ test('重設：沒勾就保留 Google 綁定；勾了「解除 Google」清掉 g
   assert.notEqual((await me((await google({ sub, name: '重設乙' })).cookie)).id, b.id, '同一個 Google 帳號登入不會回到這個帳號');
   const n = (await security(await devCookie(b.id))).filter((x) => x.title === '帳號安全已重設');
   assert.ok(n.some((x) => x.body === '理事長重設了你的通行金鑰並登出所有裝置，也解除了 Google 綁定。理事長會私訊給你一個恢復連結（24 小時內有效，只能用一次），用它接回這個帳號後，請新增通行金鑰。原因：Google 帳號被盜用'));
-  assert.match(off.json.recovery.url, /\/r\/[\w-]{43}$/, '解除 Google：一起產生恢復連結');
+  assert.match(off.json.recovery.url, /#\/recover\/[\w-]{43}$/, '解除 Google：一起產生恢復連結');
   const au = (await auditOf('security.reset')).filter((x) => x.target_id === b.id).map((x) => x.detail);
   assert.ok(au.some((d) => /^通行金鑰 0 把、裝置 \d+ 個、解除 Google$/.test(d)), au.join(' / '));
   assert.ok(au.every((d) => !d.includes('盜用')), '原因不進稽核');
@@ -277,9 +277,10 @@ test('途中被重設（理事長剛好送出）：登入、新增通行金鑰�
 
 test('執行額度：D1 句數固定（跟通行金鑰、裝置數量無關），沒有超過上限', async (t) => {
   t.diagnostic(`D1 句數 ${JSON.stringify(B)}`);
-  // 讀數字 3 以內（登入狀態、設定、一句數字）｜重設 17 以內（登入狀態、設定、限流、一句數字、一個 batch 11 句〔含恢復連結 3 句〕、通知 2 句）
+  // 讀數字 3 以內（登入狀態、設定、一句數字）｜重設 22 以內（登入狀態、設定、限流、一句數字、一個 batch 11 句〔含恢復連結 3 句〕、通知本人 2 句、
+  //   監督：名單一句、監事與行政人員的通知各 2 句〔每一群有人才寫，最多理事長、監事、行政人員三群〕）
   assert.ok(B.get > 0 && B.get <= 3, `GET 用了 ${B.get} 句`);
-  assert.ok(B.resetA > 0 && B.resetA <= 17, `重設用了 ${B.resetA} 句`);
+  assert.ok(B.resetA > 0 && B.resetA <= 22, `重設用了 ${B.resetA} 句`);
   assert.equal(B.resetB, B.resetA, '金鑰與裝置數量不同、有沒有產生恢復連結，句數一樣');
   const v = (await (await fetch(`${BASE}/api/dev/budget-violations`)).json()).list;
   assert.deepEqual(v.filter((x) => /security/.test(x.name)), []);

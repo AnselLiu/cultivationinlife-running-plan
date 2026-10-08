@@ -76,23 +76,19 @@ if (location.pathname === '/privacy' && !location.hash) history.replaceState(nul
     history.replaceState(null, '', location.hash.startsWith('#/') ? `/${location.hash}` : `/#/e/${m[1]}${t ? `?t=${encodeURIComponent(t)}` : ''}`);
   }
 }
-// 恢復連結 /r/<代碼>（理事長私訊的一次性連結，見 src/worker.js 的 recoveryStmts）：代碼只留在這個分頁的記憶體與 sessionStorage，
-//   網址馬上換成 /#/recover（不留在網址列、瀏覽紀錄、錯誤回報與效能紀錄裡）；格式不對的一樣換掉（頁面顯示連結無效）
-let recToken = null;
-{
-  const m = location.pathname.match(/^\/r\/([\w-]{43})\/?$/);
-  if (location.pathname.startsWith('/r/')) {
-    recToken = m?.[1] || '';
-    try { if (m) sessionStorage.setItem('cil-recover', m[1]); else sessionStorage.removeItem('cil-recover'); } catch {}
-    history.replaceState(null, '', '/#/recover');
-  }
-}
-// 恢復帳號頁用的代碼（重新整理、Google 登入回來時從 sessionStorage 拿）；clear＝接回帳號後清掉
+// 恢復連結（理事長私訊的一次性連結 /?openExternalBrowser=1#/recover/<代碼>，見 src/worker.js 的 recoveryStmts）：代碼在網址的 # 後面，瀏覽器不會送到伺服器
+//   接回之前代碼一直留在網址裡：在 LINE、Facebook 的內建瀏覽器按「在瀏覽器開啟」時跟著網址走；接回後才換掉這一筆瀏覽紀錄（me.js 的 recoverView）
+//   同時存一份在這個分頁的 sessionStorage：用 Google 登入沒接上，伺服器回到 #/recover?err=…（不帶代碼）時從這裡拿
+//   錯誤回報與開啟速度的頁面不帶代碼（recPage）
 const recoverToken = ({ clear = false } = {}) => {
-  if (clear) { recToken = null; try { sessionStorage.removeItem('cil-recover'); } catch {} return null; }
-  if (recToken == null) { try { recToken = sessionStorage.getItem('cil-recover') || ''; } catch { recToken = ''; } }
-  return recToken;
+  if (clear) { try { sessionStorage.removeItem('cil-recover'); } catch {} return null; }
+  const m = location.hash.match(/^#\/recover\/([^?]*)/);
+  if (!m) { try { return sessionStorage.getItem('cil-recover') || ''; } catch { return ''; } }
+  const t = /^[\w-]{43}$/.test(m[1]) ? m[1] : '';
+  try { if (t) sessionStorage.setItem('cil-recover', t); else sessionStorage.removeItem('cil-recover'); } catch {}
+  return t;
 };
+const recPage = (h) => h.replace(/^(#?\/recover)\/[^?]*/, '$1/…');
 // 地圖：先連到圖磚主機、下載地圖模組（map.js 一載入就開始抓 Leaflet），跟登入資料同時進行，不用等 /api/me 回來才開始
 let mapWarm = false;
 // 先抓的圖磚：map.js 讓其他圖磚等這幾張到了（或最多 1.2 秒）才開始抓，畫面中間先出來
@@ -351,7 +347,7 @@ let errSent = 0;
 const reportError = (message, source, line) => {
   if (errSent++ >= 5) return;
   fetch('/api/client-error', { method: 'POST', keepalive: true, headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ message: String(message || '').slice(0, 300), source: String(source || '').replace(location.origin, '').slice(0, 120), line: line || 0, page: location.hash.split('?')[0].slice(0, 60) }) }).catch(() => {});
+    body: JSON.stringify({ message: String(message || '').slice(0, 300), source: String(source || '').replace(location.origin, '').slice(0, 120), line: line || 0, page: recPage(location.hash.split('?')[0]).slice(0, 60) }) }).catch(() => {});
 };
 addEventListener('error', (e) => reportError(e.message, e.filename, e.lineno));
 addEventListener('unhandledrejection', (e) => {
@@ -948,6 +944,8 @@ const googleHref = (link, { from, basic } = {}) => {
 // ---------- 登入 ----------
 function loginView() {
   const err = new URLSearchParams(location.hash.split('?')[1] || '').get('err');
+  // 用恢復連結接回帳號、Google 登入沒完成就回到一般登入頁（例如舊版伺服器、cookie 被清掉）：回恢復帳號頁，不讓「使用 Google 帳號登入」開一個新帳號
+  if (err && recoverToken()) { location.replace(`#/recover?err=${encodeURIComponent(err)}`); return; }
   // 從分享連結進來（#/e/:id）：t 是邀請代碼；入場報到（#/e/:id/attend?t=）等活動底下的頁面，t 是報到代碼，不能當邀請代碼，登入後回到原本那一頁
   const sm = location.hash.match(/^#\/e\/([\w-]+)(\/[^?]*)?/), shared = sm?.[1], sharedPage = !!sm && !sm[2];
   const sharedTok = sharedPage ? new URLSearchParams(location.hash.split('?')[1] || '').get('t') : null;
@@ -1698,8 +1696,9 @@ function nDelete(li, viaKey = false) {
 // 共用 sheet：焦點移到第一個動作、Tab 不會跑出去、Esc 關閉，關閉後焦點回到原本的元素
 // labelledby：用 sheet 裡標題的 id 當名稱（標題是作者寫的內容、不翻譯時用這個，不用 aria-label）
 // onClose：關掉時（按鈕、Esc、點背景都算）呼叫一次，例如 choose() 回傳 null、掃碼面板關相機
+// canClose：使用者要關掉時（Esc、點 data-close）先問；回傳 false 就不關（例如只顯示一次的恢復連結還沒複製）。程式呼叫 close() 不問
 const FOCUSABLE = 'button:not([disabled]),a[href],input:not([disabled]):not([type=hidden]),select:not([disabled]),textarea:not([disabled]),summary,[tabindex]:not([tabindex="-1"])';
-function openSheet(label, inner, opener, labelledby = '', { onClose } = {}) {
+function openSheet(label, inner, opener, labelledby = '', { onClose, canClose } = {}) {
   const host = document.createElement('div');
   host.className = 'sheet'; host.setAttribute('role', 'dialog'); host.setAttribute('aria-modal', 'true');
   if (labelledby) host.setAttribute('aria-labelledby', labelledby); else host.setAttribute('aria-label', I18N.t(label));
@@ -1712,7 +1711,7 @@ function openSheet(label, inner, opener, labelledby = '', { onClose } = {}) {
   (safe || fs0[0])?.focus();
   const key = (e) => {
     if (!host.isConnected) { document.removeEventListener('keydown', key, true); return; }
-    if (e.key === 'Escape') { e.preventDefault(); close(); return; }
+    if (e.key === 'Escape') { e.preventDefault(); ask(); return; }
     if (e.key !== 'Tab') return;
     const f = focusables(), i = f.indexOf(document.activeElement);
     if (e.shiftKey && i <= 0) { e.preventDefault(); f[f.length - 1]?.focus(); } else if (!e.shiftKey && (i === f.length - 1 || i < 0)) { e.preventDefault(); f[0]?.focus(); }
@@ -1724,8 +1723,9 @@ function openSheet(label, inner, opener, labelledby = '', { onClose } = {}) {
     if (opener?.isConnected) opener.focus();
     onClose?.();
   };
+  const ask = () => { if (canClose?.() !== false) close(); };
   document.addEventListener('keydown', key, true);
-  host.addEventListener('click', (e) => { if (e.target.closest('[data-close]')) close(); });
+  host.addEventListener('click', (e) => { if (e.target.closest('[data-close]')) ask(); });
   return { host, close };
 }
 // 動作選單：長按、右鍵、更多按鈕都開這個
@@ -3414,8 +3414,9 @@ async function renderOnce() {
   document.body.classList.toggle('guest', !me);
   // 隱私權政策與登入畫面也要換分頁標題、消耗換頁的焦點設定（不然 title 停在上一頁、焦點掉到 body）
   if (hash === '/privacy') { if (!me) { try { const r = await api('/me'); me = r.member; cfg = r; } catch {} } $('#ctitle').textContent = ''; privacyView(); return pageSettled(); }
-  // 恢復帳號（恢復連結 /r/<代碼> 轉過來的）：沒登入、登入成別人都打得開，不用先同意隱私權政策（頁面沒有個人資料，只有遮過的名字）
-  if (hash === '/recover') { $('#ctitle').textContent = ''; await recoverView(); return pageSettled(); }
+  // 恢復帳號（恢復連結 #/recover/<代碼>，或用 Google 沒接上回來的 #/recover?err=）：沒登入、登入成別人都打得開，
+  //   不用先同意隱私權政策（頁面沒有個人資料，只有遮過的名字）
+  if (hash === '/recover' || hash.startsWith('/recover/')) { $('#ctitle').textContent = ''; await recoverView(); return pageSettled(); }
   if (!me) { $('#ctitle').textContent = ''; loginView(); return pageSettled(); }
   if (cfg.needConsent) {
     // 記住原本要去的頁面（例如捷徑帶數據進來），同意後再回去
@@ -3437,7 +3438,7 @@ async function renderOnce() {
   try { await route(hash); } finally { clearTimeout(skel); }
   untype();   // iPhone Safari 移除還有焦點的欄位時不送 focusout：換完畫面馬上再檢查一次，分頁列才不會一直收著
   // 第一個畫面畫好了：記下開啟到可用的時間，20 秒後（或離開時）送出
-  if (vitals.ready == null) { vitals.ready = performance.now(); vitals.page = hash.replace(/\/[\w-]{8,}/g, '/:id').slice(0, 40); setTimeout(sendVitals, 20000); }
+  if (vitals.ready == null) { vitals.ready = performance.now(); vitals.page = recPage(hash).replace(/\/[\w-]{8,}/g, '/:id').slice(0, 40); setTimeout(sendVitals, 20000); }
   $('.top').classList.toggle('titled', false);
   pageSettled();
 }

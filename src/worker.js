@@ -102,7 +102,7 @@ async function currentMember(req, env) {
   if (!token) return null;
   const th = await sha(token);
   const row = await env.DB.prepare(
-    `SELECT m.*, s.last_seen_at AS s_seen, s.role_at_issue AS s_role, s.created_at AS s_created, s.mfa_at AS s_mfa, s.google_at AS s_gat, s.token_hash AS s_th,
+    `SELECT m.*, s.last_seen_at AS s_seen, s.role_at_issue AS s_role, s.created_at AS s_created, s.mfa_at AS s_mfa, s.google_at AS s_gat, s.rec_at AS s_rec, s.token_hash AS s_th,
        (SELECT json_group_array(json_object('team_id', tm.team_id, 'role', tm.role, 'status', tm.status, 'title', tm.title)) FROM team_members tm WHERE tm.member_id = m.id) AS s_teams,
        (SELECT 1 FROM push_queue WHERE lease_until IS NULL OR lease_until < datetime('now') LIMIT 1) AS s_pq,
        (SELECT COUNT(*) FROM members r WHERE r.referrer_id = m.id AND r.referrer_ack IS NULL) AS s_refq,
@@ -144,10 +144,11 @@ async function startSession(env, member, req, opts = {}) {
   return cookie;
 }
 // 開工作階段的語句與 cookie（還沒寫入）：用恢復連結接回帳號時，跟綁定、標記連結用過、稽核放在同一個 batch
-async function sessionStmt(env, member, req, { mfa = false, google = false, guard = null } = {}) {
-  const token = rid(24), pol = policyOf(member.role);
-  const stmt = env.DB.prepare(`INSERT INTO sessions (token_hash, member_id, expires_at, last_seen_at, role_at_issue, ip_hash, ua, mfa_at, google_at)
-    SELECT ?, ?, datetime('now', '+${pol.absDays} days'), datetime('now'), ?, ?, ?, ${mfa ? "datetime('now')" : 'NULL'}, ${google ? "datetime('now')" : 'NULL'}${guard ? ` WHERE EXISTS (${guard[0]})` : ''}`)
+//   rec：用恢復連結（Google）接回的工作階段，記下 rec_at：15 分鐘內可以新增一把通行金鑰（幹部也可以、已經有通行金鑰也可以，只能一把；見 /api/passkey/options 的 via='recover'）
+async function sessionStmt(env, member, req, { mfa = false, google = false, rec = false, guard = null } = {}) {
+  const token = rid(24), pol = policyOf(member.role), now = (on) => (on ? "datetime('now')" : 'NULL');
+  const stmt = env.DB.prepare(`INSERT INTO sessions (token_hash, member_id, expires_at, last_seen_at, role_at_issue, ip_hash, ua, mfa_at, google_at, rec_at)
+    SELECT ?, ?, datetime('now', '+${pol.absDays} days'), datetime('now'), ?, ?, ?, ${now(mfa)}, ${now(google)}, ${now(rec)}${guard ? ` WHERE EXISTS (${guard[0]})` : ''}`)
     .bind(await sha(token), member.id, norm(member.role), await ipHash(req, env), str(req.headers.get('user-agent'), 120), ...(guard ? guard.slice(1) : []));
   return { stmt, cookie: `${COOKIE}=${token}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${pol.absDays * 86400}` };
 }
@@ -173,14 +174,22 @@ async function devRace(env, req, at, memberId) {
 
 // ---- 一次性恢復連結（migrations/0056；威脅模型見 docs/SECURITY.md）----
 //   理事長「重設並登出」後沒有登入方式的帳號（沒綁 Google，或勾了解除），或沒有重設、但本人已經登入不了（POST /api/members/:id/recovery）：
-//   產生 https://網域/r/<代碼>（32 bytes 隨機、base64url），理事長私訊給本人；本人打開後用 Google（可以是新的 Google 帳號）或通行金鑰接回原本的帳號
+//   產生 https://網域/?openExternalBrowser=1#/recover/<代碼>（32 bytes 隨機、base64url），理事長私訊給本人；本人打開後用 Google（可以是新的 Google 帳號）或通行金鑰接回原本的帳號
+//   代碼在網址的 # 後面：瀏覽器不會把它送到伺服器（請求網址、Workers Logs、Service Worker 的快取、Referer 都沒有），
+//     從 LINE、Facebook 的內建瀏覽器改用 Safari／Chrome 開啟時跟著網址走（openExternalBrowser＝1 讓 LINE 直接用外部瀏覽器打開）
 //   資料庫只存代碼的 SHA-256；24 小時、只能用一次；產生新的、理事長重設都會刪掉還沒用的舊連結；代碼與網址不寫稽核、不寫日誌
-//   拿到連結的人就能登入這個帳號：只回給產生的理事長一次（之後看不到），接回後通知本人與理事長
+//   拿到連結的人就能登入這個帳號：只回給產生的理事長一次（之後看不到）；產生與接回都通知本人、理事長、監事與行政人員（recoveryOversee）
 const REC_HOURS = 24;
 const REC_COOKIE = '__Host-cil_rec';
+// 用恢復連結接回帳號、正在 Google 那邊（/api/google/start?mode=X 設的，1 小時、只有「1」，不是代碼）：
+//   OAuth 的 state cookie（10 分鐘）過期了才回來（例如當場申請新的 Google 帳號）也回到恢復帳號頁，不會落到一般登入頁（那裡的 Google 按鈕會開一個新帳號）
+const REC_MARK = '__Host-cil_recm';
 const REC_INVALID = '這個恢復連結無效或已過期，請聯絡理事長重新產生';
 const REC_TAKEN = '這個 Google 帳號已經是另一個帳號，請換一個';
+const REC_TIMEOUT = '登入逾時，請重新打開恢復連結';
 const recTokenOk = (t) => typeof t === 'string' && /^[A-Za-z0-9_-]{43}$/.test(t);
+// 前端回報的頁面（錯誤回報、開啟速度）把恢復連結的代碼拿掉：新版前端本來就不送，這裡擋住舊版 App 或其他程式送上來的
+const noRecToken = (s) => String(s ?? '').replace(/(recover\/)[\w-]{16,}/g, '$1…');
 // 產生連結的語句（重設時跟其他寫入放在同一個 batch，句數固定）：刪掉這位跑友還沒用的舊連結（一律）、寫入新的與稽核（on＝false 時不寫）
 //   稽核 security.recovery_issue 只記「24 小時」，不記代碼與網址
 async function recoveryStmts(env, req, actor, memberId, on) {
@@ -193,19 +202,30 @@ async function recoveryStmts(env, req, actor, memberId, on) {
   ] };
 }
 // 回給理事長的連結（只有這一次）
-const recoveryOut = (req, rec) => ({ url: `${url0(req).origin}/r/${rec.token}`, expires_at: `${rec.exp.replace(' ', 'T')}Z` });
+const recoveryOut = (req, rec) => ({ url: `${url0(req).origin}/?openExternalBrowser=1#/recover/${rec.token}`, expires_at: `${rec.exp.replace(' ', 'T')}Z` });
 // 連結還能用就回傳那位跑友（接回帳號要用的欄位），不然 null：不存在、過期、用過、格式不對都一樣
 async function recoveryOf(env, token) {
   if (!recTokenOk(token)) return null;
   return env.DB.prepare(`SELECT m.id, m.name, m.nickname, m.role, m.google_sub, m.consent_version, m.email_findable, m.email_h, r.expires_at
     FROM recovery_links r JOIN members m ON m.id = r.member_id WHERE r.token_hash = ? AND r.used_at IS NULL AND r.expires_at > datetime('now')`).bind(await sha(token)).first();
 }
-// 接回帳號後通知本人與理事長（不能關閉的安全通知）：理事長點開直接是這位跑友的「安全」，不是本人就再重設
+// 恢復連結的監督通知（不能關閉的安全通知）：產生與接回都通知理事長（點開直接是這位跑友的「安全」，不是本人就再重設）、
+//   監事（有稽核權限，點開稽核紀錄）與行政人員；except＝不通知的人（產生的理事長自己、這位跑友）
+//   只有一位理事長時，產生的人不是唯一知道的人：理事長（或偷到理事長登入與通行金鑰的人）替別人產生連結再自己接回，監事與行政人員也會看到
+//   每一群一句通知（句數固定：理事長、監事、行政人員各一次 securityNotify）
+async function recoveryOversee(env, except, targetId, { title, body, unless }) {
+  const rows = (await env.DB.prepare("SELECT id, role FROM members WHERE role IN ('chair', 'supervisor', 'staff', 'admin') AND id NOT IN (SELECT value FROM json_each(?))")
+    .bind(JSON.stringify(except)).all()).results;
+  const ids = (...roles) => rows.filter((r) => roles.includes(r.role)).map((r) => r.id);
+  await securityNotify(env, ids('chair'), { title, body: `${body}${unless}，點這則通知打開「安全」重設。`, url: `/#/admin?tab=roles&sec=${targetId}` });
+  await securityNotify(env, ids('supervisor'), { title, body: `${body}${unless}，請馬上聯絡理事長。`, url: '/#/admin?tab=audit' });
+  await securityNotify(env, ids('staff', 'admin'), { title, body: `${body}${unless}，請馬上聯絡理事長。` });
+}
+// 接回帳號後通知本人與理事長、監事、行政人員（不能關閉的安全通知）
 async function recoveredNotify(env, req, t) {
   const body = `${t.name} 用恢復連結重新接回帳號（${deviceLabel(req.headers.get('user-agent') || '')}）`;
-  const chairs = (await env.DB.prepare("SELECT id FROM members WHERE role = 'chair' AND id != ?").bind(t.id).all()).results.map((r) => r.id);
   await securityNotify(env, [t.id], { title: '用恢復連結接回帳號', body: `${body}。不是你的話，請馬上聯絡理事長。`, url: '/#/me/security' });
-  await securityNotify(env, chairs, { title: '跑友用恢復連結接回帳號', body: `${body}。不是本人的話，點這則通知打開「安全」重設。`, url: `/#/admin?tab=roles&sec=${t.id}` });
+  await recoveryOversee(env, [t.id], t.id, { title: '跑友用恢復連結接回帳號', body: `${body}。`, unless: '不是本人的話' });
 }
 
 // 嘗試次數限制：在 window 秒內超過 limit 次就擋
@@ -476,6 +496,7 @@ const GOOGLE_ISS = ['https://accounts.google.com', 'accounts.google.com'];
 const LINK_FROM = { ref: '.R', pk: '.P' };
 //   mode=X：用恢復連結接回帳號（#/recover 先 POST /api/recover/check {google: true}，伺服器把代碼放進 HttpOnly 的 __Host-cil_rec，再導到這裡）
 //     代碼從 __Host-cil_rec 搬進 OAuth 的 state cookie（.X.<代碼>），不放進任何網址（Google 的授權網址、我們的 /api 網址都沒有）；__Host-cil_rec 同時清掉
+//     另外設 REC_MARK（1 小時、只有「1」）：state cookie 過期才回來也回到恢復帳號頁；其他模式開始時清掉
 const cookieOf = (req, name) => (req?.headers.get('cookie') || '').match(new RegExp(`(?:^|;\\s*)${name}=([\\w.-]+)`))?.[1] || null;
 async function googleStart(env, url, current, req) {
   if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET) return fail(503, '尚未設定 Google 登入');
@@ -496,7 +517,8 @@ async function googleStart(env, url, current, req) {
     ['location', auth.toString()],
     // state 與 nonce 一起綁在發起登入的瀏覽器上，callback 時兩個都要對得上
     ['set-cookie', `${OAUTH_STATE}=${state}.${nonce}${link}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=600`],
-    ...(rec ? [['set-cookie', REC_CLEAR]] : []),
+    ...(rec ? [['set-cookie', REC_CLEAR], ['set-cookie', `${REC_MARK}=1; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=3600`]]
+      : cookieOf(req, REC_MARK) ? [['set-cookie', REC_MARK_CLEAR]] : []),
   ] });
 }
 
@@ -526,9 +548,10 @@ async function verifyGoogleIdToken(env, idToken, nonce) {
 
 const OAUTH_CLEAR = `${OAUTH_STATE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`;
 const REC_CLEAR = `${REC_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0`;
+const REC_MARK_CLEAR = `${REC_MARK}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`;
 const oauthBack = (msg) => new Response(null, { status: 302, headers: { location: `/#/?err=${encodeURIComponent(msg)}`, 'set-cookie': OAUTH_CLEAR } });
 // 用恢復連結接回帳號（mode X）沒有完成：回到恢復帳號頁（代碼還在那個分頁的 sessionStorage，可以再試或改用通行金鑰）
-const recBack = (msg) => new Response(null, { status: 302, headers: [['location', `/#/recover?err=${encodeURIComponent(msg)}`], ['set-cookie', OAUTH_CLEAR], ['set-cookie', REC_CLEAR]] });
+const recBack = (msg) => new Response(null, { status: 302, headers: [['location', `/#/recover?err=${encodeURIComponent(msg)}`], ['set-cookie', OAUTH_CLEAR], ['set-cookie', REC_CLEAR], ['set-cookie', REC_MARK_CLEAR]] });
 // OAuth 的 state cookie：state.nonce[.模式[.c]]，恢復連結是 state.nonce.X.<代碼>
 function oauthState(req) {
   const [want, nonce, mode, x] = (cookieOf(req, OAUTH_STATE) || '').match(/^[\w]+\.[\w]+(?:\.[LRP](?:\.c)?|\.X\.[\w-]{43})?$/)?.[0].split('.') || [];
@@ -536,11 +559,13 @@ function oauthState(req) {
 }
 async function googleCallback(req, env, url) {
   const { want, nonce, mode, cap, token } = oauthState(req);
-  const back = mode === 'X' ? recBack : oauthBack;
+  // 恢復連結途中 state cookie 過期（REC_MARK 還在、state 對不上）：回恢復帳號頁，不是一般登入頁（那裡的 Google 按鈕會開一個新帳號）
+  const lost = mode !== 'X' && !!cookieOf(req, REC_MARK) && (!want || url.searchParams.get('state') !== want);
+  const back = mode === 'X' || lost ? recBack : oauthBack;
   // 使用者在 Google 授權頁按了取消
   if (url.searchParams.get('error')) return back(url.searchParams.get('error') === 'access_denied' ? '你取消了 Google 登入' : 'Google 登入失敗，請再試一次');
   const code = url.searchParams.get('code'), state = url.searchParams.get('state');
-  if (!code || !state || !want || state !== want) return back('登入逾時，請再試一次');
+  if (!code || !state || !want || state !== want) return back(lost ? REC_TIMEOUT : '登入逾時，請再試一次');
   let claims;
   try {
     const form = new URLSearchParams({ grant_type: 'authorization_code', code, redirect_uri: googleRedirect(url), client_id: env.GOOGLE_CLIENT_ID, client_secret: env.GOOGLE_CLIENT_SECRET });
@@ -586,7 +611,8 @@ async function googleSignIn(req, env, claims, mode, { confirm = false, token } =
   // 恢復連結（mode X）：把這個 Google 帳號（可以是新的）接回連結那位跑友原本的帳號（見 recoveryStmts）
   //   連結再檢查一次（沒用過、沒過期）；這個 Google 帳號已經是另一個帳號的不接（請他換一個）
   //   同一個 batch：綁定（Ref.RECOVER_SQL，連結還能用才寫；查詢碼照 nextHash 的規則）、標記連結用過、刪掉他其他還沒用的連結、
-  //   開工作階段（google_at：馬上可以新增通行金鑰；強制兩步驟、還沒有通行金鑰的幹部照 via='first' 新增第一把）、稽核 security.recover（actor＝本人）
+  //   開工作階段（google_at、rec_at：15 分鐘內可以新增一把通行金鑰，已經有通行金鑰的幹部也可以〔換了手機、舊的那把不在身邊〕，見 /api/passkey/options 的 via='recover'）、
+  //   稽核 security.recover（actor＝本人）
   //   工作階段與稽核只在「這個 Google 帳號綁在他身上、這個連結已經用掉」時寫：同時拿同一個連結用另一個 Google 帳號的，拿不到工作階段
   if (mode === 'X') {
     const t = await recoveryOf(env, token);
@@ -594,7 +620,7 @@ async function googleSignIn(req, env, claims, mode, { confirm = false, token } =
     if (m && m.id !== t.id) return recBack(REC_TAKEN);
     const th = await sha(token), nx = await nextHash(t.email_findable, t.consent_version === pv);
     const done = ['SELECT 1 FROM members m JOIN recovery_links r ON r.member_id = m.id WHERE m.id = ? AND m.google_sub = ? AND r.token_hash = ? AND r.used_at IS NOT NULL', t.id, claims.sub, th];
-    const s = await sessionStmt(env, t, req, { google: true, guard: done });
+    const s = await sessionStmt(env, t, req, { google: true, rec: true, guard: done });
     let res;
     try {
       res = await env.DB.batch([
@@ -611,7 +637,7 @@ async function googleSignIn(req, env, claims, mode, { confirm = false, token } =
     }
     if (!res[3].meta.changes) return recBack(REC_INVALID);
     await recoveredNotify(env, req, t);
-    return new Response(null, { status: 302, headers: [['location', '/#/me/security?recovered=1'], ['set-cookie', s.cookie], ['set-cookie', clear], ['set-cookie', REC_CLEAR]] });
+    return new Response(null, { status: 302, headers: [['location', '/#/me/security?recovered=1'], ['set-cookie', s.cookie], ['set-cookie', clear], ['set-cookie', REC_CLEAR], ['set-cookie', REC_MARK_CLEAR]] });
   }
   // 綁定模式：把這個 Google 帳號接到目前登入的帳號
   if (mode === 'L' || mode === 'R' || mode === 'P') {
@@ -2196,7 +2222,8 @@ const api = (async function api(req, env, path, method) {
   // 前端錯誤回報：同一天同一個錯誤只留一筆並累加次數；不存身分；有次數限制
   if (path === '/api/client-error' && method === 'POST') {
     if (await limited(env, `cerr:${await ipHash(req, env)}`, 20, 600)) return json({ ok: true });
-    const b = await body(), e = { message: str(b.message, 300), source: str(b.source, 120), line: Math.max(0, Math.min(Number(b.line) || 0, 1e6)), page: str(b.page, 60) };
+    // 頁面與訊息拿掉恢復連結的代碼（#/recover/<代碼>：舊版 App 回報的頁面會帶著）
+    const b = await body(), e = { message: noRecToken(str(b.message, 300)), source: noRecToken(str(b.source, 120)), line: Math.max(0, Math.min(Number(b.line) || 0, 1e6)), page: noRecToken(str(b.page, 60)) };
     if (!e.message) return json({ ok: true });
     const device = deviceLabel(req.headers.get('user-agent') || '');
     console.error('client-error', JSON.stringify({ ...e, device, member: member ? 'yes' : 'no' }));
@@ -2208,7 +2235,7 @@ const api = (async function api(req, env, path, method) {
   // 開啟速度：每次開啟最多送一次（幾個數字），不存身分
   if (path === '/api/vitals' && method === 'POST') {
     if (await limited(env, `vit:${await ipHash(req, env)}`, 30, 600)) return json({ ok: true });
-    const b = await body(), device = deviceLabel(req.headers.get('user-agent') || ''), page = str(b.page, 40);
+    const b = await body(), device = deviceLabel(req.headers.get('user-agent') || ''), page = noRecToken(str(b.page, 40));
     const LIM = { ready: 60000, fcp: 60000, lcp: 60000, inp: 20000, ttfb: 60000, cls: 10 };
     const rows = Object.entries(LIM).map(([k, max]) => [k, Number(b[k])]).filter(([k, v]) => Number.isFinite(v) && v >= 0 && v <= LIM[k]);
     // 資料讀取時間：每種 API（代碼換成 :id）的中位數，api＝總時間、apisrv＝其中伺服器處理的時間
@@ -2394,10 +2421,12 @@ const api = (async function api(req, env, path, method) {
     //   幹部不行（見 googleFresh）
     //   擋下時告訴 App 能怎麼做：officer＝幹部，要用現有的通行金鑰（可以用其他裝置掃 QR）｜google＝可以用 Google 重新確認後新增
     //   first＝還沒有通行金鑰的強制兩步驟幹部（15 分鐘內用 Google 登入或重新確認過可以新增第一把）
+    //   例外：15 分鐘內用恢復連結（Google）接回帳號的工作階段（rec_at）可以新增一把，幹部、已經有通行金鑰的也可以（理事長產生的連結就是授權：
+    //     幹部唯一一把的手機弄丟，理事長只產生連結、沒有重設時，舊的那把還在）；只能一把（驗證時同一個 batch 清掉 rec_at），通知理事長、監事與行政人員
     const have = purpose === 'register' && await hasPasskey();
     const gated = purpose === 'register' && (have || (security.require_mfa && member.mfa_pending)) && !freshMfa();
-    // via：google＝一般跑友靠 Google 確認｜first＝幹部的第一把靠 Google 確認（發挑戰值時記下，驗證時照這個寫稽核與通知）
-    const via = !gated ? null : googleFresh() ? 'google' : !have && fresh15(member.s_gat) ? 'first' : null;
+    // via：google＝一般跑友靠 Google 確認｜recover＝恢復連結接回後（幹部）｜first＝幹部的第一把靠 Google 確認（發挑戰值時記下，驗證時照這個寫稽核與通知）
+    const via = !gated ? null : googleFresh() ? 'google' : fresh15(member.s_rec) ? 'recover' : !have && fresh15(member.s_gat) ? 'first' : null;
     if (gated && !via)
       return json({ error: have ? '新增通行金鑰前，請先用現有的通行金鑰驗證' : '幹部的第一把通行金鑰要在用 Google 登入後 15 分鐘內新增', stepup: have,
         officer: !plainMember(), first: !have, google: !!member.google_sub && (plainMember() || !have) }, 403);
@@ -2434,19 +2463,25 @@ const api = (async function api(req, env, path, method) {
         if (!r.uv) throw new Error('請用 Face ID、Touch ID 或裝置密碼確認');
         // 同一句檢查這個工作階段還在：理事長剛好在途中「重設並登出」（挑戰值已經用掉、還沒寫入），這把不會在重設之後留下來
         //   幹部的第一把（?7＝1）同一句再檢查「還沒有任何一把」：兩個新增同時通過上面的 COUNT，只有先寫入的那一把算第一把
+        //   恢復連結接回後（?8＝1）同一句再檢查 rec_at 還在、15 分鐘內，同一個 batch 寫入後清掉：只能新增一把（同時開兩個新增只有先完成的算）
         await devRace(env, req, 'pk-add', member.id);
         await devRace(env, req, 'pk-first', member.id);
-        const ins = await env.DB.prepare(`INSERT INTO passkeys (id, member_id, public_jwk, sign_count, name)
-          SELECT ?1, ?2, ?3, ?4, ?5 WHERE EXISTS (SELECT 1 FROM sessions WHERE token_hash = ?6 AND member_id = ?2)
-            AND (?7 = 0 OR NOT EXISTS (SELECT 1 FROM passkeys WHERE member_id = ?2))`)
-          .bind(r.credId, member.id, JSON.stringify(r.jwk), r.signCount, str(b.name, 20) || deviceLabel(req.headers.get('user-agent') || ''), member.s_th, ch.via === 'first' ? 1 : 0).run();
+        const recv = ch.via === 'recover' ? 1 : 0;
+        const [ins] = await env.DB.batch([
+          env.DB.prepare(`INSERT INTO passkeys (id, member_id, public_jwk, sign_count, name)
+            SELECT ?1, ?2, ?3, ?4, ?5 WHERE EXISTS (SELECT 1 FROM sessions WHERE token_hash = ?6 AND member_id = ?2 AND (?8 = 0 OR rec_at > datetime('now', '-15 minutes')))
+              AND (?7 = 0 OR NOT EXISTS (SELECT 1 FROM passkeys WHERE member_id = ?2))`)
+            .bind(r.credId, member.id, JSON.stringify(r.jwk), r.signCount, str(b.name, 20) || deviceLabel(req.headers.get('user-agent') || ''), member.s_th, ch.via === 'first' ? 1 : 0, recv),
+          env.DB.prepare('UPDATE sessions SET rec_at = NULL WHERE token_hash = ?1 AND ?2 = 1 AND EXISTS (SELECT 1 FROM passkeys WHERE id = ?3 AND member_id = ?4)').bind(member.s_th, recv, r.credId, member.id),
+        ]);
         if (!ins.meta.changes) {
           if (ch.via === 'first' && await env.DB.prepare('SELECT 1 FROM passkeys WHERE member_id = ? LIMIT 1').bind(member.id).first()) return notFirst();
+          if (recv && await env.DB.prepare('SELECT 1 FROM sessions WHERE token_hash = ?').bind(member.s_th).first()) return notFirst();
           throw new Error('登入已經失效，請重新登入');
         }
         // 沒用現有的通行金鑰驗證、是靠剛才的 Google 確認新增的（發挑戰值時記下的 via，不是現在再判斷一次）：稽核註明
         const dev = deviceLabel(req.headers.get('user-agent') || '');
-        await audit(env, req, member, 'passkey.add', 'member', member.id, `${dev}${ch.via === 'google' ? '｜Google 確認後新增' : ch.via === 'first' ? '｜幹部第一把（Google 確認後新增）' : ''}`);
+        await audit(env, req, member, 'passkey.add', 'member', member.id, `${dev}${{ google: '｜Google 確認後新增', first: '｜幹部第一把（Google 確認後新增）', recover: '｜恢復連結後新增' }[ch.via] || ''}`);
         await securityNotify(env, [member.id], { title: '新增了一把通行金鑰', body: `${dev}。不是你的話，請到「我的 → 帳號與安全」移除並登出所有裝置。`, url: '/#/me/security' });
         // 幹部的第一把（第一次使用即信任）：也通知理事長與行政人員（有系統設定權限的人），不是本人的話理事長在後台「權限」重設並登出（/api/members/:id/security-reset）
         //   第一把只能在 15 分鐘內用這個帳號綁的 Google 登入或重新確認後新增：不是本人＝那個 Google 帳號被盜用，只重設不解除的話對方再用 Google 登入又能加一把
@@ -2457,6 +2492,9 @@ const api = (async function api(req, env, path, method) {
             body: `${member.name} 用 Google 登入後新增了第一把通行金鑰（${dev}）。不是本人的話，就是他的 Google 帳號被盜用了：請理事長點這則通知打開「安全」，勾「同時解除 Google 綁定」再「重設並登出」。`,
             url: `/#/admin?tab=roles&sec=${member.id}&g=1` });
         }
+        // 恢復連結接回後（幹部）沒用現有的通行金鑰就新增了一把：理事長、監事與行政人員也知道（接回時已經通知過一次，這是第二道）
+        if (ch.via === 'recover') await recoveryOversee(env, [member.id], member.id, { title: '幹部用恢復連結接回後新增了通行金鑰',
+          body: `${member.name} 用恢復連結接回帳號後新增了一把通行金鑰（${dev}）。`, unless: '不是本人的話' });
         return json({ ok: true });
       }
       const pk = await env.DB.prepare('SELECT * FROM passkeys WHERE id = ?').bind(str(cred.id, 400)).first();
@@ -2487,6 +2525,7 @@ const api = (async function api(req, env, path, method) {
   }
   // ---- 用恢復連結接回帳號（#/recover，不用登入；見 recoveryStmts 與 docs/SECURITY.md）----
   //   每個 IP 10 分鐘 10 次（查連結、改用通行金鑰都算）；不存在、過期、用過、格式不對一律同一個回應（404 invalid），不能拿來試哪些代碼存在
+  //   代碼在網址的 # 後面（不會出現在任何請求網址），這幾支 API 都放在 POST 的內容裡
   //   POST /api/recover/check {token, google}：回傳遮過的名字（王○明）與到期時間；google＝true（按「用 Google 登入並接回帳號」）時，
   //     把代碼放進 HttpOnly、SameSite=Strict、10 分鐘的 __Host-cil_rec，接著導到 /api/google/start?mode=X（代碼不放進任何網址）
   //   POST /api/recover/passkey/options、verify {token, …}：不用 Google，直接在這台裝置新增一把通行金鑰給這位跑友並登入；
@@ -2498,7 +2537,8 @@ const api = (async function api(req, env, path, method) {
     if (await recLimited()) return fail(429, '嘗試太多次，請 10 分鐘後再試');
     const b = await body(), t = await recoveryOf(env, b.token);
     if (!t) return recInvalid();
-    return json({ name: Ref.maskName(t.name), expires_at: `${t.expires_at.replace(' ', 'T')}Z` }, 200,
+    // same：這台裝置目前登入的就是這個帳號（沒登入或登入的是別人都是 false；頁面提醒「接回後會改成登入原本的帳號」）
+    return json({ name: Ref.maskName(t.name), expires_at: `${t.expires_at.replace(' ', 'T')}Z`, same: !!member && member.id === t.id }, 200,
       b.google === true ? { 'set-cookie': `${REC_COOKIE}=${b.token}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=600` } : {});
   }
   if (path === '/api/recover/passkey/options' && method === 'POST') {
@@ -6207,6 +6247,7 @@ const api = (async function api(req, env, path, method) {
   //     沒有登入方式時寫入新的恢復連結（recoveryStmts，有登入方式時那兩句不動）；
   //     稽核 security.reset 只記數字與「解除 Google」（不記原因、不記個資），還原備份後 tools/restore-sql.mjs 照這一列重做；恢復連結另外記 security.recovery_issue
   //     原因只放在給本人的通知中心（推播與稽核都沒有）；推播訂閱已經刪了，這則通知等本人重新登入後在通知中心看到
+  //     也通知其他理事長、監事與行政人員（recoveryOversee，不含原因）：只有一位理事長時，重設與產生恢復連結不是只有他自己知道
   const msec = path.match(/^\/api\/members\/([\w-]{1,32})\/security(-reset)?$/);
   if (msec && method === (msec[2] ? 'POST' : 'GET')) {
     const g = need(); if (g) return g;
@@ -6246,11 +6287,15 @@ const api = (async function api(req, env, path, method) {
     await securityNotify(env, [t.id], { title: '帳號安全已重設',
       body: `理事長重設了你的通行金鑰並登出所有裝置${unlink ? '，也解除了 Google 綁定' : ''}。${stuck ? '理事長會私訊給你一個恢復連結（24 小時內有效，只能用一次），用它接回這個帳號後，請新增通行金鑰。' : '用 Google 重新登入後，請到「我的 → 帳號與安全」新增通行金鑰。'}${reason ? `原因：${reason}` : ''}`,
       url: '/#/me/security', push: { body: '理事長重設了你的通行金鑰並登出所有裝置' } });
+    // 監督：重設本身也通知其他理事長、監事與行政人員（有沒有產生恢復連結，收件人與句數都一樣）
+    await recoveryOversee(env, [member.id, t.id], t.id, stuck ? { title: '理事長產生了恢復連結', body: `${t.name}：${member.name} 重設並登出，同時產生了恢復連結（24 小時內有效）。`, unless: '不是協會安排的話' }
+      : { title: '理事長重設了跑友的通行金鑰', body: `${t.name}：${member.name} 重設了通行金鑰並登出所有裝置。`, unless: '不是協會安排的話' });
     return json({ ok: true, passkeys: t.pk, sessions: t.ss, unlinked: unlink, ...(stuck ? { recovery: recoveryOut(req, rec) } : {}) });
   }
   // 只產生恢復連結（沒有重設）：本人已經登入不了（例如沒綁 Google、通行金鑰的手機換了），不用刪掉他的東西就能接回
   //   只有理事長、一定要 15 分鐘內用通行金鑰驗證過、不能替自己產生、每位理事長一小時 10 次；還沒用的舊連結一起刪掉
-  //   回應的 recovery {url, expires_at} 只有這一次；稽核 security.recovery_issue（不記代碼與網址）；通知本人（不放連結：推播與通知中心都可能被別人看到）
+  //   回應的 recovery {url, expires_at} 只有這一次；稽核 security.recovery_issue（不記代碼與網址）；通知本人（不放連結：推播與通知中心都可能被別人看到），
+  //   也通知其他理事長、監事與行政人員（recoveryOversee：只有一位理事長時，產生的人不是唯一知道的人）
   const mrec = path.match(/^\/api\/members\/([\w-]{1,32})\/recovery$/);
   if (mrec && method === 'POST') {
     const g = need(); if (g) return g;
@@ -6258,13 +6303,14 @@ const api = (async function api(req, env, path, method) {
     if (mrec[1] === member.id) return fail(400, '不能替自己產生恢復連結');
     const su = await needStepUp(true); if (su) return su;
     if (await limited(env, `recissue:${member.id}`, 10, 3600)) return fail(429, '操作太頻繁，請稍後再試');
-    const t = await env.DB.prepare('SELECT id FROM members WHERE id = ?').bind(mrec[1]).first();
+    const t = await env.DB.prepare('SELECT id, name FROM members WHERE id = ?').bind(mrec[1]).first();
     if (!t) return fail(404, '找不到這位跑友');
     const rec = await recoveryStmts(env, req, member, t.id, true);
     await env.DB.batch(rec.stmts);
     await securityNotify(env, [t.id], { title: '理事長產生了恢復連結',
       body: '理事長替你的帳號產生了一個恢復連結（24 小時內有效，只能用一次），會私訊給你。不是你要求的，請馬上聯絡理事長。', url: '/#/me/security',
       push: { body: '理事長替你的帳號產生了恢復連結' } });
+    await recoveryOversee(env, [member.id, t.id], t.id, { title: '理事長產生了恢復連結', body: `${t.name}：${member.name} 產生了恢復連結（24 小時內有效）。`, unless: '不是協會安排的話' });
     return json({ ok: true, recovery: recoveryOut(req, rec) });
   }
 
@@ -7862,18 +7908,6 @@ async function shareLink(req, env, ctx, url, path) {
   return res;
 }
 
-// ---- 恢復連結 /r/<代碼>（wrangler.jsonc 的 run_worker_first）----
-//   畫面就是首頁（public/index.html 原樣，不讀 D1、不把代碼放進頁面）；前端開機時把代碼收進 sessionStorage、網址換成 /#/recover（見 app.js）
-//   標頭：安全標頭跟靜態檔一樣（PAGE_HEADERS，CSP 在 index.html 的 <meta>），另外 no-store（瀏覽器與中間的快取都不存這一頁）、
-//   no-referrer（載入程式、圖片與之後的請求都不把帶代碼的網址當 Referer 送出去）
-async function recoverPage(req, env, url) {
-  if (req.method !== 'GET' && req.method !== 'HEAD') return env.ASSETS.fetch(req);
-  const page = await env.ASSETS.fetch(new Request(new URL('/', url)));
-  if (!page.ok) return page;
-  return new Response(req.method === 'HEAD' ? null : page.body, { status: 200,
-    headers: { 'content-type': 'text/html; charset=utf-8', ...PAGE_HEADERS, 'referrer-policy': 'no-referrer', 'cache-control': 'no-store' } });
-}
-
 export default {
   async scheduled(event, env, ctx) {
     const b = new Budget(env, { kind: 'cron', name: 'hourly' }), e = invocationEnv(env, ctx, b);
@@ -7886,7 +7920,6 @@ export default {
     const url = new URL(req.url);
     const path = decodeURIComponent(url.pathname);
     if (path.startsWith('/e/')) return shareLink(req, env, ctx, url, path);
-    if (path.startsWith('/r/')) return recoverPage(req, env, url);
     if (!path.startsWith('/api/')) return env.ASSETS.fetch(req);
     // 資安金鑰沒設定就不提供 API（避免用預設值雜湊 IP、稽核紀錄沒有簽章）
     if ((!env.HASH_SALT || !env.AUDIT_KEY) && !LOCAL.includes(url.hostname)) return new Response(JSON.stringify({ error: '系統設定不完整，請聯絡管理員' }), { status: 503, headers: { 'content-type': 'application/json' } });

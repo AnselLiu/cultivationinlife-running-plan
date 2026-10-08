@@ -84,11 +84,21 @@ test('權限：「安全」重設通行金鑰並登出（看數字、焦點在�
   await sheet.getByRole('button', { name: '重設並登出' }).click();
   await expect(page.locator('.toast')).toHaveText(`已重設通行金鑰並登出所有裝置：${name}`);
   await expect(page.locator('.toast [translate="no"]')).toHaveText(name);   // 英文介面名字不會被拆開翻譯
-  // 沒有登入方式：面板換成恢復連結（只顯示這一次），按「完成」關掉
+  // 沒有登入方式：面板換成恢復連結（只顯示這一次）；點背景不關（手指不小心碰到），還沒複製也沒傳出去就按「完成」或 Esc 先確認
   const panel = page.getByRole('dialog', { name: '恢復連結' });
   await expect(panel.locator('#recT')).toBeFocused();
+  await page.locator('.sheet-bg').click({ position: { x: 5, y: 5 } });
+  await expect(panel).toHaveCount(1);
+  const asked = [];
+  page.once('dialog', (d) => { asked.push(d.message()); d.dismiss(); });
+  await page.keyboard.press('Escape');
+  await expect.poll(() => asked.length).toBe(1);
+  expect(asked[0]).toBe('連結還沒複製或傳出，關掉後就看不到了，確定關閉？');
+  await expect(panel).toHaveCount(1);   // 按了取消：留著
+  page.once('dialog', (d) => { asked.push(d.message()); d.accept(); });
   await panel.getByRole('button', { name: '完成' }).click();
   await expect(panel).toHaveCount(0);
+  expect(asked.length).toBe(2);
   await expect(page.locator('#roleSearch [name=q]')).toBeFocused();   // 重畫後焦點回到搜尋框
   const me = await (await request.get('/api/me', { headers: { cookie } })).json();
   expect(me.member).toBeNull();
@@ -120,7 +130,7 @@ test('權限：幹部第一把通行金鑰的通知直接打開「安全」（�
   expect((await (await request.get('/api/me', { headers: { cookie: gc } })).json()).member.id, '取消：沒有重設').toBe(gid);
 });
 
-test('恢復連結：「安全」解除 Google 並重設 → 恢復連結（複製、用 LINE 傳給本人、關掉不再顯示）→ 本人沒登入打開連結看到遮過的名字 → 用 Google 接回原本的帳號，到帳號與安全新增通行金鑰', async ({ page, request }) => {
+test('恢復連結：「安全」解除 Google 並重設 → 恢復連結（複製、用 LINE 傳給本人、關掉不再顯示）→ 本人沒登入打開連結看到遮過的名字（LINE 裡只給「用瀏覽器開啟」）→ 用 Google 接回原本的帳號，到帳號與安全新增通行金鑰', async ({ page, request, browser }) => {
   const gname = `恢復測試${Date.now().toString(36).slice(-4)}`, sub = `e2e_rec_${Date.now()}`;
   const g = await request.get(`/api/dev/google?${new URLSearchParams({ sub, name: gname })}`, { maxRedirects: 0 });
   const gc = g.headersArray().find((h) => h.name.toLowerCase() === 'set-cookie' && h.value.startsWith('__Host-cil_sess=')).value.split(';')[0];
@@ -140,8 +150,9 @@ test('恢復連結：「安全」解除 Google 並重設 → 恢復連結（複�
   await expect(panel.locator('#recT')).toBeFocused();
   const field = panel.getByRole('textbox', { name: '恢復連結（24 小時內有效，只能用一次）' });
   await expect(field).toHaveAttribute('readonly', '');
-  const url = await field.inputValue(), token = url.split('/r/')[1];
-  expect(url).toMatch(/^https?:\/\/localhost:\d+\/r\/[\w-]{43}$/);
+  // 代碼在 # 後面（不會送到伺服器）；openExternalBrowser=1 讓 LINE 直接用 Safari／Chrome 打開
+  const url = await field.inputValue(), token = url.split('#/recover/')[1];
+  expect(url).toMatch(/^https?:\/\/localhost:\d+\/\?openExternalBrowser=1#\/recover\/[\w-]{43}$/);
   await expect(panel.locator('#recWarn')).toHaveText('請私訊給本人，不要貼到群組；拿到連結的人可以登入這個帳號');
   await expect(field).toHaveAccessibleDescription('請私訊給本人，不要貼到群組；拿到連結的人可以登入這個帳號');
   const copyBtn = panel.getByRole('button', { name: '複製' }), line = panel.getByRole('link', { name: '用 LINE 傳給本人' }), done = panel.getByRole('button', { name: '完成' });
@@ -159,12 +170,16 @@ test('恢復連結：「安全」解除 Google 並重設 → 恢復連結（複�
   await done.click();
   await expect(panel).toHaveCount(0);
   await expect(page.locator('#recUrl')).toHaveCount(0);   // 關掉之後不會再顯示
-  // 本人：沒登入的瀏覽器打開連結 → 網址馬上換成 #/recover（代碼只在 sessionStorage），看到遮過的名字
+  // 已經登入別的帳號（這裡是理事長）打開：提醒接回後這台裝置會改成登入原本的帳號
+  await page.goto(url);
+  await expect(page.locator('#recOther')).toContainText('你目前登入的是「測試理事長」；接回後這台裝置會改成登入原本的帳號');
+  // 本人：沒登入的瀏覽器打開連結（/?openExternalBrowser=1#/recover/<代碼>）→ 看到遮過的名字；代碼留在網址裡（換到 Safari／Chrome 時跟著走），接回後才換掉
   await page.context().clearCookies();
+  await page.goto('/#/');
   await page.goto(url);
   await expect(page.locator('#recT')).toHaveText(`恢復帳號：${maskName(gname)}`);
-  await expect(page).toHaveURL(/\/#\/recover$/);
-  expect(page.url()).not.toContain(token);
+  await expect(page).toHaveURL(new RegExp(`/\\?openExternalBrowser=1#/recover/${token}$`));
+  await expect(page.locator('#recOther')).toHaveCount(0);
   expect(await page.evaluate(() => sessionStorage.getItem('cil-recover'))).toBe(token);
   await expect(page.locator('#recCard')).toContainText('24 小時內有效，只能用一次。');
   await expect(page.getByRole('button', { name: '改用通行金鑰' })).toBeVisible();
@@ -172,6 +187,15 @@ test('恢復連結：「安全」解除 Google 並重設 → 恢復連結（複�
   expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(0);
   const bad2 = (await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21aa']).analyze()).violations.filter((v) => ['critical', 'serious'].includes(v.impact));
   expect(bad2.map((v) => v.id)).toEqual([]);
+  // LINE 的內建瀏覽器：Google 與通行金鑰都不能用，只給「用瀏覽器開啟」（同一個連結，代碼跟著網址走）
+  const lineCtx = await browser.newContext({ userAgent: `${await page.evaluate(() => navigator.userAgent)} Line/14.13.0`, serviceWorkers: 'block', locale: 'zh-TW', timezoneId: 'Asia/Taipei', viewport: page.viewportSize() });
+  const lp = await lineCtx.newPage();
+  await lp.goto(url);
+  await expect(lp.locator('#recT')).toHaveText(`恢復帳號：${maskName(gname)}`);
+  await expect(lp.getByRole('link', { name: '用瀏覽器開啟' })).toHaveAttribute('href', url);
+  await expect(lp.getByRole('button', { name: '改用通行金鑰' })).toHaveCount(0);
+  expect((await lp.getByRole('link', { name: '用瀏覽器開啟' }).boundingBox()).height).toBeGreaterThanOrEqual(44);
+  await lineCtx.close();
   // e2e 伺服器沒有設定 Google（沒有 Google 按鈕）：用 /api/dev/google 模擬 Google 回來，換成另一個 Google 帳號
   await expect(page.locator('#recG')).toHaveCount(0);
   await page.goto(`/api/dev/google?${new URLSearchParams({ sub: `${sub}_new`, name: '新的 Google', recover: token })}`);
@@ -182,9 +206,17 @@ test('恢復連結：「安全」解除 Google 並重設 → 恢復連結（複�
   await expect(card.getByRole('button', { name: '新增通行金鑰' })).toBeVisible();
   expect(await page.evaluate(() => sessionStorage.getItem('cil-recover')), '代碼用完就清掉').toBeNull();
   expect((await (await page.request.get('/api/me')).json()).member.id, '接回原本的帳號').toBe(gid);
-  // 連結只能用一次：再打開是「無效或已過期」
+  // 連結只能用一次：再打開是「無效或已過期」；已經登入了，給「帳號與安全」，不叫他再找理事長
+  await page.goto(url);
+  await expect(page.locator('#view .notice.err')).toHaveText('這個恢復連結無效或已過期。');
+  await expect(page.locator('#view')).toContainText(`你目前登入的是「${gname}」。這就是你的帳號的話，不用再恢復。`);
+  await expect(page.getByRole('link', { name: '帳號與安全' })).toBeVisible();
+  // 沒登入：說明已經接回的直接登入就好
+  await page.context().clearCookies();
+  await page.goto('/#/');
   await page.goto(url);
   await expect(page.locator('#view .notice.err')).toHaveText('這個恢復連結無效或已過期，請聯絡理事長重新產生');
+  await expect(page.locator('#view')).toContainText('已經接回帳號的話，直接用 Google 或通行金鑰登入就可以。');
 });
 
 test('系統設定：功能開關、分頁名稱、立即備份；稽核查詢與完整性檢查；名冊查詢', async ({ page }) => {

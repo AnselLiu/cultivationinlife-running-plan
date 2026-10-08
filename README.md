@@ -128,10 +128,10 @@ Google 不允許在 LINE、Facebook、Instagram 的內建瀏覽器登入；在 L
 
 **重設通行金鑰並登出、一次性恢復連結上線步驟**（沒有功能開關）：
 
-1. `npx wrangler d1 migrations apply cil-run --remote`（`0056_recovery_links`，只新增 `recovery_links` 表與索引），先在測試環境做一次。**要在部署程式之前做**：新程式的「安全」面板與重設會讀寫這張表。
-2. 部署程式（Service Worker 升到 `cil-v76`）。`wrangler.jsonc` 的 `assets.run_worker_first` 多了 `/r/*`（恢復連結的頁面由 Worker 回首頁並加上 `no-store`、`no-referrer`；staging 沿用同一個設定），部署就會生效，不用另外到 Cloudflare 後台設定。
+1. `npx wrangler d1 migrations apply cil-run --remote`（`0056_recovery_links`，只新增 `recovery_links` 表與索引、`sessions.rec_at` 欄位），先在測試環境做一次。**要在部署程式之前做**：新程式每次請求都會讀 `sessions.rec_at`，「安全」面板與重設會讀寫 `recovery_links`。
+2. 部署程式（Service Worker 升到 `cil-v76`）。`wrangler.jsonc` 的 `assets.run_worker_first` 不用改（還是 `/api/*`、`/e/*`）：恢復連結是 `https://網域/?openExternalBrowser=1#/recover/<代碼>`，代碼在 `#` 後面，瀏覽器不會送到伺服器（不進 Workers Logs、快取或 Referer），首頁照常是靜態檔；不用另外到 Cloudflare 後台設定。
 3. 後台「權限」每位跑友多一顆「安全」（只有理事長看得到）；幹部第一把通行金鑰的通知點下去直接打開那位幹部的「安全」，「同時解除 Google 綁定」已經勾好。重設後沒有登入方式的（沒綁 Google 或勾了解除）要輸入對方姓名，同時產生一次性恢復連結（24 小時、只能用一次，只顯示這一次）：按「複製」或「用 LINE 傳給本人」**私訊**給本人，不要貼到群組。本人登入不了、不用重設時，在「安全」按「產生恢復連結」。
-4. 過渡期：還沒按「有新版本」更新的手機打開恢復連結，會先看到舊版的登入畫面，按下後 App 重新整理就是「恢復帳號」頁（連結還能用）。
+4. 過渡期：還沒換新版的手機（舊版 Service Worker `cil-v74`／`cil-v75`）打開恢復連結，會先看到舊版的畫面（舊版不認得 `#/recover/`）；App 換成新版重新整理後就是「恢復帳號」頁（代碼在網址裡，連結還能用）。請本人先不要在舊版畫面按「使用 Google 帳號登入」（那會開一個新帳號），等畫面換成「恢復帳號」再按。舊版 App 的錯誤回報會帶著頁面網址，伺服器收到時把 `#/recover/` 後面的代碼拿掉。
 5. 還原備份的工具會重做 `security.reset`；恢復連結不備份，Time Travel 之後全部作廢（見 docs/RESTORE.md）。
 
 ### 跑步數據匯入

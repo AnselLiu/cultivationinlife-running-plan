@@ -455,6 +455,7 @@ let secSeq = 0;
 function securityDialog(id, name, { unlink = false, opener = document.activeElement } = {}) {
   const my = ++secSeq;
   let shown = false;   // 恢復連結顯示過了：關掉面板後重畫權限分頁（重設過的話數字變了）
+  let sent = false;    // 恢復連結複製或按了「用 LINE 傳給本人」：關掉前不用再問
   const after = async () => {
     await adminView('roles');
     // 重畫後焦點回到同一位跑友的「安全」（在搜尋結果裡或從通知打開的話回到搜尋框）
@@ -482,7 +483,9 @@ function securityDialog(id, name, { unlink = false, opener = document.activeElem
       <p class="tiny" style="margin:0" id="secRecD">本人登入不了、但不用重設的話（例如沒綁 Google、換了手機）：只產生恢復連結給他。</p>
       <p class="tiny" style="margin:0" id="secRecOld" hidden>已經有一個還沒用的恢復連結，產生新的之後舊的就不能用。</p>
       <button type="button" class="btn ghost iconbtn" id="secRec" aria-describedby="secRecD" disabled>${REC_IC}產生恢復連結</button>
-    </div>`, opener, 'secT', { onClose: () => { if (shown) after(); } });
+    </div>`, opener, 'secT', { onClose: () => { if (shown) after(); },
+    // 恢復連結只顯示這一次：點背景不關（手指不小心碰到）；按「完成」或 Esc 時還沒複製、也沒用 LINE 傳出去的，先確認
+    canClose: () => !shown || sent || confirm('連結還沒複製或傳出，關掉後就看不到了，確定關閉？') });
   const q = (x) => s.host.querySelector(x), n = q('#secN'), f = q('#secF');
   let google = false;
   // 重設後還有沒有登入方式：沒有的話顯示警告、姓名確認變成必填
@@ -497,9 +500,11 @@ function securityDialog(id, name, { unlink = false, opener = document.activeElem
     const card = q('.sheet-card');
     card.innerHTML = recoveryPanel(rec, name);
     s.host.setAttribute('aria-labelledby', 'recT');
+    s.host.querySelector('.sheet-bg').removeAttribute('data-close');
     const url = card.querySelector('#recUrl');
     url.onfocus = () => url.select();
-    card.querySelector('#recCopy').onclick = () => copy(rec.url);
+    card.querySelector('#recCopy').onclick = () => { sent = true; copy(rec.url); };
+    card.querySelector('#recLine').onclick = () => { sent = true; };
     focusEl(card.querySelector('#recT'));
   };
   api(`/members/${encodeURIComponent(id)}/security`).then((c) => {
@@ -545,7 +550,8 @@ function securityDialog(id, name, { unlink = false, opener = document.activeElem
 const REC_IC = ic('<path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1.2 1.2"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1.2-1.2"/>');
 const COPY_IC = ic('<rect x="8.5" y="8.5" width="11" height="11" rx="2.4"/><path d="M15.5 8.5V6.9a2.4 2.4 0 0 0-2.4-2.4H6.9a2.4 2.4 0 0 0-2.4 2.4v6.2a2.4 2.4 0 0 0 2.4 2.4h1.6"/>');
 // 給本人的 LINE 訊息：一句說明加連結（line.me/R/share 打開 LINE 選要傳給誰）；不要傳到群組
-const recoveryShareText = (url) => ['耕跑團帳號恢復連結（24 小時內有效，只能用一次，請不要轉傳）：', url].join('\n');
+//   連結帶 openExternalBrowser=1：本人在 LINE 裡點開會直接用 Safari／Chrome 打開（代碼在 # 後面，跟著網址走）
+const recoveryShareText = (url) => ['耕跑團帳號恢復連結：點開後用 Google 或通行金鑰接回你原本的帳號（24 小時內有效，只能用一次，請不要轉傳）', url].join('\n');
 const recoveryPanel = (rec, name) => `<h3 id="recT" tabindex="-1">恢復連結</h3>
   <p style="margin:0"><b translate="no">${esc(name)}</b></p>
   <label>恢復連結（24 小時內有效，只能用一次）<input id="recUrl" readonly value="${esc(rec.url)}" translate="no" spellcheck="false" autocomplete="off" aria-describedby="recWarn"></label>

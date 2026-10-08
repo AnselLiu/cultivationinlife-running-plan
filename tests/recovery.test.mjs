@@ -1,12 +1,11 @@
 // 一次性恢復連結（migrations/0056）：理事長「重設並登出」後沒有登入方式（解除 Google 或沒綁 Google）時一起產生，或只產生（POST /api/members/:id/recovery）；
-//   本人打開 /r/<代碼>（首頁原樣、no-store、no-referrer）→ #/recover → POST /api/recover/check（遮過的名字）→ 用 Google（mode X，可以是新的 Google 帳號）
+//   連結是 /?openExternalBrowser=1#/recover/<代碼>（代碼在 # 後面，不會送到伺服器）→ POST /api/recover/check（遮過的名字）→ 用 Google（mode X，可以是新的 Google 帳號）
 //   或通行金鑰接回原本的帳號並登入；24 小時、只能用一次、產生新的或重設時舊的失效、不存在／過期／用過一律同一個回應、每個 IP 10 分鐘 10 次；
-//   稽核不記代碼與網址；接回後通知本人與理事長；D1 句數固定
+//   稽核不記代碼與網址；產生與接回都通知本人、理事長、監事與行政人員；用 Google 接回的幹部可以不用舊的通行金鑰新增一把（只能一把）；D1 句數固定
 //   用 /api/dev/google 模擬 Google（recover=<代碼>，或 state=1 照 callback 讀 /api/google/start?mode=X 放進去的 state cookie），軟體驗證器模擬通行金鑰
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
 import { maskName } from '../src/referral.js';
 
 const BASE = process.env.BASE || 'http://localhost:8799', RP = new URL(BASE).hostname;
@@ -40,7 +39,7 @@ async function join(name) {
 const chair = () => devCookie('t_chair', true);
 const reset = async (id, body = {}) => call(await chair(), `/members/${id}/security-reset`, { method: 'POST', body });
 const issue = async (id, cookie) => call(cookie ?? await chair(), `/members/${id}/recovery`, { method: 'POST' });
-const tokenOf = (r) => r.json.recovery.url.split('/r/')[1];
+const tokenOf = (r) => r.json.recovery.url.split('#/recover/')[1];
 const check = (token, extra = {}) => call(null, '/recover/check', { method: 'POST', body: { token, ...extra } });
 // 稽核：action LIKE 'security.recover%'（含 security.recovery_issue；底線在查詢裡會被拿掉，所以只用前綴）
 const recAudit = async () => (await call(await chair(), '/audit?action=security.recover')).json.items;
@@ -95,7 +94,8 @@ test('重設：解除 Google（或沒綁 Google）時一起產生恢復連結，
   const r = await reset(id, { unlink_google: true, confirm: name, reason: 'Google 帳號被盜用' });
   assert.equal(r.status, 200, r.text);
   B.reset = r.d1;
-  assert.match(r.json.recovery.url, new RegExp(`^${BASE}/r/[\\w-]{43}$`));
+  // 代碼在 # 後面（瀏覽器不會送到伺服器）；openExternalBrowser＝1 讓 LINE 直接用 Safari／Chrome 打開
+  assert.match(r.json.recovery.url, new RegExp(`^${BASE}/\\?openExternalBrowser=1#/recover/[\\w-]{43}$`));
   const exp = Date.parse(r.json.recovery.expires_at);
   assert.ok(Math.abs(exp - (Date.now() + 24 * 3600e3)) < 120e3, `24 小時後到期：${r.json.recovery.expires_at}`);
   const token = tokenOf(r);
@@ -106,7 +106,14 @@ test('重設：解除 Google（或沒綁 Google）時一起產生恢復連結，
   const c = await check(token);
   assert.equal(c.status, 200, c.text);
   B.check = c.d1;
-  assert.deepEqual(c.json, { name: maskName(name), expires_at: r.json.recovery.expires_at }, '只給遮過的名字');
+  assert.deepEqual(c.json, { name: maskName(name), expires_at: r.json.recovery.expires_at, same: false }, '只給遮過的名字');
+  // 監督：重設並產生連結，也通知監事與行政人員（產生的理事長自己不算）
+  const sup = (await security(await devCookie('t_super'))).find((x) => x.title === '理事長產生了恢復連結' && x.body.startsWith(`${name}：`));
+  assert.ok(sup, '通知監事');
+  assert.equal(sup.body, `${name}：測試理事長 重設並登出，同時產生了恢復連結（24 小時內有效）。不是協會安排的話，請馬上聯絡理事長。`);
+  assert.equal(sup.url, '/#/admin?tab=audit');
+  assert.ok((await security(await devCookie('t_staff'))).some((x) => x.title === '理事長產生了恢復連結' && x.body.startsWith(`${name}：`)), '通知行政人員');
+  assert.ok(!(await security(await devCookie('t_chair'))).some((x) => x.title === '理事長產生了恢復連結' && x.body.startsWith(`${name}：`)), '產生的理事長自己不通知');
   const au = (await recAudit()).filter((x) => x.action === 'security.recovery_issue' && x.target_id === id);
   assert.deepEqual(au.map((x) => [x.detail, x.actor_name]), [['24 小時', '測試理事長']]);
   S.a = { id, name, sub, token };
@@ -149,7 +156,14 @@ test('只產生恢復連結：只有理事長、一定要驗證、不能替自�
   const n = (await security(z.cookie)).filter((x) => x.title === '理事長產生了恢復連結');
   assert.equal(n.length, 2);
   assert.equal(n[0].body, '理事長替你的帳號產生了一個恢復連結（24 小時內有效，只能用一次），會私訊給你。不是你要求的，請馬上聯絡理事長。');
-  assert.ok(n.every((x) => !JSON.stringify(x).includes('/r/') && !JSON.stringify(x).includes(tokenOf(r2))), '通知裡沒有連結');
+  assert.ok(n.every((x) => !JSON.stringify(x).includes('#/recover/') && !JSON.stringify(x).includes(tokenOf(r2))), '通知裡沒有連結');
+  // 監事與行政人員也知道（只有一位理事長時，產生的人不是唯一知道的人）；通知裡沒有連結
+  for (const who of ['t_super', 't_staff']) {
+    const o = (await security(await devCookie(who))).filter((x) => x.title === '理事長產生了恢復連結' && x.body.startsWith(`${z.name}：`));
+    assert.equal(o.length, 2, who);
+    assert.equal(o[0].body, `${z.name}：測試理事長 產生了恢復連結（24 小時內有效）。不是協會安排的話，請馬上聯絡理事長。`);
+    assert.ok(o.every((x) => !JSON.stringify(x).includes(tokenOf(r2))));
+  }
   await rate('recissue:t_chair', 'count=11&sec=3600');
   assert.equal((await issue(z.id)).status, 429);
   assert.equal((await check(tokenOf(r2))).status, 200, '被擋下：什麼都沒動');
@@ -237,6 +251,11 @@ test('Google（mode X）：代碼從 HttpOnly cookie 搬進 state cookie（不�
   const ch = (await security(await devCookie('t_chair'))).find((x) => x.title === '跑友用恢復連結接回帳號' && x.body.startsWith(name));
   assert.ok(ch, '通知理事長');
   assert.equal(ch.url, `/#/admin?tab=roles&sec=${id}`);
+  assert.match(ch.body, /。不是本人的話，點這則通知打開「安全」重設。$/);
+  const su = (await security(await devCookie('t_super'))).find((x) => x.title === '跑友用恢復連結接回帳號' && x.body.startsWith(name));
+  assert.ok(su, '通知監事');
+  assert.equal(su.url, '/#/admin?tab=audit');
+  assert.match(su.body, /。不是本人的話，請馬上聯絡理事長。$/);
   await clearRec();
 });
 
@@ -272,40 +291,82 @@ test('通行金鑰（不用 Google）：替這個帳號新增一把並登入；�
   // 稽核裡沒有任何代碼或連結
   const all = JSON.stringify((await call(await chair(), '/audit?action=security')).json.items);
   for (const t of [token, tk, S.a.token, S.z.token]) assert.ok(!all.includes(t), '稽核沒有代碼');
-  assert.ok(!all.includes('/r/'), '稽核沒有連結');
+  assert.ok(!all.includes('#/recover/'), '稽核沒有連結');
   await clearRec();
 });
 
-test('/r/<代碼>：回沒改過的首頁（CSP 照舊）；安全標頭跟靜態檔一樣、不送 Referer、不快取；代碼不會出現在頁面', async () => {
-  const lines = readFileSync(new URL('../public/_headers', import.meta.url), 'utf8').split('\n'), want = {};
-  for (let i = lines.indexOf('/*') + 1; i < lines.length && /^\s+\S/.test(lines[i]); i++) { const [k, ...v] = lines[i].trim().split(':'); want[k.trim().toLowerCase()] = v.join(':').trim(); }
-  assert.ok(Object.keys(want).length >= 5);
-  const cspOf = (html) => html.match(/<meta http-equiv="Content-Security-Policy" content="([^"]+)">/)?.[1];
-  const home = await (await fetch(`${BASE}/`)).text();
-  for (const tok of [S.z.token, 'C'.repeat(43), 'not-a-token']) {
-    const r = await fetch(`${BASE}/r/${tok}?openExternalBrowser=1`);
-    assert.equal(r.status, 200);
-    assert.match(r.headers.get('content-type'), /^text\/html/);
-    for (const [k, v] of Object.entries(want)) assert.equal(r.headers.get(k), k === 'referrer-policy' ? 'no-referrer' : v, `${k}`);
-    assert.equal(r.headers.get('cache-control'), 'no-store');
-    const html = await r.text();
-    assert.equal(html, home, '首頁原樣');
-    assert.equal(cspOf(html), cspOf(home));
-    assert.match(cspOf(html), /upgrade-insecure-requests/);
-    assert.ok(!html.includes(tok), '代碼不在頁面裡');
+test('幹部弄丟唯一一把通行金鑰的手機（只產生連結、沒有重設）：用 Google 接回後 15 分鐘內可以不用舊的那把新增一把（只能一把、稽核註明、通知理事長與監事）', async () => {
+  const sub = `rc_d_${T}`, dc = await devCookie(S.director);
+  // 理事（幹部）先有一把通行金鑰（之後手機弄丟了）
+  assert.equal((await register(dc, await newKey())).status, 200);
+  const before = (await call(dc, '/passkeys')).json.passkeys.length;
+  const r = await issue(S.director), token = tokenOf(r);
+  const back = await google({ sub, name: '理事的新 Google', recover: token });
+  assert.equal(back.location, '/#/me/security?recovered=1');
+  assert.equal((await me(back.cookie)).id, S.director);
+  // 第一把：不用舊的通行金鑰也可以（via＝recover）
+  const o1 = await call(back.cookie, '/passkey/options', { method: 'POST', body: { purpose: 'register' } });
+  assert.equal(o1.status, 200, o1.text);
+  const o2 = await call(back.cookie, '/passkey/options', { method: 'POST', body: { purpose: 'register' } });
+  assert.equal(o2.status, 200, '同時開兩個新增：發挑戰值時都可以');
+  const v1 = await call(back.cookie, '/passkey/verify', { method: 'POST', body: { cid: o1.json.cid, credential: await attest(await newKey(), o1.json.publicKey.challenge) } });
+  assert.equal(v1.status, 200, v1.text);
+  B.recAdd = v1.d1;
+  // 只能一把：另一個同時開的、之後再新增的都要用現有的通行金鑰驗證
+  const v2 = await call(back.cookie, '/passkey/verify', { method: 'POST', body: { cid: o2.json.cid, credential: await attest(await newKey(), o2.json.publicKey.challenge) } });
+  assert.equal(v2.status, 403, v2.text);
+  assert.equal(v2.json.error, '新增通行金鑰前，請先用現有的通行金鑰驗證');
+  const o3 = await call(back.cookie, '/passkey/options', { method: 'POST', body: { purpose: 'register' } });
+  assert.equal(o3.status, 403, o3.text);
+  assert.equal(o3.json.officer, true);
+  assert.equal((await call(back.cookie, '/passkeys')).json.passkeys.length, before + 1, '只多了一把，舊的那把還在（只產生連結、沒有重設）');
+  const adds = (await (await call(await chair(), '/audit?action=passkey.add')).json.items).filter((x) => x.target_id === S.director).map((x) => x.detail);
+  assert.ok(adds[0].endsWith('｜恢復連結後新增'), adds[0]);
+  for (const who of ['t_chair', 't_super', 't_staff']) {
+    const n = (await security(await devCookie(who))).filter((x) => x.title === '幹部用恢復連結接回後新增了通行金鑰' && x.body.startsWith(`恢復理事${T} 用恢復連結接回帳號後新增了一把通行金鑰（`));
+    assert.equal(n.length, 1, who);
   }
-  const h = await fetch(`${BASE}/r/${S.z.token}`, { method: 'HEAD' });
-  assert.equal(h.status, 200);
-  assert.equal(h.headers.get('cache-control'), 'no-store');
-  assert.equal((await check(S.z.token)).status, 200, '打開頁面不會用掉連結');
+  await clearRec();
+});
+
+test('恢復連結的代碼不會送到伺服器：Google 那邊待太久（state cookie 過期）回到恢復帳號頁，不是一般登入頁；錯誤回報的頁面拿掉代碼', async () => {
+  // /api/google/start?mode=X 另外設 1 小時的 __Host-cil_recm（只有「1」，不是代碼）
+  const z = await join(`恢復己${T}`), token = tokenOf(await issue(z.id));
+  const rc = (await check(token, { google: true })).headers.getSetCookie().find((c) => c.startsWith('__Host-cil_rec=')).split(';')[0];
+  const st = await fetch(`${BASE}/api/google/start?mode=X`, { redirect: 'manual', headers: { cookie: rc } });
+  const mark = st.headers.getSetCookie().find((c) => c.startsWith('__Host-cil_recm='));
+  assert.match(mark, /^__Host-cil_recm=1; Path=\/; HttpOnly; Secure; SameSite=Lax; Max-Age=3600$/);
+  // state cookie 過期（只剩 __Host-cil_recm）：回恢復帳號頁「登入逾時，請重新打開恢復連結」，不是一般登入頁（那裡的 Google 按鈕會開新帳號）
+  const lost = await fetch(`${BASE}/api/google/callback?code=x&state=y`, { redirect: 'manual', headers: { cookie: mark.split(';')[0] } });
+  assert.equal(lost.headers.get('location'), `/#/recover?err=${encodeURIComponent('登入逾時，請重新打開恢復連結')}`);
+  assert.ok(lost.headers.getSetCookie().some((c) => /^__Host-cil_recm=;.*Max-Age=0/.test(c)), '清掉');
+  const cancel = await fetch(`${BASE}/api/google/callback?error=access_denied`, { redirect: 'manual', headers: { cookie: mark.split(';')[0] } });
+  assert.equal(cancel.headers.get('location'), `/#/recover?err=${encodeURIComponent('你取消了 Google 登入')}`);
+  // 沒有 __Host-cil_recm：照舊回一般登入頁
+  const plain = await fetch(`${BASE}/api/google/callback?code=x&state=y`, { redirect: 'manual' });
+  assert.equal(plain.headers.get('location'), `/#/?err=${encodeURIComponent('登入逾時，請再試一次')}`);
+  // 之後一般的 Google 登入開始時清掉
+  const next = await fetch(`${BASE}/api/google/start`, { redirect: 'manual', headers: { cookie: mark.split(';')[0] } });
+  assert.ok(next.headers.getSetCookie().some((c) => /^__Host-cil_recm=;.*Max-Age=0/.test(c)));
+  assert.equal((await check(token)).status, 200, '連結還能用');
+  // 錯誤回報：舊版 App 可能把 #/recover/<代碼> 當頁面送上來，伺服器拿掉代碼
+  const msg = `rec-scrub-${T}`;
+  for (let i = 0; i < 3; i++) assert.equal((await call(null, '/client-error', { method: 'POST', body: { message: msg, source: '/app.js', line: 1, page: `#/recover/${token}` } })).status, 200);
+  const h = await call(await chair(), '/admin/health?days=7');
+  const row = h.json.errors.find((x) => x.message === msg);
+  assert.ok(row, h.text.slice(0, 200));
+  assert.equal(row.page, '#/recover/…');
+  assert.ok(!h.text.includes(token), '代碼不在錯誤紀錄裡');
   await clearRec();
 });
 
 test('執行額度：D1 句數固定，沒有超過上限', async (t) => {
   t.diagnostic(`D1 句數 ${JSON.stringify(B)}`);
-  // 查連結 3（設定、限流、一句）｜只產生 9（登入、設定、限流、一句、batch 3、通知 2）｜重設 17｜
-  //   Google 接回 12（設定與帳號一句、連結一句、batch 5、理事長一句、通知 2×2）｜通行金鑰接回 14（設定、挑戰值讀與刪 2、連結一句、batch 5、理事長一句、通知 2×2）
-  const max = { check: 3, issue: 9, reset: 17, google: 12, pkVerify: 14 };
+  // 查連結 3（設定、限流、一句）｜只產生 14（登入、設定、限流、一句、batch 3、通知本人 2、監督名單一句、監事與行政人員的通知 2×2）｜重設 22（同 security-reset.test）｜
+  //   Google 接回 16（設定與帳號一句、連結一句、batch 5、監督名單一句、通知本人、理事長、監事、行政人員 2×4）｜通行金鑰接回 18（設定、挑戰值讀與刪 2、連結一句、batch 5、監督名單一句、通知 2×4）｜
+  //   恢復連結後新增通行金鑰 17（登入、設定、挑戰值讀與刪 2、COUNT、batch 2、稽核、通知本人 2、監督名單一句、通知 2×3）
+  //   （監督的通知每一群有人才寫，句數照收件的群數，最多理事長、監事、行政人員三群）
+  const max = { check: 3, issue: 14, reset: 22, google: 16, pkVerify: 18, recAdd: 17 };
   for (const [k, n] of Object.entries(max)) assert.ok(B[k] > 0 && B[k] <= n, `${k} 用了 ${B[k]} 句（上限 ${n}）`);
   const v = (await (await fetch(`${BASE}/api/dev/budget-violations`)).json()).list;
   assert.deepEqual(v.filter((x) => /recover|google|security/.test(x.name)), []);
