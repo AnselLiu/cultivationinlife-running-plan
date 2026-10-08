@@ -100,6 +100,8 @@ test('登錄成績：三格時間與即時配速、沒有連結與截圖擋下�
   expect(body.proof.length).toBeLessThanOrEqual(200000);
   expect(body.result_url).toBeNull();
   await expect(toast(page)).toContainText('已送出');
+  // 等送出後的「我的成績」畫好（清單有這一筆）再核准：不然那一頁可能在核准之後才讀到資料，先把「新 PB」的光帶用掉（只出現一次）
+  await expect(pending).toContainText('45:10');
 
   // 核准全馬那一筆：PB 卡顯示時間與「新 PB」、清單「已通過」有「第一筆」；減少動態時光帶不出現
   const mine = await pageApi(page, '/pb');

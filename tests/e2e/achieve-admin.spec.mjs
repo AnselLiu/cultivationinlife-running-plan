@@ -53,7 +53,7 @@ test.describe.serial('成績與挑戰：後台', () => {
     for (const k of ['achieve', 'achieve_rank']) {
       const sw = grp.locator(`input[name=${k}]`);
       await expect(sw).not.toBeChecked();
-      await grp.locator('label.switch', { has: sw }).click();
+      await grp.locator('label.switch', { has: page.locator(`input[name=${k}]`) }).click();   // has 的定位要相對於 label（不能用從 fieldset 開始的 sw）
       await expect(sw).toBeChecked();
     }
     await page.locator('#featForm').getByRole('button', { name: '儲存功能開關' }).click();
@@ -173,8 +173,10 @@ test.describe.serial('成績與挑戰：後台', () => {
     const p = await logPb(request, 't_other', { seconds: 14000, race_name: 'E2E 期間內', race_date: plus(-1) });
     const rv = await apiAs(request, 't_chair', `/admin/pb/${p}/review`, { method: 'POST', body: { approve: true } });
     expect(rv.achieved.map((a) => a.cid)).toContain(cid);
-    // 結算：時間推到結束後第 8 天上午 10 點（台北）
-    await request.get(`/api/dev/cron?at=${plus(8)}T02:00:00Z&skip=backup`);
+    // 結算：時間推到結束後第 8 天上午 10 點（台北）；同一個整點的其他排程工作先跳過（週報、清理會用掉額度，結算就延到下一個整點）
+    const OTHER_JOBS = 'events,opsAlerts,backup,signupOpen,followups,weather,signupReviews,digest,renewals,retention,auditDigest,monthSummary,review,fatigue,weeklyReport,cams,rest,promoteSweep,push';
+    const st = await (await request.get(`/api/dev/cron?at=${plus(8)}T02:00:00Z&skip=${OTHER_JOBS}`)).json();
+    expect(st.achSettle, JSON.stringify(st)).not.toBe('deferred');
     await enter(page, 't_chair');
     await page.goto(`/#/admin/ach/c/${cid}`);
     await expect(page.locator('.adm-ach-head .pill').first()).toHaveText('已結算');

@@ -13,8 +13,8 @@ test('安全區域：瀏海、手勢條、浮動分頁列不會擋到內容', as
   await cdp.send('Emulation.setSafeAreaInsetsOverride', { insets: { top: TOP, bottom: BOTTOM, left: 0, right: 0 } });
   await login(page, 't_chair'); await acceptPrivacyIfAsked(page);
   const routes = ['#/', '#/plan', '#/run', '#/map', '#/calendar', '#/challenge', '#/studio', '#/report', '#/notifications', '#/tickets', '#/teams', '#/t/youth',
-    '#/me', '#/me/profile', '#/me/races', '#/me/reg', '#/me/notify', '#/me/calendar', '#/me/display', '#/me/security', '#/me/privacy', '#/me/card', '#/me/referral',
-    '#/admin?tab=overview', '#/admin?tab=members', '#/admin/tree', '#/admin?tab=settings', '#/roster', '#/new', '#/log?extra=1', '#/privacy'];
+    '#/me', '#/me/profile', '#/me/races', '#/me/reg', '#/me/notify', '#/me/calendar', '#/me/display', '#/me/security', '#/me/privacy', '#/me/card', '#/me/referral', '#/pb', '#/ach', '#/cheers',
+    '#/admin?tab=overview', '#/admin?tab=members', '#/admin/tree', '#/admin/ach', '#/admin/ach/new', '#/admin?tab=settings', '#/roster', '#/new', '#/log?extra=1', '#/privacy'];
   const problems = {};
   for (const r of routes) {
     await page.goto(`/${r}`);

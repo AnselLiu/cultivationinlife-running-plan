@@ -306,9 +306,8 @@ export async function pbFormView(id) {
     f.h.value = cs >= 3600 ? Math.floor(cs / 3600) : ''; f.m.value = two(Math.floor((cs % 3600) / 60)); f.s.value = two(cs % 60);
     pace(); f.race_name.focus();
   });
-  const btn = $id('pbSubmit');
   f.onsubmit = (e) => { e.preventDefault(); go(); };
-  const go = once(btn, async () => {
+  const go = async () => {   // 表單送出：送出鍵由 app.js 的全域 submit 處理停用（不能再包 once，不然一律被當成重複送出）
     if (!dist) return fieldError(seg.querySelector('button'), '請選距離', { anchor: seg });
     const km = kmNow();
     if (dist === 'other' && !kmOk('other', km)) return fieldError(f.km, '其他距離請填 1–250 公里');
@@ -329,7 +328,7 @@ export async function pbFormView(id) {
       toast(!id ? '已送出，審核通過後會通知你' : p.status === 'rejected' ? '已重新送出審核' : '已更新');
       location.hash = '#/pb';
     } catch (err) { toast(err.message); }
-  });
+  };
 }
 
 // ---------- #/ach 目標挑戰 ----------
@@ -483,7 +482,7 @@ function joinSheet(c, opener, again) {
       <label class="inline ach-agree"><input type="checkbox" id="achAgree"><span>我同意協會為了這個挑戰加密保存我的體重</span></label>` : ''}
     ${sh ? `<fieldset class="group"><legend>團服尺寸（選填，之後也可以改）</legend><div class="chips ach-sizes">${sh.sizes.map((z) => `<button type="button" class="chip" data-size="${esc(z)}" aria-pressed="false" translate="no">${esc(z)}</button>`).join('')}</div>
       ${sh.chart ? `<a class="tiny" href="${esc(sh.chart)}" target="_blank" rel="noopener">尺寸表 ›</a>` : ''}</fieldset>` : ''}
-    <div class="choices"><button type="button" class="btn block" id="achJoinGo"${witness ? ' disabled' : ''}>${witness ? '同意並參加' : '參加'}</button><button type="button" class="btn ghost block" data-close>取消</button></div>`, opener, 'achJoinT');
+    <div class="choices"><button type="button" class="btn block" id="achJoinGo"${witness ? ' disabled' : ''}>${witness ? '同意並參加' : '確定參加'}</button><button type="button" class="btn ghost block" data-close>取消</button></div>`, opener, 'achJoinT');
   const go = s.host.querySelector('#achJoinGo');
   s.host.querySelector('#achAgree')?.addEventListener('change', (e) => { go.disabled = !e.target.checked; });
   s.host.addEventListener('click', (e) => {
@@ -595,16 +594,16 @@ function weighSheet(c, m, which, opener, again) {
     <form id="achWeighF" class="ach-wform" novalidate><label>體重（公斤）<input name="kg" inputmode="decimal" autocomplete="off" aria-describedby="achWeighHint"></label>
       <p class="tiny" id="achWeighHint" style="margin:0">請在團練現場、幹部在旁邊時再量</p>
       <div class="choices"><button class="btn block">請幹部見證</button><button type="button" class="btn ghost block" data-close>取消</button></div></form>`, opener, 'achWeighT');
-  const f = s.host.querySelector('form'), btn = f.querySelector('.btn.block');
+  const f = s.host.querySelector('form');
   f.onsubmit = (e) => { e.preventDefault(); go(); };
-  const go = once(btn, async () => {
+  const go = async () => {   // 表單送出：送出鍵由 app.js 的全域 submit 處理停用（不能再包 once，不然一律被當成重複送出）
     const kg = Math.round(Number(String(f.kg.value).replace(',', '.')) * 10) / 10;
     if (!kgOk(kg)) { fieldError(f.kg, '體重請填 30–250 公斤'); return; }
     try {
       const r = await api(`/ach/${encodeURIComponent(c.id)}/weigh`, { method: 'POST', body: { which, kg } });
       s.close(); qrPanel(c, m, which, r, kg, opener, again);
     } catch (err) { fieldError(f.kg, err.message); }
-  });
+  };
 }
 // 見證碼面板：QR＋分成 4 組的代碼（data-code 放完整代碼）、倒數；體重數字預設遮住（旁邊的人看不到），按「顯示數字」才出現
 //   輪詢 M17（只讀一列、不解密）：前 2 分鐘每 4 秒、之後每 10 秒；見證碼過期、已見證、作廢或面板關掉就停；頁面看不到時不問
@@ -677,7 +676,7 @@ function witnessKg(code, opener) {
       <div class="choices"><button class="btn block">送出見證</button><button type="button" class="btn ghost block" data-close>關閉</button></div></form>`, opener, 'achWkT');
   const f = s.host.querySelector('form'), btn = f.querySelector('.btn.block'), msg = f.querySelector('.ach-wkmsg');
   f.onsubmit = (e) => { e.preventDefault(); go(); };
-  const go = once(btn, async () => {
+  const go = async () => {   // 表單送出：送出鍵由 app.js 的全域 submit 處理停用（不能再包 once，不然一律被當成重複送出）
     const kg = Math.round(Number(String(f.kg.value).replace(',', '.')) * 10) / 10;
     if (!kgOk(kg)) { fieldError(f.kg, '體重請填 30–250 公斤'); return; }
     try {
@@ -691,7 +690,7 @@ function witnessKg(code, opener) {
       if (err.status === 400 && !/數字/.test(err.message)) { f.kg.disabled = true; btn.hidden = true; }
       else f.kg.select();
     }
-  });
+  };
 }
 // 團服卡：名額、候補、已領取、同款已拿、不需要；尺寸（44px chips）、尺寸表、用報名資料的尺寸、不需要／又想要
 function shirtCard(c, m, t) {

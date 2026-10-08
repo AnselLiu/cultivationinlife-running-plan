@@ -31,8 +31,8 @@ for (const scheme of ['light', 'dark']) test(`逐頁檢查・${scheme === 'dark'
   const party = await apiAs(request, 't_chair', '/events', { method: 'POST', body: { kind: 'party', title: '逐頁檢查 慶功宴', date: plus(20), gather_time: '18:30', place: '榮榮園', address: '台北市大安區信義路四段25號2樓', fee: 800, guest_max: 2, meal_options: '葷食,素食', link_url: 'https://forms.gle/example', link_label: '登記座位', notify: false } });
   await login(page, 't_chair'); await acceptPrivacyIfAsked(page);
   const routes = ['#/', '#/plan', '#/plan/season', '#/plan/race', '#/plan/guide', '#/plan/setup', '#/run', '#/map', '#/calendar', '#/challenge', '#/studio', '#/report', '#/past', '#/notifications', '#/tickets', '#/teams', '#/t/youth',
-    '#/me', '#/me/profile', '#/me/races', '#/me/reg', '#/me/teams', '#/me/notify', '#/me/security', '#/me/privacy', '#/me/assoc', '#/me/card', '#/me/referral',
-    '#/admin?tab=overview', '#/admin?tab=members', '#/admin/tree', '#/admin?tab=roles', '#/admin?tab=teams', '#/admin?tab=events', '#/admin?tab=settings', '#/admin/settings/signup', '#/admin/settings/org', '#/admin/settings/features', '#/admin/settings/retention', '#/admin?tab=audit', '#/roster', '#/logs/team',
+    '#/me', '#/me/profile', '#/me/races', '#/me/reg', '#/me/teams', '#/me/notify', '#/me/security', '#/me/privacy', '#/me/assoc', '#/me/card', '#/me/referral', '#/pb', '#/pb/new', '#/ach', '#/cheers',
+    '#/admin?tab=overview', '#/admin?tab=members', '#/admin/tree', '#/admin?tab=roles', '#/admin?tab=teams', '#/admin?tab=events', '#/admin?tab=settings', '#/admin/settings/signup', '#/admin/settings/org', '#/admin/settings/features', '#/admin/settings/retention', '#/admin?tab=audit', '#/admin/ach', '#/admin/ach?tab=campaigns', '#/admin/ach?tab=shirts', '#/admin/ach/new', '#/roster', '#/logs/team',
     '#/new', `#/e/${ev.id}`, `#/e/${ev.id}/stats`, `#/e/${ev.id}/stats?f=pending`, `#/edit/${ev.id}`, `#/e/${party.id}`, `#/e/${party.id}/stats`, '#/log?extra=1', '#/plan/new', '#/privacy'];
   const problems = {};
   routes.push('#/me/calendar', '#/me/display');   // 「我的」的行事曆訂閱、外觀與語言子頁

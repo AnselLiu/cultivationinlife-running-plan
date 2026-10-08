@@ -4311,7 +4311,7 @@ const api = (async function api(req, env, path, method) {
           detail = { total: Math.round(logs.reduce((t, l) => t + Math.min(l.km || 0, 100), 0) * 10) / 10, logs: logs.length, max: logs.reduce((m2, l) => Math.max(m2, l.km || 0), 0),
             late: logs.filter((l) => (l.updated_at || l.created_at) >= F).length,
             backfilled: logs.filter((l) => Ach.daysBetween(l.date, tpDate(new Date(`${String(l.created_at).replace(' ', 'T')}Z`))) > 7).length,
-            by_source: { gps: src.gps.n, health: src.health.n, file: src.file.n, manual: src.manual } };
+            by_source: src };
         } else if (row.kind === 'attend' && e.member_id) {
           const ev = (await env.DB.prepare(`SELECT ev.date, ev.title FROM signups s JOIN events ev ON ev.id = s.event_id
             WHERE s.member_id = ?1 AND s.status = 'in' AND s.attended_at IS NOT NULL AND ev.status = 'open' AND ev.date BETWEEN ?2 AND ?3
