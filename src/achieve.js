@@ -26,10 +26,12 @@ RETURNING id, member_id, dist_key, km, seconds, race_name, pb_kind`;
 
 // pb／time／pace 的達成判定（參加、核准、撤銷改用別筆、結算）：證據＝符合條件、比賽日最早的那一筆
 //   pb／pace 的「有基準」：至少一筆開始前的已核准成績是在挑戰發布前登錄的；基準數值是全部開始前已核准成績的 MIN（補登只會更難）
-export const PB_EVAL = (scope) => `UPDATE ach_entries AS x SET status = 'achieved', met_at = datetime('now'), achieved_at = datetime('now'), evidence = q.pb_id,
+//   本人刪過會影響基準的成績（ach_base_del，見 BASE_DEL）：判定達成時改成待確認（met），由審核者確認；RETURNING 帶 status
+export const PB_EVAL = (scope) => `UPDATE ach_entries AS x SET status = CASE WHEN q.review THEN 'met' ELSE 'achieved' END, met_at = datetime('now'),
+  achieved_at = CASE WHEN q.review THEN NULL ELSE datetime('now') END, evidence = q.pb_id,
   rank_key = (SELECT p.race_date || ' ' || p.created_at FROM pb_records p WHERE p.id = q.pb_id), updated_at = datetime('now')
 FROM (
-  SELECT e.id AS eid, (
+  SELECT e.id AS eid, EXISTS (SELECT 1 FROM ach_base_del f WHERE f.campaign_id = e.campaign_id AND f.member_id = e.member_id) AS review, (
     SELECT p.id FROM pb_records p
     WHERE p.member_id = e.member_id AND p.status = 'approved' AND p.race_date BETWEEN c.start_date AND c.end_date
       AND (CASE WHEN c.dist_key IS NULL THEN p.dist_key IN ('5k', '10k', 'hm', 'fm') ELSE p.dist_key = c.dist_key END)
@@ -57,7 +59,24 @@ FROM (
     AND ${scope}
 ) q
 WHERE x.id = q.eid AND q.pb_id IS NOT NULL
-RETURNING id, campaign_id, member_id`;
+RETURNING id, campaign_id, member_id, status`;
+
+// 本人刪除成績（M4，同一個 batch、在 DELETE 前面）：這筆是「比賽日在開始前、同距離、挑戰發布前就登錄」的已核准成績，而且刪掉會讓比較變容易——
+//   破 PB／速度上升：它比剩下的開始前成績都快（基準會變慢），或是 first_ok 挑戰裡唯一一筆開始前的成績（會變成「第一次」）；
+//   首次跑進：它是唯一一筆開始前就跑進目標的。→ 記下「這位跑友、這個挑戰」（不記成績本身），之後 PB_EVAL 判定達成改成待確認。
+//   進行中、或已結算 60 天內（PB_EVAL 還會補算）的挑戰，參加了沒有都記（先刪再參加也一樣）。?1 成績 id、?2 本人
+export const BASE_DEL = `INSERT OR IGNORE INTO ach_base_del (campaign_id, member_id)
+SELECT c.id, d.member_id FROM pb_records d JOIN ach_campaigns c ON c.kind IN ('pb', 'time', 'pace') AND d.race_date < c.start_date AND d.created_at < c.opened_at
+  AND (c.status = 'open' OR (c.status = 'settled' AND c.settled_at >= datetime('now', '-60 days')))
+  AND (CASE WHEN c.dist_key IS NULL THEN d.dist_key IN ('5k', '10k', 'hm', 'fm') ELSE d.dist_key = c.dist_key END)
+WHERE d.id = ?1 AND d.member_id = ?2 AND d.status = 'approved'
+  AND (CASE c.kind
+    WHEN 'time' THEN COALESCE(json_extract(c.opts, '$.first_time'), 0) = 1 AND d.seconds < c.target
+      AND NOT EXISTS (SELECT 1 FROM pb_records b WHERE b.member_id = d.member_id AND b.dist_key = d.dist_key AND b.status = 'approved'
+        AND b.race_date < c.start_date AND b.seconds < c.target AND b.id != d.id)
+    ELSE COALESCE(d.seconds < (SELECT MIN(b.seconds) FROM pb_records b WHERE b.member_id = d.member_id AND b.dist_key = d.dist_key AND b.status = 'approved'
+        AND b.race_date < c.start_date AND b.id != d.id),
+      c.kind = 'pb' AND COALESCE(json_extract(c.opts, '$.first_ok'), 0) = 1) END)`;
 
 // 結算：累積里程與團練出席（?1 挑戰 id）；里程凍結在結束後第 4 天 00:00（台北）＝ datetime(end_date, '+4 days', '-8 hours')（UTC）
 //   training_logs.updated_at 新增時是 NULL，凍結條件一定要 COALESCE(updated_at, created_at)；單筆最多算 100 公里
@@ -121,15 +140,20 @@ FROM (
 WHERE x.id = q.id`;
 
 // 遞補：已結算挑戰的候補依順位補上空出來的名額；同款已拿過的跳過（由 DUPMARK 改成 dup）
+//   同一句裡 POOL_HELD 看到的是更新前的資料：同一位跑友在兩個同款挑戰都輪到時，這一句只補一邊（結算早的那一場），
+//   另一邊的名額留著，下一次 DUPMARK 把他改成 dup、PROMOTE 再補給下一位
 export const PROMOTE = (scope) => `UPDATE ach_entries SET reward_state = 'granted', updated_at = datetime('now')
 WHERE id IN (
   SELECT id FROM (
-    SELECT e.id, ROW_NUMBER() OVER (PARTITION BY e.campaign_id ORDER BY e.reward_rank) AS rk,
-      COALESCE(json_extract(c.rewards, '$.shirt.quota'), 1000000)
-        - (SELECT COUNT(*) FROM ach_entries y WHERE y.campaign_id = e.campaign_id AND y.reward_state IN ('granted', 'issued')) AS free
-    FROM ach_entries e JOIN ach_campaigns c ON c.id = e.campaign_id
-    WHERE e.reward_state = 'waitlist' AND c.status = 'settled' AND NOT ${POOL_HELD} AND ${scope}
-  ) WHERE rk <= free)
+    SELECT id, pool, ROW_NUMBER() OVER (PARTITION BY member_id, pool ORDER BY settled_at, reward_rank, id) AS pn FROM (
+      SELECT e.id, e.member_id, e.reward_rank, c.settled_at, json_extract(c.rewards, '$.shirt.pool') AS pool,
+        ROW_NUMBER() OVER (PARTITION BY e.campaign_id ORDER BY e.reward_rank) AS rk,
+        COALESCE(json_extract(c.rewards, '$.shirt.quota'), 1000000)
+          - (SELECT COUNT(*) FROM ach_entries y WHERE y.campaign_id = e.campaign_id AND y.reward_state IN ('granted', 'issued')) AS free
+      FROM ach_entries e JOIN ach_campaigns c ON c.id = e.campaign_id
+      WHERE e.reward_state = 'waitlist' AND c.status = 'settled' AND NOT ${POOL_HELD} AND ${scope}
+    ) WHERE rk <= free
+  ) WHERE pool IS NULL OR pn = 1)
 RETURNING id, member_id, campaign_id`;
 
 // 候補裡後來在同款團服別的挑戰拿到名額的人改成 dup（排程每次跑、讓出名額時）
@@ -138,6 +162,7 @@ WHERE id IN (SELECT e.id FROM ach_entries e JOIN ach_campaigns c ON c.id = e.cam
              WHERE e.reward_state = 'waitlist' AND c.status = 'settled' AND ${POOL_HELD} AND ${scope})`;
 
 // 我的挑戰清單（M6）與單一挑戰（M7）：一句；統計每場只掃一次參加列（GROUP BY）
+//   體重挑戰進行中不給達成人數（s_done＝NULL）：見證的幹部比對見證前後的人數，就知道那位跑友有沒有達成
 //   ?1 我的 id、?2 今天（台北）；單一挑戰另外 ?3 挑戰 id（不套清單的日期與資格條件，由 JS 判斷看不看得到）
 const KINDS_SQL = ATT_KINDS;
 export const MY_LIST = (single = false) => `SELECT c.*, t.name AS team_name, t.color AS team_color, t.private AS team_private,
@@ -157,7 +182,7 @@ export const MY_LIST = (single = false) => `SELECT c.*, t.name AS team_name, t.c
   CASE WHEN c.kind IN ('pb', 'pace') AND c.dist_key IS NOT NULL THEN (SELECT MIN(p.created_at) >= c.opened_at FROM pb_records p
       WHERE p.member_id = ?1 AND p.dist_key = c.dist_key AND p.status = 'approved' AND p.race_date < c.start_date) END AS p_base_late,
   (SELECT COUNT(*) FROM pb_records p WHERE p.member_id = ?1 AND p.status = 'pending') AS p_pending,
-  COALESCE(st.s_joined, 0) AS s_joined, COALESCE(st.s_done, 0) AS s_done, COALESCE(st.s_held, 0) AS s_held,
+  COALESCE(st.s_joined, 0) AS s_joined, CASE WHEN c.kind = 'weight' AND c.status = 'open' THEN NULL ELSE COALESCE(st.s_done, 0) END AS s_done, COALESCE(st.s_held, 0) AS s_held,
   COALESCE(st.s_wait, 0) AS s_wait, COALESCE(st.s_issued, 0) AS s_issued,
   CASE WHEN e.status IN ('met', 'achieved') AND c.status = 'open' THEN (SELECT COUNT(*) + 1 FROM ach_entries y WHERE y.campaign_id = c.id
       AND y.status IN ('met', 'achieved') AND y.reward_state IS NOT 'declined' AND (y.rank_key, y.joined_at, y.id) < (e.rank_key, e.joined_at, e.id)) END AS position

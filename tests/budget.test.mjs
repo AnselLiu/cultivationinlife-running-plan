@@ -86,7 +86,7 @@ test('執行額度：備份解得回來，格式與筆數都對', async () => {
   }
   if ('cams' in m.counts) assert.ok(m.counts.cams <= m.now.cams);
   // 成績與挑戰：新表都在備份裡，成績截圖（pb_proofs）不備份
-  for (const t of ['pb_records', 'ach_campaigns', 'ach_entries', 'ach_private', 'cheers']) assert.ok(t in m.counts, `${t} 要在備份裡`);
+  for (const t of ['pb_records', 'ach_campaigns', 'ach_entries', 'ach_private', 'ach_base_del', 'cheers']) assert.ok(t in m.counts, `${t} 要在備份裡`);
   assert.ok(!('pb_proofs' in m.counts), '成績截圖不備份');
   assert.deepEqual(await violations(), []);
 });

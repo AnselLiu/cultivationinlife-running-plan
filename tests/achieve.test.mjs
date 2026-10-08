@@ -167,6 +167,12 @@ test('修改：審核中可以改（edited）；通過的不能改；婉拒的�
   ok(await call(u.cookie, `/pb/${id}`, { method: 'PUT', body: pbBody({ race_date: D(-15), seconds: 13800 }) }));
   p = ok(await call(u.cookie, '/pb')).items.find((x) => x.id === id);
   assert.deepEqual([p.status, p.review_note, p.review_at], ['pending', null, null]);
+  // 登錄時間（挑戰「發布前登錄」與團服排序看這個）：只改賽事名稱不重算；改了時間、日期、距離就重算成現在
+  await dev(`pb=${id}&created=${D(-40)} 00:00:00`);
+  ok(await call(u.cookie, `/pb/${id}`, { method: 'PUT', body: pbBody({ race_date: D(-15), seconds: 13800, race_name: '改名馬拉松' }) }));
+  assert.equal(ok(await call(u.cookie, '/pb')).items.find((x) => x.id === id).created_at, `${D(-40)} 00:00:00`, '只改名稱不重算');
+  ok(await call(u.cookie, `/pb/${id}`, { method: 'PUT', body: pbBody({ race_date: D(-300), seconds: 19800, race_name: '改名馬拉松' }) }));
+  assert.ok(ok(await call(u.cookie, '/pb')).items.find((x) => x.id === id).created_at > `${D(-1)} 23:59:59`, '換成另一場比賽：登錄時間重算');
   ok(await approve(id));
   err(await call(u.cookie, `/pb/${id}`, { method: 'PUT', body: pbBody() }), 400, '通過審核的成績不能修改，可以刪除後重新登錄');
 });
@@ -354,6 +360,60 @@ test('刪除成績：寫 pb.delete（本人、原狀態）；官方 PB 回到下
   err(await call('t_other', '/ach/cheer', { method: 'POST', body: { item: `pb:${fast}`, on: true } }), 400, '這則恭喜已經看不到了');
   const a = (await auditOf('pb.delete')).find((x) => x.target_id === fast);
   assert.deepEqual([a.actor_name, a.detail], ['刪除跑友', 'approved']);
+});
+
+test('刪掉影響基準的成績：挑戰發布後刪開始前較快的成績 → 之後判定達成要幹部確認（先刪再參加也一樣）；刪較慢的不影響；確認、取消挑戰時回到參加中、取消的不能選尺寸', async () => {
+  const u = await fresh('刪基準跑友');
+  const ids = [];
+  for (const [d, sec] of [[-200, 12600], [-150, 13500], [-120, 14000]]) {   // 3:30、3:45、3:53:20，都是挑戰發布前登錄的
+    const id = await submit(u.cookie, { race_date: D(d), seconds: sec });
+    await dev(`pb=${id}&created=${D(-1)} 00:00:00`);
+    ok(await approve(id));
+    ids.push(id);
+  }
+  const [fast, mid, slow] = ids;
+  const c1 = await campaign({ title: '刪基準破 PB', kind: 'pb', dist_key: 'fm', target: null, rewards: { badge: 'medal' } });
+  const c2 = await campaign({ title: '刪基準破 PB 團服', kind: 'pb', dist_key: 'fm', target: null, rewards: { badge: 'medal', shirt: { sizes: ['M'], quota: 5 } } });
+  ok(await joinC(u.cookie, c1));
+  ok(await approve(await submit(u.cookie, { race_date: D(-3), seconds: 13200 })));   // 3:40：沒有破 3:30
+  // 刪較慢的（不是基準）：不影響
+  ok(await call(u.cookie, `/pb/${slow}`, { method: 'DELETE' }));
+  ok(await approve(await submit(u.cookie, { dist_key: '10k', seconds: 3000, race_date: D(-2) })));   // 觸發重新判定
+  assert.equal((await mine(u.cookie, c1)).me.status, 'joined');
+  // 刪掉 3:30：基準變成 3:45，3:40 就「破了」→ 要幹部確認；之後才參加的挑戰也一樣
+  ok(await call(u.cookie, `/pb/${fast}`, { method: 'DELETE' }));
+  const j = ok(await joinC(u.cookie, c2));
+  assert.equal(j.entry.status, 'met');
+  assert.equal((await mine(u.cookie, c1)).me.status, 'met');
+  assert.ok((await notes(u.cookie)).some((n) => n.title === '挑戰達成，等幹部確認' && n.body === '「刪基準破 PB 團服」'));
+  const list = ok(await call('t_chair', '/admin/ach'));
+  const q = list.met.find((x) => x.cid === c1 && x.member?.id === u.id);
+  assert.deepEqual([q.base_del, q.pb?.seconds, q.evidence], [true, 13200, null]);
+  const e1 = (await mine(u.cookie, c1)).me.id;
+  assert.equal(ok(await call('t_chair', `/admin/ach/${c1}/entries/${e1}`)).detail.base_del, true);
+  assert.ok(mid);
+  // 確認 → 達成；取消另一個挑戰 → 回到參加中、不再待確認、不能選尺寸
+  assert.deepEqual(ok(await call('t_chair', `/admin/ach/${c1}/entries/${e1}/confirm`, { method: 'POST', body: { approve: true } })), { ok: true, status: 'achieved' });
+  ok(await call('t_chair', `/admin/ach/${c2}/cancel`, { method: 'POST', body: { note: '測試取消' } }));
+  assert.equal((await mine(u.cookie, c2)).me.status, 'joined');
+  assert.ok(!ok(await call('t_chair', '/admin/ach')).met.some((x) => x.member?.id === u.id));
+  err(await call(u.cookie, `/ach/${c2}/shirt`, { method: 'POST', body: { size: 'M' } }), 400, '挑戰已取消，團服不會發放');
+  // 匯出：記下的挑戰（只有名稱與時間，沒有成績）
+  const ex = ok(await call(u.cookie, '/me/export')), titles = ex.challenge_base_deleted.map((x) => x.title);
+  assert.ok(['刪基準破 PB', '刪基準破 PB 團服'].every((t) => titles.includes(t)), JSON.stringify(titles));
+  assert.ok(ex.challenge_base_deleted.every((x) => Object.keys(x).sort().join() === 'created_at,title'));
+});
+
+test('撤銷成績：選了「不需要」團服的，改用別筆重新達成時不會又排進名額', async () => {
+  const u = await fresh('不需要跑友');
+  const cid = await campaign({ title: '撤銷不需要', rewards: { badge: 'medal', shirt: { sizes: ['M'], quota: 5 } } });
+  ok(await joinC(u.cookie, cid));
+  const p1 = await submit(u.cookie, { race_date: D(-9), seconds: 14300 }), p2 = await submit(u.cookie, { race_date: D(-6), seconds: 14200 });
+  ok(await approve(p1)); ok(await approve(p2));
+  assert.equal(ok(await call(u.cookie, `/ach/${cid}/shirt`, { method: 'POST', body: { decline: true } })).reward_state, 'declined');
+  ok(await call('t_staff', `/admin/pb/${p1}/revoke`, { method: 'POST', body: { code: 'wrong' } }));
+  const m = (await mine(u.cookie, cid));
+  assert.deepEqual([m.me.status, m.me.evidence, m.me.reward_state], ['achieved', p2, 'declined']);
 });
 
 test('撤銷成績：以它為證據的達成退回、改用別筆符合的成績（仍達成）；沒有別筆→回到參加中；稽核與通知', async () => {
@@ -661,6 +721,9 @@ test('榮譽制體重：伺服器不收體重；聲明期間外 400；聲明直�
   await dev(`camp=${cid}&end=${D(5)}`);
   assert.deepEqual(ok(await call('t_other', `/ach/${cid}/claim`, { method: 'POST', body: {} })), { ok: true, status: 'achieved' });
   assert.equal((await dev(`private=${cid}&member=t_other`)).private, null);
+  // 體重挑戰進行中不給達成人數（見證的幹部比對前後人數就知道那位跑友有沒有達成）
+  assert.deepEqual((await mine('t_runner', cid)).stats, { joined: 1, done: null, granted: 0, waitlist: 0, issued: 0 });
+  assert.equal(ok(await call('t_chair', '/admin/ach')).campaigns.find((c) => c.id === cid).stats.done, null);
   assert.ok(!ok(await call('t_chair', '/admin/ach')).met.some((m) => m.cid === cid));
   err(await call('t_other', `/ach/${cid}/leave`, { method: 'POST', body: {} }), 400, '已經達成，不能退出');
 });

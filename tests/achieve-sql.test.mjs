@@ -112,6 +112,51 @@ test('PB_EVAL：時間門檻嚴格小於、first_time；速度上升 3.0% 剛好
   assert.deepEqual(ev('d'), [], '沒有基準');
 });
 
+test('BASE_DEL：挑戰發布後刪掉會讓比較變容易的開始前成績 → 記下挑戰、之後判定達成改成待確認（met）；不影響的、發布後才登錄的、還沒核准的不記', () => {
+  const db = freshDb(), ev = (m) => db.prepare(Q.PB_EVAL(Q.SCOPE.member)).all(m).map((r) => [r.id, r.status]);
+  const del = (id, m) => { db.prepare(Q.BASE_DEL).run(id, m); db.prepare('DELETE FROM pb_records WHERE id = ?').run(id); };
+  const flags = (m) => db.prepare('SELECT campaign_id FROM ach_base_del WHERE member_id = ? ORDER BY campaign_id').all(m).map((r) => r.campaign_id);
+  camp(db, 'b1', 'pb', { dist: 'fm', opened: '2026-09-01 00:00:00' });   // 開始 2026-10-01
+  camp(db, 'b2', 'pb', { dist: null, opts: { first_ok: 1 }, opened: '2026-09-01 00:00:00' });
+  camp(db, 'b3', 'time', { dist: 'fm', target: 14400, opts: { first_time: 1 }, opened: '2026-09-01 00:00:00' });
+  camp(db, 'b4', 'pace', { dist: 'fm', target: 3, status: 'draft', opened: null });
+  camp(db, 'b5', 'pb', { dist: 'fm', status: 'settled', settled: '2020-01-01 00:00:00', opened: '2026-09-01 00:00:00' });
+  // a：發布前登錄的 3:30、3:45、3:50；期間內 3:40 沒有破 3:30
+  const p330 = pb(db, 'a', 'fm', 12600, '2026-03-01', { created: '2026-04-01 00:00:00' });
+  pb(db, 'a', 'fm', 13500, '2026-05-01', { created: '2026-05-02 00:00:00' });
+  const p350 = pb(db, 'a', 'fm', 13800, '2026-06-01', { created: '2026-06-02 00:00:00' });
+  const late = pb(db, 'a', 'fm', 12000, '2026-02-01', { created: '2026-09-10 00:00:00' });   // 發布後才補登的開始前成績（只會讓基準更難）
+  const pend = pb(db, 'a', 'fm', 11000, '2026-01-01', { status: 'pending', created: '2026-04-01 00:00:00' });
+  join(db, 'ba', 'b1', 'a');
+  pb(db, 'a', 'fm', 13200, '2026-10-10');
+  assert.deepEqual(ev('a'), []);
+  del(p350, 'a'); del(pend, 'a'); del(late, 'a');
+  assert.deepEqual(flags('a'), [], '刪較慢的、還沒核准的、發布後才登錄的：基準不會變容易');
+  assert.deepEqual(ev('a'), []);
+  del(p330, 'a');
+  assert.deepEqual(flags('a'), ['b1', 'b2'], '破 PB（全馬與任一距離：基準變慢）；首次破 4 還有 3:45 不受影響；草稿與已結算超過 60 天的不記；參加了沒有都記');
+  assert.deepEqual(ev('a'), [['ba', 'met']], '基準變成 3:45，3:40 判定達成但要幹部確認');
+  assert.equal(db.prepare("SELECT achieved_at FROM ach_entries WHERE id = 'ba'").get().achieved_at, null);
+  // b：first_ok 的挑戰裡唯一一筆開始前的成績 → 記下（不然刪掉就變成「第一次」）；還有別筆就不影響
+  const only = pb(db, 'b', '10k', 3000, '2026-05-01', { created: '2026-05-01 00:00:00' });
+  join(db, 'bb', 'b2', 'b');
+  pb(db, 'b', '10k', 3100, '2026-10-05');
+  assert.deepEqual(ev('b'), [], '沒有破 10K 的基準');
+  del(only, 'b');
+  assert.deepEqual(flags('b'), ['b2']);
+  assert.deepEqual(ev('b'), [['bb', 'met']], '刪掉之後變成「第一次」：要幹部確認');
+  // c：開始前有兩筆破 4 → 刪掉快的那筆，首次破 4 不受影響（還有一筆）；破 PB 的基準變慢了照樣記
+  const c1 = pb(db, 'c', 'fm', 14000, '2026-03-01', { created: '2026-04-01 00:00:00' });
+  pb(db, 'c', 'fm', 14200, '2026-04-01', { created: '2026-04-02 00:00:00' });
+  del(c1, 'c');
+  assert.deepEqual(flags('c'), ['b1', 'b2']);
+  // d：唯一一筆開始前就破 4 的被刪 → 首次破 4 也記（刪掉就變成「第一次」）
+  const d1 = pb(db, 'd', 'fm', 14000, '2026-03-01', { created: '2026-04-01 00:00:00' });
+  pb(db, 'd', 'fm', 15000, '2026-02-01', { created: '2026-04-01 00:00:00' });
+  del(d1, 'd');
+  assert.deepEqual(flags('d'), ['b1', 'b2', 'b3']);
+});
+
 test('KMA_EVAL：里程凍結（結束後第 4 天 00:00 台北之後新增或修改的不算；沒改過的 updated_at 是 NULL 也算）、單筆 100 公里；出席只算指定的團練與分團', () => {
   const db = freshDb();
   camp(db, 'k1', 'km', { target: 150, confirm: true, start: '2026-10-01', end: '2026-10-31', rewards: { shirt: { sizes: ['M'], quota: 1 } } });
@@ -178,6 +223,17 @@ test('RANK／PROMOTE／DUPMARK：依達成先後分配、名額滿候補、之�
   db.prepare("UPDATE ach_entries SET reward_state = 'declined' WHERE id = 'e1'").run();
   db.prepare(Q.RANK(Q.SCOPE.member)).run('a');
   assert.deepEqual([st(db, 'f1').reward_state, st(db, 'f1').reward_rank], ['waitlist', 4]);
+  // 同一句 PROMOTE 裡同一位跑友在兩個同款挑戰都輪到：只補結算早的那一邊，另一邊等 DUPMARK 改成 dup 後補給下一位
+  camp(db, 'p1', 'km', { status: 'settled', settled: '2026-11-01 00:00:00', rewards: shirt('同款', 1) });
+  camp(db, 'p2', 'km', { status: 'settled', settled: '2026-11-02 00:00:00', rewards: shirt('同款', 1) });
+  const w = (id, cid, m, rk) => { join(db, id, cid, m, { status: 'achieved', rank: '2026-10-01 00:00:00', reward: 'waitlist' }); db.prepare('UPDATE ach_entries SET reward_rank = ? WHERE id = ?').run(rk, id); };
+  w('h1', 'p1', 'c', 1); w('h2', 'p1', 'd', 2);
+  w('h3', 'p2', 'c', 1); w('h4', 'p2', 'b', 2);
+  assert.deepEqual(db.prepare(Q.PROMOTE(Q.SCOPE.all)).all().map((r) => r.id).sort(), ['h1'], 'c 只拿 p1 的；p2 這一句不補');
+  assert.equal(st(db, 'h3').reward_state, 'waitlist');
+  db.prepare(Q.DUPMARK()).run();
+  assert.equal(st(db, 'h3').reward_state, 'dup');
+  assert.deepEqual(db.prepare(Q.PROMOTE(Q.SCOPE.all)).all().map((r) => r.id), ['h4']);
   // 不限量
   camp(db, 's3', 'km', { status: 'settled', rewards: shirt(null, null) });
   for (const [i, m] of ['a', 'b', 'c'].entries()) join(db, `g${i}`, 's3', m, { status: 'achieved', rank: `2026-10-0${i + 1} 00:00:00` });

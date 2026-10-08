@@ -24,6 +24,7 @@
 //   最後把抓到的稽核紀錄原樣補回 audit_log（INSERT OR IGNORE，簽章照原本的，驗得過）：Time Travel 會連稽核紀錄一起倒回，
 //   補回來之後，下次再從更舊的備份還原時也查得到這些撤回
 import { ERASE_MEMBER, ERASE_ACTIONS } from '../src/erase.js';
+import { BASE_DEL } from '../src/achieve.js';
 import { MUTABLE } from '../public/notif-cats.js';
 
 const ID = /^[\w-]{1,64}$/, AT = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/, PK = /^[\w-]{8,64}$/;
@@ -261,7 +262,12 @@ export function replaySql(rows, { timeTravel = false } = {}) {
     L.push(`UPDATE ach_entries SET w_base_at = NULL, w_last_at = NULL, w_token = NULL, w_token_exp = NULL, w_tries = 0 WHERE member_id = ${lit(mid)} AND campaign_id = ${lit(cid)} AND status != 'achieved';`);
     if (leave) L.push(`UPDATE ach_entries SET status = 'left', consent_at = NULL WHERE member_id = ${lit(mid)} AND campaign_id = ${lit(cid)} AND status IN ('joined', 'met');`);
   }
-  for (const [id, by] of p.pbDel) { if (!ID.test(id) || !ID.test(by)) throw new Error(`看不懂的 id：${id}`); L.push(`DELETE FROM pb_records WHERE id = ${lit(id)} AND member_id = ${lit(by)};`); }
+  // 刪除自己的成績：先照正式站一樣記下「刪過會影響比較基準的成績」的挑戰（AchSql.BASE_DEL，之後判定達成要幹部確認），再刪
+  for (const [id, by] of p.pbDel) {
+    if (!ID.test(id) || !ID.test(by)) throw new Error(`看不懂的 id：${id}`);
+    L.push(`${BASE_DEL.replace(/\s+/g, ' ').replaceAll('?1', lit(id)).replaceAll('?2', lit(by))};`);
+    L.push(`DELETE FROM pb_records WHERE id = ${lit(id)} AND member_id = ${lit(by)};`);
+  }
   if (timeTravel) L.push('DELETE FROM push_queue;');
   // 原樣補回稽核紀錄（只補整列都有的；已經在的不動）
   for (const r of rows) if (r.id && r.at && r.mac) L.push(`INSERT OR IGNORE INTO audit_log (${AUDIT_COLS.join(', ')}) VALUES (${AUDIT_COLS.map((c) => lit(r[c])).join(', ')});`);

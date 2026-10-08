@@ -1,6 +1,6 @@
 // 成績與挑戰（團員端）：登錄成績（三格時間、即時配速、沒有連結與截圖擋下、截圖在手機上縮小）、核准後的 PB 卡、
 //   恭喜榜（本人打開才上榜、別人恭喜與收回、只分享自己的到 LINE）、目標挑戰（參加、核准後達成、英文條件句）、
-//   見證制體重（同意書、見證碼面板、幹部見證後變成已見證）、隱私頁的開關與文字、無障礙與版面寬度
+//   見證制體重（同意書、見證碼面板、幹部見證後變成已見證）、取消的挑戰不給操作、隱私頁的開關與文字、無障礙與版面寬度
 //   這個檔案開頭打開「成績與挑戰」與「PB 排行」功能開關、結束時關掉（workers＝1，不會影響同時跑的其他測試）
 //   會留下狀態的步驟（審核中的成績最多 5 筆、同一場同距離只能一筆）一律用這次新建的帳號；挑戰每次新建，重用伺服器重跑也會過
 import { test, expect } from '@playwright/test';
@@ -292,6 +292,20 @@ test('隱私頁：「出現在恭喜榜」開關與縮排的「也列入 PB 排�
   await expect(page.locator('.prose')).toContainText('比賽成績（選填）');
   await expect(page.locator('.prose')).toContainText('體重（選填，敏感資料）');
   expect(await axeBad(page)).toEqual([]);
+});
+
+test('取消的挑戰：挑戰頁只說明「團服不會發放」，沒有尺寸按鈕、退出與進度操作', async ({ page, request }) => {
+  const cid = await newCampaign(request, { title: `E2E 取消的里程 ${tag}`, kind: 'km', target: 30,
+    rewards: { badge: 'flame', shirt: { sizes: ['S', 'M'], quota: 5, size_by: null, chart: null, pool: null } }, start_date: plus(-5), end_date: plus(20), join_by: plus(20) });
+  await apiAs(request, 't_runner', `/ach/${cid}/join`, { method: 'POST', body: { shirt_size: 'M' } });
+  await apiAs(request, 't_chair', `/admin/ach/${cid}/cancel`, { method: 'POST', body: { note: '場地借不到' } });
+  await login(page, 't_runner'); await acceptPrivacyIfAsked(page);
+  await page.goto(`/#/ach/c/${cid}`);
+  await expect(page.locator('#view h1')).toContainText('E2E 取消的里程');
+  await expect(page.locator('#view .notice')).toContainText('這個挑戰已經取消');
+  await expect(page.locator('#achShirt')).toContainText('挑戰已取消，團服不會發放');
+  await expect(page.locator('#achShirt [data-shirt], #achShirtNo')).toHaveCount(0);
+  await expect(page.locator('#achLeave, #achProg')).toHaveCount(0);
 });
 
 test('無障礙與版面：我的成績、登錄成績、目標挑戰、挑戰詳細（團服卡）、恭喜榜沒有嚴重問題，也不超出 390px', async ({ page, request }) => {

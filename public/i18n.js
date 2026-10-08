@@ -41,6 +41,7 @@ const PATTERNS = [
   [/^已經有 (\d+) 位達成，現在參加會排在候補$/, (_, n) => `${n} ${n === '1' ? 'runner has' : 'runners have'} already finished — if you join now you’ll be on the shirt waitlist`],
   [/^(\d+) 位跑友恭喜你$/, (_, n) => `${n} ${n === '1' ? 'runner' : 'runners'} cheered for you`],
   [/^已見證 (.+) 的(起始|結束)量測$/, (_, n, w) => `Witnessed ${n}’s ${w === '起始' ? 'starting' : 'final'} weigh-in`],
+  [/^刪除 (\d{4}\/\d{1,2}\/\d{1,2}) (的紀錄？|的紀錄)$/, (_, d, q) => `Delete the ${d} entry${q.endsWith('？') ? '?' : ''}`],
   [/^配速 (\S+)$/, 'Pace $1'],
   [/^尺寸選到 (\d{1,2})\/(\d{1,2})$/, 'Choose a size by $1/$2'],
   [/^已通知 (\d+) 人$/, 'Notified $1'],

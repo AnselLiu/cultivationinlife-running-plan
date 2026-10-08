@@ -240,11 +240,11 @@ function choose(title, message, options, { cancel = '取消' } = {}) {
     s.host.addEventListener('click', (e) => { const v = e.target.closest('[data-v]')?.dataset.v; if (v === undefined) return; picked = v || null; s.close(); });
   });
 }
-// 婉拒原因面板：常用理由 chips＋自由填寫（最多 120 字）；回傳 { note } 或 null（取消）
+// 婉拒原因面板：常用理由 chips＋自由填寫（最多 max 字，預設 120；跟伺服器存的長度一致）；回傳 { note } 或 null（取消）
 //   who：團員自己填的姓名，一律當純文字、不翻譯；lines：說明句（純文字，空字串略過）；ok：確認鍵文字（婉拒／移出）
 //   開著的時候 Tab 只在面板裡循環，關掉後焦點回到原本的按鈕
 // alt：第二個動作（例如「移出（可再報名）」），選了回傳 { note, alt: true }
-function askReason(title, { who = '', lines = [], chips = [], ok = '婉拒', alt = '' } = {}) {
+function askReason(title, { who = '', lines = [], chips = [], ok = '婉拒', alt = '', max = 120 } = {}) {
   return new Promise((done) => {
     const back = document.activeElement;
     const host = document.createElement('div');
@@ -254,7 +254,7 @@ function askReason(title, { who = '', lines = [], chips = [], ok = '婉拒', alt
       ${who ? `<p style="margin:0"><b translate="no">${esc(who)}</b></p>` : ''}
       ${text.map((x) => `<p class="muted" style="margin:0">${esc(x)}</p>`).join('')}
       ${chips.length ? `<div class="chips" role="group" aria-label="常用原因">${chips.map((c) => `<button type="button" class="chip" data-c="${esc(c)}" aria-pressed="false">${esc(c)}</button>`).join('')}</div>` : ''}
-      <label>原因（選填）<textarea maxlength="120" rows="3" aria-describedby="reasonHint"></textarea></label>
+      <label>原因（選填）<textarea maxlength="${Number(max) || 120}" rows="3" aria-describedby="reasonHint"></textarea></label>
       <p class="tiny" id="reasonHint" style="margin:0">原因只有本人看得到，推播不會顯示原因</p>
       <div class="choices"><button type="button" class="btn danger block" data-ok="1">${esc(ok)}</button>${alt ? `<button type="button" class="btn block" data-alt="1">${esc(alt)}</button>` : ''}<button type="button" class="btn ghost block" data-x="1">取消</button></div></div>`;
     document.body.append(host);
@@ -269,8 +269,8 @@ function askReason(title, { who = '', lines = [], chips = [], ok = '婉拒', alt
         if (c.dataset.c === '其他') ta.focus();
         return;
       }
-      if (e.target.closest('[data-ok]')) { close({ note: ta.value.trim().slice(0, 120) }); return; }
-      if (e.target.closest('[data-alt]')) { close({ note: ta.value.trim().slice(0, 120), alt: true }); return; }
+      if (e.target.closest('[data-ok]')) { close({ note: ta.value.trim().slice(0, max) }); return; }
+      if (e.target.closest('[data-alt]')) { close({ note: ta.value.trim().slice(0, max), alt: true }); return; }
       if (e.target.closest('[data-x]')) close(null);
     });
     host.addEventListener('keydown', (e) => {
@@ -1131,7 +1131,7 @@ function privacyView() {
          個人賽事：你自己加入的賽事名稱、日期與目標成績（用於倒數）。<br>
          訓練紀錄：你照課表記錄的日期、距離、時間、心率、自覺強度、感覺與備註；預設只有你看得到，你打開分享後，教練與分團幹部只看得到完成率、里程與平均強度，看不到備註。<br>
          比賽成績（選填）：你登錄的比賽距離、完賽時間、賽事名稱與日期、號碼布、官方成績連結或截圖，以及給審核的說明；只有你自己與審核的協會幹部看得到，你打開「恭喜榜」後，登入的跑友才看得到你的 PB 與完成的挑戰，另外打開「PB 排行」才會列入排名。截圖與給審核的說明在審核完成 7 天後自動刪除；沒有通過或被撤銷的成績 180 天後刪除。<br>
-         挑戰紀錄（選填）：參加的挑戰、是否達成、團服尺寸與發放紀錄；分團挑戰的團長與幹部看得到團員的參加狀態與團服尺寸，看不到成績與體重；體重挑戰只看得到有團服名額的人。<br>
+         挑戰紀錄（選填）：參加的挑戰、是否達成、團服尺寸與發放紀錄；挑戰發布後刪掉會影響比較基準的成績時，只記下是哪個挑戰（不留成績），那個挑戰的達成改由幹部確認；分團挑戰的團長與幹部看得到團員的參加狀態與團服尺寸，看不到成績與體重；體重挑戰只看得到有團服名額的人。<br>
          體重（選填，敏感資料）：只有參加需要在團練現場量體重的挑戰、並逐場勾選同意時才蒐集；量測時由你選一位在場的幹部看體重計輸入讀數，那位幹部當下會看到數字；系統<b>加密後保存</b>，只用來判定是否達成，幹部與其他跑友都無法查詢，也不會知道你有沒有達成；挑戰結束 30 天後自動刪除，你隨時可以在挑戰頁刪除或退出，立即刪除。自主聲明的體重挑戰只記錄你是否聲明達成，不上傳體重。<br>
          照片：拍照分享的照片在你的手機上合成，不會上傳到我們的伺服器。<br>
          賽事報名資料（選填）：只有你需要幹部代為報名馬拉松等賽事時才填，包含中英文姓名、身分證字號或護照號碼、生日、性別、電話、Email、地址、緊急聯絡人與衣服尺寸；<b>加密後保存</b>，只有你自己看得到完整內容。<br>
@@ -2210,7 +2210,8 @@ function scanSheet({ title, hint, placeholder = '手動輸入代碼', onCode }) 
   const msg = host.querySelector('.scanmsg');
   const run = async (code) => {
     if (busy) return; busy = true;
-    try { msg.textContent = await onCode(code.trim()); navigator.vibrate?.(30); } catch (e) { msg.textContent = e.message; }
+    // onCode 回傳文字，或已經分好段的節點（名字要 translate="no" 的訊息）
+    try { const out = await onCode(code.trim()); if (out instanceof Node) msg.replaceChildren(out); else msg.textContent = out; navigator.vibrate?.(30); } catch (e) { msg.textContent = e.message; }
     setTimeout(() => { busy = false; }, 1800);
   };
   host.querySelector('form').onsubmit = (e) => { e.preventDefault(); run(e.target.code.value); e.target.code.value = ''; };

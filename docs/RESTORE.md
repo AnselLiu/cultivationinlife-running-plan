@@ -64,7 +64,7 @@ node tools/restore-backup.mjs --replay withdrawals.json --since "$T"
 10. 關閉用 Gmail 找到我（`privacy.email_lookup`）：只要關過就清掉 Gmail 查詢碼（`email_h`；刪除是單向的，之後又打開也不會從備份回來，要本人再用 Google 確認一次）；開關照最後一次（同一秒有開有關以關閉為準）。
 11. 移除推薦人（`referrer.clear` 本人、`referrer.admin_clear` 幹部）：清掉推薦人；推薦人按「不是我」（`referrer.deny`）：只清掉推薦人還是這位的那一筆，標成沒有確認，並補回 180 天的冷卻（`rate_limits`）。備份不含 `rate_limits`：備份之前按的「不是我」，冷卻照備份自己的 `audit_log` 補回（還沒過 180 天的，完整還原或只還原 `members` 時）。
 12. 刪除自己的訓練紀錄（`log.delete`）、路線（`route.delete`）、分團公告（`team.post_delete`）：照 id 再刪一次，備註、心率、強度不會跟著回來。
-13. 退出恭喜榜（`privacy.cheer_board`）與 PB 排行（`privacy.cheer_rank`），最後一次是關閉就關掉；刪除挑戰體重（`privacy.ach_weight_delete`：刪掉該挑戰的 `ach_private`、清掉見證紀錄；detail 有 `leave` 的再把參加改成已退出）；刪除自己的成績（`pb.delete`：照 id 再刪一次，截圖與恭喜一起刪）。
+13. 退出恭喜榜（`privacy.cheer_board`）與 PB 排行（`privacy.cheer_rank`），最後一次是關閉就關掉；刪除挑戰體重（`privacy.ach_weight_delete`：刪掉該挑戰的 `ach_private`、清掉見證紀錄；detail 有 `leave` 的再把參加改成已退出）；刪除自己的成績（`pb.delete`：照 id 再刪一次，截圖與恭喜一起刪；刪之前先照正式站記下會影響比較基準的挑戰 `ach_base_del`，之後那些挑戰的達成要幹部確認）。
 14. 清空倒回來的推播佇列（`push_queue`），舊推播不會重送；通知中心的內容不受影響。
 15. 抓到的稽核紀錄原樣補回 `audit_log`（`INSERT OR IGNORE`，簽章照原本的）。之後再從更舊的備份還原時，也查得到這些撤回。
 

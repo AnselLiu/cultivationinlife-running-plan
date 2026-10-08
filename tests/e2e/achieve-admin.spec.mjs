@@ -204,7 +204,7 @@ test.describe.serial('成績與挑戰：後台', () => {
     await expect(page.locator('.adm-ach-shirtbox')).toContainText('不要轉給廠商');
   });
 
-  test('見證體重量測：手動輸入見證碼與體重計讀數，訊息只說「已見證」，不顯示任何數字', async ({ page, request }) => {
+  test('見證體重量測：手動輸入見證碼與體重計讀數，訊息只說「已見證」，不顯示任何數字；同一個碼再讀到一次不會再送（錯誤次數不增加）', async ({ page, request }) => {
     const cid = await newCamp(request, { title: 'E2E 秋季體態挑戰', kind: 'weight', dist_key: null, target: 3, opts: { verify: 'witness' },
       rewards: { badge: 'heart' }, start_date: plus(0), end_date: plus(40), join_by: plus(14) });
     await apiAs(request, 't_chair', `/admin/ach/${cid}/open`, { method: 'POST', body: { announce: false } });
@@ -217,10 +217,22 @@ test.describe.serial('成績與挑戰：後台', () => {
     await expect(page.locator('#view')).toContainText('體重挑戰不顯示誰有沒有達成');
     await page.locator('#achWit').click();
     const sheet = page.locator('.sheet');
+    const sendCode = async () => {
+      await sheet.locator('input[name=code]').fill(w.token.match(/.{1,4}/g).join(' '));
+      await sheet.locator('form:not(#achKgF)').getByRole('button', { name: '送出' }).click();
+    };
+    // 先打錯數字再掃：對不上（第 1 次）；鏡頭重讀同一個碼（這裡用手動再送一次代替）不會再送，錯誤次數還是 1
+    await sheet.locator('[name=kg]').fill('75.0');
+    await sendCode();
+    await expect(sheet.locator('.scanmsg')).toHaveText('數字和跑友輸入的不一樣，請再看一次體重計');
+    await page.waitForTimeout(1900);   // scanSheet 讀到之後 1.8 秒內不再處理
+    await sendCode();
+    await expect(sheet.locator('.scanmsg')).toHaveText('數字和跑友輸入的不一樣，請再看一次體重計');
+    expect((await (await request.get(`/api/dev/ach?entry=${j.entry.id}`)).json()).entry.w_tries).toBe(1);
+    // 改好數字按「送出見證」
     await sheet.locator('[name=kg]').fill('72.5');
-    await sheet.locator('input[name=code]').fill(w.token.match(/.{1,4}/g).join(' '));
-    await sheet.locator('form:not(#achKgF)').getByRole('button', { name: '送出' }).click();
-    await expect(sheet.locator('.scanmsg')).toHaveText(/^已見證 .+ 的起始量測$/);
+    await sheet.locator('#achKgF').getByRole('button', { name: '送出見證' }).click();
+    await expect(sheet.locator('.scanmsg')).toHaveText(/^已見證 .+的起始量測$/);
     await expect(sheet.locator('.scanmsg')).not.toContainText(/\d/);
     await page.keyboard.press('Escape');
     await expect(sheet).toHaveCount(0);

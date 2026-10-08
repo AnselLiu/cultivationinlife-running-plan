@@ -182,7 +182,8 @@ export async function pbView() {
     if (v === 'share') { shareSheet(pbShareText(p), b); return; }
     if (v !== 'del') return;
     const pend = p.status === 'pending';
-    const ok = await choose(pend ? '撤回這筆成績？' : '刪除這筆成績？', pend ? '撤回後幹部就不會審核；之後可以重新登錄。' : '刪除後恭喜榜上的這一則也會消失；已經完成的挑戰不受影響。',
+    const ok = await choose(pend ? '撤回這筆成績？' : '刪除這筆成績？', pend ? '撤回後幹部就不會審核；之後可以重新登錄。'
+      : `<span>刪除後恭喜榜上的這一則也會消失；已經完成的挑戰不受影響。</span>${p.status === 'approved' ? ' <span>如果這筆是進行中挑戰的比較基準，那個挑戰之後的達成要由幹部確認。</span>' : ''}`,
       [{ value: 'y', label: pend ? '撤回' : '刪除', danger: true }], { cancel: '保留' });
     if (ok !== 'y') return;
     try { await api(`/pb/${encodeURIComponent(p.id)}`, { method: 'DELETE' }); toast(pend ? '已撤回' : '已刪除'); await pbView(); focusEl(view.querySelector('h1')); } catch (err) { toast(err.message); }
@@ -414,11 +415,13 @@ export async function achCampaignView(id, focusSel) {
     : !myTeam ? '這個挑戰只限分團團員' : c.members_only && me.membership !== 'active' ? '這個挑戰只限協會會員' : witness && d.raceKey === false ? '體重挑戰暫時無法使用' : '';
   const canJoin = !m && c.status === 'open' && !why;
   const lines = ruleLines(c);
-  const full = sh?.quota && (d.stats?.done || 0) >= sh.quota;
+  // 體重挑戰進行中伺服器不給達成人數（done＝null）：不顯示「達成」與「已經有 N 位達成」
+  const full = sh?.quota && d.stats?.done != null && d.stats.done >= sh.quota;
+  const cancelled = c.status === 'cancelled';
   // 頁首：標題是協會幹部寫的內容（不翻譯），所以自己畫大標題
   const head = `<header class="lt ach-head">${kindTile(c.kind, 'ach-htile')}<div><h1 tabindex="-1"><span translate="no">${esc(c.title)}</span></h1>
     <p class="ach-hsub">${scopePill(c)}<span class="tiny"><span class="num">${md(c.start_date)}–${md(c.end_date)}</span>・<span>${whenText(c, t)}</span></span></p></div></header>`;
-  const stats = d.stats ? `<div class="ach-stats" role="group" aria-label="參加人數"><span><b class="num">${d.stats.joined}</b><span>參加</span></span><span><b class="num">${d.stats.done}</b><span>達成</span></span>
+  const stats = d.stats ? `<div class="ach-stats" role="group" aria-label="參加人數"><span><b class="num">${d.stats.joined}</b><span>參加</span></span>${d.stats.done == null ? '' : `<span><b class="num">${d.stats.done}</b><span>達成</span></span>`}
     ${sh ? `<span><b class="num">${(d.stats.granted || 0) + (d.stats.issued || 0)}</b><span>團服名額已給</span></span>` : ''}</div>` : '';
   view.innerHTML = `${head}
     ${c.status === 'cancelled' ? `<div class="notice"><b>這個挑戰已經取消</b>${c.cancel_note ? ` <span translate="no">${esc(c.cancel_note)}</span>` : ''}</div>` : ''}
@@ -440,11 +443,11 @@ export async function achCampaignView(id, focusSel) {
     : rw.board ? `<li><span class="ach-rwic">${ic(ACH_ICONS.sparkle)}</span><span>完成後出現在恭喜榜（要先在隱私打開）</span></li>` : ''}
       </ul>
     </section>
-    ${m ? myProgress(c, m, pr, d, pbData, t) : ''}
+    ${m && (!cancelled || c.kind === 'weight') ? myProgress(c, m, pr, d, pbData, t) : ''}
     ${m && sh ? shirtCard(c, m, t) : ''}
     ${m || canJoin || why ? `<section class="card ach-sec ach-joinbox" id="achJoinBox">
       ${m ? `<div class="row spread"><span class="ach-mystate">${statePill(m)}${m.status === 'met' ? '<span class="tiny">達成了，等幹部確認</span>' : ''}</span>
-          ${['joined', 'met'].includes(m.status) ? '<button type="button" class="btn ghost sm" id="achLeave">退出挑戰</button>' : ''}</div>
+          ${['joined', 'met'].includes(m.status) && !cancelled ? '<button type="button" class="btn ghost sm" id="achLeave">退出挑戰</button>' : ''}</div>
           ${m.status === 'achieved' ? '<button type="button" class="btn block iconbtn" id="achShare">分享到 LINE</button>' : ''}
           ${m.status === 'not_met' ? '<p class="tiny" style="margin:0">這次沒有達成，謝謝你一起努力</p>' : ''}`
     : canJoin ? `${full ? `<p class="tiny" style="margin:0">已經有 ${d.stats.done} 位達成，現在參加會排在候補</p>` : ''}<button type="button" class="btn block" id="achJoin">參加挑戰</button>`
@@ -532,7 +535,7 @@ function weightProgress(c, m, d, t) {
   if (c.opts?.verify !== 'witness') return honorProgress(c, m, t);
   const step = (which, label, rule) => {
     const at = which === 'base' ? m.w_base_at : m.w_last_at, pend = m.w_pending === which;
-    const can = m.status === 'joined' && (which === 'base' ? baseOpen(c, t) : lastOpen(c, m, t));
+    const can = c.status === 'open' && m.status === 'joined' && (which === 'base' ? baseOpen(c, t) : lastOpen(c, m, t));
     const state = at ? `<span class="ach-ok">${ic('<path d="M5 12.5l4.2 4.2L19 7"/>')}<span>已見證</span></span>・<span class="num">${md(tpDay(at))}</span>` : pend ? '<span>等幹部見證</span>' : '<span>還沒量</span>';
     return `<li class="ach-step${at ? ' ok' : ''}"><div class="ach-stephd"><b>${label}</b><span class="tiny">${state}</span></div>
       <span class="tiny">${rule}</span>
@@ -554,9 +557,9 @@ function honorProgress(c, m, t) {
     <p class="tiny" style="margin:0">不會上傳，換手機或登出就不見了</p>
     <form class="ach-hform" id="achHForm"><label>體重（公斤）<input name="kg" inputmode="decimal" autocomplete="off"></label><button class="btn ghost sm">記一筆</button></form>
     ${log.length ? `<ul class="ach-hlist" role="list">${log.map((x, i) => `<li><span class="num">${slash(x.d)}</span><b class="num">${(x.kg10 / 10).toFixed(1)}</b><span>公斤</span>
-      <button type="button" class="iconx" data-hdel="${i}" aria-label="刪除這筆紀錄">${ic('<path d="M7 7l10 10M17 7 7 17"/>')}</button></li>`).join('')}</ul>` : ''}
+      <button type="button" class="iconx" data-hdel="${i}" aria-label="刪除 ${slash(x.d)} 的紀錄">${ic('<path d="M7 7l10 10M17 7 7 17"/>')}</button></li>`).join('')}</ul>` : ''}
     ${pct > 0 ? `<p class="ach-pct">比開始時減少 ${pct}%</p>` : ''}</div>
-    ${m.status === 'joined' && claimOpen(c, t) ? '<button type="button" class="btn block" id="achClaim">送出達成聲明</button>' : ''}`;
+    ${c.status === 'open' && m.status === 'joined' && claimOpen(c, t) ? '<button type="button" class="btn block" id="achClaim">送出達成聲明</button>' : ''}`;
 }
 function bindProgress(c, m, d, t, again) {
   if (!m || c.kind !== 'weight') return;
@@ -577,7 +580,14 @@ function bindProgress(c, m, d, t, again) {
     const log = [...honorLog(c.id).filter((x) => x.d !== t), { d: t, kg10: x10(kg) }].sort((a, b) => (a.d < b.d ? -1 : 1));
     setHonor(c.id, log); toast('已記在這台裝置'); again('#achHForm input');
   });
-  for (const b of view.querySelectorAll('[data-hdel]')) b.onclick = () => { const log = honorLog(c.id); log.splice(Number(b.dataset.hdel), 1); setHonor(c.id, log); again('#achHForm input'); };
+  // 刪除一筆：只存在這台裝置、刪了就沒有，先確認（標題只有日期，不唸出體重）
+  for (const b of view.querySelectorAll('[data-hdel]')) b.onclick = async () => {
+    const i = Number(b.dataset.hdel), x = honorLog(c.id)[i];
+    if (!x) return;
+    const ok = await choose(`刪除 ${slash(x.d)} 的紀錄？`, '這筆紀錄只存在這台裝置，刪除後沒辦法復原。', [{ value: 'y', label: '刪除', danger: true }], { cancel: '保留' });
+    if (ok !== 'y') return;
+    const log = honorLog(c.id); log.splice(i, 1); setHonor(c.id, log); toast('已刪除'); again('#achHForm input');
+  };
   $id('achClaim')?.addEventListener('click', async (e) => {
     const btn = e.currentTarget;
     const ok = await choose('送出達成聲明', `我確認體重比挑戰開始時減少了 ${c.target}% 以上。這是榮譽制聲明，不會上傳數字。`, [{ value: 'y', label: '送出聲明', primary: true }]);
@@ -695,6 +705,14 @@ function witnessKg(code, opener) {
 // 團服卡：名額、候補、已領取、同款已拿、不需要；尺寸（44px chips）、尺寸表、用報名資料的尺寸、不需要／又想要
 function shirtCard(c, m, t) {
   const sh = c.rewards.shirt, st = m.reward_state, by = sh.size_by;
+  // 取消的挑戰、或已經沒辦法達成的（沒有通過確認、達成被撤銷；已結算還沒達成的里程、出席、體重）：只說明，不給選尺寸
+  //   pb／time／pace 結算後 60 天內補核准的成績還會補算，照常顯示
+  const over = st !== 'issued' && (c.status === 'cancelled' ? '挑戰已取消，團服不會發放'
+    : ['rejected', 'revoked'].includes(m.status) || (c.status === 'settled' && !['met', 'achieved'].includes(m.status) && !['pb', 'time', 'pace'].includes(c.kind)) ? '這次沒有達成' : '');
+  if (over) {
+    return `<section class="card ach-sec ach-shirt" id="achShirt" aria-labelledby="achShirtT"><h2 class="h3" id="achShirtT">團服</h2>
+    <p class="ach-shst">${ic(ACH_ICONS.shirt)}<span><b>${over}</b></span></p></section>`;
+  }
   const head = st === 'issued' ? `<b>已領取</b>・<span class="num">${md(tpDay(m.issued_at))}</span>`
     : st === 'granted' ? '<b>你有團服名額</b>'
       : st === 'waitlist' ? `<b>候補第 ${m.reward_rank} 位</b>`

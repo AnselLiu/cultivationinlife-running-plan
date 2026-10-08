@@ -1389,9 +1389,11 @@ async function achQueue(panel, ctx) {
     <div class="adm-ach-list" id="achPbList"></div>`;
   const list = $('#achPbList'), only = latest();
   const empty = () => { if (!list.querySelector('.adm-ach-pb')) list.innerHTML = `<section class="card">${emptyState(achIc('trophy'), q ? '找不到符合的成績' : PB_EMPTY[st])}</section>`; };
+  // 載入更多：按鈕會被移掉，焦點移到新的第一張卡片（VoiceOver 與鍵盤不會跳回頁首）
   const load = async (more) => {
     const r = await only(api(`/admin/pb?${new URLSearchParams({ status: st, ...(q ? { q } : {}), ...(more && next ? { before: next } : {}) })}`));
     next = r.next || null;
+    const n0 = list.querySelectorAll('.adm-ach-pb').length;
     list.querySelector('.adm-ach-more')?.remove();
     if (!more) achDropUrls();
     if (!more) list.innerHTML = '';
@@ -1399,6 +1401,7 @@ async function achQueue(panel, ctx) {
     empty();
     if (next) list.insertAdjacentHTML('beforeend', '<button type="button" class="btn ghost sm block adm-ach-more">載入更多</button>');
     achThumbs(list);
+    if (more) focusEl(list.querySelectorAll('.adm-ach-pb')[n0] || list.querySelector('.adm-ach-more') || [...list.querySelectorAll('.adm-ach-pb')].pop());
   };
   for (const b of panel.querySelectorAll('[data-pbst]')) b.onclick = () => {
     st = b.dataset.pbst;
@@ -1419,8 +1422,8 @@ async function achQueue(panel, ctx) {
     const pid = card.dataset.pb, who = card.dataset.name;
     let body;
     if (act === 'reject' || act === 'revoke') {
-      const r = await askReason(act === 'reject' ? '婉拒這筆成績' : '撤銷這筆成績', act === 'reject' ? { who, chips: PB_REJECT }
-        : { who, chips: ACH_REVOKE, ok: '撤銷', lines: ['用這筆成績完成的挑戰會一起撤銷；團服已發放的保留發放紀錄'] });
+      const r = await askReason(act === 'reject' ? '婉拒這筆成績' : '撤銷這筆成績', act === 'reject' ? { who, chips: PB_REJECT, max: ACH_NOTE_MAX }
+        : { who, chips: ACH_REVOKE, ok: '撤銷', max: ACH_NOTE_MAX, lines: ['用這筆成績完成的挑戰會重新判定；有別筆符合的成績就維持達成。已發放的團服保留發放紀錄'] });
       if (!r) return;
       body = { note: r.note, code: achReason(r.note) };
       if (act === 'reject') body.approve = false;
@@ -1441,23 +1444,28 @@ async function achQueue(panel, ctx) {
   await load(false).catch((e) => { list.innerHTML = `<section class="card"><p class="muted">${esc(e.message)}</p></section>`; });
 }
 
-// ---- 待確認（只有里程挑戰；榮譽制體重直接達成、不進這裡）----
+// ---- 待確認（里程挑戰，以及挑戰發布後刪過開始前成績的跑友；榮譽制體重直接達成、不進這裡）----
+const ACH_BASE_DEL = '本人在挑戰發布後刪除過挑戰開始前的成績，比較基準可能變慢了。請跟本人確認以前的成績後再確認。';
+const ACH_NOTE_MAX = 100;   // 婉拒、撤銷、退回、取消的原因：伺服器存 100 字
+const achPbLine = (p) => `<p class="adm-ach-res"><span class="pill">${esc(AR.distLabel(p.dist_key, p.km))}</span> <b class="num adm-ach-time">${AR.fmtTime(p.seconds)}</b></p>
+  <p class="adm-ach-race"><span translate="no">${esc(p.race_name)}</span>・<span class="num">${achYMD(p.race_date)}</span></p>`;
 function achMetCard(x) {
   const self = x.member?.id === me.id;
   return `<article class="card adm-ach-met" data-eid="${esc(x.eid)}" data-cid="${esc(x.cid)}" data-name="${esc(x.member?.name || '')}">
     <div class="adm-ach-who">${avatar(x.member || {})}<span>${achNm(x.member)} ${achTeam(x.member?.team)}
       <a class="tiny tlink" style="display:block" href="#/admin/ach/c/${esc(x.cid)}" translate="no">${esc(x.title)}</a></span></div>
-    ${x.evidence ? `<p class="adm-ach-res"><span>累積</span> <b class="num adm-ach-time">${esc(x.evidence)}</b> <span>公里</span></p>` : ''}
+    ${x.pb ? achPbLine(x.pb) : x.evidence ? `<p class="adm-ach-res"><span>累積</span> <b class="num adm-ach-time">${esc(x.evidence)}</b> <span>公里</span></p>` : ''}
+    ${x.base_del ? `<p class="tiny adm-ach-warn"><span>${ACH_BASE_DEL}</span></p>` : ''}
     <p class="tiny"><span>系統判定達成：</span><span class="num">${achMD(x.met_at)}</span></p>
-    <button type="button" class="linkbtn" data-src>查看紀錄來源 ›</button>
+    <button type="button" class="linkbtn" data-src>${x.kind === 'km' ? '查看紀錄來源 ›' : '細節 ›'}</button>
     <div class="row adm-ach-acts">${self ? '<p class="tiny">這是你自己的達成，要由另一位審核者確認</p>'
-      : '<button type="button" class="btn sm" data-metact="ok">確認達成</button><button type="button" class="btn ghost sm" data-metact="no">退回</button>'}</div>
+      : '<button type="button" class="btn sm" data-metact="ok">確認達成</button><button type="button" class="btn ghost sm" data-metact="no">退回這筆</button>'}</div>
   </article>`;
 }
 function achMetPanel(panel, ctx) {
   const rows = ctx.data.met || [];
   const empty = () => `<section class="card">${emptyState(achIc('calcheck'), '目前沒有待確認的達成')}</section>`;
-  panel.innerHTML = `<p class="tiny">里程挑戰由系統判定達成後，要幹部看過紀錄來源再確認；確認前名額先保留。</p>
+  panel.innerHTML = `<p class="tiny">里程挑戰由系統判定達成後，要幹部看過紀錄來源再確認；挑戰發布後刪過開始前成績的跑友也要確認（比較基準可能變了）。確認前名額先保留。</p>
     <div class="adm-ach-list" id="achMetList">${rows.length ? rows.map(achMetCard).join('') : empty()}</div>`;
   const list = $('#achMetList');
   list.addEventListener('click', async (e) => {
@@ -1468,7 +1476,7 @@ function achMetPanel(panel, ctx) {
     const ok = b.dataset.metact === 'ok';
     let body = { approve: true };
     if (!ok) {
-      const r = await askReason('退回這筆達成', { who: name, chips: ACH_REJECT, ok: '退回' });
+      const r = await askReason('退回這筆達成', { who: name, chips: ACH_REJECT, ok: '退回這筆', max: ACH_NOTE_MAX });
       if (!r) return;
       body = { approve: false, note: r.note, code: achReason(r.note) };
     }
@@ -1501,11 +1509,12 @@ async function achSourceSheet(cid, eid, opener) {
   } else if (d.events) {
     body = d.events.length ? `<div class="itemtable">${d.events.map((ev) => `<div class="itr"><span translate="no">${esc(ev.title)}</span><b class="num">${achYMD(ev.date)}</b></div>`).join('')}</div>`
       : '<p class="tiny">沒有出席紀錄</p>';
-  } else if (d.pb) {
+  } else if ('pb' in d) {
     const p = d.pb;
-    body = `<p class="adm-ach-res"><span class="pill">${esc(AR.distLabel(p.dist_key, p.km))}</span> <b class="num adm-ach-time">${AR.fmtTime(p.seconds)}</b></p>
-      <p class="adm-ach-race"><span translate="no">${esc(p.race_name)}</span>・<span class="num">${achYMD(p.race_date)}</span></p>
-      ${achUrlOk(p.result_url) ? `<a class="adm-ach-link" href="${esc(p.result_url)}" target="_blank" rel="noopener noreferrer"><b translate="no">${esc(achHost(p.result_url))}</b><span>開官方成績 ›</span></a>` : ''}`;
+    body = `${p ? `${achPbLine(p)}
+      ${achUrlOk(p.result_url) ? `<a class="adm-ach-link" href="${esc(p.result_url)}" target="_blank" rel="noopener noreferrer"><b translate="no">${esc(achHost(p.result_url))}</b><span>開官方成績 ›</span></a>` : ''}`
+      : '<p class="tiny">找不到這筆成績</p>'}
+      ${d.base_del ? `<p class="tiny adm-ach-warn"><span>${ACH_BASE_DEL}</span></p>` : ''}`;
   } else if (d.verify) {
     body = `<div class="itemtable">${itr('起始量測', d.w_base_at ? '已見證' : '還沒見證')}${itr('結束量測', d.w_last_at ? '已見證' : '還沒見證')}</div>
       <p class="tiny">體重不會顯示在這裡，也看不到有沒有達成。</p>`;
@@ -1547,10 +1556,10 @@ const achCsv = (c) => `<div class="row adm-ach-csv"><a class="btn ghost sm" href
 async function achShirtsPanel(panel, ctx) {
   const cs = (ctx.data.campaigns || []).filter((c) => c.rewards?.shirt && ['open', 'settled'].includes(c.status));
   if (!cs.length) { panel.innerHTML = `<section class="card">${emptyState(achIc('shirt'), '還沒有送團服的挑戰')}</section>`; return; }
-  panel.innerHTML = cs.map((c) => { const s = c.stats || {};
+  panel.innerHTML = cs.map((c, i) => { const s = c.stats || {};
     return `<section class="card adm-ach-shirt" data-cid="${esc(c.id)}">
       <div class="row spread"><a class="tlink" href="#/admin/ach/c/${esc(c.id)}"><b translate="no">${esc(c.title)}</b></a>${achPhasePill(c)}</div>
-      <div class="adm-ach-sizes" data-sizes><span class="tiny">載入中…</span></div>
+      <div class="adm-ach-sizes" data-sizes>${i < 8 ? '<span class="tiny">載入中…</span>' : `<a class="tiny tlink" href="#/admin/ach/c/${esc(c.id)}">點進挑戰看尺寸統計 ›</a>`}</div>
       <p class="adm-ach-stats">${achN('已給', s.granted)}${achN('候補', s.waitlist)}${achN('已發', s.issued)}${achN('未選尺寸', s.unsized)}</p>
       ${achCsv(c)}
       ${c.status === 'settled' ? `<button type="button" class="btn ghost sm" data-remind ${s.unsized ? '' : 'disabled'}>提醒還沒選尺寸的人</button>` : '<p class="tiny">挑戰結算後才分配名額</p>'}
@@ -1559,7 +1568,7 @@ async function achShirtsPanel(panel, ctx) {
     try { const r = await api(`/admin/ach/${encodeURIComponent(b.closest('[data-cid]').dataset.cid)}/remind-size`, { method: 'POST', body: {} }); toast(`已提醒 ${Number(r.n) || 0} 人`); }
     catch (e) { toast(e.message); }
   });
-  // 尺寸統計：每場讀一次團服名單（最多 8 場；名單本身不畫在這裡）
+  // 尺寸統計：每場讀一次團服名單（最多 8 場，其他的連到挑戰頁看；名單本身不畫在這裡）
   await Promise.all(cs.slice(0, 8).map(async (c) => {
     const r = await api(`/admin/ach/${encodeURIComponent(c.id)}/entries?state=shirt`).catch(() => null);
     const box = panel.querySelector(`[data-cid="${CSS.escape(c.id)}"] [data-sizes]`);
@@ -1655,7 +1664,7 @@ function achEntryRow(x, c, { appr, limited, canIssue }) {
   const ev = appr && !limited && x.evidence && ['km', 'attend'].includes(c.kind) ? `<span>${c.kind === 'km' ? '累積' : '出席'}</span> <span class="num">${esc(x.evidence)}</span> <span>${c.kind === 'km' ? '公里' : '次'}</span>` : '';
   const meta = [when, ev, x.shirt_size ? `<span>尺寸</span> <b translate="no">${esc(x.shirt_size)}</b>` : x.reward_state === 'granted' ? '<span>還沒選尺寸</span>' : ''].filter(Boolean).join('・');
   const btns = !appr || limited || self ? '' : [
-    x.status === 'met' ? '<button type="button" class="btn sm" data-eact="ok">確認</button><button type="button" class="btn ghost sm" data-eact="no">退回</button>' : '',
+    x.status === 'met' ? '<button type="button" class="btn sm" data-eact="ok">確認</button><button type="button" class="btn ghost sm" data-eact="no">退回這筆</button>' : '',
     x.status === 'achieved' && !weight ? '<button type="button" class="btn ghost sm" data-eact="revoke">撤銷達成</button>' : '',
     !weight && ['met', 'achieved', 'not_met', 'revoked', 'rejected'].includes(x.status) ? '<button type="button" class="linkbtn" data-eact="detail">細節 ›</button>' : '',
   ].join('');
@@ -1717,10 +1726,10 @@ function bindAchCamp(c, { appr, limited, stats }) {
     if (act === 'detail') { achSourceSheet(id, eid, b); return; }
     let path = `${base}/confirm`, body = { approve: true }, msg = '已確認達成';
     if (act === 'no') {
-      const r = await askReason('退回這筆達成', { who, chips: ACH_REJECT, ok: '退回' }); if (!r) return;
+      const r = await askReason('退回這筆達成', { who, chips: ACH_REJECT, ok: '退回這筆', max: ACH_NOTE_MAX }); if (!r) return;
       body = { approve: false, note: r.note, code: achReason(r.note) }; msg = '已退回';
     } else if (act === 'revoke') {
-      const r = await askReason('撤銷這筆達成', { who, chips: ACH_REVOKE, ok: '撤銷', lines: ['還沒發放的團服名額會讓給候補'] }); if (!r) return;
+      const r = await askReason('撤銷這筆達成', { who, chips: ACH_REVOKE, ok: '撤銷', max: ACH_NOTE_MAX, lines: ['還沒發放的團服名額會讓給候補'] }); if (!r) return;
       path = `${base}/revoke`; body = { note: r.note, code: achReason(r.note) }; msg = '已撤銷達成';
     }
     await once(b, async () => { try { await api(path, { method: 'POST', body }); toast(msg); rerender(); } catch (err) { fail(err); } })();
@@ -1734,7 +1743,7 @@ function bindAchCamp(c, { appr, limited, stats }) {
   });
   $('#achCancel')?.addEventListener('click', async (e) => {
     const b = e.currentTarget;
-    const note = await achAskText('取消這個挑戰', { lines: [c.kind === 'weight' ? '參加者會收到通知；體重資料會立即刪除' : '參加者會收到通知'], label: '取消原因', max: 120, ok: '取消挑戰', required: true, hint: '原因會出現在參加者收到的通知裡' });
+    const note = await achAskText('取消這個挑戰', { lines: [c.kind === 'weight' ? '參加者會收到通知；體重資料會立即刪除' : '參加者會收到通知'], label: '取消原因', max: ACH_NOTE_MAX, ok: '取消挑戰', required: true, hint: '原因會出現在參加者收到的通知裡' });
     if (note == null) return;
     await once(b, async () => { try { await api(`/admin/ach/${encodeURIComponent(id)}/cancel`, { method: 'POST', body: { note } }); toast('已取消挑戰'); rerender(); } catch (err) { fail(err); } })();
   });
@@ -1771,22 +1780,42 @@ function bindAchCamp(c, { appr, limited, stats }) {
   $('#achWit')?.addEventListener('click', () => achWitness());
 }
 // 見證體重量測：掃跑友手機上的見證碼（或手動輸入），看著體重計輸入讀數；伺服器不回傳任何數字，也不說有沒有達成
-//   先掃碼再填數字、或先填數字再掃碼都可以；同一個碼見證成功後鏡頭還對著，不會再送一次
+//   先掃碼再填數字、或先填數字再掃碼都可以。鏡頭一直開著、碼還在畫面裡時大約每 1.8 秒會再讀到一次：同一個碼只在第一次讀到時送
+//   （那時已經填好數字的話），之後的重讀只回上一次的訊息；數字打錯或還沒打完都不會被重讀送出去（一個碼錯 3 次就作廢）。
+//   要重送（例如改了數字）就按「送出見證」。成功訊息分成幾段（名字不翻譯），英文介面才換得過去
 function achWitness() {
-  let pending = '', lastOk = '', lastMsg = '';
+  let pending = '', seen = '', lastMsg = '';
   const norm = (s) => String(s || '').trim().replace(/^cil-wit:/i, '').replace(/[\s-]/g, '').toLowerCase();   // 畫面上分成 4 組顯示，手動輸入時空白與減號不算
-  let kgIn = null, msgEl = null;
+  let kgIn = null, msgEl = null, busy = false;
+  const okMsg = (r) => {
+    const el = document.createElement('span');
+    el.innerHTML = `<span>已見證</span> <b translate="no">${esc(r.name || '')}</b><span>${/^b/.test(r.which || '') ? '的起始量測' : '的結束量測'}</span>`;
+    return el;
+  };
+  const show = (m) => { if (m instanceof Node) msgEl.replaceChildren(m); else msgEl.textContent = m; };
   const send = async (code) => {
+    pending = code;
     const kg = Number(String(kgIn?.value || '').trim().replace(',', '.'));
-    if (!AR.kgOk(kg)) { pending = code; kgIn?.focus(); return '已讀到見證碼，請輸入體重計上的數字'; }
-    const r = await api('/ach/witness', { method: 'POST', body: { code, kg: Math.round(kg * 10) / 10 } });
-    pending = ''; lastOk = code; kgIn.value = '';
-    lastMsg = `已見證 ${r.name || ''} 的${/^b/.test(r.which || '') ? '起始量測' : '結束量測'}`;   // 整句由 i18n.js 的句型換成英文
+    if (!AR.kgOk(kg)) { kgIn?.focus(); lastMsg = '已讀到見證碼，請輸入體重計上的數字'; return lastMsg; }
+    if (busy) return lastMsg;
+    busy = true;
+    try {
+      const r = await api('/ach/witness', { method: 'POST', body: { code, kg: Math.round(kg * 10) / 10 } });
+      pending = ''; kgIn.value = '';
+      lastMsg = okMsg(r);
+    } catch (err) {
+      lastMsg = err.message;
+      // 作廢、過期、不能見證：這個碼不能再用（要跑友重新產生）；數字對不上：改好按「送出見證」；太頻繁或連不上：稍後按「送出見證」重送
+      if ([400, 403, 404].includes(err.status) && !/數字|體重請填/.test(err.message)) pending = '';
+      else kgIn?.select();
+    } finally { busy = false; }
     return lastMsg;
   };
   scanSheet({ title: '見證體重量測', hint: '掃跑友手機上的見證碼，數字以體重計為準', placeholder: '手動輸入見證碼', onCode: async (raw) => {
     const code = norm(raw); if (!code) return '';
-    return code === lastOk ? lastMsg : send(code);
+    if (code === seen) return lastMsg;   // 鏡頭重讀同一個碼：不再送
+    seen = code;
+    return send(code);
   } });
   const host = document.getElementById('scanT')?.closest('.sheet'); if (!host) return;
   msgEl = host.querySelector('.scanmsg');
@@ -1795,8 +1824,8 @@ function achWitness() {
   kgIn = host.querySelector('#achKgF [name=kg]');
   host.querySelector('#achKgF').onsubmit = async (e) => {
     e.preventDefault();
-    if (!pending) { msgEl.textContent = '請先掃跑友手機上的見證碼，或在下面輸入代碼'; return; }
-    try { msgEl.textContent = await send(pending); } catch (err) { msgEl.textContent = err.message; }
+    if (!pending) { show('請先掃跑友手機上的見證碼，或在下面輸入代碼'); return; }
+    show(await send(pending));
   };
 }
 // 發布：先問要不要通知可以參加的人

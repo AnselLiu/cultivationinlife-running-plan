@@ -133,3 +133,15 @@ CREATE TABLE cheers (
 CREATE UNIQUE INDEX cheers_pb ON cheers(pb_id, member_id) WHERE pb_id IS NOT NULL;
 CREATE UNIQUE INDEX cheers_entry ON cheers(entry_id, member_id) WHERE entry_id IS NOT NULL;
 CREATE INDEX cheers_member ON cheers(member_id);
+
+-- 刪除了會影響比較基準的成績：本人在挑戰發布後，刪掉一筆「比賽日在挑戰開始前、同距離、發布前就登錄」的已核准成績，
+--   而且刪掉會讓比較變容易（它比剩下的開始前成績都快、是 first_ok 挑戰裡唯一一筆、或是首次跑進挑戰裡唯一一筆開始前就跑進的）。
+--   刪除是本人的權利，但不能因此讓基準變慢或變成「第一次」：之後系統判定達成時改成待確認（met），由審核者確認。
+--   只記「哪位跑友、哪個挑戰」，不記被刪掉的成績；進行中或已結算 60 天內的挑戰（參加了沒有都記，先刪再參加也算）；刪除帳號時跟著刪（外鍵）
+CREATE TABLE ach_base_del (
+  campaign_id TEXT NOT NULL REFERENCES ach_campaigns(id) ON DELETE CASCADE,
+  member_id   TEXT NOT NULL REFERENCES members(id) ON DELETE CASCADE,
+  created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (campaign_id, member_id)
+);
+CREATE INDEX ach_bd_member ON ach_base_del(member_id);

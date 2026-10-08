@@ -409,6 +409,8 @@ test('還原後重做成績與挑戰的撤回：恭喜榜、PB 排行、挑戰�
   assert.ok(!/退出 PB 排行/.test(planSummary(plan)), '最後一次是開啟的不算');
   assert.ok(lines.some((l) => l.startsWith('UPDATE members SET cheer_board = 0')) && lines.some((l) => l.startsWith('DELETE FROM ach_private')) && lines.some((l) => l.startsWith('DELETE FROM pb_records')));
   assert.ok(!lines.some((l) => l.includes("'pb'") && l.startsWith('DELETE FROM pb_records')), '沒有 actor 的 pb.delete 略過');
+  const iDel = lines.findIndex((l) => l.startsWith('DELETE FROM pb_records')), iFlag = lines.findIndex((l) => l.startsWith('INSERT OR IGNORE INTO ach_base_del'));
+  assert.ok(iFlag >= 0 && iFlag === iDel - 1 && lines[iFlag].includes("d.id = 'pa' AND d.member_id = 'ca'"), '刪除成績之前先照正式站記下會影響基準的挑戰');
   const db = freshDb();
   db.exec(`BEGIN;\n${toSql(data, { audit: rows }).join('\n')}\nCOMMIT;`);
   assert.deepEqual({ ...one(db, "SELECT cheer_board, cheer_rank FROM members WHERE id = 'ca'") }, { cheer_board: 0, cheer_rank: 1 });

@@ -2035,7 +2035,7 @@ details > summary.setsum .tiny{font-weight:400}
 /* 分頁上的待辦數、篩選、搜尋 */
 .adm-ach-seg button{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:44px}
 .adm-ach-badge{min-width:20px;padding:1px 6px;border-radius:999px;background:var(--warn-bg);color:var(--warn);font-size:12px;font-weight:700;line-height:18px}
-.adm-ach-filter button{min-height:40px}
+.adm-ach-filter button{min-height:44px}
 .adm-ach-search{display:flex;gap:8px;align-items:center}
 .adm-ach-search input,.adm-ach-q{flex:1;min-width:0;min-height:44px}
 .adm-ach-list{display:grid;gap:12px}

@@ -79,7 +79,7 @@ for f in sorted(glob.glob('src/*.js')):
               part=part.strip()
               if part and re.search(r'[一-鿿]',part) and len(part)<=240: segs[part]=1
 have=json.loads(open('public/i18n-en.js').read().split('export default ',1)[1].split(';\nexport const inner')[0])
-missing=[k for k in segs if k not in have and not re.search(r'//|\bif \(|[|]', k)]
+missing=[k for k in segs if k not in have and not re.search(r'(?<!:)//|\bif \(|[|]', k)]
 # 不是介面文字：使用者看不到，或不經過 i18n.js（例如行事曆訂閱檔給外部 App 讀）
 NOT_UI={
   '快取失敗：',                                                # sw.js 安裝時丟的錯誤，只進主控台

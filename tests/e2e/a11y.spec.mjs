@@ -56,6 +56,7 @@ for (const scheme of ['light', 'dark']) for (const p of ['#/notifications', '#/m
 }
 // 報名設定、統計頁審核、後台活動報名預設（幹部頁面）：淺色、深色都要通過，375px 寬不能水平捲動
 for (const scheme of ['light', 'dark']) test(`無障礙 報名設定與審核（${scheme}）`, async ({ page, request }) => {
+  test.setTimeout(90000);   // 20 幾頁、每頁等 1.2 秒再跑 axe：加上成績與挑戰的 5 頁後超過預設的 45 秒
   const ev = await apiAs(request, 't_chair', '/events', { method: 'POST', body: { kind: 'track', title: '無障礙 審核', date: plus(6), gather_time: '07:00', capacity: 5, require_approval: true, notify: false } });
   await apiAs(request, 't_other', `/events/${ev.id}/signup`, { method: 'POST', body: {} });
   await page.emulateMedia({ colorScheme: scheme });
