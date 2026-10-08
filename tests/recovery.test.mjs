@@ -321,7 +321,10 @@ test('幹部弄丟唯一一把通行金鑰的手機（只產生連結、沒有�
   assert.equal(o3.json.officer, true);
   assert.equal((await call(back.cookie, '/passkeys')).json.passkeys.length, before + 1, '只多了一把，舊的那把還在（只產生連結、沒有重設）');
   const adds = (await (await call(await chair(), '/audit?action=passkey.add')).json.items).filter((x) => x.target_id === S.director).map((x) => x.detail);
-  assert.ok(adds[0].endsWith('｜恢復連結後新增'), adds[0]);
+  // 稽核照時間（秒）排序：同一秒的兩筆先後不一定，不看第一筆，看「恢復連結後新增」剛好一筆、原本那把沒有註明
+  assert.equal(adds.length, 2, JSON.stringify(adds));
+  assert.equal(adds.filter((d) => d.endsWith('｜恢復連結後新增')).length, 1, JSON.stringify(adds));
+  assert.equal(adds.filter((d) => d.includes('｜')).length, 1, JSON.stringify(adds));
   for (const who of ['t_chair', 't_super', 't_staff']) {
     const n = (await security(await devCookie(who))).filter((x) => x.title === '幹部用恢復連結接回後新增了通行金鑰' && x.body.startsWith(`恢復理事${T} 用恢復連結接回帳號後新增了一把通行金鑰（`));
     assert.equal(n.length, 1, who);

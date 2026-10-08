@@ -173,12 +173,13 @@ test('恢復連結：「安全」解除 Google 並重設 → 恢復連結（複�
   // 已經登入別的帳號（這裡是理事長）打開：提醒接回後這台裝置會改成登入原本的帳號
   await page.goto(url);
   await expect(page.locator('#recOther')).toContainText('你目前登入的是「測試理事長」；接回後這台裝置會改成登入原本的帳號');
-  // 本人：沒登入的瀏覽器打開連結（/?openExternalBrowser=1#/recover/<代碼>）→ 看到遮過的名字；代碼留在網址裡（換到 Safari／Chrome 時跟著走），接回後才換掉
+  // 本人：沒登入的瀏覽器打開連結（/?openExternalBrowser=1#/recover/<代碼>）→ 看到遮過的名字；Safari／Chrome 馬上把代碼從網址拿掉（只留在這個分頁的 sessionStorage）
   await page.context().clearCookies();
   await page.goto('/#/');
   await page.goto(url);
   await expect(page.locator('#recT')).toHaveText(`恢復帳號：${maskName(gname)}`);
-  await expect(page).toHaveURL(new RegExp(`/\\?openExternalBrowser=1#/recover/${token}$`));
+  await expect(page).toHaveURL(/\/#\/recover$/);
+  expect(page.url()).not.toContain(token);
   await expect(page.locator('#recOther')).toHaveCount(0);
   expect(await page.evaluate(() => sessionStorage.getItem('cil-recover'))).toBe(token);
   await expect(page.locator('#recCard')).toContainText('24 小時內有效，只能用一次。');
@@ -187,11 +188,12 @@ test('恢復連結：「安全」解除 Google 並重設 → 恢復連結（複�
   expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(0);
   const bad2 = (await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21aa']).analyze()).violations.filter((v) => ['critical', 'serious'].includes(v.impact));
   expect(bad2.map((v) => v.id)).toEqual([]);
-  // LINE 的內建瀏覽器：Google 與通行金鑰都不能用，只給「用瀏覽器開啟」（同一個連結，代碼跟著網址走）
+  // LINE 的內建瀏覽器：Google 與通行金鑰都不能用，只給「用瀏覽器開啟」（同一個連結）；代碼留在網址裡（用 LINE 選單的「在瀏覽器開啟」也跟著走）
   const lineCtx = await browser.newContext({ userAgent: `${await page.evaluate(() => navigator.userAgent)} Line/14.13.0`, serviceWorkers: 'block', locale: 'zh-TW', timezoneId: 'Asia/Taipei', viewport: page.viewportSize() });
   const lp = await lineCtx.newPage();
   await lp.goto(url);
   await expect(lp.locator('#recT')).toHaveText(`恢復帳號：${maskName(gname)}`);
+  expect(lp.url()).toBe(url);
   await expect(lp.getByRole('link', { name: '用瀏覽器開啟' })).toHaveAttribute('href', url);
   await expect(lp.getByRole('button', { name: '改用通行金鑰' })).toHaveCount(0);
   expect((await lp.getByRole('link', { name: '用瀏覽器開啟' }).boundingBox()).height).toBeGreaterThanOrEqual(44);

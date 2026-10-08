@@ -76,18 +76,26 @@ if (location.pathname === '/privacy' && !location.hash) history.replaceState(nul
     history.replaceState(null, '', location.hash.startsWith('#/') ? `/${location.hash}` : `/#/e/${m[1]}${t ? `?t=${encodeURIComponent(t)}` : ''}`);
   }
 }
+// Google 不允許在 App 內建瀏覽器登入（LINE、Facebook、Instagram）：LINE 可以用 openExternalBrowser=1 直接跳到 Safari／Chrome
+const inAppBrowser = () => (/Line\//i.test(navigator.userAgent) ? 'line' : /FBAN|FBAV|Instagram/i.test(navigator.userAgent) ? 'meta' : '');
 // 恢復連結（理事長私訊的一次性連結 /?openExternalBrowser=1#/recover/<代碼>，見 src/worker.js 的 recoveryStmts）：代碼在網址的 # 後面，瀏覽器不會送到伺服器
-//   接回之前代碼一直留在網址裡：在 LINE、Facebook 的內建瀏覽器按「在瀏覽器開啟」時跟著網址走；接回後才換掉這一筆瀏覽紀錄（me.js 的 recoverView）
-//   同時存一份在這個分頁的 sessionStorage：用 Google 登入沒接上，伺服器回到 #/recover?err=…（不帶代碼）時從這裡拿
-//   錯誤回報與開啟速度的頁面不帶代碼（recPage）
+//   Safari／Chrome：一讀到就把代碼從網址拿掉（開機時，或同一頁換到 #/recover/<代碼> 時），網址換成 /#/recover，不留在網址列與這個分頁的上一頁；
+//     代碼只留在這個分頁的 sessionStorage（不能用時在記憶體），重新整理、用 Google 沒接上回到 #/recover?err=… 時從這裡拿
+//   LINE、Facebook／Instagram 的內建瀏覽器：留在網址裡，按它們選單的「在瀏覽器開啟」時代碼跟著網址走（到了 Safari／Chrome 一樣馬上拿掉）
+//   接回後清掉（me.js 的 recoverView、meView）；錯誤回報與開啟速度的頁面不帶代碼（recPage）
+let recMem = '';
 const recoverToken = ({ clear = false } = {}) => {
-  if (clear) { try { sessionStorage.removeItem('cil-recover'); } catch {} return null; }
+  if (clear) { recMem = ''; try { sessionStorage.removeItem('cil-recover'); } catch {} return null; }
   const m = location.hash.match(/^#\/recover\/([^?]*)/);
-  if (!m) { try { return sessionStorage.getItem('cil-recover') || ''; } catch { return ''; } }
+  if (!m) { try { return sessionStorage.getItem('cil-recover') || recMem; } catch { return recMem; } }
   const t = /^[\w-]{43}$/.test(m[1]) ? m[1] : '';
+  recMem = t;
   try { if (t) sessionStorage.setItem('cil-recover', t); else sessionStorage.removeItem('cil-recover'); } catch {}
+  if (!inAppBrowser()) try { history.replaceState(null, '', '/#/recover'); } catch {}
   return t;
 };
+// 開機時就拿掉：在錯誤回報、開啟速度與第一個 API 請求之前
+if (location.hash.startsWith('#/recover/')) recoverToken();
 const recPage = (h) => h.replace(/^(#?\/recover)\/[^?]*/, '$1/…');
 // 地圖：先連到圖磚主機、下載地圖模組（map.js 一載入就開始抓 Leaflet），跟登入資料同時進行，不用等 /api/me 回來才開始
 let mapWarm = false;
@@ -931,8 +939,7 @@ function bindStepup() {
 
 // Google 標誌（依 Google 品牌規範使用原色 G）
 const GOOGLE_G = '<svg viewBox="0 0 48 48" width="20" height="20" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9.1 3.6l6.8-6.8C35.8 2.4 30.3 0 24 0 14.6 0 6.6 5.4 2.6 13.3l7.9 6.1C12.4 13.7 17.7 9.5 24 9.5z"/><path fill="#4285F4" d="M46.1 24.5c0-1.6-.1-3.1-.4-4.5H24v9h12.4c-.5 2.9-2.2 5.3-4.6 6.9l7.4 5.7c4.3-4 6.9-9.9 6.9-17.1z"/><path fill="#FBBC05" d="M10.5 28.6c-.5-1.4-.8-3-.8-4.6s.3-3.2.8-4.6l-7.9-6.1C1 16.6 0 20.2 0 24s1 7.4 2.6 10.7l7.9-6.1z"/><path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.4-5.7c-2.1 1.4-4.8 2.3-8.5 2.3-6.3 0-11.6-4.2-13.5-9.9l-7.9 6.1C6.6 42.6 14.6 48 24 48z"/></svg>';
-// Google 不允許在 App 內建瀏覽器登入（LINE、Facebook、Instagram）：LINE 可以用 openExternalBrowser=1 直接跳到 Safari／Chrome
-const inAppBrowser = () => (/Line\//i.test(navigator.userAgent) ? 'line' : /FBAN|FBAV|Instagram/i.test(navigator.userAgent) ? 'meta' : '');
+// inAppBrowser（LINE、Facebook、Instagram 的內建瀏覽器）定義在開頭，恢復連結開機時就要用
 // from: 'ref'＝從推薦人頁綁定或確認（登入後回到推薦人頁）；basic：只用名稱與大頭貼登入（不給 Email）
 const googleHref = (link, { from, basic } = {}) => {
   // c=1：這一版看得懂「先 Google、再通行金鑰」的確認卡（伺服器才會回 ?google=confirm；舊版畫面回 stepup）

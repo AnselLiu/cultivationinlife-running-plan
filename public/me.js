@@ -650,7 +650,8 @@ function meAssoc() {
 }
 
 // ---------- 恢復帳號（#/recover/<代碼>）----------
-// 理事長私訊的一次性恢復連結 /?openExternalBrowser=1#/recover/<代碼>：代碼在 # 後面（不會送到伺服器），接回之前一直留在網址裡（app.js 的 recoverToken）
+// 理事長私訊的一次性恢復連結 /?openExternalBrowser=1#/recover/<代碼>：代碼在 # 後面（不會送到伺服器）；Safari／Chrome 一打開就從網址拿掉、只留在這個分頁的 sessionStorage，
+//   LINE、Facebook／Instagram 的內建瀏覽器留在網址裡（改用瀏覽器開啟時跟著走；app.js 的 recoverToken）
 //   先問伺服器這個連結還能不能用（POST /api/recover/check：不存在、過期、用過一律同一個回應），能用才顯示遮過的名字與按鈕
 //   主要：用 Google 登入並接回帳號（check 帶 google:true，伺服器把代碼放進 HttpOnly cookie，再到 /api/google/start?mode=X；代碼不進任何網址）
 //   次要：改用通行金鑰（在這台裝置替這個帳號新增一把並登入，不用 Google）
@@ -717,7 +718,7 @@ export async function recoverView() {
       try {
         // 伺服器把代碼放進 HttpOnly cookie（10 分鐘），/api/google/start?mode=X 再搬進 OAuth 的 state cookie
         await api('/recover/check', { method: 'POST', body: { token, google: true } });
-        // 已經在 Safari／Chrome 裡（內建瀏覽器沒有這顆按鈕）：離開前把網址換成不帶代碼的 #/recover（從 Google 返回或沒接上回來，代碼從 sessionStorage 拿）
+        // 離開前網址一律是不帶代碼的 #/recover（Safari／Chrome 開機時已經拿掉；從 Google 返回或沒接上回來，代碼從 sessionStorage 拿）
         try { history.replaceState(null, '', '/#/recover'); } catch {}
         location.href = '/api/google/start?mode=X';
       } catch (e) {

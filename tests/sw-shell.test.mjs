@@ -26,13 +26,18 @@ test('分享連結 /e/:id 的頁面導覽用存好的首頁回應（不會每個
   assert.match(app, /location\.pathname\.match\(\/\^\\\/e\\\/\(\[\\w-\]\{1,32\}\)\\\/\?\$\/\)/, '前端開機時把 /e/:id 轉成 /#/e/:id');
 });
 
-test('恢復連結的代碼在網址的 # 後面（不送到伺服器、不進 Service Worker 的快取與 Workers Logs）：沒有 /r/ 路徑；錯誤回報與開啟速度的頁面不帶代碼', () => {
+test('恢復連結的代碼在網址的 # 後面（不送到伺服器、不進 Service Worker 的快取與 Workers Logs）：沒有 /r/ 路徑；Safari／Chrome 開機時從網址拿掉；錯誤回報與開啟速度的頁面不帶代碼', () => {
   const sw = readFileSync(new URL('../public/sw.js', import.meta.url), 'utf8');
   assert.ok(!sw.includes("'/r/'"), 'Service Worker 不用特別處理恢復連結');
   const wr = readFileSync(new URL('../wrangler.jsonc', import.meta.url), 'utf8');
   assert.match(wr, /"run_worker_first": \["\/api\/\*", "\/e\/\*"\]/, '恢復連結不經過 Worker');
   const app = readFileSync(new URL('../public/app.js', import.meta.url), 'utf8');
   assert.match(app, /location\.hash\.match\(\/\^#\\\/recover\\\/\(\[\^\?\]\*\)\/\)/, '代碼從 #/recover/<代碼> 拿');
+  // Safari／Chrome：開機時就把代碼從網址拿掉（在錯誤回報、開啟速度與第一個 API 請求之前）；LINE、Facebook／Instagram 的內建瀏覽器留著（改用瀏覽器開啟時跟著走）
+  assert.ok(app.includes("if (!inAppBrowser()) try { history.replaceState(null, '', '/#/recover'); } catch {}"), 'Safari／Chrome 把代碼從網址拿掉');
+  const boot = app.indexOf("if (location.hash.startsWith('#/recover/')) recoverToken();");
+  assert.ok(boot > 0 && boot < app.indexOf("fetch('/api/client-error'") && boot < app.indexOf("fetch('/api/vitals'"), '開機時就拿掉');
+  assert.ok(app.indexOf('const inAppBrowser') < boot, 'inAppBrowser 要在開機拿掉代碼之前定義');
   assert.match(app, /page: recPage\(location\.hash\.split\('\?'\)\[0\]\)/, '錯誤回報的頁面拿掉代碼');
   assert.match(app, /vitals\.page = recPage\(hash\)/, '開啟速度的頁面拿掉代碼');
   // recPage 的行為（照 app.js 的寫法）
