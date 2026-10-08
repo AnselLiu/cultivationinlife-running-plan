@@ -167,6 +167,7 @@ const PATTERNS = [
   // 跑步記錄的計圈
   [/^第 (\d+) 圈$/, 'Lap $1'], [/^第 (\d+) 圈・進行中$/, 'Lap $1 · in progress'], [/^第 (\d+) 圈・(\d+) m$/, 'Lap $1 · $2 m'],
   [/^已記第 (\d+) 圈 ([\d:]+)$/, 'Lap $1 saved · $2'],
+  [/^搜尋推薦族譜，(\d+) 筆結果$/, 'Searched the referral tree: $1 results'], [/^看族譜：往上 (\d+) 人、往下 (\d+) 人$/, 'Viewed the tree: $1 up, $2 down'], [/^只填名字的跑友 (\d+) 人$/, '$1 runners with a name-only referrer'],   // 稽核：推薦人動作的細節
   [/^第 (\d+) 層$/, 'Level $1'], [/^把 (\d+) 位跑友填的推薦人「$/, 'Link $1 runners’ referrer “'],   // 推薦族譜：往上第幾層推薦人、把只填名字連到帳號
   // 跑步記錄的空檔估算（成績頁整句、記錄中只有前半句）
   [/^螢幕鎖定或訊號弱時以直線估算 (\d+) 公尺，路線上畫成虛線；實際跑的通常比直線長一點。$/, '$1 m was estimated as a straight line while the screen was locked or GPS was weak (dashed on the route). The real distance is usually a bit longer.'],

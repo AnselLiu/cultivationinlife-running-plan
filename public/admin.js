@@ -538,9 +538,26 @@ function auditPanel() {
     <div id="auVerifyOut" class="tiny"></div></section>`;
 }
 // 稽核細節：JSON 轉成「開：A、B；關：C」，ISO 時間轉成「10/5 22:25」
-function auditDetail(d) {
+// 推薦人動作的細節存的是代碼（稽核紀錄寫進去就不改，改了串鏈驗不過），畫面上換成中文
+const REF_DETAIL = {
+  'referrer.lookup': { found: '找到跑友帳號', none: '沒有找到', self: '填的是自己的 Gmail' },
+  'referrer.set': { account: '綁定跑友帳號', name: '只填名字' },
+  'referrer.ack': { ok: '確認是推薦人' },
+};
+function refDetail(action, t) {
+  const hit = REF_DETAIL[action]?.[t];
+  if (hit) return hit;
+  if (action !== 'referrer.view') return t;
+  let m = t.match(/^search｜n=(\d+)$/);
+  if (m) return `搜尋推薦族譜，${m[1]} 筆結果`;
+  m = t.match(/^tree｜up=(\d+)｜down=(\d+)$/);
+  if (m) return `看族譜：往上 ${m[1]} 人、往下 ${m[2]} 人`;
+  m = t.match(/^named｜n=(\d+)$/);
+  return m ? `只填名字的跑友 ${m[1]} 人` : t;
+}
+function auditDetail(d, action) {
   // 結尾的 ｜team=…｜role=…｜to=… 是給還原工具看的代碼（tools/restore-sql.mjs），畫面上不顯示
-  let t = String(d).replace(/(｜(team|role|to)=[\w-]+)+$/, '');
+  let t = refDetail(action, String(d).replace(/(｜(team|role|to)=[\w-]+)+$/, ''));
   if (/^\{.*\}$/.test(t)) {
     try {
       const o = JSON.parse(t), on = [], off = [], rest = [];
@@ -556,7 +573,7 @@ function bindAudit() {
   const row = (x) => `<div class="arow">
       <span class="num tiny">${esc(x.at.slice(5, 16))}</span>
       <span><b>${esc(AUDIT_NAME[x.action] || '其他操作')}</b>
-        <span class="tiny" style="display:block">${x.actor_name ? `<span translate="no">${esc(x.actor_name)}</span>` : '未登入'}${x.actor_role ? `（${esc(ROLE_NAME[x.actor_role] || x.actor_role)}）` : ''}${x.detail ? `・${esc(auditDetail(x.detail))}` : ''}</span></span>
+        <span class="tiny" style="display:block">${x.actor_name ? `<span translate="no">${esc(x.actor_name)}</span>` : '未登入'}${x.actor_role ? `（${esc(ROLE_NAME[x.actor_role] || x.actor_role)}）` : ''}${x.detail ? `・<span>${esc(auditDetail(x.detail, x.action))}</span>` : ''}</span></span>
     </div>`;
   const load = async (more) => {
     const r = await api(`/audit?${new URLSearchParams({ ...params, ...(more ? { before: next } : {}) })}`);

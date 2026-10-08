@@ -102,6 +102,19 @@ test.describe.serial('推薦族譜：功能打開', () => {
     await expect(page.locator('#rtRelink, [data-nid]')).toHaveCount(0);
   });
 
+  test('稽核：推薦人動作的細節顯示中文（不是代碼）', async ({ page }) => {
+    await enter(page, 't_chair');
+    await page.goto('/#/admin/tree?id=t_lead');
+    await expect(page.locator('#rtFocusH')).toBeVisible();
+    await page.goto('/#/admin?tab=audit');
+    await page.locator('#auf [name=action]').selectOption('referrer');
+    await page.locator('#auf').getByRole('button', { name: '查詢' }).click();
+    const list = page.locator('#auList');
+    await expect(list).toContainText(/看族譜：往上 \d+ 人、往下 \d+ 人/);
+    await expect(list).toContainText('只填名字');
+    await expect(list).not.toContainText(/tree｜|search｜|named｜|account|\bname\b/);
+  });
+
   test('功能開關：「會員」分組有推薦人，而且是打開的', async ({ page }) => {
     await enter(page, 't_chair');
     await page.goto('/#/admin/settings/features');
