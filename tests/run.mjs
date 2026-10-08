@@ -1,12 +1,24 @@
 // 測試流程：用獨立的本機資料庫（.wrangler/test-state）啟動 wrangler dev，灌測試帳號，跑全部測試，最後關掉
 // 用法：npm run test:ci（本機或 GitHub Actions 都一樣）
+//   只跑部分檔案：TEST_FILES=tests/achieve.test.mjs,tests/restore.test.mjs（單元測試與 API 測試都可以列；沒列到 API 測試就不啟動伺服器）
 import { spawn, spawnSync, execSync } from 'node:child_process';
 import { rmSync } from 'node:fs';
 
 // 先跑不需要伺服器的單元測試（課表引擎、課表教練計算、舊版資料搬移、共用裝置換人、還原備份重做刪除與隱私撤回、跑步記錄、Email 查詢碼、推薦人 SQL）；失敗就不用啟動伺服器
-const UNIT = ['tests/plan.test.mjs', 'tests/coachcalc.test.mjs', 'tests/migrate.test.mjs', 'tests/device.test.mjs', 'tests/restore.test.mjs', 'tests/run-record.test.mjs', 'tests/email.test.mjs', 'tests/referral-sql.test.mjs'];
-const unit = spawnSync(process.execPath, ['--test', ...UNIT], { stdio: 'inherit', env: { ...process.env, TZ: 'Asia/Taipei' } });
-if (unit.status !== 0) process.exit(unit.status ?? 1);
+//   成績與挑戰的共用規則（achrule）與 SQL 積木（achieve-sql）
+const UNIT = ['tests/plan.test.mjs', 'tests/coachcalc.test.mjs', 'tests/migrate.test.mjs', 'tests/device.test.mjs', 'tests/restore.test.mjs', 'tests/run-record.test.mjs', 'tests/email.test.mjs', 'tests/referral-sql.test.mjs',
+  'tests/achrule.test.mjs', 'tests/achieve-sql.test.mjs'];
+// 需要伺服器的測試（node --test 照檔名字母順序跑；achieve.test 另外最後跑，見下面）
+const API = ['tests/hours.test.mjs', 'tests/ics.test.mjs', 'tests/push.test.mjs', 'tests/cams-sync.test.mjs', 'tests/sql-limits.test.mjs', 'tests/rest-parse.test.mjs', 'tests/rest-sync.test.mjs', 'tests/signup-window.test.mjs', 'tests/sw-shell.test.mjs', 'tests/api.test.mjs', 'tests/passkey.test.mjs', 'tests/referral.test.mjs', 'tests/achieve.test.mjs', 'tests/budget.test.mjs'];
+const ONLY = (process.env.TEST_FILES || '').split(',').map((f) => f.trim()).filter(Boolean);
+const pick = (list) => (ONLY.length ? list.filter((f) => ONLY.includes(f)) : list);
+const unknown = ONLY.filter((f) => !UNIT.includes(f) && !API.includes(f));
+if (unknown.length) { console.error(`TEST_FILES 裡有不認得的檔案：${unknown.join(', ')}`); process.exit(1); }
+if (pick(UNIT).length) {
+  const unit = spawnSync(process.execPath, ['--test', ...pick(UNIT)], { stdio: 'inherit', env: { ...process.env, TZ: 'Asia/Taipei' } });
+  if (unit.status !== 0) process.exit(unit.status ?? 1);
+}
+if (!pick(API).length) process.exit(0);
 
 const PORT = Number(process.env.TEST_PORT) || 8799, STATE = '.wrangler/test-state';
 const sh = (cmd) => execSync(cmd, { stdio: ['ignore', 'inherit', 'inherit'], env: { ...process.env, CI: '1', WRANGLER_SEND_METRICS: 'false' } });
@@ -38,5 +50,13 @@ for (let i = 0; ; i++) {
   if (i > 120) { console.error(log); stop(); process.exit(1); }
   await new Promise((r) => setTimeout(r, 500));
 }
-const t = spawn(process.execPath, ['--test', '--test-concurrency=1', 'tests/hours.test.mjs', 'tests/ics.test.mjs', 'tests/push.test.mjs', 'tests/cams-sync.test.mjs', 'tests/sql-limits.test.mjs', 'tests/rest-parse.test.mjs', 'tests/rest-sync.test.mjs', 'tests/signup-window.test.mjs', 'tests/sw-shell.test.mjs', 'tests/api.test.mjs', 'tests/passkey.test.mjs', 'tests/referral.test.mjs', 'tests/budget.test.mjs'], { stdio: 'inherit', env: { ...process.env, BASE: base } });
-t.on('exit', (code) => { stop(); process.exit(code ?? 1); });
+// node --test 會把檔案照字母排序後才跑：成績與挑戰的測試（會改功能開關、留下大量帳號與資料）另外放在最後一輪，前面的測試照原本的順序與狀態
+const LATE = ['tests/achieve.test.mjs'];
+const runFiles = (files) => new Promise((resolve) => {
+  const t = spawn(process.execPath, ['--test', '--test-concurrency=1', ...files], { stdio: 'inherit', env: { ...process.env, BASE: base } });
+  t.on('exit', (code) => resolve(code ?? 1));
+});
+let code = 0;
+for (const files of [pick(API).filter((f) => !LATE.includes(f)), pick(API).filter((f) => LATE.includes(f))]) if (files.length) code = (await runFiles(files)) || code;
+stop();
+process.exit(code);

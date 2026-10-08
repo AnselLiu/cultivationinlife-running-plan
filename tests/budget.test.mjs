@@ -85,6 +85,9 @@ test('執行額度：備份解得回來，格式與筆數都對', async () => {
     else assert.equal(n, m.now[t], `${t} 的筆數`);
   }
   if ('cams' in m.counts) assert.ok(m.counts.cams <= m.now.cams);
+  // 成績與挑戰：新表都在備份裡，成績截圖（pb_proofs）不備份
+  for (const t of ['pb_records', 'ach_campaigns', 'ach_entries', 'ach_private', 'cheers']) assert.ok(t in m.counts, `${t} 要在備份裡`);
+  assert.ok(!('pb_proofs' in m.counts), '成績截圖不備份');
   assert.deepEqual(await violations(), []);
 });
 
@@ -439,6 +442,58 @@ test('大量輸入：排桌（同一個代碼以最後一筆為準）與一次�
   const d = ok50(await call('t_chair', `/events/${id}/draw`, { method: 'POST', body: { prize_id: pid, count: 20, onlyCheckedIn: false } }), '抽 20 位');
   assert.equal(d.winners.length, 20);
   assert.equal((await call('t_chair', `/events/${id}/prizes`)).json.draws.length, 20);
+  assert.deepEqual(await violations(), []);
+});
+
+// 成績與挑戰（規格 §19.4）：300 則的恭喜榜、PB 排行、清單、審核都在額度內；300 人的里程挑戰一次結算完、每人一則通知、重跑不重複；空出 10 個名額下個整點遞補
+const ACH_SKIP = 'events,opsAlerts,backup,signupOpen,followups,weather,signupReviews,digest,renewals,retention,auditDigest,monthSummary,review,fatigue,weeklyReport,cams,rest,promoteSweep,push';
+test('大量輸入：成績與挑戰 300 人（恭喜榜、PB 排行、清單、審核）在額度內；300 人的里程挑戰結算一次做完、遞補', async () => {
+  await violations();
+  const sub = (r) => Number(/sub=(\d+)/.exec(r.headers.get('x-budget') || '')?.[1]);
+  assert.equal((await call('t_chair', '/settings/features', { method: 'POST', body: { achieve: true, achieve_rank: true } })).status, 200);
+  const endDay = plus(-8);   // 結束 8 天前：今天 10:00 的排程就會結算
+  assert.equal((await call(null, `/dev/seed-bulk?pbs=fm&pn=300&achkm=${endDay}&cn=300`)).json.ok, true);
+  const b = await call('t_runner', '/ach/board');
+  assert.equal(b.status, 200, b.text);
+  assert.equal(b.json.items.length, 30);
+  assert.ok(sub(b) <= 50, `恭喜榜用了 ${sub(b)} 個子請求`);
+  const rk = await call('t_runner', '/ach/board?tab=rank&dist=fm');
+  assert.equal(rk.status, 200, rk.text);
+  assert.equal(rk.json.rank.length, 50);
+  assert.deepEqual(rk.json.rank.slice(0, 3).map((r) => [r.rk, r.seconds]), [[1, 10800], [2, 10807], [3, 10814]]);
+  assert.ok(sub(rk) <= 50);
+  for (const [who, path] of [['t_runner', '/ach'], ['t_runner', '/pb'], ['t_chair', '/admin/pb?status=approved'], ['t_chair', '/admin/ach']]) {
+    const r = await call(who, path);
+    assert.equal(r.status, 200, `${path} ${r.text}`);
+    assert.ok(sub(r) <= 50, `${path} 用了 ${sub(r)} 個子請求`);
+  }
+  const p = await call('t_runner', '/pb', { method: 'POST', body: { dist_key: '10k', seconds: 2900, race_name: '額度測試', race_date: plus(-77), result_url: 'https://example.com/r' } });
+  assert.equal(p.status, 200, p.text);
+  const rv = await call('t_chair', `/admin/pb/${p.json.id}/review`, { method: 'POST', body: { approve: true } });
+  assert.equal(rv.status, 200, rv.text);
+  assert.ok(sub(rv) <= 50, `核准用了 ${sub(rv)} 個子請求`);
+  // 結算：一次執行做完，名額 100、候補 200，每人一則通知
+  const count = async (like) => (await call(null, `/dev/notes?like=${encodeURIComponent(like)}`)).json.rows;
+  const [g0, w0] = [await count('團服名額確定了'), await count('你在團服候補名單')];
+  const r = await cron(`at=${plus(0)}T02:00:00Z&skip=${ACH_SKIP}`);
+  within(r, '挑戰結算');
+  assert.equal(r.achSettle?.settled, 'bc_km', JSON.stringify(r.achSettle));
+  assert.deepEqual([r.achSettle.granted, r.achSettle.waitlist], [100, 200]);
+  assert.deepEqual([await count('團服名額確定了') - g0, await count('你在團服候補名單') - w0], [100, 200]);
+  const again = await cron(`at=${plus(0)}T02:00:00Z&skip=${ACH_SKIP}`);
+  within(again, '挑戰結算重跑');
+  assert.deepEqual([await count('團服名額確定了') - g0, await count('你在團服候補名單') - w0], [100, 200], '重跑不重複');
+  // 有名額的 10 位刪除帳號 → 名額空出來 → 下一個 09–21 點的整點遞補 10 人
+  const p0 = await count('團服名額輪到你了');
+  for (let i = 0; i < 10; i++) {
+    const c = (await fetch(`${BASE}/api/dev/login?id=b_${String(i).padStart(4, '0')}`, { redirect: 'manual' })).headers.get('set-cookie').split(';')[0];
+    assert.equal((await fetch(`${BASE}/api/me`, { method: 'DELETE', headers: { cookie: c, origin: BASE } })).status, 200);
+  }
+  const pr = await cron(`at=${plus(0)}T03:00:00Z&skip=${ACH_SKIP}`);
+  within(pr, '遞補');
+  assert.equal(pr.achSettle?.promoted, 10, JSON.stringify(pr.achSettle));
+  assert.equal(await count('團服名額輪到你了') - p0, 10);
+  assert.equal((await call('t_chair', '/settings/features', { method: 'POST', body: { achieve: false, achieve_rank: false } })).status, 200);
   assert.deepEqual(await violations(), []);
 });
 
