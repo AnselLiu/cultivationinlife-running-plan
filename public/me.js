@@ -2,7 +2,7 @@
 //   個人資料、我的賽事與倒數、賽事報名資料、主團與分團、推薦人、通知設定、行事曆訂閱、外觀與語言、帳號與安全、隱私、協會、會籍卡、分享 App
 //   共用的工具與狀態從 app.js 拿；改登入狀態用 setMe（import 進來的 me、cfg 不能直接改）
 import {
-  $, addrField, ago, api, applyTabs, applyTheme, askLegacyOnLeave, avatar, bindAddrField, bindInstall, bindStepup, btnRow, camLazy, cfg, choose,
+  $, achOn, achRankOn, addrField, ago, api, applyTabs, applyTheme, askLegacyOnLeave, avatar, bindAddrField, bindInstall, bindStepup, btnRow, camLazy, cfg, choose,
   clearDeviceData, copy, countdownPicker, dropPush, esc, feat, fieldError, focusEl, GOOGLE_G, googleHref, group, IC, iconsOnly, installCard, isStandalone, lsOrNull, me,
   mfaBanner, MI, myCycle, NICON, openSheet, org, paintCountdown, passkey, pkSupported, qrSVG, reduceMotion, refOn, refreshMe, render, ROLE_NAME, row, setMe, startBack, subTitle,
   TEAM_ROLE_NAME, teamIcon, teamOf, teams, theme, toast, togglePush, view, ymd
@@ -319,15 +319,29 @@ function mePrivacy() {
   view.innerHTML = `${subTitle('隱私')}
     <section class="card">
       <label class="switch"><span>把訓練完成率、里程與平均強度分享給教練與分團幹部<span class="tiny" style="display:block">每次的時間、心率、強度、感覺與備註永遠只有你看得到</span></span><input type="checkbox" id="shareLogs" ${me.share_logs ? 'checked' : ''}><i></i></label>
-      <label class="switch"><span>出現在分團里程排行榜<span class="tiny" style="display:block">只有同分團的人看得到你的名字與里程</span></span><input type="checkbox" id="showRank" ${me.show_rank ? 'checked' : ''}><i></i></label>
+      <label class="switch"><span>出現在分團里程排行榜<span class="tiny" style="display:block">登入的跑友在每月里程挑戰與分團排行榜看得到你的名字與里程</span></span><input type="checkbox" id="showRank" ${me.show_rank ? 'checked' : ''}><i></i></label>
+      ${achOn() || me.cheer_board ? `<label class="switch"><span>出現在恭喜榜<span class="tiny" style="display:block">登入的跑友看得到你的名字、通過審核的 PB 成績與完成的挑戰；體重挑戰一律不上榜</span></span><input type="checkbox" id="cheerBoard" ${me.cheer_board ? 'checked' : ''}><i></i></label>` : ''}
+      ${achRankOn() || me.cheer_rank ? `<label class="switch ach-subswitch"><span>也列入 PB 排行<span class="tiny" style="display:block" id="cheerRankHint">${me.cheer_board ? '登入的跑友看得到你在各距離 PB 排行的名次與成績' : '先打開恭喜榜'}</span></span><input type="checkbox" id="cheerRank" ${me.cheer_rank ? 'checked' : ''} ${me.cheer_board ? '' : 'disabled'}><i></i></label>` : ''}
       ${cfg.googleLogin && (refOn() || me.referral?.emailLinked) ? `<label class="switch"><span>讓我推薦的跑友用 Gmail 找到我<span class="tiny" style="display:block">只存一組由 Email 算出、無法還原的查詢碼；關掉後立刻刪除，之後登入也不再產生</span></span><input type="checkbox" id="emailFind" ${me.referral?.findable !== false ? 'checked' : ''}><i></i></label>` : ''}
     </section>
     <section class="card"><h2 class="h3">我們存了什麼</h2>
-      <p class="tiny" style="margin:0">${refOn() ? '姓名、暱稱、組別、主團、餐點偏好、報名與訓練紀錄；推薦人（如果有填）；Gmail 查詢碼（無法還原成 Email）；賽事報名資料加密保存；電話只有行政人員看得到完整號碼。' : '姓名、暱稱、組別、主團、餐點偏好、報名與訓練紀錄；賽事報名資料加密保存；電話只有行政人員看得到完整號碼。'}</p>
+      <p class="tiny" style="margin:0"><span>姓名、暱稱、組別、主團、餐點偏好、報名與訓練紀錄；</span>${refOn() ? '<span>推薦人（如果有填）；Gmail 查詢碼（無法還原成 Email）；</span>' : ''}${achOn() ? '<span>比賽成績與挑戰紀錄；參加現場量體重的挑戰時的體重（加密，挑戰結束 30 天後刪除，隨時可以自己刪除）；</span>' : ''}<span>賽事報名資料加密保存；電話只有行政人員看得到完整號碼。</span></p>
       <div class="row"><a class="btn ghost sm" href="#/privacy">隱私權政策</a><a class="btn ghost sm" href="/api/me/export" download>下載我的資料</a></div></section>
     ${feat('coach') ? group('', [row('#/plan/setup?go=device', MI.phone, '這台裝置上的課表設定與身體資料', '只存在這台裝置，不會上傳；登出時清除')]) : ''}
-    <section class="card"><h2 class="h3">刪除帳號</h2><p class="tiny" style="margin:0">${refOn() ? '報名、入場券、通知與訓練紀錄都會刪除，中獎紀錄只留獎項給協會對帳。把你設為推薦人的跑友只會看到「推薦人已刪除帳號」。' : '報名、入場券、通知與訓練紀錄都會刪除，中獎紀錄只留獎項給協會對帳。'}</p>
+    <section class="card"><h2 class="h3">刪除帳號</h2><p class="tiny" style="margin:0">${refOn() ? '報名、入場券、通知與訓練紀錄都會刪除，中獎紀錄只留獎項給協會對帳。把你設為推薦人的跑友只會看到「推薦人已刪除帳號」。' : '報名、入場券、通知與訓練紀錄都會刪除，中獎紀錄只留獎項給協會對帳。'}${achOn() ? '<span>比賽成績、挑戰紀錄與體重都會刪除；已發放的團服只留尺寸給協會對帳。</span>' : ''}</p>
       <button class="btn danger block" id="delAcct">刪除我的帳號</button></section>`;
+  // 恭喜榜與 PB 排行：分開同意（排行比單純慶祝更暴露）；關掉恭喜榜時排行的開關停用（排行只列兩個都打開的人）
+  $('#cheerBoard')?.addEventListener('change', async (e) => {
+    const on = e.target.checked;
+    try {
+      await api('/me/cheer-board', { method: 'POST', body: { on } }); me.cheer_board = on; toast(on ? '已加入恭喜榜' : '已退出恭喜榜');
+      const r = $('#cheerRank'); if (r) { r.disabled = !on; $('#cheerRankHint').textContent = on ? '登入的跑友看得到你在各距離 PB 排行的名次與成績' : '先打開恭喜榜'; }
+    } catch (err) { e.target.checked = !on; toast(err.message); }
+  });
+  $('#cheerRank')?.addEventListener('change', async (e) => {
+    const on = e.target.checked;
+    try { await api('/me/cheer-board', { method: 'POST', body: { rank: on } }); me.cheer_rank = on; toast(on ? '已列入 PB 排行' : '已退出 PB 排行'); } catch (err) { e.target.checked = !on; toast(err.message); }
+  });
   $('#showRank').onchange = async (e) => { try { await api('/me/show-rank', { method: 'POST', body: { on: e.target.checked } }); me.show_rank = e.target.checked; toast(e.target.checked ? '已加入排行榜' : '已退出排行榜'); } catch (err) { e.target.checked = !e.target.checked; toast(err.message); } };
   // 讓推薦的跑友用 Gmail 找到我：關掉立刻刪除查詢碼；再打開不會自己恢復，要到「推薦人」再用 Google 確認一次
   $('#emailFind')?.addEventListener('change', async (e) => {

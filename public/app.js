@@ -4,6 +4,7 @@ import * as P from './plan.js';
 import * as I18N from './i18n.js';
 import { CATS, CHIPS } from './notif-cats.js';
 import * as Device from './device.js';
+import { ACH_ICONS } from './achrule.js';
 import { tpNow, signupState, tpShort, SIGNUP_DEFAULTS, evPhase, PHASE_LABEL } from './signup-window.js';
 // 用到才下載的模組：管理後台、拍照、報表、活動頁、「我的」子頁、活動表單與統計、分團
 // 剛部署的那幾秒可能拿到舊檔：載入失敗就等一下、加版本參數再試一次，仍失敗才顯示錯誤
@@ -730,6 +731,12 @@ const meetupTeams = () => (cfg.settings?.features?.meetup === true ? myTeams().f
 // 推薦人（協會在功能開關打開才有）：首頁卡、開始使用的第 4 步、登入頁的說明、「我的 → 推薦人」的表單
 //   關掉後已經填的推薦人、我推薦的跑友照樣看得到，也照樣可以移除、按「不是我」
 const refOn = () => cfg.settings?.features?.referral === true;
+// 成績與挑戰（功能開關 achieve、achieve_rank，預設關閉；不能用預設開的 feat()）：關掉後已有的成績、挑戰照樣看得到、可以刪除
+const achOn = () => cfg.settings?.features?.achieve === true;
+const achRankOn = () => achOn() && cfg.settings?.features?.achieve_rank === true;
+// 審核成績、設定挑戰（理事長、行政人員）；監事只看挑戰清單與彙總
+const achApprover = () => allow('achieve') && me?.role !== 'supervisor';
+const achViewer = () => achApprover() || me?.role === 'supervisor';
 const canMeetup = (tid) => meetupTeams().some((t) => !tid || t.id === tid);
 // 活動類型的標籤：團員發起的揪團標「揪團」
 const kindLabel = (e) => (e.owner_managed && e.kind === 'other' ? '揪團' : KIND_NAME[e.kind] || '活動');
@@ -1091,6 +1098,9 @@ function richText(src) {
 }
 // 隱私權政策每次改版的重點：要重新同意時放在最上面，不用整篇讀完才知道改了什麼
 const PRIVACY_CHANGES = {
+  '2026-10-08.1': ['協會開放「成績與挑戰」時，可以登錄比賽成績（距離、時間、賽事名稱、日期、官方成績連結或截圖），由理事長或行政人員審核；截圖在審核完成 7 天後自動刪除，只留成績連結',
+    '參加需要在現場量體重的挑戰時要逐場同意：見證的幹部在現場會看到體重計；系統把體重加密保存，只用來判定是否達成，其他幹部與跑友都查不到數字，挑戰結束 30 天後自動刪除，你隨時可以刪除或退出、立即刪除；自主聲明的體重挑戰不上傳體重',
+    '「恭喜榜」預設不出現；在「我的 → 隱私」打開後，登入的跑友才看得到你的名字、通過審核的 PB 成績與完成的挑戰；各距離的 PB 排行要另外打開；體重挑戰一律不上榜'],
   '2026-10-07.1': ['報名時可以替同行的親友填攜伴姓名（選填），只有該活動的主辦看得到，公開名單只顯示「＋人數」；請先徵得對方同意', '報名時給主辦的備註改成只有主辦看得到，不再出現在公開名單',
     '協會開放「團員揪團」時，團員自己發起的揪團，發起人就是主辦：看得到報名者的姓名、給主辦的備註與攜伴姓名',
     '協會開放「推薦人」時，可以填是誰介紹你來的：選跑友帳號（對方會收到通知，可以按「不是我」移除），或只填名字（最多 20 字）；推薦關係只有會員管理權限的協會幹部看得到，每次查看都有稽核紀錄',
@@ -1120,13 +1130,16 @@ function privacyView() {
          系統紀錄：登入時間、裝置型號摘要、IP 位址的單向雜湊值（無法還原）；App 的開啟速度與錯誤訊息只記裝置類型與頁面，不記是誰，保留 90 天。<br>
          個人賽事：你自己加入的賽事名稱、日期與目標成績（用於倒數）。<br>
          訓練紀錄：你照課表記錄的日期、距離、時間、心率、自覺強度、感覺與備註；預設只有你看得到，你打開分享後，教練與分團幹部只看得到完成率、里程與平均強度，看不到備註。<br>
+         比賽成績（選填）：你登錄的比賽距離、完賽時間、賽事名稱與日期、號碼布、官方成績連結或截圖，以及給審核的說明；只有你自己與審核的協會幹部看得到，你打開「恭喜榜」後，登入的跑友才看得到你的 PB 與完成的挑戰，另外打開「PB 排行」才會列入排名。截圖與給審核的說明在審核完成 7 天後自動刪除；沒有通過或被撤銷的成績 180 天後刪除。<br>
+         挑戰紀錄（選填）：參加的挑戰、是否達成、團服尺寸與發放紀錄；分團挑戰的團長與幹部看得到團員的參加狀態與團服尺寸，看不到成績與體重；體重挑戰只看得到有團服名額的人。<br>
+         體重（選填，敏感資料）：只有參加需要在團練現場量體重的挑戰、並逐場勾選同意時才蒐集；量測時由你選一位在場的幹部看體重計輸入讀數，那位幹部當下會看到數字；系統<b>加密後保存</b>，只用來判定是否達成，幹部與其他跑友都無法查詢，也不會知道你有沒有達成；挑戰結束 30 天後自動刪除，你隨時可以在挑戰頁刪除或退出，立即刪除。自主聲明的體重挑戰只記錄你是否聲明達成，不上傳體重。<br>
          照片：拍照分享的照片在你的手機上合成，不會上傳到我們的伺服器。<br>
          賽事報名資料（選填）：只有你需要幹部代為報名馬拉松等賽事時才填，包含中英文姓名、身分證字號或護照號碼、生日、性別、電話、Email、地址、緊急聯絡人與衣服尺寸；<b>加密後保存</b>，只有你自己看得到完整內容。<br>
          協會入會申請另以協會的 Google 表單辦理。</p>
       <h2 class="h3">三、利用期間、地區、對象與方式</h2>
       <p>期間：${esc(PRIVACY.retention)}。<br>
          地區：台灣，以及雲端服務（Cloudflare）的資料中心所在地。<br>
-         對象：依職務最小權限開放給協會幹部；分團團長與幹部可以看自己分團的名冊（不含電話）與該分團活動的報名及問卷結果；協會開放團員揪團時，團員自己發起的揪團由發起人擔任主辦，看得到報名者的姓名、給主辦的備註與攜伴姓名（不含電話與繳費資料）；電話完整號碼只有行政人員看得到。賽事報名資料只在你報名「代為團體報名」的活動並勾選同意後，提供給該活動的主辦幹部，用來向賽事主辦單位送出團體報名，每次下載都留有稽核紀錄。通訊地址存檔前會送到中華郵政的 3+3 郵遞區號服務核對寫法並補上郵遞區號，只傳送地址文字。練跑地圖的「附近即時影像」由本站伺服器向政府公開攝影機取得畫面再轉給你，你的 IP 與位置不會傳給影像來源，本站也不保存影像。推薦關係（誰推薦誰）只有具會員管理權限的協會幹部（理事長、理事、監事、行政人員）在管理後台看得到，監事只能查看，每次查看都留有稽核紀錄；分團幹部看不到。不提供給第三方行銷使用。<br>
+         對象：依職務最小權限開放給協會幹部；分團團長與幹部可以看自己分團的名冊（不含電話）與該分團活動的報名及問卷結果；協會開放團員揪團時，團員自己發起的揪團由發起人擔任主辦，看得到報名者的姓名、給主辦的備註與攜伴姓名（不含電話與繳費資料）；電話完整號碼只有行政人員看得到。賽事報名資料只在你報名「代為團體報名」的活動並勾選同意後，提供給該活動的主辦幹部，用來向賽事主辦單位送出團體報名，每次下載都留有稽核紀錄。通訊地址存檔前會送到中華郵政的 3+3 郵遞區號服務核對寫法並補上郵遞區號，只傳送地址文字。練跑地圖的「附近即時影像」由本站伺服器向政府公開攝影機取得畫面再轉給你，你的 IP 與位置不會傳給影像來源，本站也不保存影像。推薦關係（誰推薦誰）只有具會員管理權限的協會幹部（理事長、理事、監事、行政人員）在管理後台看得到，監事只能查看，每次查看都留有稽核紀錄；分團幹部看不到。<span>比賽成績由具「成績與挑戰」權限的協會幹部（預設為理事長與行政人員）審核；團服名單（姓名、暱稱、分團與尺寸）只提供給負責發放的協會幹部與該分團幹部；給廠商訂製的只有各尺寸的件數，不含姓名。</span>不提供給第三方行銷使用。<br>
          方式：以電子方式處理，全程加密傳輸。</p>
       <h2 class="h3">四、您的權利</h2>
       <p>您可以隨時行使個人資料保護法第 3 條的權利：</p>
@@ -1136,7 +1149,7 @@ function privacyView() {
         <li>停止蒐集、處理、利用及刪除：「我的 → 隱私 → 刪除帳號」</li>
       </ul>
       <h2 class="h3">五、不提供資料的影響</h2>
-      <p>姓名與組別是報名與排課表的必要資料；不提供就無法報名活動。賽事報名資料只在報名「代為團體報名」的活動時需要，不填不影響其他功能。其他欄位都是選填。</p>
+      <p>姓名與組別是報名與排課表的必要資料；不提供就無法報名活動。賽事報名資料只在報名「代為團體報名」的活動時需要，不填不影響其他功能。其他欄位都是選填。<span>比賽成績、挑戰與體重都是選填，不提供只是不能參加對應的挑戰。</span></p>
       <h2 class="h3">六、安全措施</h2>
       <p>存取控制依職務分級、特權操作留有稽核紀錄、登入權杖只存雜湊值，並設有嘗試次數限制。詳見專案的資訊安全設計說明。</p>
       <h2 class="h3">七、聯絡方式</h2>
@@ -1182,6 +1195,7 @@ async function listView() {
     ${mfaBanner()}
     ${start}
     ${refCard(start.includes('data-step="ref"'))}
+    ${me.ach?.needSize > 0 ? `<a class="card tight ach-homecard" href="#/ach"><span class="sic" style="--sc:var(--tile-orange)">${MI.shirt}</span><span class="st"><b>選團服尺寸</b><span class="sr">，</span><span class="tiny">你有團服名額，記得選尺寸</span></span><span class="chev" aria-hidden="true"></span></a>` : ''}
     <div class="chiprow">${chips}${teamLink}</div>
     <div class="dash"><div style="display:grid;gap:14px">
     ${today}
@@ -1667,6 +1681,8 @@ const todoBox = (t) => {
     ...t.pays.map((p) => row(`#/e/${esc(p.id)}/stats`, tile, `<span translate="no">「${esc(p.title)}」</span>繳費確認`, '', num(p.n))),
     ...(t.reviews || []).map((p) => row(`#/e/${esc(p.id)}/stats?f=pending`, tile, `<span translate="no">「${esc(p.title)}」</span><span class="nw">報名待審核</span>`, '', num(p.n))),
     t.spots ? row('#/map', tile, '地點審核', '', num(t.spots)) : '',
+    t.pb ? row('#/admin/ach', tile, '成績待審核', '', num(t.pb)) : '',
+    t.achMet ? row('#/admin/ach?tab=met', tile, '挑戰達成待確認', '', num(t.achMet)) : '',
   ].join('')}</div></section>`;
 };
 const nEmptyCard = (icon, title, desc = '', act = '') => `<div class="card"><div class="empty">${icon}<b class="etitle">${title}</b>${desc ? `<span>${desc}</span>` : ''}${act}</div></div>`;
@@ -2343,6 +2359,7 @@ async function planView(n) {
         <a class="setrow" href="/coach"><span class="sic" style="--sc:var(--tile-gray)">${IC.runner}</span><span class="st"><b>舊版課表教練</b><span class="tiny">舊版的完成紀錄與倒數，可以到課表設定搬進 App</span></span><span class="chev" aria-hidden="true"></span></a>` : ''}
       <a class="setrow" href="#/report"><span class="sic" style="--sc:var(--tile-green)">${MI.report}</span><span class="st"><b>訓練報表</b><span class="tiny">週里程、完成率、個人最佳</span></span><span class="chev" aria-hidden="true"></span></a>
       <a class="setrow" href="#/challenge"><span class="sic" style="--sc:var(--tile-orange)">${MI.trophy}</span><span class="st"><b>每月里程挑戰</b><span class="tiny">徽章、分團對抗、排行榜</span></span><span class="chev" aria-hidden="true"></span></a>
+      ${achOn() || me.ach?.needSize > 0 ? row('#/ach', MI.medal, '目標挑戰', '破 PB、完成目標拿團服') : ''}
     </div><p class="tiny center">課表來源：耕跑團記事本・實際以教練每週公告為準</p></section>`;
   for (const b of document.querySelectorAll('[data-delplan]')) b.onclick = async () => {
     if (!confirm('確定刪除這則課表？')) return;
@@ -3015,7 +3032,8 @@ const ME_SECTIONS = {
 // 設定列的色磚：跟 iPhone 設定一樣每一項一個顏色（深色模式也不會是一整排亮黃方塊）
 const ROW_TILE = { '#/report': 'green', '#/challenge': 'orange', '#/me/races': 'red', '#/me/reg': 'indigo', '#/tickets': 'purple', '#/me/teams': 'teal', '#/me/referral': 'orange',
   '#/me/notify': 'red', '#/me/calendar': 'orange', '#/me/display': 'indigo', '#/me/security': 'gray', '#/me/privacy': 'blue', '#/me/assoc': 'indigo', '#/me/card': 'teal',
-  '#/admin': 'gray', '#/admin/settings': 'gray', '#/roster': 'blue', '#/logs/team': 'green', '#/plan/new': 'green', '#/plan/season': 'green', '#/plan/race': 'red', '#/plan/guide': 'teal', '#/plan/setup': 'gray', '#/admin/tree': 'gray' };
+  '#/admin': 'gray', '#/admin/settings': 'gray', '#/roster': 'blue', '#/logs/team': 'green', '#/plan/new': 'green', '#/plan/season': 'green', '#/plan/race': 'red', '#/plan/guide': 'teal', '#/plan/setup': 'gray', '#/admin/tree': 'gray',
+  '#/ach': 'orange', '#/pb': 'red', '#/cheers': 'purple', '#/admin/ach': 'gray' };
 // 標題與副標中間放一個只給螢幕閱讀器的「，」：VoiceOver 唸「通知設定，推播類別」，不會連成一串沒有停頓
 const rowText = (title, sub) => `<span class="st"><b>${title}</b>${sub ? `<span class="sr">，</span><span class="tiny">${sub}</span>` : ''}</span>`;
 const row = (href, icon, title, sub = '', badge = '') => `<a class="setrow" href="${href}"><span class="sic"${ROW_TILE[href] ? ` style="--sc:var(--tile-${ROW_TILE[href]})"` : ''}>${icon}</span>${rowText(title, sub)}${badge}<span class="chev" aria-hidden="true"></span></a>`;
@@ -3044,6 +3062,8 @@ const MI = {
   sliders: IC.sliders,
   referral: REF_IC,
   tree: ic('<rect x="9" y="3" width="6" height="5" rx="1.5"/><rect x="3" y="16" width="6" height="5" rx="1.5"/><rect x="15" y="16" width="6" height="5" rx="1.5"/><path d="M12 8v4M6 16v-2a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v2"/>'),
+  // 成績與挑戰（圖示在 achrule.js，後台與團員頁共用）
+  medal: ic(ACH_ICONS.medal), sparkle: ic(ACH_ICONS.sparkle), shirt: ic(ACH_ICONS.shirt),
 };
 async function meView(section) {
   const welcome = new URLSearchParams(location.hash.split('?')[1] || '').get('welcome');
@@ -3072,7 +3092,7 @@ async function meHome(welcome) {
   const main = teamOf(me.main_team);
   const admin = allow('members') || allow('roles') || allow('settings');
   const weekly = weeklyHref();
-  const staff = admin || allow('roster') || canTeamLogs() || canPublishPlan() || !!weekly;
+  const staff = admin || allow('roster') || canTeamLogs() || canPublishPlan() || !!weekly || achViewer();
   view.innerHTML = `
     ${largeTitle('我的')}
     ${mfaBanner()}
@@ -3085,6 +3105,7 @@ async function meHome(welcome) {
     </a>
     ${group('賽事與報名', [
       row('#/me/races', MI.flag, '我的賽事與倒數', raceSub()),
+      achOn() || me.cheer_board || me.ach?.needSize > 0 ? row('#/pb', MI.medal, '我的成績', 'PB 登錄與審核', me.ach?.needSize > 0 ? '<span class="pill wait">選團服尺寸</span>' : '') : '',
       row('#/tickets', MI.ticket, '入場券與團購', '領取 QR Code、中獎紀錄'),
       row('#/me/reg', MI.form, '團體報名資料', '幹部代為報名馬拉松時使用', '<span id="regBadge"></span>'),
     ])}
@@ -3098,6 +3119,7 @@ async function meHome(welcome) {
     ${staff ? group('幹部', [
       admin ? row('#/admin', MI.admin, '管理後台', allow('settings') ? '總覽、週報、會員、權限、分團、稽核' : '總覽、會員、權限、分團、稽核') : '',
       allow('settings') ? row('#/admin/settings', MI.sliders, '系統設定', '活動報名預設、協會、地圖資料、功能開關') : '',
+      achViewer() ? row('#/admin/ach', MI.medal, '成績與挑戰', achApprover() ? '審核成績、設定挑戰與團服' : '挑戰與團服的統計', achApprover() && me.ach?.queue > 0 ? `<span class="pill wait">${me.ach.queue}</span>` : '') : '',
       weekly ? row(weekly, MI.trend, '週報', allow('settings') ? '上週的活動、報名、出席與系統健康' : '上週分團的活動、報名與出席') : '',
       allow('roster') ? row('#/roster', MI.roster, '團員名冊') : '',
       canTeamLogs() ? row('#/logs/team', MI.trend, '團員訓練', '分享給教練的團員每週完成率') : '',
@@ -3187,6 +3209,13 @@ function parentOf(h) {
   if (h.startsWith('/e/') && p.length > 3) return [`#/e/${p[2]}`, '活動'];
   if (h.startsWith('/edit/')) return [`#/e/${p[2]}`, '活動'];
   if (h.startsWith('/logs/m/')) return ['#/logs/team', '團員訓練'];
+  // 成績與挑戰：目標挑戰在課表的工具裡、我的成績在「我的」；後台頁回到管理後台
+  if (h === '/ach') return ['#/plan', '課表'];
+  if (h.startsWith('/ach/') || h === '/cheers') return ['#/ach', '目標挑戰'];
+  if (h === '/pb') return ['#/me', '我的'];
+  if (h.startsWith('/pb/')) return ['#/pb', '我的成績'];
+  if (h === '/admin/ach') return ['#/admin', '管理後台'];
+  if (h.startsWith('/admin/ach/')) return ['#/admin/ach', '成績與挑戰'];
   if (h.startsWith('/admin/settings/')) return ['#/admin/settings', '系統設定'];
   if (h === '/admin/settings') return ['#/admin', '管理後台'];
   if (h === '/admin/tree') return ['#/admin?tab=members', '管理後台'];   // 推薦族譜：回到管理後台的會員分頁
@@ -3207,11 +3236,15 @@ function tabOf(h) {
 function nameOf(h) {
   const N = { '/': '團練', '/plan': '課表', '/run': '跑步', '/studio': '拍照', '/me': '我的', '/calendar': '行事曆', '/map': '地圖', '/challenge': '挑戰', '/admin': '管理後台',
     '/teams': '分團', '/report': '報表', '/tickets': '入場券', '/notifications': '通知', '/past': '過去的團練', '/roster': '名冊', '/logs/team': '團員訓練',
-    '/plan/season': '全季課表', '/plan/race': '賽事準備', '/plan/guide': '配速與用語', '/plan/setup': '課表設定', '/weekly': '週報', '/admin/tree': '推薦族譜' };
+    '/plan/season': '全季課表', '/plan/race': '賽事準備', '/plan/guide': '配速與用語', '/plan/setup': '課表設定', '/weekly': '週報', '/admin/tree': '推薦族譜',
+    '/ach': '目標挑戰', '/pb': '我的成績', '/cheers': '恭喜榜', '/admin/ach': '成績與挑戰' };
   if (N[h]) return N[h];
   if (h.startsWith('/me/')) return ME_SECTIONS[h.slice(4)] || '我的';
   if (h.startsWith('/e/')) return h.endsWith('/stats') ? '統計' : '活動';
   if (h.startsWith('/admin/settings')) return '系統設定';
+  if (h.startsWith('/ach/')) return '挑戰';
+  if (h.startsWith('/pb/')) return '我的成績';
+  if (h.startsWith('/admin/ach/')) return '成績與挑戰';
   if (h.startsWith('/t/')) return '分團';
   if (h.startsWith('/plan/')) return '課表';
   return '返回';
@@ -3360,6 +3393,16 @@ async function route(hash) {
     if (hash === '/admin') return await adminView();
     if (hash === '/weekly') return await lazy('./admin.js', 'weeklyView')();   // 分團頁的「上週分團週報」（畫面在 admin.js）
     if (hash === '/admin/tree') return await lazy('./admin.js', 'treeView')();   // 推薦族譜（畫面在 admin.js）
+    // 成績與挑戰：團員頁在 achieve.js、後台在 admin.js（都是用到才下載）
+    if (hash === '/ach') return await lazy('./achieve.js', 'achView')();
+    const mach = hash.match(/^\/ach\/c\/([\w-]{1,16})$/); if (mach) return await lazy('./achieve.js', 'achCampaignView')(mach[1]);
+    if (hash === '/pb') return await lazy('./achieve.js', 'pbView')();
+    if (hash === '/pb/new') return await lazy('./achieve.js', 'pbFormView')();
+    const mpb = hash.match(/^\/pb\/([\w-]{1,16})\/edit$/); if (mpb) return await lazy('./achieve.js', 'pbFormView')(mpb[1]);
+    if (hash === '/cheers') return await lazy('./achieve.js', 'cheersView')();
+    if (hash === '/admin/ach') return await lazy('./admin.js', 'achAdminView')();
+    if (hash === '/admin/ach/new') return await lazy('./admin.js', 'achAdminView')('new');
+    const maa = hash.match(/^\/admin\/ach\/c\/([\w-]{1,16})(\/edit)?$/); if (maa) return await lazy('./admin.js', 'achAdminView')(maa[2] ? 'edit' : 'c', maa[1]);
     // 系統設定：清單（等於 #/admin?tab=settings）與子頁
     if (hash === '/admin/settings') return await settingsPage();
     const aset = hash.match(/^\/admin\/settings\/(\w+)$/);
@@ -3550,7 +3593,7 @@ addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvt 
 addEventListener('appinstalled', () => { installEvt = null; try { localStorage.setItem('cil-installed', '1'); } catch {} saveStart({ install: 'done' }); document.querySelectorAll('.installcard').forEach((c) => c.remove()); if ($('#startCard')) repaintStart(); });
 
 // 拆出去的模組（admin.js、photo.js…）從這裡拿共用的工具與狀態
-export { tbdTag, timeHtml, signedWord, gatherVerb, unitOf, tpAt, canMeetup, meetupTeams, refOn, kindLabel, tilePreload, focusEl, legacyData, removeLegacy, addrField, bindAddrField, latest, $, cfg, downloadAuthed, scanSheet, FEEL, IC, KIND_NAME, LOG_ICON, LOG_STATUS_NAME, MI, PAID_NAME, ROLE_NAME, TAB_DEFAULT, TEAM_PERMS, coachTeam, TEAM_ROLE_NAME, ago, allow, api, applyFeatures, avatar, barChart, bars, bindComments, bindStepup, btnRow, choose, coachPrefs, copy, countdownPicker, dayLabel, dstr, emptyState, esc, eventCard, feat, fixText, group, ic, largeTitle, me, mfaBanner, money, myCycle, nrow, org, pad2, paintCountdown, passkey, planSeg, queueLog, raceTarget, refreshMe, render, route, row, setCoachPrefs, squareIcon, startKey, studio, subTitle, teamAllow, teamIcon, teamOf, teams, toast, rich, keep, names, view, ymd, askReason, isOffline, nowTp, signupDefaults, submitLabel, camLazy, openSheet, apiAll, fmtDuration, fmtDistPace, parseHMS,
+export { tbdTag, timeHtml, signedWord, gatherVerb, unitOf, tpAt, canMeetup, meetupTeams, refOn, achOn, achRankOn, kindLabel, tilePreload, focusEl, legacyData, removeLegacy, addrField, bindAddrField, latest, $, cfg, downloadAuthed, scanSheet, FEEL, IC, KIND_NAME, LOG_ICON, LOG_STATUS_NAME, MI, PAID_NAME, ROLE_NAME, TAB_DEFAULT, TEAM_PERMS, coachTeam, TEAM_ROLE_NAME, ago, allow, api, applyFeatures, avatar, barChart, bars, bindComments, bindStepup, btnRow, choose, coachPrefs, copy, countdownPicker, dayLabel, dstr, emptyState, esc, eventCard, feat, fixText, group, ic, largeTitle, me, mfaBanner, money, myCycle, nrow, org, pad2, paintCountdown, passkey, planSeg, queueLog, raceTarget, refreshMe, render, route, row, setCoachPrefs, squareIcon, startKey, studio, subTitle, teamAllow, teamIcon, teamOf, teams, toast, rich, keep, names, view, ymd, askReason, isOffline, nowTp, signupDefaults, submitLabel, camLazy, openSheet, apiAll, fmtDuration, fmtDistPace, parseHMS,
   // event.js、me.js
   applyCounts, bellState, canScan, dayPattern, mapsUrl, once, qrSVG, routeSvg, scan, setStopScan, GOOGLE_G, NICON, applyTabs, applyTheme, askLegacyOnLeave,
   bindInstall, clearDeviceData, dropPush, googleHref, iconsOnly, installCard, isStandalone, lsOrNull, pkSupported, reduceMotion, theme, togglePush, setMe,

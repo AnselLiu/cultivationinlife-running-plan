@@ -2303,3 +2303,196 @@ a.tiny.tlink{display:inline-flex;align-items:center;justify-self:start;min-heigh
 .refkids .racts{grid-column:2 / -1;display:flex;flex-wrap:wrap;gap:8px;align-items:center}
 .refkids .racts :is(.btn,.linkbtn){min-height:44px}
 @media (prefers-reduced-transparency:reduce){.startcard{background:var(--sheet-solid)!important}}
+/* ---------- 成績與挑戰（團員）---------- */
+/* 我的成績、登錄成績、目標挑戰、挑戰詳細、恭喜榜（public/achieve.js）；手機寬度優先（375px 不水平捲動）、點擊目標 ≥ 44px、深色模式只用既有變數 */
+.ach-homecard,.ach-pbs{display:grid;grid-template-columns:34px minmax(0,1fr) auto;align-items:center;gap:12px;color:var(--ink);text-decoration:none;min-height:58px}
+.ach-homecard .st{display:grid;gap:2px}
+.ach-pbs{grid-template-columns:auto minmax(0,1fr) auto}
+.ach-pbchips{display:flex;flex-wrap:wrap;gap:6px}
+.ach-pbchips .chip{cursor:inherit;padding:5px 10px;font-size:13px}
+.ach-note{display:flex;align-items:center;gap:8px;text-decoration:none;min-height:44px}
+.ach-roundbtn{flex:none;margin-left:auto;width:44px;height:44px;border-radius:50%;display:grid;place-items:center;color:var(--ink);
+  background:var(--glass-2);box-shadow:var(--shadow-s),inset 0 1px 0 var(--rim);-webkit-backdrop-filter:var(--blur);backdrop-filter:var(--blur)}
+.ach-roundbtn svg.ic{width:22px;height:22px}
+/* PB 四格 */
+.pb-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.pb-cell{appearance:none;border:0;font:inherit;color:var(--ink);text-align:left;text-decoration:none;cursor:pointer;display:grid;gap:3px;align-content:start;padding:14px 15px;min-height:118px;overflow:hidden;min-width:0}
+div.pb-cell{cursor:default}
+.pb-cell[aria-pressed="true"]{box-shadow:var(--shadow-s),inset 0 0 0 2px var(--accent)}
+.pb-d{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:14px;font-weight:650;color:var(--ink-2)}
+.pb-t{font-size:30px;font-weight:700;line-height:1.1;letter-spacing:-.01em}
+.pb-none{font-size:17px;font-weight:600;color:var(--ink-3)}
+.pb-go{color:var(--accent);font-weight:600}
+.pb-race{overflow-wrap:anywhere}
+.pb-cell.pb-new::after{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;
+  background:linear-gradient(105deg,transparent 30%,color-mix(in srgb,var(--accent) 24%,transparent) 48%,transparent 66%);transform:translateX(-110%);animation:pbsweep .9s .2s ease-out 1 both}
+@keyframes pbsweep{to{transform:translateX(110%)}}
+.pb-others{gap:6px}
+.pb-ochip{cursor:default;font-size:14px}
+.pb-acts{display:grid;gap:10px}
+.pb-foot{margin:4px 8px 0}
+.pb-foot a{white-space:nowrap}
+.pb-list{list-style:none;margin:0}
+.pb-list li + li .pb-row{border-top:1px solid var(--stroke)}
+.pb-row{appearance:none;border:0;background:none;font:inherit;color:var(--ink);width:100%;text-align:left;cursor:pointer;display:grid;grid-template-columns:auto minmax(0,1fr) auto 10px;align-items:center;gap:10px;min-height:58px;padding:10px 16px}
+.pb-row .chev{width:10px}
+.pb-main{display:grid;gap:2px;min-width:0}
+.pb-main .tiny{overflow-wrap:anywhere}
+.pb-rt{font-size:19px}
+.pb-why{color:var(--ink-2)}
+.pb-pills{display:flex;flex-direction:column;align-items:flex-end;gap:4px}
+.pb-dist{background:var(--accent-soft);color:var(--accent)}
+/* 登錄成績 */
+.pb-form{gap:14px}
+.pb-fs{border:0;margin:0;padding:0;display:grid;gap:8px;min-width:0}
+.pb-fs legend{font-size:13px;color:var(--ink-2);font-weight:500;padding:0;margin-bottom:5px}
+.pb-seg button{min-height:44px;padding:7px 4px}
+.pb-km{display:grid;gap:6px}
+.pb-hms{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr) auto minmax(0,1fr);align-items:start;gap:6px}
+.pb-hms label{text-align:center;justify-items:stretch}
+.pb-hms input{text-align:center;font-size:22px;font-weight:650;font-variant-numeric:tabular-nums;padding:10px 6px;min-height:52px}
+.pb-hms label span{order:2}
+.pb-colon{font-size:22px;font-weight:700;color:var(--ink-3);padding-top:12px}
+.pb-pace{margin:0;min-height:1.3em;font-weight:650;color:var(--accent)}
+.pb-hint{margin:-8px 2px 0}
+.pb-proof{display:grid;gap:8px;justify-items:start}
+.pb-flabel{font-size:13px;color:var(--ink-2);font-weight:500}
+.pb-proofrow{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.pb-proofrow:empty{display:none}
+.pb-thumb{width:84px;height:84px;object-fit:cover;border-radius:var(--r-m);border:1px solid var(--stroke);background:var(--fill)}
+.pb-filebtn{display:inline-flex;flex-direction:row;align-items:center;gap:6px;min-height:44px;color:var(--ink)}
+.pb-filebtn:focus-within{outline:2.5px solid color-mix(in srgb,var(--accent) 65%,transparent);outline-offset:2px}
+.pb-coach{gap:8px}
+.pb-proofbig{display:grid;place-items:center;min-height:120px}
+.pb-proofbig img{max-width:100%;max-height:70vh;border-radius:var(--r-m)}
+/* 目標挑戰：清單卡片 */
+.ach-cards{display:grid;gap:10px}
+.ach-card{display:grid;grid-template-columns:34px minmax(0,1fr) 10px;gap:12px;align-items:start;color:var(--ink);text-decoration:none;padding:14px 15px}
+.ach-card .chev{align-self:center}
+.ach-cbody{display:grid;gap:5px;min-width:0}
+.ach-ctop{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.ach-ctop b{font-size:17px;overflow-wrap:anywhere}
+.ach-rule{font-size:15px;color:var(--ink-2)}
+.ach-meta{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.ach-rw{display:inline-flex;align-items:center;gap:4px;font-size:13px;color:var(--ink-2)}
+.ach-rw svg.ic{width:17px;height:17px}
+.ach-mini{display:flex;align-items:center;gap:8px}
+.ach-ring{--p:0;position:relative;display:grid;place-items:center;align-content:center;border-radius:50%;width:44px;height:44px;flex:none}
+.ach-ring::before{content:"";position:absolute;inset:0;border-radius:50%;background:conic-gradient(var(--accent) calc(var(--p)*1%),color-mix(in srgb,var(--ink) 10%,transparent) 0);
+  -webkit-mask:radial-gradient(circle,transparent 0 62%,#000 63%);mask:radial-gradient(circle,transparent 0 62%,#000 63%)}
+.ach-ring.sm{width:28px;height:28px}
+.ach-ring.lg{width:120px;height:120px}
+.ach-ring.lg::before{-webkit-mask:radial-gradient(circle,transparent 0 49px,#000 50px);mask:radial-gradient(circle,transparent 0 49px,#000 50px)}
+.ach-ring b,.ach-ring small{position:relative}.ach-ring.lg b{font-size:28px;line-height:1}.ach-ring small{font-size:12px;color:var(--ink-3)}
+.ach-done summary{cursor:pointer;min-height:44px;display:flex;align-items:center;list-style:none}
+.ach-done summary::-webkit-details-marker{display:none}
+.ach-done summary::after{content:"";width:8px;height:8px;margin-left:8px;border:solid currentColor;border-width:0 2px 2px 0;transform:rotate(45deg) translateY(-2px);transition:transform .2s}
+.ach-done[open] summary::after{transform:rotate(-135deg) translateY(-2px)}
+/* 挑戰詳細 */
+.ach-head{align-items:center;flex-wrap:nowrap}
+.ach-head > div{min-width:0}
+.ach-head h1{overflow-wrap:anywhere}
+.ach-htile{width:44px;height:44px;border-radius:13px;flex:none}
+.ach-htile svg.ic{width:26px;height:26px}
+.ach-hsub{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.ach-sec{gap:10px}
+.ach-sec .h3{margin:0}
+.ach-intro{margin:0;white-space:pre-line;overflow-wrap:anywhere}
+.ach-rules{margin:0;padding-left:1.2em;display:grid;gap:6px;font-size:15px;color:var(--ink-2)}
+.ach-rules b{color:var(--ink);font-size:16px}
+.ach-health{margin:0;padding:10px 12px;border-radius:var(--r-m);background:var(--fill)}
+.ach-stats{display:flex;gap:18px;flex-wrap:wrap}
+.ach-stats > span{display:grid;gap:0}
+.ach-stats b{font-size:22px}
+.ach-stats > span > span{font-size:12px;color:var(--ink-3)}
+.ach-rewards{list-style:none;margin:0;padding:0;display:grid;gap:10px}
+.ach-rewards li{display:grid;grid-template-columns:32px minmax(0,1fr);gap:10px;align-items:start}
+.ach-rwic{width:32px;height:32px;border-radius:10px;display:grid;place-items:center;background:var(--accent-soft);color:var(--accent)}
+.ach-rwic svg.ic{width:19px;height:19px}
+.ach-rwbody{display:grid;gap:6px;min-width:0}
+.ach-sizechips .chip{cursor:default;padding:4px 10px;font-size:13px}
+.ach-mystate{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.ach-big{display:grid;grid-template-columns:auto minmax(0,1fr);gap:18px;align-items:center}
+.ach-bigtx{display:grid;gap:4px}
+.ach-bigtx b{font-size:18px}
+.ach-kv{display:flex;justify-content:space-between;align-items:baseline;gap:12px;padding:8px 0;border-bottom:1px solid var(--stroke)}
+.ach-kv > span:first-child{color:var(--ink-2);font-size:15px}
+.ach-kv > span:last-child{display:grid;justify-items:end;text-align:right;min-width:0}
+.ach-kv b{font-size:20px}
+.ach-nobase,.ach-pct{margin:0}
+.ach-pct{font-size:18px;font-weight:700;color:var(--accent)}
+.ach-steps{list-style:none;margin:0;padding:0;display:grid;gap:10px}
+.ach-step{display:grid;gap:6px;padding:12px 14px;border-radius:var(--r-m);border:1px solid var(--stroke);background:var(--glass-hi);justify-items:start}
+.ach-step.ok{border-color:color-mix(in srgb,var(--ok) 45%,transparent)}
+.ach-stephd{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.ach-step .btn{min-height:44px}
+.ach-ok{display:inline-flex;align-items:center;gap:4px;color:var(--ok-ink);font-weight:650}
+.ach-delw,.ach-shirt .linkbtn{min-height:44px;justify-self:start;padding:0 2px}
+.ach-honor{display:grid;gap:8px}
+.ach-subh{margin:0;font-size:15px}
+.ach-hform{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:end}
+.ach-hform .btn{min-height:44px}
+.ach-hlist{list-style:none;margin:0;padding:0;display:grid}
+.ach-hlist li{display:grid;grid-template-columns:auto minmax(0,1fr) auto 44px;gap:8px;align-items:center;min-height:44px;border-bottom:1px solid var(--stroke)}
+.ach-hlist b{text-align:right}
+.ach-hlist .iconx{width:44px;height:44px}
+.ach-consent{font-size:14px}
+.ach-agree{font-size:15px;color:var(--ink)}
+.ach-sizes .chip{min-width:52px;min-height:44px;font-variant-numeric:tabular-nums}
+.ach-sizes .chip:disabled{opacity:.5;cursor:default}
+.ach-wform{display:grid;gap:10px}
+.ach-kgline{display:flex;align-items:center;justify-content:center;gap:8px;flex-wrap:wrap}
+.ach-kgv{font-size:34px;font-weight:700;letter-spacing:.02em}
+.ach-kgline .btn{min-height:44px}
+.ach-qr{position:relative}
+.ach-qrdone{opacity:.25}
+.ach-code{margin:0;text-align:center;font-size:20px;font-weight:650;letter-spacing:.08em;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;user-select:all}
+.ach-wstate{margin:0;min-height:1.4em;font-size:17px}
+.ach-wstate .ach-ok svg.ic{width:22px;height:22px}
+.ach-wkmsg{margin:0;min-height:1.4em}
+.ach-shst{margin:0;display:flex;align-items:center;gap:8px}
+.ach-shst svg.ic{width:22px;height:22px;color:var(--accent);flex:none}
+.ach-sizefs{border:0;margin:0;padding:0;min-width:0}
+.ach-sizefs legend{font-size:13px;color:var(--ink-2);margin-bottom:6px;padding:0}
+.ach-shacts{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.ach-shacts:empty{display:none}
+.ach-shacts .btn{min-height:44px}
+.ach-sharetext{margin:0;padding:12px 14px;border-radius:var(--r-m);background:var(--fill);white-space:pre-line;overflow-wrap:anywhere;font-size:15px}
+.ach-subswitch{padding-left:22px}
+.ach-subswitch:has(input:disabled){color:var(--ink-3);cursor:default}
+/* 恭喜榜 */
+.cheer-intro{gap:10px}
+.cheer-intro .btn{min-height:44px}
+.cheer-intro .row a{min-height:44px;display:inline-flex;align-items:center}
+.cheer-teams .chip,.cheer-tabs button,.cheer-dists button{min-height:44px}
+.cheer-list{list-style:none;margin:0;padding:0;display:grid;gap:10px}
+.cheer-card{gap:6px}
+.cheer-head{display:grid;grid-template-columns:32px minmax(0,1fr) auto;gap:10px;align-items:center}
+.cheer-who{display:flex;align-items:center;gap:6px;flex-wrap:wrap;min-width:0}
+.cheer-who b{overflow-wrap:anywhere}
+.cheer-btn{appearance:none;border:0;font:inherit;cursor:pointer;display:inline-flex;align-items:center;gap:5px;min-width:44px;min-height:44px;padding:0 14px;border-radius:999px;
+  background:var(--glass-2);color:var(--ink);font-size:14px;font-weight:600;box-shadow:var(--shadow-s),inset 0 1px 0 var(--rim)}
+.cheer-btn svg.ic{width:18px;height:18px}
+.cheer-btn[aria-pressed="true"]{background:var(--accent);color:var(--on-accent)}
+.cheer-btn b:empty{display:none}
+.cheer-what{margin:0;font-weight:650;color:var(--ink-2)}
+.cheer-time{margin:0;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.cheer-time b{font-size:34px;font-weight:700;line-height:1.1}
+.cheer-race{margin:0;overflow-wrap:anywhere}
+.cheer-ach{display:flex;align-items:center;gap:8px;color:var(--ink);text-decoration:none;min-height:44px}
+.cheer-ach svg.ic{width:26px;height:26px;color:var(--accent);flex:none}
+.cheer-ach b{font-size:18px;overflow-wrap:anywhere}
+.cheer-self{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.cheer-self .btn{min-height:44px}
+.cheer-rank{list-style:none;margin:0;padding:6px 0;gap:0}
+.cheer-rank li{display:grid;grid-template-columns:44px 32px minmax(0,1fr) auto;gap:10px;align-items:center;padding:9px 16px;min-height:56px}
+.cheer-rank li + li{border-top:1px solid var(--stroke)}
+.cheer-rank li.me{background:var(--accent-soft)}
+.cheer-rk{display:grid;justify-items:center;line-height:1.1}
+.cheer-rk b{font-size:18px}
+.cheer-rwho{display:grid;gap:2px;min-width:0}
+.cheer-rwho b{overflow-wrap:anywhere}
+.cheer-rt{font-size:17px}
+.cheer-rank .cheer-gap{display:block;min-height:0;padding:2px 16px;text-align:center;color:var(--ink-3)}
+@media (prefers-reduced-motion:reduce){.pb-cell.pb-new::after{display:none}.ach-done summary::after{transition:none}}
+@media (prefers-reduced-transparency:reduce){.ach-roundbtn,.cheer-btn{background:var(--sheet-solid);-webkit-backdrop-filter:none;backdrop-filter:none}}
