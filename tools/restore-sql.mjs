@@ -34,7 +34,8 @@ export const AUDIT_COLS = ['id', 'at', 'actor_id', 'actor_name', 'actor_role', '
 // 本人的撤回
 export const WITHDRAW_ACTIONS = ['privacy.race_profile_delete', 'privacy.share_logs', 'privacy.show_rank', 'notif.prefs', 'push.unsubscribe', 'session.revoke_all', 'passkey.remove',
   'team.leave', 'team.remove', 'team.reject', 'calendar.off', 'calendar.on', 'log.delete', 'route.delete', 'team.post_delete',
-  'privacy.email_lookup', 'referrer.clear', 'referrer.deny', 'referrer.admin_clear'];
+  'privacy.email_lookup', 'referrer.clear', 'referrer.deny', 'referrer.admin_clear',
+  'privacy.cheer_board', 'privacy.cheer_rank', 'privacy.ach_weight_delete', 'pb.delete'];
 // 身分：照時間順序重設成最後一次（跟 team.leave／remove 一起照順序做）
 export const ROLE_ACTIONS = ['role.change', 'role.handover', 'bootstrap.chair', 'team.role'];
 // 中文名稱 → 代碼（跟 src/worker.js 的 ROLES、TEAM_ROLES 一樣；tests/restore.test.mjs 會比對）
@@ -42,7 +43,7 @@ export const ROLE_LABELS = { 理事長: 'chair', 理事: 'director', 監事: 'su
 export const TEAM_ROLE_LABELS = { 團長: 'lead', 幹部: 'officer', 團員: 'member' };
 const ROLE_OF = Object.fromEntries(Object.entries(ROLE_LABELS).map(([k, v]) => [v, k])), TEAM_ROLE_OF = Object.fromEntries(Object.entries(TEAM_ROLE_LABELS).map(([k, v]) => [v, k]));
 // 一定要有做這件事的人（actor_id）才能重做
-const NEED_ACTOR = ['team.leave', 'log.delete', 'referrer.deny'];
+const NEED_ACTOR = ['team.leave', 'log.delete', 'referrer.deny', 'pb.delete'];
 // 讓某人的登入失效的動作（target_id；理事長移交另外連 actor_id）
 export const REVOKE_ACTIONS = ['role.change', 'role.handover', 'bootstrap.chair', 'session.revoke_all'];
 export const REPLAY_ACTIONS = [...new Set([...ERASE_ACTIONS, ...WITHDRAW_ACTIONS, ...REVOKE_ACTIONS, ...ROLE_ACTIONS])];
@@ -144,6 +145,12 @@ export function planReplay(rows) {
     emailOn: [...latest(rows, 'privacy.email_lookup')].filter(([, v]) => !v.rows.some((r) => r.detail === '關閉') && v.rows.some((r) => r.detail === '開啟')).map(([id]) => id),
     refClear: ids((r) => r.action === 'referrer.clear' || r.action === 'referrer.admin_clear'),
     refDeny: rows.filter((r) => r.action === 'referrer.deny').map((r) => [r.target_id, r.actor_id, sqlTime(r.at)]),
+    // 成績與挑戰：恭喜榜與 PB 排行最後一次是關閉就關掉；刪除挑戰體重（detail c=<挑戰 id>，有 leave 的是退出見證制挑戰）；刪除自己的成績（target＝成績 id、actor＝本人）
+    boardOff: offAtLast(rows, 'privacy.cheer_board'),
+    cheerRankOff: offAtLast(rows, 'privacy.cheer_rank'),
+    achWeight: rows.filter((r) => r.action === 'privacy.ach_weight_delete').map((r) => [r.target_id, /(?:^|｜)c=([\w-]{1,32})(?:｜|$)/.exec(r.detail || '')?.[1], /(?:^|｜)leave(?:｜|$)/.test(r.detail || '')])
+      .filter(([, c]) => c),
+    pbDel: rows.filter((r) => r.action === 'pb.delete' && r.actor_id).map((r) => [r.target_id, r.actor_id]),
   };
 }
 // 分團：team.leave（actor 退出 target 這個分團）、team.remove／reject（target 被移出，分團看 detail）、team.role（分團身分）
@@ -202,6 +209,7 @@ export const planSummary = (p) => [
   ['通知分類設定', p.mute.size], ['推播訂閱刪除', p.pushOff.length], ['通行金鑰刪除', p.passkeys.length], ['登入失效', p.revoke.length],
   ['身分與分團成員', p.steps.length], ['行事曆訂閱停用', p.calOff.length], ['訓練紀錄刪除', p.logs.length], ['路線刪除', p.routes.length], ['分團公告刪除', p.posts.length],
   ['Gmail 查詢關閉', p.emailOff.length], ['Gmail 查詢碼刪除（關過又打開）', p.emailDel.length - p.emailOff.length], ['推薦人移除', p.refClear.length], ['推薦人「不是我」', p.refDeny.length],
+  ['退出恭喜榜', p.boardOff.length], ['退出 PB 排行', p.cheerRankOff.length], ['刪除挑戰體重', p.achWeight.length], ['成績刪除', p.pbDel.length],
   ['看不懂、要人工確認的身分或分團紀錄', p.unresolved.length],
 ].filter(([, n]) => n).map(([k, n]) => `${k} ${n}`).join('、') || '沒有要重做的撤回';
 
@@ -244,6 +252,16 @@ export function replaySql(rows, { timeTravel = false } = {}) {
   for (const [id, by] of p.logs) { if (!ID.test(id) || !ID.test(by)) throw new Error(`看不懂的 id：${id}`); L.push(`DELETE FROM training_logs WHERE id = ${lit(id)} AND member_id = ${lit(by)};`); }
   each(p.routes, ['DELETE FROM routes WHERE id = ?1', 'UPDATE events SET route_id = NULL WHERE route_id = ?1']);
   for (const [tid, pid] of p.posts) L.push(`DELETE FROM team_posts WHERE id = ${lit(pid)} AND team_id = ${lit(tid)};`);
+  // 成績與挑戰：恭喜榜、PB 排行；挑戰體重（只刪體重不改參加狀態，leave 的再把參加改成已退出）；自己的成績（截圖與恭喜靠 ON DELETE CASCADE）
+  each(p.boardOff, ['UPDATE members SET cheer_board = 0 WHERE id = ?1']);
+  each(p.cheerRankOff, ['UPDATE members SET cheer_rank = 0 WHERE id = ?1']);
+  for (const [mid, cid, leave] of p.achWeight) {
+    if (!ID.test(mid) || !ID.test(cid)) throw new Error(`看不懂的 id：${mid}`);
+    L.push(`DELETE FROM ach_private WHERE member_id = ${lit(mid)} AND campaign_id = ${lit(cid)};`);
+    L.push(`UPDATE ach_entries SET w_base_at = NULL, w_last_at = NULL, w_token = NULL, w_token_exp = NULL, w_tries = 0 WHERE member_id = ${lit(mid)} AND campaign_id = ${lit(cid)} AND status != 'achieved';`);
+    if (leave) L.push(`UPDATE ach_entries SET status = 'left', consent_at = NULL WHERE member_id = ${lit(mid)} AND campaign_id = ${lit(cid)} AND status IN ('joined', 'met');`);
+  }
+  for (const [id, by] of p.pbDel) { if (!ID.test(id) || !ID.test(by)) throw new Error(`看不懂的 id：${id}`); L.push(`DELETE FROM pb_records WHERE id = ${lit(id)} AND member_id = ${lit(by)};`); }
   if (timeTravel) L.push('DELETE FROM push_queue;');
   // 原樣補回稽核紀錄（只補整列都有的；已經在的不動）
   for (const r of rows) if (r.id && r.at && r.mac) L.push(`INSERT OR IGNORE INTO audit_log (${AUDIT_COLS.join(', ')}) VALUES (${AUDIT_COLS.map((c) => lit(r[c])).join(', ')});`);
